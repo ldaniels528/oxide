@@ -6,7 +6,7 @@ Rust and Go by implementing the same small virtual machine in both languages.
 
 You can find the [Go variant here](https://github.com/ldaniels528/tiny_vm.go).
 
-I'm just getting started bu check back from time to time to see the progress.
+I'm just getting started but check back from time to time to see the progress.
 
 #### Test input
 
