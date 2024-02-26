@@ -1,0 +1,187 @@
+//mod tokenizer;
+
+type CharSlice = Vec<char>;
+
+type MakeToken = fn(String, usize, usize, usize, usize) -> Token;
+
+type ParserFunction = fn(&CharSlice, &mut usize) -> Option<Token>;
+
+type TokenSlice = Vec<Option<Token>>;
+
+//#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
+enum Token {
+    // text, start, end, line_number, column_number
+    AlphaNumeric(String, usize, usize, usize, usize),
+    BackticksQuoted(String, usize, usize, usize, usize),
+    DoubleQuoted(String, usize, usize, usize, usize),
+    Numeric(String, usize, usize, usize, usize),
+    Operator(String, usize, usize, usize, usize),
+    SingleQuoted(String, usize, usize, usize, usize),
+    Symbol(String, usize, usize, usize, usize),
+}
+
+type ValidationFunction = fn(&CharSlice, &mut usize) -> bool;
+
+fn parse_fully(text: &str) -> Result<Vec<Token>, &str> {
+    let inputs: CharSlice = text.chars().collect();
+    let mut pos: usize = 0;
+    let mut tokens: Vec<Token> = Vec::new();
+    while has_next(&inputs, &mut pos) {
+        let tok_opt: Option<Token> = next_token(&inputs, &mut pos);
+        if tok_opt.is_some() {
+            tokens.push(tok_opt.unwrap())
+        }
+    }
+    Ok(tokens)
+}
+
+fn determine_code_position(inputs: &CharSlice, start: usize) -> (usize, usize) {
+    let mut line_no: usize = 1;
+    for pos in 1..start {
+        let r = inputs[pos];
+        if r == '\n' {
+            line_no += 1;
+        }
+    }
+    let column_no = std::cmp::max(start.saturating_sub(line_no), 1);
+    (line_no, column_no)
+}
+
+// Define the helper functions is_whitespace, has_more, and next_token here
+fn is_whitespace(inputs: &CharSlice, pos: &mut usize) -> bool {
+    let chars = &['\t', '\n', '\r', ' '];
+    has_more(inputs, pos) && chars.contains(&inputs[*pos])
+}
+
+fn has_more(inputs: &CharSlice, pos: &mut usize) -> bool {
+    *pos < (*inputs).len()
+}
+
+fn has_next(inputs: &CharSlice, pos: &mut usize) -> bool {
+    while is_whitespace(inputs, pos) {
+        *pos += 1
+    }
+    has_more(&inputs, pos)
+}
+
+fn next_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+    let parsers: Vec<ParserFunction> = vec![
+        next_numeric_token,
+        next_alphanumeric_token,
+        next_backticks_quoted_token,
+        next_double_quoted_token,
+        next_single_quoted_token,
+        next_symbol_token,
+    ];
+
+    // find and return the token
+    return parsers.iter().find_map(|&p| p(&inputs, pos));
+}
+
+fn next_alphanumeric_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+    next_eligible_token(inputs, pos, Token::AlphaNumeric,
+                        |inputs, pos| {
+                            has_more(inputs, pos) && (inputs[*pos].is_alphanumeric())
+                        })
+}
+
+fn next_eligible_token(inputs: &CharSlice,
+                       pos: &mut usize,
+                       make_token: MakeToken,
+                       is_valid: ValidationFunction) -> Option<Token> {
+    let start = *pos;
+    if has_more(inputs, pos) && is_valid(inputs, pos) {
+        while has_more(inputs, pos) && is_valid(inputs, pos) {
+            *pos += 1;
+        }
+        let end = *pos;
+        return generate_token(inputs, start, end, make_token);
+    }
+    None
+}
+
+fn generate_token(inputs: &CharSlice,
+                  start: usize,
+                  end: usize,
+                  make_token: MakeToken) -> Option<Token> {
+    let (line_no, column_no) = determine_code_position(&inputs, start);
+    return Some(make_token(inputs[start..end].iter().collect(), start, end, line_no, column_no));
+}
+
+fn next_backticks_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+    next_quoted_string_token(inputs, pos, Token::BackticksQuoted, '`')
+}
+
+fn next_double_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+    next_quoted_string_token(inputs, pos, Token::DoubleQuoted, '"')
+}
+
+fn next_glyph_token(inputs: &CharSlice,
+                    pos: &mut usize,
+                    make_token: MakeToken,
+                    is_valid: ValidationFunction) -> Option<Token> {
+    let start = *pos;
+    if has_more(inputs, pos) && is_valid(inputs, pos) {
+        *pos += 1;
+        let end = *pos;
+        return generate_token(inputs, start, end, make_token);
+    }
+    None
+}
+
+fn next_numeric_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+    next_eligible_token(inputs, pos, Token::Numeric, |inputs, pos| {
+        has_more(inputs, pos) && (inputs[*pos].is_numeric())
+    })
+}
+
+fn next_quoted_string_token(inputs: &CharSlice, pos: &mut usize, make_token: MakeToken, q: char) -> Option<Token> {
+    if has_more(inputs, pos) && inputs[*pos] == q {
+        let start = *pos;
+        *pos += 1;
+        while has_more(inputs, pos) && inputs[*pos] != q {
+            *pos += 1;
+        }
+        *pos += 1;
+        let end = *pos;
+        return generate_token(inputs, start, end, make_token);
+    }
+    None
+}
+
+fn next_operator_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+    next_glyph_token(inputs, pos, Token::Operator,
+                     |inputs, pos| {
+                         let chars = ['!', '%', '*', '&', '/', '+', '-', '<', '>', '=', '[', ']', '(', ')'];
+                         has_more(inputs, pos) && chars.contains(&inputs[*pos])
+                     })
+}
+
+fn next_single_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+    next_quoted_string_token(inputs, pos, Token::SingleQuoted, '\'')
+}
+
+fn next_symbol_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+    next_glyph_token(inputs, pos, Token::Symbol, has_more)
+}
+
+// Unit tests
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_fully() {
+        let text = "this\n is\n 1 \n\"way of the world\"\n - `x` + '%'";
+        match parse_fully(text) {
+            Ok(tokens) =>
+                for (i, tok) in tokens.iter().enumerate() {
+                    println!("token[{}]: {:?}", i, tok)
+                }
+            Err(err) =>
+                eprintln!("Error parsing text: {}", err)
+        }
+        assert_eq!(5 - 3, 2);
+    }
+}
