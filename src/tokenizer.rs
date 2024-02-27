@@ -1,12 +1,12 @@
-//mod tokenizer;
+////////////////////////////////////////////////////////////////////
+// tokenizer
+////////////////////////////////////////////////////////////////////
 
 type CharSlice = Vec<char>;
 
 type MakeToken = fn(String, usize, usize, usize, usize) -> Token;
 
 type ParserFunction = fn(&CharSlice, &mut usize) -> Option<Token>;
-
-type TokenSlice = Vec<Option<Token>>;
 
 //#[derive(Debug, Clone, Copy)]
 #[derive(Debug, Clone)]
@@ -38,20 +38,25 @@ fn parse_fully(text: &str) -> Result<Vec<Token>, &str> {
 
 fn determine_code_position(inputs: &CharSlice, start: usize) -> (usize, usize) {
     let mut line_no: usize = 1;
-    for pos in 1..start {
-        let r = inputs[pos];
-        if r == '\n' {
-            line_no += 1;
+    let mut column_no: usize = 1;
+    for pos in 0..=start {
+        match inputs[pos] {
+            '\n' => {
+                line_no += 1;
+                column_no = 1;
+            }
+            _ => column_no += 1
         }
     }
-    let column_no = std::cmp::max(start.saturating_sub(line_no), 1);
     (line_no, column_no)
 }
 
-// Define the helper functions is_whitespace, has_more, and next_token here
-fn is_whitespace(inputs: &CharSlice, pos: &mut usize) -> bool {
-    let chars = &['\t', '\n', '\r', ' '];
-    has_more(inputs, pos) && chars.contains(&inputs[*pos])
+fn generate_token(inputs: &CharSlice,
+                  start: usize,
+                  end: usize,
+                  make_token: MakeToken) -> Option<Token> {
+    let (line_no, column_no) = determine_code_position(&inputs, start);
+    return Some(make_token(inputs[start..end].iter().collect(), start, end, line_no, column_no));
 }
 
 fn has_more(inputs: &CharSlice, pos: &mut usize) -> bool {
@@ -65,8 +70,15 @@ fn has_next(inputs: &CharSlice, pos: &mut usize) -> bool {
     has_more(&inputs, pos)
 }
 
+// Define the helper functions is_whitespace, has_more, and next_token here
+fn is_whitespace(inputs: &CharSlice, pos: &mut usize) -> bool {
+    let chars = &['\t', '\n', '\r', ' '];
+    has_more(inputs, pos) && chars.contains(&inputs[*pos])
+}
+
 fn next_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
+        next_operator_token,
         next_numeric_token,
         next_alphanumeric_token,
         next_backticks_quoted_token,
@@ -80,10 +92,7 @@ fn next_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
 }
 
 fn next_alphanumeric_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
-    next_eligible_token(inputs, pos, Token::AlphaNumeric,
-                        |inputs, pos| {
-                            has_more(inputs, pos) && (inputs[*pos].is_alphanumeric())
-                        })
+    next_eligible_token(inputs, pos, Token::AlphaNumeric, |inputs, pos| has_more(inputs, pos) && (inputs[*pos].is_alphanumeric()))
 }
 
 fn next_eligible_token(inputs: &CharSlice,
@@ -99,14 +108,6 @@ fn next_eligible_token(inputs: &CharSlice,
         return generate_token(inputs, start, end, make_token);
     }
     None
-}
-
-fn generate_token(inputs: &CharSlice,
-                  start: usize,
-                  end: usize,
-                  make_token: MakeToken) -> Option<Token> {
-    let (line_no, column_no) = determine_code_position(&inputs, start);
-    return Some(make_token(inputs[start..end].iter().collect(), start, end, line_no, column_no));
 }
 
 fn next_backticks_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
@@ -172,16 +173,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parse_fully() {
+    fn test_determine_code_position() {
         let text = "this\n is\n 1 \n\"way of the world\"\n - `x` + '%'";
+        let inputs = text.chars().collect();
+        let start = 32;
+        let (line_no, column_no) = determine_code_position(&inputs, start);
+        assert_eq!(line_no, 5);
+        assert_eq!(column_no, 2);
+    }
+
+    #[test]
+    fn test_parse_fully() {
+        let text = "this\n is\n 1 \n\"way of the world\"\n ! `x` + '%' $";
         match parse_fully(text) {
-            Ok(tokens) =>
+            Ok(tokens) => {
                 for (i, tok) in tokens.iter().enumerate() {
                     println!("token[{}]: {:?}", i, tok)
                 }
+                assert_eq!(tokens.len(), 9);
+            }
             Err(err) =>
                 eprintln!("Error parsing text: {}", err)
         }
-        assert_eq!(5 - 3, 2);
+
     }
 }
