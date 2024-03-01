@@ -2,28 +2,17 @@
 // tokenizer
 ////////////////////////////////////////////////////////////////////
 
+use crate::tokens::Token;
+
 type CharSlice = Vec<char>;
 
-type MakeToken = fn(String, usize, usize, usize, usize) -> Token;
+type NewToken = fn(String, usize, usize, usize, usize) -> Token;
 
 type ParserFunction = fn(&CharSlice, &mut usize) -> Option<Token>;
 
-//#[derive(Debug, Clone, Copy)]
-#[derive(Debug, Clone)]
-enum Token {
-    // text, start, end, line_number, column_number
-    AlphaNumeric(String, usize, usize, usize, usize),
-    BackticksQuoted(String, usize, usize, usize, usize),
-    DoubleQuoted(String, usize, usize, usize, usize),
-    Numeric(String, usize, usize, usize, usize),
-    Operator(String, usize, usize, usize, usize),
-    SingleQuoted(String, usize, usize, usize, usize),
-    Symbol(String, usize, usize, usize, usize),
-}
-
 type ValidationFunction = fn(&CharSlice, &mut usize) -> bool;
 
-fn parse_fully(text: &str) -> Result<Vec<Token>, &str> {
+pub fn parse_fully(text: &str) -> Result<Vec<Token>, &str> {
     let inputs: CharSlice = text.chars().collect();
     let mut pos: usize = 0;
     let mut tokens: Vec<Token> = Vec::new();
@@ -54,7 +43,7 @@ fn determine_code_position(inputs: &CharSlice, start: usize) -> (usize, usize) {
 fn generate_token(inputs: &CharSlice,
                   start: usize,
                   end: usize,
-                  make_token: MakeToken) -> Option<Token> {
+                  make_token: NewToken) -> Option<Token> {
     let (line_no, column_no) = determine_code_position(&inputs, start);
     return Some(make_token(inputs[start..end].iter().collect(), start, end, line_no, column_no));
 }
@@ -97,7 +86,7 @@ fn next_alphanumeric_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token>
 
 fn next_eligible_token(inputs: &CharSlice,
                        pos: &mut usize,
-                       make_token: MakeToken,
+                       make_token: NewToken,
                        is_valid: ValidationFunction) -> Option<Token> {
     let start = *pos;
     if has_more(inputs, pos) && is_valid(inputs, pos) {
@@ -120,7 +109,7 @@ fn next_double_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token
 
 fn next_glyph_token(inputs: &CharSlice,
                     pos: &mut usize,
-                    make_token: MakeToken,
+                    make_token: NewToken,
                     is_valid: ValidationFunction) -> Option<Token> {
     let start = *pos;
     if has_more(inputs, pos) && is_valid(inputs, pos) {
@@ -137,7 +126,7 @@ fn next_numeric_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
     })
 }
 
-fn next_quoted_string_token(inputs: &CharSlice, pos: &mut usize, make_token: MakeToken, q: char) -> Option<Token> {
+fn next_quoted_string_token(inputs: &CharSlice, pos: &mut usize, make_token: NewToken, q: char) -> Option<Token> {
     if has_more(inputs, pos) && inputs[*pos] == q {
         let start = *pos;
         *pos += 1;
@@ -193,8 +182,7 @@ mod tests {
                 assert_eq!(tokens.len(), 9);
             }
             Err(err) =>
-                eprintln!("Error parsing text: {}", err)
+                panic!("Error parsing text: {}", err)
         }
-
     }
 }
