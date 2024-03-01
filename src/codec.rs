@@ -2,7 +2,9 @@
 // codec - responsible for encoding/decoding bytes
 ////////////////////////////////////////////////////////////////////
 
+use std::error::Error;
 use std::mem::size_of;
+use uuid::Uuid;
 
 pub fn decode_row_id(buffer: &Vec<u8>, offset: usize) -> u64 {
     let mut id_chk_array: [u8; 8] = [0; 8];
@@ -50,6 +52,10 @@ pub(crate) fn decode_u8x16<A>(buffer: &Vec<u8>, offset: usize, f: fn([u8; 16]) -
     f(scratch)
 }
 
+pub(crate) fn deserialize_uuid(uuid_str: &str) -> Result<[u8; 16], Box<dyn Error>> {
+    Ok(*Uuid::parse_str(uuid_str)?.as_bytes())
+}
+
 pub fn encode_chars(chars: Vec<char>) -> Vec<u8> {
     let mut buf: Vec<u8> = Vec::with_capacity(chars.len());
     for ch in chars {
@@ -88,6 +94,12 @@ mod tests {
         let buf: Vec<u8> = vec![64, 64, 112, 163, 215, 10, 61, 113];
         let value: f64 = decode_u8x8(&buf, 0, |b| f64::from_be_bytes(b));
         assert_eq!(value, 32.88)
+    }
+
+    #[test]
+    fn test_deserialize_uuid() {
+        let bytes: [u8; 16] = deserialize_uuid("2992bb53-cc3c-4f30-8a4c-c1a666afcc46").unwrap();
+        assert_eq!(bytes, [0x29, 0x92, 0xbb, 0x53, 0xcc, 0x3c, 0x4f, 0x30, 0x8a, 0x4c, 0xc1, 0xa6, 0x66, 0xaf, 0xcc, 0x46])
     }
 
     #[test]

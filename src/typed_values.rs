@@ -78,16 +78,17 @@ impl TypedValue {
     }
 
     pub fn wrap_value(raw_value: &str) -> Result<TypedValue, Box<dyn Error>> {
-        use crate::typed_values::TypedValue::*;
-        let int_regex = Regex::new(r"^-?\d+$")?;
         let decimal_regex = Regex::new(r"^-?\d+\.\d+$")?;
+        let int_regex = Regex::new(r"^-?\d+$")?;
         let iso_date_regex = Regex::new(ISO_DATE_FORMAT)?;
+        let uuid_regex = Regex::new("^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$")?;
         match raw_value {
             s if s.is_empty() => Ok(NullValue),
-            s if iso_date_regex.is_match(s) =>
-                Ok(DateValue(DateTime::parse_from_rfc3339(s)?.timestamp_millis())),
             s if int_regex.is_match(s) => Ok(Int64Value(s.parse::<i64>()?)),
             s if decimal_regex.is_match(s) => Ok(Float64Value(s.parse::<f64>()?)),
+            s if iso_date_regex.is_match(s) =>
+                Ok(DateValue(DateTime::parse_from_rfc3339(s)?.timestamp_millis())),
+            s if uuid_regex.is_match(s) => Ok(UUIDValue(codec::deserialize_uuid(s)?)),
             s => Ok(StringValue(s.to_string())),
         }
     }
