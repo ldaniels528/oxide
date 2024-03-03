@@ -40,7 +40,7 @@ impl TypedValue {
             BLOBType(size) => BLOBValue(vec![]),
             CLOBType(size) => CLOBValue(vec![]),
             DateType => codec::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
-            EnumType(_) => NullValue, // TODO enum support
+            EnumType(_) => todo!(), // TODO enum support
             Int8Type => codec::decode_u8(buffer, offset, |b| Int8Value(b)),
             Int16Type => codec::decode_u8x2(buffer, offset, |b| Int16Value(i16::from_be_bytes(b))),
             Int32Type => codec::decode_u8x4(buffer, offset, |b| Int32Value(i32::from_be_bytes(b))),
@@ -49,8 +49,8 @@ impl TypedValue {
             Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
             RecordNumberType => Int64Value(codec::decode_row_id(&buffer, 1) as i64),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
-            StructType(_) => NullValue, // TODO struct support
-            TableType(_) => NullValue, // TODO table support (struct table stocks ...)
+            StructType(_) => todo!(), // TODO struct support
+            TableType(_) => todo!(), // TODO table support (struct table stocks ...)
             UUIDType => codec::decode_u8x16(buffer, offset, |b| UUIDValue(b))
         }
     }

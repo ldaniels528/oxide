@@ -19,11 +19,18 @@ pub struct TableColumn {
 
 impl TableColumn {
     pub fn from_column(column: &Column) -> Result<TableColumn, Box<dyn Error>> {
-        Ok(TableColumn {
-            name: column.name.to_string(),
-            data_type: DataType::parse(&column.column_type)?,
-            default_value: TypedValue::wrap_value(&column.default_value)?,
-        })
+        Ok(Self::new(&column.name,
+                     DataType::parse(&column.column_type)?,
+                     TypedValue::wrap_value(&column.default_value)?))
+    }
+
+    pub fn from_columns(columns: &Vec<Column>) -> Result<Vec<TableColumn>, Box<dyn Error>> {
+        //Ok(columns.iter().map(|c|Self::from_column(c)?).collect())
+        let mut new_columns: Vec<TableColumn> = Vec::with_capacity(columns.len());
+        for column in columns {
+            new_columns.push(Self::from_column(&column)?);
+        }
+        Ok(new_columns)
     }
 
     pub fn new(name: &str, data_type: DataType, default_value: TypedValue) -> TableColumn {

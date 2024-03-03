@@ -8,9 +8,9 @@ use std::mem::size_of;
 use uuid::Uuid;
 
 pub fn decode_row_id(buffer: &Vec<u8>, offset: usize) -> usize {
-    let mut id_chk_array: [u8; 8] = [0; 8];
-    id_chk_array.copy_from_slice(&buffer[offset..(offset + 8)]);
-    usize::from_be_bytes(id_chk_array)
+    let mut id_array: [u8; 8] = [0; 8];
+    id_array.copy_from_slice(&buffer[offset..(offset + 8)]);
+    usize::from_be_bytes(id_array)
 }
 
 pub fn decode_string(buffer: &Vec<u8>, offset: usize, max_size: usize) -> &str {

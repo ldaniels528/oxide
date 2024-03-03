@@ -13,6 +13,7 @@ mod row_metadata;
 mod table_columns;
 mod iocost;
 mod codec;
+mod testdata;
 
 fn main() {
     println!("Tiny-VM v0.1.0");

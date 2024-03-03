@@ -32,7 +32,6 @@ pub enum DataType {
 }
 
 impl DataType {
-
     pub fn max_physical_size(data_type: &DataType) -> usize {
         use crate::data_types::DataType::*;
         let width: usize = match data_type {

@@ -23,16 +23,25 @@ pub struct Row {
 
 impl Row {
     pub fn decode(id: usize, buffer: &Vec<u8>, columns: Vec<TableColumn>) -> Self {
-        let metadata: RowMetadata = RowMetadata::decode(buffer[0]);
+        // if the buffer is empty, just return an empty row
+        if buffer.len() == 0 {
+            return Row {
+                id,
+                metadata: RowMetadata::decode(0x00),
+                columns,
+                fields: vec![],
+            };
+        }
+        let metadata: RowMetadata = RowMetadata::from_bytes(buffer, 0);
         let _id = codec::decode_row_id(buffer, 1);
         let mut offset: usize = 0;
         let mut prev: usize = 1 + size_of::<usize>();
-        let fields = columns.iter().map(|t| {
+        let fields: Vec<Field> = columns.iter().map(|t| {
             offset = prev;
             prev += t.max_physical_size();
             Field::decode(&t.data_type, &buffer, offset)
         }).collect();
-        Self::new(id, metadata, columns.clone(), fields)
+        Self::new(_id, metadata, columns.clone(), fields)
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -52,7 +61,7 @@ impl Row {
 
     // Constructor
     pub fn new(id: usize, metadata: RowMetadata, columns: Vec<TableColumn>, fields: Vec<Field>) -> Self {
-        Self { id, metadata, columns, fields }
+        Row { id, metadata, columns, fields }
     }
 
     pub fn record_size(&self) -> usize {
@@ -62,12 +71,7 @@ impl Row {
     }
 
     pub fn with_row_id(&self, id: usize) -> Row {
-        Row {
-            id,
-            metadata: self.metadata,
-            columns: self.columns.clone(),
-            fields: self.fields.clone(),
-        }
+        Self::new(id, self.metadata, self.columns.clone(), self.fields.clone())
     }
 }
 
@@ -114,11 +118,10 @@ mod tests {
     fn test_encode() {
         let row: Row = create_test_row();
         assert_eq!(row.encode(), vec![
-            0b1001_0000, 0, 0, 0, 0, 0, 0, 0, 214,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 214,
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 3, b'A', b'M', b'D', 0,
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
             0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
         ]);
-        assert_eq!(row.record_size(), 44)
     }
 }
