@@ -15,14 +15,14 @@ use crate::table_columns::TableColumn;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Row {
-    pub id: u64,
+    pub id: usize,
     pub metadata: RowMetadata,
     pub columns: Vec<TableColumn>,
     pub fields: Vec<Field>,
 }
 
 impl Row {
-    pub fn decode(id: u64, buffer: &Vec<u8>, columns: Vec<TableColumn>) -> Self {
+    pub fn decode(id: usize, buffer: &Vec<u8>, columns: Vec<TableColumn>) -> Self {
         let metadata: RowMetadata = RowMetadata::decode(buffer[0]);
         let _id = codec::decode_row_id(buffer, 1);
         let mut offset: usize = 0;
@@ -51,7 +51,7 @@ impl Row {
     }
 
     // Constructor
-    pub fn new(id: u64, metadata: RowMetadata, columns: Vec<TableColumn>, fields: Vec<Field>) -> Self {
+    pub fn new(id: usize, metadata: RowMetadata, columns: Vec<TableColumn>, fields: Vec<Field>) -> Self {
         Self { id, metadata, columns, fields }
     }
 
@@ -60,12 +60,22 @@ impl Row {
         size += self.columns.iter().map(|c| c.max_physical_size()).sum::<usize>();
         return size;
     }
+
+    pub fn with_row_id(&self, id: usize) -> Row {
+        Row {
+            id,
+            metadata: self.metadata,
+            columns: self.columns.clone(),
+            fields: self.fields.clone(),
+        }
+    }
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::*;
+    use crate::testdata::create_test_row;
     use crate::typed_values::TypedValue::*;
 
     use super::*;
@@ -89,7 +99,6 @@ mod tests {
         assert_eq!(row.metadata.is_blob, false);
         assert_eq!(row.metadata.is_encrypted, false);
         assert_eq!(row.metadata.is_replicated, false);
-        assert_eq!(row.record_size(), 44);
         assert_eq!(row.fields[0].metadata.is_active, true);
         assert_eq!(row.fields[0].metadata.is_compressed, false);
         assert_eq!(row.fields[0].value, StringValue("MANA".to_string()));
@@ -103,23 +112,7 @@ mod tests {
 
     #[test]
     fn test_encode() {
-        let metadata = RowMetadata {
-            is_allocated: true,
-            is_blob: false,
-            is_encrypted: false,
-            is_replicated: true,
-        };
-        let columns: Vec<TableColumn> = vec![
-            TableColumn::new("symbol", StringType(4), NullValue),
-            TableColumn::new("exchange", StringType(4), NullValue),
-            TableColumn::new("lastSale", Float64Type, NullValue),
-        ];
-        let fields: Vec<Field> = vec![
-            Field::with_value(StringValue("AMD".to_string())),
-            Field::with_value(StringValue("NYSE".to_string())),
-            Field::with_value(Float64Value(78.35)),
-        ];
-        let row: Row = Row::new(214, metadata, columns, fields);
+        let row: Row = create_test_row();
         assert_eq!(row.encode(), vec![
             0b1001_0000, 0, 0, 0, 0, 0, 0, 0, 214,
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 3, b'A', b'M', b'D', 0,

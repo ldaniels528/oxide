@@ -4,12 +4,13 @@
 
 use std::error::Error;
 use std::mem::size_of;
+
 use uuid::Uuid;
 
-pub fn decode_row_id(buffer: &Vec<u8>, offset: usize) -> u64 {
+pub fn decode_row_id(buffer: &Vec<u8>, offset: usize) -> usize {
     let mut id_chk_array: [u8; 8] = [0; 8];
     id_chk_array.copy_from_slice(&buffer[offset..(offset + 8)]);
-    u64::from_be_bytes(id_chk_array)
+    usize::from_be_bytes(id_chk_array)
 }
 
 pub fn decode_string(buffer: &Vec<u8>, offset: usize, max_size: usize) -> &str {
@@ -64,7 +65,7 @@ pub fn encode_chars(chars: Vec<char>) -> Vec<u8> {
     encode_u8x_n(buf)
 }
 
-pub fn encode_row_id(id: u64) -> Vec<u8> {
+pub fn encode_row_id(id: usize) -> Vec<u8> {
     id.to_be_bytes().to_vec()
 }
 
@@ -85,7 +86,7 @@ mod tests {
     #[test]
     fn test_decode_row_id() {
         let buf: Vec<u8> = vec![0xDE, 0xAD, 0xCA, 0xFE, 0xBE, 0xEF, 0xBA, 0xBE];
-        let id: u64 = decode_row_id(&buf, 0);
+        let id = decode_row_id(&buf, 0);
         assert_eq!(id, 0xDEAD_CAFE_BEEF_BABE)
     }
 
@@ -105,9 +106,8 @@ mod tests {
     #[test]
     fn test_encode_row_id() {
         let expected: Vec<u8> = vec![0xDE, 0xAD, 0xCA, 0xFE, 0xBE, 0xEF, 0xBA, 0xBE];
-        let id: u64 = 0xDEAD_CAFE_BEEF_BABE;
+        let id = 0xDEAD_CAFE_BEEF_BABE;
         let actual: Vec<u8> = encode_row_id(id);
         assert_eq!(actual, expected)
     }
-    
 }
