@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-// namespaces
+// namespaces module
 ////////////////////////////////////////////////////////////////////
 
 use std::fs;
@@ -85,7 +85,7 @@ impl Namespace {
 #[cfg(test)]
 mod tests {
     use crate::columns::Column;
-    use crate::dataframe_config::DataFrameConfig;
+    use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 
     use super::*;
 
@@ -129,10 +129,10 @@ mod tests {
             Column::new("exchange", "String(10)", ""),
             Column::new("lastSale", "Double", ""),
         ];
-        let indices = Vec::with_capacity(0);
-        let partitions = Vec::with_capacity(0);
-        let df = DataFrameConfig::new(columns, indices, partitions);
-        let ns = Namespace::new("securities", "other_otc", "Stocks");
+        let indices: Vec<HashIndexConfig> = Vec::with_capacity(0);
+        let partitions: Vec<String> = Vec::with_capacity(0);
+        let df: DataFrameConfig = DataFrameConfig::new(columns, indices, partitions);
+        let ns: Namespace = Namespace::new("securities", "other_otc", "Stocks");
 
         ns.write_config(&df)
             .expect("failed to write config");

@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-// I/O cost
+// I/O cost module
 ////////////////////////////////////////////////////////////////////
 
 use std::ops::Add;
@@ -142,4 +142,32 @@ impl IOCost {
 
 // Unit tests
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add() {
+        let (mut a, mut b) = (IOCost::new(), IOCost::new());
+        a.inserted = 3;
+        a.deleted = 3;
+        b.updated = 3;
+        b.deleted = 1;
+        let c: IOCost = a + b;
+
+        assert_eq!(c.deleted, 4);
+        assert_eq!(c.inserted, 3);
+        assert_eq!(c.updated, 3);
+    }
+
+    #[test]
+    fn test_add_assign() {
+        let (mut a, mut b, mut c) = (IOCost::new(), IOCost::new(), IOCost::new());
+        a.inserted = 3;
+        b.updated = 3;
+        c += a;
+        c += b;
+
+        assert_eq!(c.inserted, 3);
+        assert_eq!(c.updated, 3);
+    }
+}

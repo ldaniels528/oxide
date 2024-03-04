@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-// data_types
+// data types module
 ////////////////////////////////////////////////////////////////////
 
 use std::error::Error;
@@ -32,9 +32,10 @@ pub enum DataType {
 }
 
 impl DataType {
-    pub fn max_physical_size(data_type: &DataType) -> usize {
+    /// computes and returns the maximum physical size of a value of this datatype
+    pub fn compute_max_physical_size(&self) -> usize {
         use crate::data_types::DataType::*;
-        let width: usize = match data_type {
+        let width: usize = match self {
             BLOBType(size) => *size,
             CLOBType(size) => *size,
             DateType => 8,
@@ -54,6 +55,7 @@ impl DataType {
         width + 1 // +1 for field metadata
     }
 
+    /// parses a datatype expression (e.g. "String(20)")
     pub fn parse(column_type: &str) -> Result<DataType, Box<dyn Error>> {
         let tokens: Vec<Token> = parse_fully(column_type)?;
         let token_slice: &[Token] = tokens.as_slice();
@@ -79,6 +81,7 @@ impl DataType {
         }
     }
 
+    /// resolves a datatype by name
     pub fn resolve(name: &str, args: &[&str]) -> Result<DataType, Box<dyn Error>> {
         fn parameterless(data_type: DataType, args: &[&str]) -> Result<DataType, Box<dyn Error>> {
             if args.is_empty() { Ok(data_type) } else { Err("Parameters are not supported for this type".into()) }

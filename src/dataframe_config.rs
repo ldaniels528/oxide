@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-// dataframe configuration
+// dataframe configuration module
 ////////////////////////////////////////////////////////////////////
 
 use serde::Serialize;
@@ -8,15 +8,15 @@ use crate::columns::Column;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct DataFrameConfig {
-    pub columns: Vec<Column>,
-    pub indices: Vec<HashIndexConfig>,
-    pub partitions: Vec<String>,
+    pub(crate) columns: Vec<Column>,
+    pub(crate) indices: Vec<HashIndexConfig>,
+    pub(crate) partitions: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct HashIndexConfig {
-    pub indexed_column_name: String,
-    pub is_unique: bool,
+    pub(crate) indexed_column_name: String,
+    pub(crate) is_unique: bool,
 }
 
 impl DataFrameConfig {
@@ -31,11 +31,11 @@ impl DataFrameConfig {
 #[cfg(test)]
 mod tests {
     use crate::dataframe_config::DataFrameConfig;
-    use crate::testdata::create_test_dataframe_config;
+    use crate::testdata::make_dataframe_config;
 
     #[test]
-    fn test_create_dataframe() {
-        let cfg: DataFrameConfig = create_test_dataframe_config();
+    fn test_new() {
+        let cfg: DataFrameConfig = make_dataframe_config();
         assert_eq!(cfg.columns[0].name, "symbol");
         assert_eq!(cfg.columns[0].column_type, "String(4)");
         assert_eq!(cfg.columns[0].default_value, "");

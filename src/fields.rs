@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-// fields
+// fields module
 ////////////////////////////////////////////////////////////////////
 
 use std::error::Error;
@@ -15,8 +15,8 @@ use crate::typed_values::TypedValue;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Field {
-    pub metadata: FieldMetadata,
-    pub value: TypedValue,
+    pub(crate) metadata: FieldMetadata,
+    pub(crate) value: TypedValue,
 }
 
 impl Field {
@@ -73,14 +73,14 @@ mod tests {
     #[test]
     fn test_encode() {
         let buf: Vec<u8> = vec![0x80, 0, 0, 0, 0, 0, 0, 0, 4, b'H', b'A', b'N', b'D', 0];
-        let column: TableColumn = TableColumn::new("symbol", StringType(5), NullValue);
+        let column: TableColumn = TableColumn::new("symbol", StringType(5), NullValue, 0);
         let field: Field = Field::with_value(StringValue("HAND".to_string()));
-        assert_eq!(field.encode(column.max_physical_size()), buf);
+        assert_eq!(field.encode(column.max_physical_size), buf);
     }
 
     #[test]
     fn test_with_default() {
-        let column: TableColumn = TableColumn::new("symbol", StringType(4), StringValue("N/A".to_string()));
+        let column: TableColumn = TableColumn::new("symbol", StringType(4), StringValue("N/A".to_string()), 0);
         let field: Field = Field::with_default(column);
         assert_eq!(field.value, StringValue("N/A".to_string()));
     }
