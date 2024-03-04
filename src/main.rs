@@ -16,7 +16,7 @@ mod codec;
 mod testdata;
 
 fn main() {
-    println!("Tiny-VM v0.1.0");
+    println!("TinyDB v0.1.0");
 
     let text = "this\n is\n 1 \n\"way of the world\"\n ! `x` + '%' $";
     match tokenizer::parse_fully(text) {
