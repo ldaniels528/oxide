@@ -39,7 +39,7 @@ impl DataFrame {
         Ok(IOCost::append(1, self.record_size))
     }
 
-    /// computes the total record size (ih bytes)
+    /// computes the total record size (in bytes)
     fn compute_record_size(columns: &Vec<TableColumn>) -> usize {
         Row::overhead() + columns.iter().map(|c| c.max_physical_size).sum::<usize>()
     }
@@ -82,9 +82,9 @@ impl DataFrame {
         let column: &TableColumn = &self.columns[column_id];
         let mut buffer: Vec<u8> = vec![0; column.max_physical_size];
         let row_offset: u64 = (id * self.record_size) as u64;
-        let _ = &self.file.seek(SeekFrom::Start(row_offset))?;
+        let _ = &self.file.seek(SeekFrom::Start(row_offset + column.offset as u64))?;
         let _ = &self.file.read_exact(&mut buffer)?;
-        let field: Field = Field::decode(&column.data_type, &buffer, column.offset);
+        let field: Field = Field::decode(&column.data_type, &buffer, 0);
         Ok(field.value)
     }
 
@@ -146,6 +146,7 @@ mod tests {
     use crate::rows::Row;
     use crate::table_columns::TableColumn;
     use crate::testdata::*;
+    use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::{Float64Value, NullValue, StringValue};
 
     #[test]
@@ -251,6 +252,20 @@ mod tests {
         assert_eq!(row.fields[2].value, Float64Value(78.35));
         assert_eq!(cost.scanned, 1);
         assert_eq!(cost.bytes_read, df.record_size);
+    }
+
+    #[test]
+    fn test_read_field() {
+        // create a dataframe with a single (encoded) row
+        let mut df: DataFrame = make_rows_from_bytes("finance", "stocks", "quotes", &mut vec![
+            0b1000_0000, 0xDE, 0xAD, 0xBA, 0xBE, 0xBE, 0xEF, 0xCA, 0xFE,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'O', b'O', b'M',
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'K', b'I', b'N', b'G',
+            0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
+        ]).unwrap();
+
+        let value: TypedValue = df.read_field(0, 0).unwrap();
+        assert_eq!(value, StringValue("ROOM".to_string()));
     }
 
     #[test]
