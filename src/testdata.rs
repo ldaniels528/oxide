@@ -3,7 +3,8 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::error::Error;
-use std::io::{Seek, SeekFrom, Write};
+use std::fs::File;
+use std::io::{Seek, Write};
 
 use crate::columns::Column;
 use crate::data_types::DataType::{Float64Type, StringType};
@@ -15,6 +16,8 @@ use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::{Float64Value, NullValue, StringValue};
+
+type TestError = Box<dyn Error>;
 
 pub fn make_columns() -> Vec<Column> {
     vec![
@@ -46,9 +49,9 @@ pub fn make_row(id: usize) -> Row {
     Row::new(id, metadata, columns, fields)
 }
 
-pub fn make_rows_from_bytes(database: &str, schema: &str, name: &str, row_data: &[u8]) -> Result<DataFrame, Box<dyn Error>> {
+pub fn make_rows_from_bytes(database: &str, schema: &str, name: &str, row_data: &[u8]) -> Result<DataFrame, TestError> {
     let mut df: DataFrame = make_dataframe(database, schema, name)?;
-    df.file.seek(SeekFrom::Start(0))?;
+    df.file.set_len(0)?;
     df.file.write_all(row_data)?;
     df.file.flush()?;
     Ok(df)
@@ -60,6 +63,19 @@ pub fn make_table_columns() -> Vec<TableColumn> {
         TableColumn::new("exchange", StringType(4), NullValue, 22),
         TableColumn::new("lastSale", Float64Type, NullValue, 35),
     ]
+}
+
+pub fn make_table_file_from_bytes(database: &str, schema: &str, name: &str, row_data: &[u8]) -> (File, Vec<TableColumn>, usize) {
+    let (mut file, columns, record_size) = make_table_file(database, schema, name);
+    file.write_all(row_data).unwrap();
+    file.flush().unwrap();
+    (file, columns, record_size)
+}
+
+pub fn make_table_file(database: &str, schema: &str, name: &str) -> (File, Vec<TableColumn>, usize) {
+    let mut df: DataFrame = make_dataframe(database, schema, name).unwrap();
+    df.file.set_len(0).unwrap();
+    (df.file, df.columns, df.record_size)
 }
 
 // Unit tests

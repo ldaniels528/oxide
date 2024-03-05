@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct FieldMetadata {
     pub(crate) is_active: bool,
     pub(crate) is_compressed: bool,

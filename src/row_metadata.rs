@@ -6,7 +6,7 @@ use std::error::Error;
 
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct RowMetadata {
     pub(crate) is_allocated: bool,
     pub(crate) is_blob: bool,

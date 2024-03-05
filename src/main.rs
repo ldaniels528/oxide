@@ -14,6 +14,7 @@ mod table_columns;
 mod iocost;
 mod codec;
 mod testdata;
+mod row_collection;
 
 fn main() {
     println!("TinyDB v0.1.0");

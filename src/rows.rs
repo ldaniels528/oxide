@@ -13,7 +13,7 @@ use crate::fields::Field;
 use crate::row_metadata::RowMetadata;
 use crate::table_columns::TableColumn;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Row {
     pub(crate) id: usize,
     pub(crate) metadata: RowMetadata,
@@ -38,6 +38,18 @@ impl Row {
             Field::decode(&t.data_type, &buffer, t.offset)
         }).collect();
         Self::new(_id, metadata, columns.clone(), fields)
+    }
+
+    pub fn decode_rows(columns: &Vec<TableColumn>, row_data: Vec<Vec<u8>>) -> Vec<Row> {
+        let mut rows: Vec<Row> = Vec::new();
+        for row_bytes in row_data {
+            let id: usize = codec::decode_row_id(&row_bytes, 1);
+            let row: Row = Row::decode(id, &row_bytes, &columns);
+            if row.metadata.is_allocated {
+                rows.push(row);
+            }
+        }
+        rows
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -81,6 +93,7 @@ impl Row {
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::*;
+    use crate::field_metadata::FieldMetadata;
     use crate::testdata::{make_row, make_table_columns};
     use crate::typed_values::TypedValue::*;
 
@@ -95,21 +108,21 @@ mod tests {
             0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
         ];
         let row: Row = Row::decode(187, &buf, &make_table_columns());
-        println!("{:?}", row);
-        assert_eq!(row.id, 187);
-        assert_eq!(row.metadata.is_allocated, true);
-        assert_eq!(row.metadata.is_blob, false);
-        assert_eq!(row.metadata.is_encrypted, false);
-        assert_eq!(row.metadata.is_replicated, false);
-        assert_eq!(row.fields[0].metadata.is_active, true);
-        assert_eq!(row.fields[0].metadata.is_compressed, false);
-        assert_eq!(row.fields[0].value, StringValue("MANA".to_string()));
-        assert_eq!(row.fields[1].metadata.is_active, true);
-        assert_eq!(row.fields[1].metadata.is_compressed, false);
-        assert_eq!(row.fields[1].value, StringValue("YHWH".to_string()));
-        assert_eq!(row.fields[2].metadata.is_active, true);
-        assert_eq!(row.fields[2].metadata.is_compressed, false);
-        assert_eq!(row.fields[2].value, Float64Value(78.35));
+        let fmd: FieldMetadata = FieldMetadata::decode(0x80);
+        assert_eq!(row, Row {
+            id: 187,
+            metadata: RowMetadata::decode(0x80),
+            columns: vec![
+                TableColumn::new("symbol", StringType(4), NullValue, 9),
+                TableColumn::new("exchange", StringType(4), NullValue, 22),
+                TableColumn::new("lastSale", Float64Type, NullValue, 35),
+            ],
+            fields: vec![
+                Field::new(fmd.clone(), StringValue("MANA".into())),
+                Field::new(fmd.clone(), StringValue("YHWH".into())),
+                Field::new(fmd.clone(), Float64Value(78.35)),
+            ],
+        });
     }
 
     #[test]

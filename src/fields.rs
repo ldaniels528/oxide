@@ -13,7 +13,7 @@ use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::*;
 use crate::typed_values::TypedValue;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Field {
     pub(crate) metadata: FieldMetadata,
     pub(crate) value: TypedValue,

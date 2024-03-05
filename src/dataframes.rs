@@ -16,6 +16,8 @@ use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
 
+type DeviceError = Box<dyn Error>;
+
 /// DataFrame is a logical representation of table
 #[derive(Debug)]
 pub struct DataFrame {
@@ -28,7 +30,7 @@ pub struct DataFrame {
 
 impl DataFrame {
     /// appends a new row to the table
-    pub fn append(&mut self, row: Row) -> Result<IOCost, Box<dyn Error>> {
+    pub fn append(&mut self, row: Row) -> Result<IOCost, DeviceError> {
         let file_len: u64 = (&self.file.metadata()?).len();
         let new_row_id: usize = (file_len / self.record_size as u64) as usize;
         let new_row: Row = row.with_row_id(new_row_id);
@@ -45,7 +47,7 @@ impl DataFrame {
     }
 
     /// creates a new dataframe; persisting its configuration to disk.
-    pub fn create(ns: Namespace, config: DataFrameConfig) -> Result<DataFrame, Box<dyn Error>> {
+    pub fn create(ns: Namespace, config: DataFrameConfig) -> Result<DataFrame, DeviceError> {
         // write the configuration file
         ns.write_config(&config)?;
         // open the file with read and write access
@@ -55,12 +57,12 @@ impl DataFrame {
     }
 
     /// returns the size of the underlying physical table
-    pub fn length(&self) -> Result<u64, Box<dyn Error>> {
+    pub fn length(&self) -> Result<u64, DeviceError> {
         Ok(self.file.metadata()?.len())
     }
 
     /// creates a new dataframe.
-    pub fn new(ns: Namespace, config: DataFrameConfig, file: File) -> Result<DataFrame, Box<dyn Error>> {
+    pub fn new(ns: Namespace, config: DataFrameConfig, file: File) -> Result<DataFrame, DeviceError> {
         // convert the logical columns to "realized" physical columns
         let columns: Vec<TableColumn> = TableColumn::from_columns(&config.columns)?;
         // compute the record size (+9 bytes for metadata and row ID)
@@ -69,7 +71,7 @@ impl DataFrame {
     }
 
     /// overwrites a specified row by ID
-    pub fn overwrite(&mut self, row: Row) -> Result<IOCost, Box<dyn Error>> {
+    pub fn overwrite(&mut self, row: Row) -> Result<IOCost, DeviceError> {
         let offset: u64 = (row.id * self.record_size) as u64;
         let _ = &self.file.seek(SeekFrom::Start(offset))?;
         let _ = &self.file.write_all(&row.encode())?;
@@ -78,7 +80,7 @@ impl DataFrame {
     }
 
     /// reads the specified field value from the specified row ID
-    pub fn read_field(&mut self, id: usize, column_id: usize) -> Result<TypedValue, Box<dyn Error>> {
+    pub fn read_field(&mut self, id: usize, column_id: usize) -> Result<TypedValue, DeviceError> {
         let column: &TableColumn = &self.columns[column_id];
         let mut buffer: Vec<u8> = vec![0; column.max_physical_size];
         let row_offset: u64 = (id * self.record_size) as u64;
@@ -89,7 +91,7 @@ impl DataFrame {
     }
 
     /// reads a row by ID
-    pub fn read_row(&mut self, id: usize) -> Result<(Row, IOCost), Box<dyn Error>> {
+    pub fn read_row(&mut self, id: usize) -> Result<(Row, IOCost), DeviceError> {
         let offset: u64 = (id * self.record_size) as u64;
         let mut buffer: Vec<u8> = vec![0; self.record_size];
         let _ = &self.file.seek(SeekFrom::Start(offset))?;
@@ -100,7 +102,7 @@ impl DataFrame {
     }
 
     /// reads a range of rows
-    pub fn read_rows(&mut self, from: usize, to: usize) -> Result<(Vec<Row>, IOCost), Box<dyn Error>> {
+    pub fn read_rows(&mut self, from: usize, to: usize) -> Result<(Vec<Row>, IOCost), DeviceError> {
         let mut rows: Vec<Row> = Vec::with_capacity(to - from);
         let mut total_cost: IOCost = IOCost::new();
         for id in from..to {
@@ -115,7 +117,7 @@ impl DataFrame {
     }
 
     /// resizes the table
-    pub fn resize(&mut self, new_size: usize) -> Result<IOCost, Box<dyn Error>> {
+    pub fn resize(&mut self, new_size: usize) -> Result<IOCost, DeviceError> {
         let new_length = new_size as u64 * self.record_size as u64;
         let old_length = self.file.metadata()?.len();
         // modify the file
@@ -132,7 +134,7 @@ impl DataFrame {
     }
 
     /// returns the allocated sizes the table (in numbers of rows)
-    pub fn size(&self) -> Result<usize, Box<dyn Error>> {
+    pub fn size(&self) -> Result<usize, DeviceError> {
         Ok((self.file.metadata()?.len() as usize) / self.record_size)
     }
 }
@@ -142,7 +144,10 @@ impl DataFrame {
 mod tests {
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::dataframes::DataFrame;
+    use crate::field_metadata::FieldMetadata;
+    use crate::fields::Field;
     use crate::iocost::IOCost;
+    use crate::row_metadata::RowMetadata;
     use crate::rows::Row;
     use crate::table_columns::TableColumn;
     use crate::testdata::*;
@@ -235,21 +240,21 @@ mod tests {
 
         // read the row
         let (row, cost) = df.read_row(0).unwrap();
-
-        assert_eq!(row.id, 0xDEAD_BABE_BEEF_CAFE);
-        assert_eq!(row.metadata.is_allocated, true);
-        assert_eq!(row.metadata.is_blob, false);
-        assert_eq!(row.metadata.is_encrypted, false);
-        assert_eq!(row.metadata.is_replicated, false);
-        assert_eq!(row.fields[0].metadata.is_active, true);
-        assert_eq!(row.fields[0].metadata.is_compressed, false);
-        assert_eq!(row.fields[0].value, StringValue("ROOM".to_string()));
-        assert_eq!(row.fields[1].metadata.is_active, true);
-        assert_eq!(row.fields[1].metadata.is_compressed, false);
-        assert_eq!(row.fields[1].value, StringValue("KING".to_string()));
-        assert_eq!(row.fields[2].metadata.is_active, true);
-        assert_eq!(row.fields[2].metadata.is_compressed, false);
-        assert_eq!(row.fields[2].value, Float64Value(78.35));
+        let fmd: FieldMetadata = FieldMetadata::decode(0x80);
+        assert_eq!(row, Row {
+            id: 0xDEAD_BABE_BEEF_CAFE,
+            metadata: RowMetadata::decode(0x80),
+            columns: vec![
+                TableColumn::new("symbol", StringType(4), NullValue, 9),
+                TableColumn::new("exchange", StringType(4), NullValue, 22),
+                TableColumn::new("lastSale", Float64Type, NullValue, 35),
+            ],
+            fields: vec![
+                Field::new(fmd.clone(), StringValue("ROOM".into())),
+                Field::new(fmd.clone(), StringValue("KING".into())),
+                Field::new(fmd.clone(), Float64Value(78.35)),
+            ],
+        });
         assert_eq!(cost.scanned, 1);
         assert_eq!(cost.bytes_read, df.record_size);
     }

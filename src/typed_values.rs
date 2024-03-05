@@ -34,8 +34,6 @@ pub enum TypedValue {
 
 impl TypedValue {
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> TypedValue {
-        use DataType::*;
-        use TypedValue::*;
         match data_type {
             BLOBType(size) => BLOBValue(vec![]),
             CLOBType(size) => CLOBValue(vec![]),
@@ -60,7 +58,6 @@ impl TypedValue {
     }
 
     pub fn encode_value(value: &TypedValue) -> Vec<u8> {
-        use crate::typed_values::TypedValue::*;
         match value {
             BLOBValue(bytes) => codec::encode_u8x_n(bytes.to_vec()),
             CLOBValue(chars) => codec::encode_chars(chars.to_vec()),
