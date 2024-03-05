@@ -53,7 +53,7 @@ pub(crate) fn decode_u8x16<A>(buffer: &Vec<u8>, offset: usize, f: fn([u8; 16]) -
     f(scratch)
 }
 
-pub(crate) fn deserialize_uuid(uuid_str: &str) -> Result<[u8; 16], Box<dyn Error>> {
+pub(crate) fn decode_uuid(uuid_str: &str) -> Result<[u8; 16], Box<dyn Error>> {
     Ok(*Uuid::parse_str(uuid_str)?.as_bytes())
 }
 
@@ -91,6 +91,27 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_u8() {
+        let buf: Vec<u8> = vec![64];
+        let value = decode_u8(&buf, 0, |b| b);
+        assert_eq!(value, 64)
+    }
+
+    #[test]
+    fn test_decode_u8x2() {
+        let buf: Vec<u8> = vec![255, 255];
+        let value: u16 = decode_u8x2(&buf, 0, |b| u16::from_be_bytes(b));
+        assert_eq!(value, 65535)
+    }
+
+    #[test]
+    fn test_decode_u8x4() {
+        let buf: Vec<u8> = vec![64, 64, 112, 163];
+        let value: i32 = decode_u8x4(&buf, 0, |b| i32::from_be_bytes(b));
+        assert_eq!(value, 1077964963)
+    }
+
+    #[test]
     fn test_decode_u8x8() {
         let buf: Vec<u8> = vec![64, 64, 112, 163, 215, 10, 61, 113];
         let value: f64 = decode_u8x8(&buf, 0, |b| f64::from_be_bytes(b));
@@ -98,9 +119,30 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_uuid() {
-        let bytes: [u8; 16] = deserialize_uuid("2992bb53-cc3c-4f30-8a4c-c1a666afcc46").unwrap();
+    fn test_decode_u8x16() {
+        let buf: Vec<u8> = vec![0x29, 0x92, 0xbb, 0x53, 0xcc, 0x3c, 0x4f, 0x30, 0x8a, 0x4c, 0xc1, 0xa6, 0x66, 0xaf, 0xcc, 0x46];
+        let value: Uuid = decode_u8x16(&buf, 0, |b| Uuid::from_bytes(b));
+        assert_eq!(value, Uuid::parse_str("2992bb53-cc3c-4f30-8a4c-c1a666afcc46").unwrap())
+    }
+
+    #[test]
+    fn test_decode_string() {
+        let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 4, b'Y', b'H', b'W', b'H'];
+        let value: &str = decode_string(&buf, 0, 4);
+        assert_eq!(value, "YHWH")
+    }
+
+    #[test]
+    fn test_decode_uuid() {
+        let bytes: [u8; 16] = decode_uuid("2992bb53-cc3c-4f30-8a4c-c1a666afcc46").unwrap();
         assert_eq!(bytes, [0x29, 0x92, 0xbb, 0x53, 0xcc, 0x3c, 0x4f, 0x30, 0x8a, 0x4c, 0xc1, 0xa6, 0x66, 0xaf, 0xcc, 0x46])
+    }
+
+    #[test]
+    fn test_encode_chars() {
+        let expected: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 30, 84, 104, 101, 32, 108, 105, 116, 116, 108, 101, 32, 121, 111, 114, 107, 105, 101, 32, 98, 97, 114, 107, 101, 100, 32, 97, 116, 32, 109, 101];
+        let actual: Vec<u8> = encode_chars("The little yorkie barked at me".chars().collect());
+        assert_eq!(actual, expected)
     }
 
     #[test]

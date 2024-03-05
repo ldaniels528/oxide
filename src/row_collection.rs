@@ -26,6 +26,8 @@ pub trait RowCollection {
 
     fn read_rows(&mut self, from: usize, to: usize) -> Result<(Vec<Vec<u8>>, IOCost), DeviceError>;
 
+    fn record_size(&self) -> usize;
+
     /// resizes the table
     fn resize(&mut self, new_size: usize) -> Result<IOCost, DeviceError>;
 
@@ -33,11 +35,11 @@ pub trait RowCollection {
     fn size(&self) -> Result<usize, DeviceError>;
 }
 
-// impl dyn RowCollection {
-//     pub fn from_file(record_size: usize, file: File) -> impl RowCollection {
-//         FileRowCollection::new(record_size, file)
-//     }
-// }
+impl dyn RowCollection {
+    pub fn from_file(record_size: usize, file: File) -> impl RowCollection {
+        FileRowCollection::new(record_size, file)
+    }
+}
 
 #[derive(Debug)]
 pub struct FileRowCollection {
@@ -107,6 +109,10 @@ impl RowCollection for FileRowCollection {
         Ok((rows, total_cost))
     }
 
+    fn record_size(&self) -> usize {
+        self.record_size
+    }
+
     fn resize(&mut self, new_size: usize) -> Result<IOCost, DeviceError> {
         let new_length = new_size as u64 * self.record_size as u64;
         let old_length = self.file.metadata()?.len();
@@ -163,10 +169,11 @@ mod tests {
             0b1000_0000, 64, 89, 0, 0, 0, 0, 0, 0,
         ];
         let target_row_id: usize = codec::decode_row_id(&row_data, 1);
-        let mut frc: FileRowCollection = FileRowCollection::new(record_size, file);
+        let mut frc = <dyn RowCollection>::from_file(record_size, file);
         let cost: IOCost = frc.overwrite(target_row_id, row_data).unwrap();
         assert_eq!(cost.updated, 1);
-        assert_eq!(cost.bytes_written, frc.record_size);
+        assert_eq!(cost.bytes_written, frc.record_size());
+        assert_eq!(frc.next_row_id().unwrap(), 2);
 
         // retrieve the rows (as binary)
         let (bytes, cost) = frc.read_rows(0, 2).unwrap();
@@ -206,18 +213,18 @@ mod tests {
             ],
         });
         assert_eq!(cost.scanned, 2);
-        assert_eq!(cost.bytes_read, 2 * frc.record_size);
+        assert_eq!(cost.bytes_read, 2 * frc.record_size());
     }
 
     #[test]
     fn test_overwrite_row() {
+        // create a new empty table file
         let (file, columns, record_size) =
             make_table_file("finance", "stocks", "quotes");
         file.set_len(0).unwrap();
 
         // create a new row
         let mut frc: FileRowCollection = FileRowCollection::new(record_size, file);
-        frc.resize(0).unwrap();
         let row: Row = make_row(2);
         let cost: IOCost = frc.overwrite(row.id, row.encode()).unwrap();
         assert_eq!(cost.updated, 1);
@@ -296,5 +303,36 @@ mod tests {
         });
         assert_eq!(cost.scanned, 1);
         assert_eq!(cost.bytes_read, record_size);
+    }
+
+    #[test]
+    fn test_resize_shrink() {
+        // create a dataframe with a single (encoded) row
+        let (file, _, record_size) = make_table_file_from_bytes("finance", "stocks", "quotes", &mut vec![
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'I', b'C', b'E',
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+            0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
+        ]);
+
+        let mut frc: FileRowCollection = FileRowCollection::new(record_size, file);
+        let _ = frc.resize(0).unwrap();
+        assert_eq!(frc.length().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_resize_grow() {
+        // create a dataframe with a single (encoded) row
+        let (file, _, record_size) = make_table_file_from_bytes("finance", "stocks", "quotes", &mut vec![
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'I', b'C', b'E',
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+            0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
+        ]);
+
+        let mut frc: FileRowCollection = FileRowCollection::new(record_size, file);
+        let _ = frc.resize(5).unwrap();
+        assert_eq!(frc.size().unwrap(), 5);
+        assert_eq!(frc.length().unwrap(), 5 * frc.record_size as u64);
     }
 }

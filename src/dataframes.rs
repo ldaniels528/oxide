@@ -209,6 +209,7 @@ mod tests {
         assert_eq!(rows[1].fields[2].value, Float64Value(100.0));
         assert_eq!(cost.scanned, 2);
         assert_eq!(cost.bytes_read, 2 * df.record_size);
+        assert_eq!(df.size().unwrap(), 2);
     }
 
     #[test]
@@ -226,6 +227,15 @@ mod tests {
         assert_eq!(df.columns[2].name, "lastSale");
         assert_eq!(df.columns[2].data_type, Float64Type);
         assert_eq!(df.columns[2].default_value, NullValue);
+    }
+
+    #[test]
+    fn test_overwrite_row() {
+        let mut df: DataFrame = make_dataframe("finance", "stocks", "quotes").unwrap();
+        let row: Row = make_row(2);
+        let cost: IOCost = df.overwrite(row).unwrap();
+        assert_eq!(cost.updated, 1);
+        assert_eq!(cost.bytes_written, df.record_size);
     }
 
     #[test]
@@ -279,14 +289,5 @@ mod tests {
         let _ = df.resize(0).unwrap();
         let cost1: IOCost = df.resize(5).unwrap();
         assert_eq!(df.length().unwrap(), (5 * df.record_size) as u64);
-    }
-
-    #[test]
-    fn test_overwrite_row() {
-        let mut df: DataFrame = make_dataframe("finance", "stocks", "quotes").unwrap();
-        let row: Row = make_row(2);
-        let cost: IOCost = df.overwrite(row).unwrap();
-        assert_eq!(cost.updated, 1);
-        assert_eq!(cost.bytes_written, df.record_size);
     }
 }

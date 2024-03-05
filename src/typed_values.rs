@@ -85,7 +85,7 @@ impl TypedValue {
             s if decimal_regex.is_match(s) => Ok(Float64Value(s.parse::<f64>()?)),
             s if iso_date_regex.is_match(s) =>
                 Ok(DateValue(DateTime::parse_from_rfc3339(s)?.timestamp_millis())),
-            s if uuid_regex.is_match(s) => Ok(UUIDValue(codec::deserialize_uuid(s)?)),
+            s if uuid_regex.is_match(s) => Ok(UUIDValue(codec::decode_uuid(s)?)),
             s => Ok(StringValue(s.to_string())),
         }
     }
