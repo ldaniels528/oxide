@@ -8,3 +8,12 @@ name = "tinydb_cli"
 path = "main.rs"
 
 [dependencies]
+bytes = "1.5.0"
+chrono = "0.4.35"
+crossterm = "0.27.0"
+hex = "0.4.3"
+log = "0.4.21"
+regex = "1.10.3"
+serde = { version = "1.0.197", features = ["derive"] }
+serde_json = "1.0.114"
+uuid = { version = "1.7.0", features = ["v4"] }

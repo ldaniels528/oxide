@@ -2,12 +2,9 @@
 // fields module
 ////////////////////////////////////////////////////////////////////
 
-
-
 use serde::Serialize;
 
 use crate::data_types::DataType;
-
 use crate::field_metadata::FieldMetadata;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::*;
@@ -59,6 +56,8 @@ impl Field {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::data_types::DataType::StringType;
+
     use super::*;
 
     #[test]
