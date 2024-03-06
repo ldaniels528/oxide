@@ -1,5 +1,7 @@
+workspace = { members = ["src/core", "src/server"] }
+
 [package]
-name = "tiny_vm"
+name = "tiny_db"
 version = "0.1.0"
 edition = "2021"
 
@@ -16,3 +18,11 @@ regex = "1.10.3"
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = "1.0.114"
 uuid = { version = "1.7.0", features = ["v4"] }
+
+[[bin]]
+name = "tinydb_cli"
+path = "./src/core/main.rs"
+
+[[bin]]
+name = "tinydb_server"
+path = "./src/server/main.rs"

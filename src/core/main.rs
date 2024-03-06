@@ -2,23 +2,6 @@
 //      TinyDB v0.1.0
 ////////////////////////////////////////////////////////////////////
 
-use std::error::Error;
-use std::io::{stdout, Write};
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
-
-use crossterm::{
-    execute,
-    style::{Print, ResetColor},
-    terminal::{Clear, ClearType},
-};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, poll, read};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use serde::Serialize;
-
-use crate::repl::{REPLError, REPLState};
-
 mod tokenizer;
 mod dataframes;
 mod rows;
@@ -37,7 +20,23 @@ mod codec;
 mod testdata;
 mod row_collection;
 mod repl;
-mod server;
+
+use std::error::Error;
+use std::io::{stdout, Write};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use crossterm::{
+    execute,
+    style::{Print, ResetColor},
+    terminal::{Clear, ClearType},
+};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, poll, read};
+use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use serde::Serialize;
+
+use crate::repl::{REPLError, REPLState};
 
 fn main() -> Result<(), REPLError> {
     let mut state: REPLState = REPLState::new();

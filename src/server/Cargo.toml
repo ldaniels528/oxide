@@ -1,0 +1,10 @@
+[package]
+name = "server"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "tinydb_server"
+path = "main.rs"
+
+[dependencies]
