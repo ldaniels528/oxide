@@ -118,6 +118,7 @@ impl RowCollection for FileRowCollection {
         let old_length = self.file.metadata()?.len();
         // modify the file
         self.file.set_len(new_length)?;
+        self.file.flush()?;
         // return the cost
         let mut cost = IOCost::new();
         let shrinkage = (old_length as i64 - new_length as i64) / self.record_size as i64;
