@@ -35,8 +35,8 @@ pub enum TypedValue {
 impl TypedValue {
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> TypedValue {
         match data_type {
-            BLOBType(size) => BLOBValue(vec![]),
-            CLOBType(size) => CLOBValue(vec![]),
+            BLOBType(_size) => BLOBValue(vec![]),
+            CLOBType(_size) => CLOBValue(vec![]),
             DateType => codec::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
             EnumType(_) => todo!(), // TODO enum support
             Int8Type => codec::decode_u8(buffer, offset, |b| Int8Value(b)),

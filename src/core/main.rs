@@ -21,7 +21,7 @@ mod testdata;
 mod row_collection;
 mod repl;
 
-use std::error::Error;
+
 use std::io::{stdout, Write};
 use std::sync::mpsc;
 use std::thread;
@@ -34,7 +34,7 @@ use crossterm::{
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, poll, read};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use serde::Serialize;
+
 
 use crate::repl::{REPLError, REPLState};
 

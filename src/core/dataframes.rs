@@ -6,7 +6,7 @@ use std::error::Error;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use serde::Serialize;
+
 
 use crate::dataframe_config::DataFrameConfig;
 use crate::fields::Field;

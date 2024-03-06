@@ -4,7 +4,7 @@
 
 use std::error::Error;
 use std::fs::File;
-use std::io::{Seek, Write};
+use std::io::{Write};
 
 use crate::columns::Column;
 use crate::data_types::DataType::{Float64Type, StringType};
@@ -73,7 +73,7 @@ pub fn make_table_file_from_bytes(database: &str, schema: &str, name: &str, row_
 }
 
 pub fn make_table_file(database: &str, schema: &str, name: &str) -> (File, Vec<TableColumn>, usize) {
-    let mut df: DataFrame = make_dataframe(database, schema, name).unwrap();
+    let df: DataFrame = make_dataframe(database, schema, name).unwrap();
     df.file.set_len(0).unwrap();
     (df.file, df.columns, df.record_size)
 }
