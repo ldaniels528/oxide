@@ -2,13 +2,13 @@
 // codec module - responsible for encoding/decoding bytes
 ////////////////////////////////////////////////////////////////////
 
-use std::error::Error;
+use std::io;
 use std::mem::size_of;
 
 use uuid::Uuid;
 
 pub fn decode_row_id(buffer: &Vec<u8>, offset: usize) -> usize {
-    let mut id_array: [u8; 8] = [0; 8];
+    let mut id_array = [0u8; 8];
     id_array.copy_from_slice(&buffer[offset..(offset + 8)]);
     usize::from_be_bytes(id_array)
 }
@@ -53,8 +53,9 @@ pub(crate) fn decode_u8x16<A>(buffer: &Vec<u8>, offset: usize, f: fn([u8; 16]) -
     f(scratch)
 }
 
-pub(crate) fn decode_uuid(uuid_str: &str) -> Result<[u8; 16], Box<dyn Error>> {
-    Ok(*Uuid::parse_str(uuid_str)?.as_bytes())
+pub(crate) fn decode_uuid(uuid_str: &str) -> io::Result<[u8; 16]> {
+    Ok(*Uuid::parse_str(uuid_str)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?.as_bytes())
 }
 
 pub fn encode_chars(chars: Vec<char>) -> Vec<u8> {

@@ -2,17 +2,21 @@
 // field metadata module
 ////////////////////////////////////////////////////////////////////
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct FieldMetadata {
     pub(crate) is_active: bool,
     pub(crate) is_compressed: bool,
 }
 
 impl FieldMetadata {
-    pub fn decode(metadata: u8) -> FieldMetadata {
-        FieldMetadata {
+    pub fn new(is_active: bool) -> Self {
+        Self { is_active, is_compressed: false }
+    }
+
+    pub fn decode(metadata: u8) -> Self {
+        Self {
             is_active: metadata & 0b1000_0000u8 > 0,
             is_compressed: metadata & 0b0100_0000u8 > 0,
         }

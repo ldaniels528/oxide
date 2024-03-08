@@ -2,6 +2,8 @@
 // tokenizer module
 ////////////////////////////////////////////////////////////////////
 
+use std::error::Error;
+
 use crate::tokens::Token;
 
 type CharSlice = Vec<char>;
@@ -12,7 +14,7 @@ type ParserFunction = fn(&CharSlice, &mut usize) -> Option<Token>;
 
 type ValidationFunction = fn(&CharSlice, &mut usize) -> bool;
 
-pub fn parse_fully(text: &str) -> Result<Vec<Token>, &str> {
+pub fn parse_fully(text: &str) -> Vec<Token> {
     let inputs: CharSlice = text.chars().collect();
     let mut pos: usize = 0;
     let mut tokens: Vec<Token> = Vec::new();
@@ -22,7 +24,7 @@ pub fn parse_fully(text: &str) -> Result<Vec<Token>, &str> {
             tokens.push(tok_opt.unwrap())
         }
     }
-    Ok(tokens)
+    tokens
 }
 
 fn determine_code_position(inputs: &CharSlice, start: usize) -> (usize, usize) {
@@ -174,15 +176,10 @@ mod tests {
     #[test]
     fn test_parse_fully() {
         let text = "this\n is\n 1 \n\"way of the world\"\n ! `x` + '%' $";
-        match parse_fully(text) {
-            Ok(tokens) => {
-                for (i, tok) in tokens.iter().enumerate() {
-                    println!("token[{}]: {:?}", i, tok)
-                }
-                assert_eq!(tokens.len(), 9);
-            }
-            Err(err) =>
-                panic!("Error parsing text: {}", err)
+        let tokens = parse_fully(text);
+        for (i, tok) in tokens.iter().enumerate() {
+            println!("token[{}]: {:?}", i, tok)
         }
+        assert_eq!(tokens.len(), 9);
     }
 }

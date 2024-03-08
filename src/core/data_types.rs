@@ -4,15 +4,16 @@
 
 use std::error::Error;
 use std::fmt::Debug;
+use std::io;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::columns::Column;
 use crate::data_types::DataType::*;
 use crate::tokenizer::parse_fully;
 use crate::tokens::Token;
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
     BLOBType(usize),
     CLOBType(usize),
@@ -56,8 +57,8 @@ impl DataType {
     }
 
     /// parses a datatype expression (e.g. "String(20)")
-    pub fn parse(column_type: &str) -> Result<DataType, Box<dyn Error>> {
-        let tokens: Vec<Token> = parse_fully(column_type)?;
+    pub fn parse(column_type: &str) -> io::Result<DataType> {
+        let tokens: Vec<Token> = parse_fully(column_type);
         let token_slice: &[Token] = tokens.as_slice();
         match token_slice {
             // ex: Int
@@ -77,20 +78,20 @@ impl DataType {
                 DataType::resolve(name, DataType::transfer_to_string_array(arg_tokens).as_slice())
             }
             // unrecognized - syntax error?
-            _ => Err("malformed type definition".into())
+            _ => Err(io::Error::new(io::ErrorKind::Other, "malformed type definition"))
         }
     }
 
     /// resolves a datatype by name
-    pub fn resolve(name: &str, args: &[&str]) -> Result<DataType, Box<dyn Error>> {
-        fn parameterless(data_type: DataType, args: &[&str]) -> Result<DataType, Box<dyn Error>> {
-            if args.is_empty() { Ok(data_type) } else { Err("Parameters are not supported for this type".into()) }
+    pub fn resolve(name: &str, args: &[&str]) -> io::Result<DataType> {
+        fn parameterless(data_type: DataType, args: &[&str]) -> io::Result<DataType> {
+            if args.is_empty() { Ok(data_type) } else { Err(io::Error::new(io::ErrorKind::Other, "Parameters are not supported for this type")) }
         }
 
-        fn size_parameter(f: fn(usize) -> DataType, args: &[&str]) -> Result<DataType, Box<dyn Error>> {
+        fn size_parameter(f: fn(usize) -> DataType, args: &[&str]) -> io::Result<DataType> {
             if args.len() == 1 {
-                Ok(f(args[0].parse::<usize>()?))
-            } else { Err("a single parameter was expected for this type".into()) }
+                Ok(f(args[0].parse::<usize>().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?))
+            } else { Err(io::Error::new(io::ErrorKind::Other, "a single parameter was expected for this type")) }
         }
 
         match name {
@@ -109,10 +110,10 @@ impl DataType {
             "RecordNumber" => parameterless(RecordNumberType, args),
             "Short" => parameterless(Int16Type, args),
             "String" => size_parameter(|size| StringType(size), args),
-            "Struct" => Err("Struct is not yet implemented".into()),
-            "Table" => Err("Table is not yet implemented".into()),
+            "Struct" => Err(io::Error::new(io::ErrorKind::Other, "Struct is not yet implemented")),
+            "Table" => Err(io::Error::new(io::ErrorKind::Other, "Table is not yet implemented")),
             "UUID" => parameterless(UUIDType, args),
-            type_name => Err(("unrecognized type ".to_owned() + type_name).into())
+            type_name => Err(io::Error::new(io::ErrorKind::Other, format!("unrecognized type {}", type_name)))
         }
     }
 
@@ -120,19 +121,19 @@ impl DataType {
         match self {
             BLOBType(size) => format!("BLOB({})", size),
             CLOBType(size) => format!("CLOB({})", size),
-            DateType => "Date".to_string(),
+            DateType => "Date".into(),
             EnumType(values) => format!("Enum({:?})", values),
-            Int8Type => "Int8".to_string(),
-            Int16Type => "Int16".to_string(),
-            Int32Type => "Int32".to_string(),
-            Int64Type => "Int64".to_string(),
-            Float32Type => "Float32".to_string(),
-            Float64Type => "Float64".to_string(),
-            RecordNumberType => "RecordNumber".to_string(),
+            Int8Type => "Int8".into(),
+            Int16Type => "Int16".into(),
+            Int32Type => "Int32".into(),
+            Int64Type => "Int64".into(),
+            Float32Type => "Float32".into(),
+            Float64Type => "Float64".into(),
+            RecordNumberType => "RecordNumber".into(),
             StringType(size) => format!("String({})", size),
             StructType(columns) => format!("Struct({:?})", columns),
             TableType(columns) => format!("Table({:?})", columns),
-            UUIDType => "UUID".to_string()
+            UUIDType => "UUID".into()
         }
     }
 

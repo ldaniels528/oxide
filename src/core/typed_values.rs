@@ -2,12 +2,12 @@
 // typed values module
 ////////////////////////////////////////////////////////////////////
 
+use std::{i32, io};
 use std::error::Error;
-use std::i32;
 
 use chrono::DateTime;
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::codec;
 use crate::data_types::DataType;
@@ -16,7 +16,7 @@ use crate::typed_values::TypedValue::*;
 
 const ISO_DATE_FORMAT: &str = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$";
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     BLOBValue(Vec<u8>),
     CLOBValue(Vec<char>),
@@ -74,17 +74,24 @@ impl TypedValue {
         }
     }
 
-    pub fn wrap_value(raw_value: &str) -> Result<TypedValue, Box<dyn Error>> {
-        let decimal_regex = Regex::new(r"^-?\d+\.\d+$")?;
-        let int_regex = Regex::new(r"^-?\d+$")?;
-        let iso_date_regex = Regex::new(ISO_DATE_FORMAT)?;
-        let uuid_regex = Regex::new("^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$")?;
+    pub fn wrap_value(raw_value: &str) -> io::Result<TypedValue> {
+        let decimal_regex = Regex::new(r"^-?\d+\.\d+$")
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let int_regex = Regex::new(r"^-?\d+$")
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let iso_date_regex = Regex::new(ISO_DATE_FORMAT)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        let uuid_regex = Regex::new("^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$")
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         match raw_value {
             s if s.is_empty() => Ok(NullValue),
-            s if int_regex.is_match(s) => Ok(Int64Value(s.parse::<i64>()?)),
-            s if decimal_regex.is_match(s) => Ok(Float64Value(s.parse::<f64>()?)),
+            s if int_regex.is_match(s) => Ok(Int64Value(s.parse::<i64>()
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?)),
+            s if decimal_regex.is_match(s) => Ok(Float64Value(s.parse::<f64>()
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?)),
             s if iso_date_regex.is_match(s) =>
-                Ok(DateValue(DateTime::parse_from_rfc3339(s)?.timestamp_millis())),
+                Ok(DateValue(DateTime::parse_from_rfc3339(s)
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?.timestamp_millis())),
             s if uuid_regex.is_match(s) => Ok(UUIDValue(codec::decode_uuid(s)?)),
             s => Ok(StringValue(s.to_string())),
         }
@@ -100,13 +107,13 @@ mod tests {
     fn test_decode() {
         let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
         let actual: TypedValue = TypedValue::decode(&StringType(5), &buf, 0);
-        let expected = StringValue("Hello".to_string());
+        let expected = StringValue("Hello".into());
         assert_eq!(actual, expected)
     }
 
     #[test]
     fn test_encode() {
-        let value = StringValue("Hello".to_string());
+        let value = StringValue("Hello".into());
         let actual: Vec<u8> = TypedValue::encode_value(&value);
         let expected: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
         assert_eq!(actual, expected);
@@ -117,7 +124,7 @@ mod tests {
         verify("100", Int64Value(100));
         verify("100.0", Float64Value(100.0));
         verify("2024-02-28T23:41:19.081Z", DateValue(1709163679081));
-        verify("Hello World", StringValue("Hello World".to_string()));
+        verify("Hello World", StringValue("Hello World".into()));
     }
 
     fn verify(raw_value: &str, expected_value: TypedValue) {

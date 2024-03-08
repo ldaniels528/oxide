@@ -2,7 +2,7 @@
 // fields module
 ////////////////////////////////////////////////////////////////////
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::data_types::DataType;
 use crate::field_metadata::FieldMetadata;
@@ -10,7 +10,7 @@ use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::*;
 use crate::typed_values::TypedValue;
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Field {
     pub(crate) metadata: FieldMetadata,
     pub(crate) value: TypedValue,
@@ -22,7 +22,7 @@ impl Field {
         let value: TypedValue = if metadata.is_active {
             TypedValue::decode(&data_type, buffer, offset + 1)
         } else { NullValue };
-        Self::new(metadata, value)
+        Self::new(value)
     }
 
     pub fn encode(&self, capacity: usize) -> Vec<u8> {
@@ -33,8 +33,8 @@ impl Field {
         buf
     }
 
-    pub fn new(metadata: FieldMetadata, value: TypedValue) -> Self {
-        Self { metadata, value }
+    pub fn new(value: TypedValue) -> Self {
+        Self { metadata: FieldMetadata::new(true), value }
     }
 
     pub fn with_default(column: TableColumn) -> Self {
@@ -46,10 +46,7 @@ impl Field {
     }
 
     pub fn with_value(value: TypedValue) -> Self {
-        Self::new(FieldMetadata {
-            is_active: true,
-            is_compressed: false,
-        }, value)
+        Self::new(value)
     }
 }
 
@@ -66,22 +63,22 @@ mod tests {
         let field: Field = Field::decode(&StringType(5), &buf, 0);
         assert_eq!(field.metadata.is_active, true);
         assert_eq!(field.metadata.is_compressed, false);
-        assert_eq!(field.value, StringValue("Hello".to_string()));
+        assert_eq!(field.value, StringValue("Hello".into()));
     }
 
     #[test]
     fn test_encode() {
         let buf: Vec<u8> = vec![0x80, 0, 0, 0, 0, 0, 0, 0, 4, b'H', b'A', b'N', b'D', 0];
         let column: TableColumn = TableColumn::new("symbol", StringType(5), NullValue, 0);
-        let field: Field = Field::with_value(StringValue("HAND".to_string()));
+        let field: Field = Field::with_value(StringValue("HAND".into()));
         assert_eq!(field.encode(column.max_physical_size), buf);
     }
 
     #[test]
     fn test_with_default() {
-        let column: TableColumn = TableColumn::new("symbol", StringType(4), StringValue("N/A".to_string()), 0);
+        let column: TableColumn = TableColumn::new("symbol", StringType(4), StringValue("N/A".into()), 0);
         let field: Field = Field::with_default(column);
-        assert_eq!(field.value, StringValue("N/A".to_string()));
+        assert_eq!(field.value, StringValue("N/A".into()));
     }
 
     #[test]
@@ -92,7 +89,7 @@ mod tests {
 
     #[test]
     fn test_with_value() {
-        let field: Field = Field::with_value(StringValue("INTC".to_string()));
-        assert_eq!(field.value, StringValue("INTC".to_string()));
+        let field: Field = Field::with_value(StringValue("INTC".into()));
+        assert_eq!(field.value, StringValue("INTC".into()));
     }
 }

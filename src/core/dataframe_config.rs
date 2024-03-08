@@ -31,11 +31,11 @@ impl DataFrameConfig {
 #[cfg(test)]
 mod tests {
     use crate::dataframe_config::DataFrameConfig;
-    use crate::testdata::make_dataframe_config;
+    use crate::testdata::{make_columns, make_dataframe_config};
 
     #[test]
     fn test_new() {
-        let cfg: DataFrameConfig = make_dataframe_config();
+        let cfg: DataFrameConfig = make_dataframe_config(make_columns());
         assert_eq!(cfg.columns[0].name, "symbol");
         assert_eq!(cfg.columns[0].column_type, "String(4)");
         assert_eq!(cfg.columns[0].default_value, "");

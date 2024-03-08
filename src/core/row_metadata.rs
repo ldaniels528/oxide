@@ -2,8 +2,6 @@
 // row metadata module
 ////////////////////////////////////////////////////////////////////
 
-
-
 use serde::Serialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
@@ -15,8 +13,30 @@ pub struct RowMetadata {
 }
 
 impl RowMetadata {
-    pub fn decode(metadata: u8) -> RowMetadata {
-        RowMetadata {
+    pub fn from_bytes(buf: &Vec<u8>, offset: usize) -> Self {
+        if offset >= buf.len() {
+            return Self::new(false);
+        }
+        let metadata = buf[offset];
+        Self {
+            is_allocated: metadata & 0b1000_0000u8 != 0,
+            is_blob: metadata & 0b0100_0000u8 != 0,
+            is_encrypted: metadata & 0b0010_0000u8 != 0,
+            is_replicated: metadata & 0b0001_0000u8 != 0,
+        }
+    }
+
+    pub fn new(is_allocated: bool) -> Self {
+        Self {
+            is_allocated,
+            is_blob: false,
+            is_encrypted: false,
+            is_replicated: false,
+        }
+    }
+
+    pub fn decode(metadata: u8) -> Self {
+        Self {
             is_allocated: metadata & 0b1000_0000u8 != 0,
             is_blob: metadata & 0b0100_0000u8 != 0,
             is_encrypted: metadata & 0b0010_0000u8 != 0,
@@ -30,28 +50,6 @@ impl RowMetadata {
             (b2n(self.is_blob) << 6) |
             (b2n(self.is_encrypted) << 5) |
             (b2n(self.is_replicated) << 4)) as u8
-    }
-
-    pub fn from_bytes(buf: &Vec<u8>, offset: usize) -> RowMetadata {
-        if offset >= buf.len() {
-            return Self::new(false);
-        }
-        let metadata = buf[offset];
-        RowMetadata {
-            is_allocated: metadata & 0b1000_0000u8 != 0,
-            is_blob: metadata & 0b0100_0000u8 != 0,
-            is_encrypted: metadata & 0b0010_0000u8 != 0,
-            is_replicated: metadata & 0b0001_0000u8 != 0,
-        }
-    }
-
-    pub fn new(is_allocated: bool) -> Self {
-        RowMetadata {
-            is_allocated,
-            is_blob: false,
-            is_encrypted: false,
-            is_replicated: false,
-        }
     }
 }
 

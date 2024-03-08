@@ -1,147 +1,88 @@
 ////////////////////////////////////////////////////////////////////
-//      TinyDB v0.1.0
+//      TinyDB Server v0.1.0
 ////////////////////////////////////////////////////////////////////
 
-mod tokenizer;
-mod dataframes;
-mod rows;
-mod typed_values;
-mod fields;
-mod data_types;
-mod columns;
-mod namespaces;
-mod dataframe_config;
-mod tokens;
-mod field_metadata;
-mod row_metadata;
-mod table_columns;
-mod iocost;
+use std::ops::Deref;
+
+use actix_web::{HttpResponse, Responder};
+use serde::Serialize;
+
 mod codec;
-mod testdata;
+mod columns;
+mod dataframes;
+mod dataframe_config;
+mod data_types;
+mod field_metadata;
+mod fields;
+mod namespaces;
 mod row_collection;
-mod repl;
+mod row_metadata;
+mod rows;
+mod table_columns;
+mod token_slice;
+mod testdata;
+mod tokenizer;
+mod tokens;
+mod typed_values;
 
+type ServerError = Box<dyn std::error::Error>;
 
-use std::io::{stdout, Write};
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
-
-use crossterm::{
-    execute,
-    style::{Print, ResetColor},
-    terminal::{Clear, ClearType},
-};
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, poll, read};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-
-
-use crate::repl::{REPLError, REPLState};
-
-fn main() -> Result<(), REPLError> {
-    let mut state: REPLState = REPLState::new();
-    println!("Welcome to TinyDB. Enter \"q!\" to quit.\n");
-    print!("{}", state.get_prompt());
-
-    enable_raw_mode().unwrap();
-    let mut stdout = stdout();
-    stdout.flush()?;
-
-    // channel for communication between input handling thread and main thread
-    let (tx, rx) = mpsc::channel();
-
-    // spawn a separate thread to handle input events
-    thread::spawn(move || loop {
-        if poll(Duration::from_millis(50)).unwrap() {
-            if let Event::Key(KeyEvent { code, modifiers, kind, state }) = read().unwrap() {
-                tx.send((code, modifiers, kind, state)).unwrap();
-            }
-        }
-    });
-
-    // main event loop
-    while state.is_alive() {
-        if let Ok((code, _modifiers, _kind, _state)) = rx.recv() {
-            process_keyboard_event(&mut state, code, _modifiers, _kind, _state);
-            stdout.flush().unwrap();
-        }
-    }
-    Ok(())
+#[derive(Clone, Debug, PartialEq, Serialize)]
+struct SystemInfo {
+    title: String,
+    version: String,
 }
 
-fn process_keyboard_event(state: &mut REPLState,
-                          code: KeyCode,
-                          _modifiers: KeyModifiers,
-                          _kind: KeyEventKind,
-                          _state: KeyEventState) {
-    match code {
-        KeyCode::Backspace => {
-            if !state.chars.is_empty() {
-                state.chars.pop();
-                print!("{}", "\u{0008}")
-            }
+// Define a handler function for the index route
+async fn index() -> impl Responder {
+    HttpResponse::Ok().json(create_system_info())
+}
+
+#[actix_web::main]
+async fn main() -> Result<(), ServerError> {
+    println!("Welcome to TinyDB Server.\n");
+    match get_port_number(std::env::args().collect()).await {
+        Ok(port) => {
+            println!("Starting server on port {}.", port);
+            listen_to(&port).await
         }
-        KeyCode::Char(c) => {
-            state.chars.push(c);
-            print!("{}", c)
-        }
-        KeyCode::Enter if _modifiers.contains(KeyModifiers::SHIFT) => {
-            state.chars.push('\n');
-            print!("\r\n")
-        }
-        KeyCode::Enter => {
-            print!("\r\n");
-            disable_raw_mode().unwrap();
-            let input: String = state.chars.iter().collect();
-            process_user_input(state, input);
-            print!("{}", state.get_prompt());
-            enable_raw_mode().unwrap();
-            state.chars.clear();
-        }
-        KeyCode::Down => {
-            print!("\r<D>")
-        }
-        KeyCode::Left => {
-            print!("\r<L>")
-        }
-        KeyCode::Right => {
-            print!("\r<R>")
-        }
-        KeyCode::Up => {
-            print!("\r<U>")
-        }
-        _ => {}
+        Err(err) => Err(err.into())
     }
 }
 
-fn process_user_input(state: &mut REPLState, input: String) {
-    match input.trim() {
-        "" => {}
-        "history" => for s in state.get_history() { println!("{s}") },
-        "q!" => state.die(),
-        cmd => {
-            state.put_history(cmd);
-            match process_statement(cmd.into()) {
-                Ok(_) => {}
-                Err(msg) => eprintln!("{msg:?}")
-            };
-        }
+fn create_system_info() -> SystemInfo {
+    SystemInfo {
+        title: "TinyDB".into(),
+        version: "0.1.0".into(),
     }
 }
 
-fn process_statement(input: String) -> Result<(), REPLError> {
-    println!("[{input}]");
-    Ok(())
+fn get_address(port: &str) -> String {
+    format!("127.0.0.1:{}", port)
 }
 
-// prints messages to STDOUT
-fn say(message: &str) -> Result<(), REPLError> {
-    execute!(
-        stdout(),
-        Clear(ClearType::CurrentLine),
-        Print(format!("{}\n", message)),
-        ResetColor
-    );
+async fn get_port_number(args: Vec<String>) -> Result<String, ServerError> {
+    if args.len() > 1 {
+        let re = regex::Regex::new(r"^\d+$").unwrap();
+        let port: String = args[1].trim().into();
+        if re.is_match(&port) {
+            Ok(port)
+        } else {
+            Err(format!("Port '{}' is invalid", port).into())
+        }
+    } else {
+        Ok("8080".into())
+    }
+}
+
+async fn listen_to(port: &str) -> Result<(), ServerError> {
+    let server = actix_web::HttpServer::new(|| {
+        actix_web::App::new()
+            .route("/", actix_web::web::get().to(index))
+    })
+        .bind(get_address(port))?
+        .run();
+    server.await?;
     Ok(())
 }
 
@@ -151,12 +92,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_process_input() {
-        process_statement("history".into()).unwrap()
+    fn test_create_system_info() {
+        let sys_info = create_system_info();
+        assert_eq!(sys_info, SystemInfo {
+            title: "TinyDB".into(),
+            version: "0.1.0".into(),
+        })
     }
 
     #[test]
-    fn test_say() {
-        say("Hello").unwrap()
+    fn test_get_address() {
+        let address = get_address("8888");
+        assert_eq!(address, "127.0.0.1:8888")
+    }
+
+    #[tokio::test]
+    async fn test_get_port_number_valid_input() -> Result<(), ServerError> {
+        let args: Vec<String> = vec!["test_program".into(), "1234".into()];
+        let expected: String = "1234".into();
+        let actual: String = get_port_number(args).await?;
+        assert_eq!(actual, expected);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_port_number_no_input() -> Result<(), ServerError> {
+        let args: Vec<String> = vec!["test_program".into()];
+        let expected: String = "8080".into();
+        let actual: String = get_port_number(args).await?;
+        assert_eq!(actual, expected);
+        Ok(())
     }
 }

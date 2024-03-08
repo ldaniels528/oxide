@@ -2,11 +2,9 @@
 // columns module
 ////////////////////////////////////////////////////////////////////
 
+use serde::{Deserialize, Serialize};
 
-
-use serde::Serialize;
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Column {
     pub name: String,
     pub column_type: String,
@@ -14,11 +12,13 @@ pub struct Column {
 }
 
 impl Column {
-    pub fn new(name: &str, column_type: &str, default_value: &str) -> Self {
+    pub fn new(name: impl Into<String>,
+               column_type: impl Into<String>,
+               default_value: impl Into<String>) -> Self {
         Column {
-            name: name.to_string(),
-            column_type: column_type.to_string(),
-            default_value: default_value.to_string(),
+            name: name.into(),
+            column_type: column_type.into(),
+            default_value: default_value.into(),
         }
     }
 }
