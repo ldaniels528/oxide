@@ -135,20 +135,28 @@ impl TypedValue {
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         let uuid_regex = Regex::new("^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$")
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
-        match raw_value {
-            s if s == "false" => Ok(BooleanValue(false)),
-            s if s == "null" => Ok(NullValue),
-            s if s == "true" => Ok(BooleanValue(true)),
-            s if s.is_empty() => Ok(NullValue),
-            s if int_regex.is_match(s) => Ok(Int64Value(s.parse::<i64>()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?)),
-            s if decimal_regex.is_match(s) => Ok(Float64Value(s.parse::<f64>()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?)),
+        let result = match raw_value {
+            s if s == "false" => BooleanValue(false),
+            s if s == "null" => NullValue,
+            s if s == "true" => BooleanValue(true),
+            s if s.is_empty() => NullValue,
+            s if int_regex.is_match(s) => Int64Value(s.parse::<i64>()
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?),
+            s if decimal_regex.is_match(s) => Float64Value(s.parse::<f64>()
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?),
             s if iso_date_regex.is_match(s) =>
-                Ok(DateValue(DateTime::parse_from_rfc3339(s)
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?.timestamp_millis())),
-            s if uuid_regex.is_match(s) => Ok(UUIDValue(codec::decode_uuid(s)?)),
-            s => Ok(StringValue(s.to_string())),
+                DateValue(DateTime::parse_from_rfc3339(s)
+                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?.timestamp_millis()),
+            s if uuid_regex.is_match(s) => UUIDValue(codec::decode_uuid(s)?),
+            s => StringValue(s.to_string()),
+        };
+        Ok(result)
+    }
+
+    pub fn wrap_value_opt(opt_value: &Option<String>) -> io::Result<TypedValue> {
+        match opt_value {
+            Some(value) => Self::wrap_value(value.trim()),
+            None => Ok(NullValue)
         }
     }
 }
@@ -198,6 +206,11 @@ mod tests {
             0x67, 0x45, 0x23, 0x01, 0xAB, 0xCD, 0xEF, 0x89,
             0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
         ]))
+    }
+
+    #[test]
+    fn test_unwrap_optional_value() {
+        assert_eq!(TypedValue::wrap_value_opt(&Some("123.45".into())).unwrap(), Float64Value(123.45))
     }
 
     fn verify_to_json(typed_value: TypedValue, expected: serde_json::Value) {

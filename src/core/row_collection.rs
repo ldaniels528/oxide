@@ -136,7 +136,7 @@ mod tests {
     fn test_append_row_then_read_rows() {
         // create a dataframe with a single (encoded) row
         let (file, columns, record_size) =
-            make_table_file_from_bytes("finance", "stocks", "quotes", make_columns(), &mut vec![
+            make_table_file_from_bytes("rows", "append_row", "quotes", make_columns(), &mut vec![
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'I', b'C', b'E',
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
@@ -229,7 +229,7 @@ mod tests {
     fn test_read_field() {
         // create a dataframe with a single (encoded) row
         let (file, columns, record_size) =
-            make_table_file_from_bytes("finance", "stocks", "quotes", make_columns(), &mut vec![
+            make_table_file_from_bytes("rows", "read_field", "quotes", make_columns(), &mut vec![
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'F', b'A', b'C', b'T',
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',

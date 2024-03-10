@@ -19,9 +19,9 @@ use crate::typed_values::TypedValue::NullValue;
 
 pub fn make_columns() -> Vec<Column> {
     vec![
-        Column::new("symbol", "String(4)", ""),
-        Column::new("exchange", "String(4)", ""),
-        Column::new("lastSale", "Double", ""),
+        Column::new("symbol", "String(4)", None),
+        Column::new("exchange", "String(4)", None),
+        Column::new("lastSale", "Double", None),
     ]
 }
 

@@ -39,7 +39,7 @@ impl TableColumn {
     pub fn from_column(column: &Column, offset: usize) -> io::Result<TableColumn> {
         Ok(Self::new(&column.name,
                      DataType::parse(&column.column_type)?,
-                     TypedValue::wrap_value(&column.default_value)?, offset))
+                     TypedValue::wrap_value_opt(&column.default_value)?, offset))
     }
 
     pub fn from_columns(columns: &Vec<Column>) -> io::Result<Vec<TableColumn>> {
@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn test_from_column() {
-        let column_desc: Column = Column::new("exchange", "String(10)", "N/A");
+        let column_desc: Column = Column::new("exchange", "String(10)", Some("N/A".into()));
         let column: TableColumn = TableColumn::from_column(&column_desc, 0)
             .expect("Deserialization error");
         assert_eq!(column.name, "exchange");

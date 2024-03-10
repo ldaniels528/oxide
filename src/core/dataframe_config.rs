@@ -61,9 +61,9 @@ mod tests {
     #[test]
     fn test_load_and_save_config() -> io::Result<()> {
         let columns: Vec<Column> = vec![
-            Column::new("symbol", "String(10)", ""),
-            Column::new("exchange", "String(10)", ""),
-            Column::new("lastSale", "Double", "0.00"),
+            Column::new("symbol", "String(10)", None),
+            Column::new("exchange", "String(10)", None),
+            Column::new("lastSale", "Double", Some("0.00".into())),
         ];
         let indices: Vec<HashIndexConfig> = Vec::with_capacity(0);
         let partitions: Vec<String> = Vec::with_capacity(0);
@@ -78,17 +78,17 @@ mod tests {
                 Column {
                     name: "symbol".into(),
                     column_type: "String(10)".into(),
-                    default_value: "".into(),
+                    default_value: None,
                 },
                 Column {
                     name: "exchange".into(),
                     column_type: "String(10)".into(),
-                    default_value: "".into(),
+                    default_value: None,
                 },
                 Column {
                     name: "lastSale".into(),
                     column_type: "Double".into(),
-                    default_value: "0.00".into(),
+                    default_value: Some("0.00".into()),
                 },
             ],
             indices: vec![],
