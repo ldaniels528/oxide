@@ -13,11 +13,13 @@ pub fn decode_row_id(buffer: &Vec<u8>, offset: usize) -> usize {
     usize::from_be_bytes(id_array)
 }
 
-pub fn decode_string(buffer: &Vec<u8>, offset: usize, max_size: usize) -> &str {
+pub fn decode_string(buffer: &Vec<u8>, offset: usize, max_size: usize) -> String {
     let a: usize = offset + size_of::<usize>();
     let b: usize = a + max_size;
     let data: &[u8] = &buffer[a..b];
-    let value = std::str::from_utf8(&*data).unwrap();
+    let value = std::str::from_utf8(&*data).unwrap().chars()
+        .filter(|&c| c != '\0')
+        .collect();
     value
 }
 
@@ -68,6 +70,10 @@ pub fn encode_chars(chars: Vec<char>) -> Vec<u8> {
 
 pub fn encode_row_id(id: usize) -> Vec<u8> {
     id.to_be_bytes().to_vec()
+}
+
+pub fn encode_string(string: &str) -> Vec<u8> {
+    encode_u8x_n(string.bytes().collect())
 }
 
 pub fn encode_u8x_n(bytes: Vec<u8>) -> Vec<u8> {
@@ -127,10 +133,15 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_string() {
+    fn test_decode_string_max_length() {
         let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 4, b'Y', b'H', b'W', b'H'];
-        let value: &str = decode_string(&buf, 0, 4);
-        assert_eq!(value, "YHWH")
+        assert_eq!(decode_string(&buf, 0, 4), "YHWH")
+    }
+
+    #[test]
+    fn test_decode_string_less_than_max_length() {
+        let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 4, b'Y', b'A', b'H', 0];
+        assert_eq!(decode_string(&buf, 0, 4), "YAH")
     }
 
     #[test]
@@ -150,7 +161,6 @@ mod tests {
     fn test_encode_row_id() {
         let expected: Vec<u8> = vec![0xDE, 0xAD, 0xCA, 0xFE, 0xBE, 0xEF, 0xBA, 0xBE];
         let id = 0xDEAD_CAFE_BEEF_BABE;
-        let actual: Vec<u8> = encode_row_id(id);
-        assert_eq!(actual, expected)
+        assert_eq!(encode_row_id(id), expected)
     }
 }

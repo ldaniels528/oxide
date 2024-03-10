@@ -74,7 +74,7 @@ impl DataFrame {
         let file_len = (&self.file.metadata()?).len();
         let new_row_id = (file_len / self.record_size as u64) as usize;
         let new_row = row.with_row_id(new_row_id);
-        let offset = (new_row.id * self.record_size) as u64;
+        let offset = self.to_offset(new_row.id);
         let _ = &self.file.seek(SeekFrom::Start(offset))?;
         let _ = &self.file.write_all(&new_row.encode())?;
         self.file.flush()?;
@@ -86,7 +86,43 @@ impl DataFrame {
         Row::overhead() + columns.iter().map(|c| c.max_physical_size).sum::<usize>()
     }
 
-    pub fn foreach_row(&self, f: fn(&Row) -> ()) -> io::Result<()> {
+    /// performs a top-down fold operation
+    pub fn fold_left<A>(&self, init: A, f: fn(A, Row) -> A) -> io::Result<A> {
+        let mut result: A = init;
+        for id in 0..self.size()? {
+            let (row, metadata) = self.read_row(id)?;
+            if metadata.is_allocated {
+                result = f(result, row);
+            }
+        }
+        Ok(result)
+    }
+
+    /// performs a bottom-up fold operation
+    pub fn fold_right<A>(&self, init: A, f: fn(A, Row) -> A) -> io::Result<A> {
+        let mut result: A = init;
+        for id in (0..self.size()?).rev() {
+            let (row, metadata) = self.read_row(id)?;
+            if metadata.is_allocated {
+                result = f(result, row);
+            }
+        }
+        Ok(result)
+    }
+
+    /// returns true if all allocated rows satisfy the provided function
+    pub fn for_all(&self, f: fn(&Row) -> bool) -> io::Result<bool> {
+        for id in 0..self.size()? {
+            let (row, metadata) = self.read_row(id)?;
+            if metadata.is_allocated && !f(&row) {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// iterates through all allocated rows
+    pub fn foreach(&self, f: fn(&Row) -> ()) -> io::Result<()> {
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated { f(&row); }
@@ -99,19 +135,31 @@ impl DataFrame {
         Ok(self.file.metadata()?.len())
     }
 
-    /// convenience function to create, read or write a file
+    /// transforms the collection of rows into a collection of [A]
+    pub fn map<A>(&self, f: fn(&Row) -> A) -> io::Result<Vec<A>> {
+        let mut rows = Vec::new();
+        for id in 0..self.size()? {
+            let (row, metadata) = self.read_row(id)?;
+            if metadata.is_allocated {
+                &rows.push(f(&row));
+            }
+        }
+        Ok(rows)
+    }
+
+    /// convenience function to create, read or write a table file
     fn open_crw(ns: &Namespace) -> io::Result<File> {
         OpenOptions::new().create(true).read(true).write(true).open(ns.get_table_file_path())
     }
 
-    /// convenience function to read or write a file
+    /// convenience function to read or write a table file
     fn open_rw(ns: &Namespace) -> io::Result<File> {
         OpenOptions::new().read(true).write(true).open(ns.get_table_file_path())
     }
 
     /// overwrites a specified row by ID
     pub fn overwrite(&mut self, row: Row) -> io::Result<usize> {
-        let offset = (row.id * self.record_size) as u64;
+        let offset = self.to_offset(row.id);
         let _ = &self.file.seek(SeekFrom::Start(offset))?;
         let _ = &self.file.write_all(&row.encode())?;
         self.file.flush()?;
@@ -122,7 +170,7 @@ impl DataFrame {
     pub fn read_field(&self, id: usize, column_id: usize) -> io::Result<TypedValue> {
         let column = &self.columns[column_id];
         let mut buffer: Vec<u8> = vec![0; column.max_physical_size];
-        let row_offset = (id * self.record_size) as u64;
+        let row_offset = self.to_offset(id);
         let _ = &self.file.read_at(&mut buffer, row_offset + column.offset as u64)?;
         let field = Field::decode(&column.data_type, &buffer, 0);
         Ok(field.value)
@@ -130,7 +178,7 @@ impl DataFrame {
 
     /// reads a row by ID
     pub fn read_row(&self, id: usize) -> io::Result<(Row, RowMetadata)> {
-        let offset = (id * self.record_size) as u64;
+        let offset = self.to_offset(id);
         let mut buffer: Vec<u8> = vec![0; self.record_size];
         let _ = &self.file.read_at(&mut buffer, offset)?;
         Ok(Row::decode(&buffer, &self.columns))
@@ -140,6 +188,19 @@ impl DataFrame {
     pub fn read_rows(&self, from: usize, to: usize) -> io::Result<Vec<Row>> {
         let mut rows: Vec<Row> = Vec::with_capacity(to - from);
         for id in from..to {
+            let (row, metadata) = self.read_row(id)?;
+            if metadata.is_allocated {
+                rows.push(row);
+            }
+        }
+        Ok(rows)
+    }
+
+    /// returns the rows in reverse order
+    pub fn reverse(&self) -> io::Result<Vec<Row>> {
+        let size = self.size()?;
+        let mut rows: Vec<Row> = Vec::with_capacity(size);
+        for id in (0..size).rev() {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated {
                 rows.push(row);
@@ -159,6 +220,8 @@ impl DataFrame {
     pub fn size(&self) -> io::Result<usize> {
         Ok((self.file.metadata()?.len() as usize) / self.record_size)
     }
+
+    fn to_offset(&self, id: usize) -> u64 { (id * self.record_size) as u64 }
 }
 
 // Unit tests
@@ -184,7 +247,7 @@ mod tests {
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'A', b'S', b'D',
                 0b1000_0000, 64, 94, 220, 204, 204, 204, 204, 205,
             ]).unwrap();
-        // decode a second row and append it to the dataframe
+        // decode a second dataframe with a single (encoded) row
         let df1: DataFrame = make_rows_from_bytes(
             "add_assign", "stocks", "quotes1", make_columns(), &mut vec![
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 1,
@@ -192,7 +255,7 @@ mod tests {
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'A', b'M', b'E', b'X',
                 0b1000_0000, 64, 118, 81, 235, 133, 30, 184, 82,
             ]).unwrap();
-        // concatenate the tables
+        // concatenate the dataframes
         df0 += df1;
         // re-read the rows
         let rows = df0.read_rows(0, df0.size().unwrap()).unwrap();
@@ -289,10 +352,83 @@ mod tests {
     }
 
     #[test]
+    fn test_fold_left() {
+        // create a dataframe with 3 rows, 3 columns
+        let columns = make_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let mut df = make_dataframe("dataframes", "fold_left", "quotes", columns).unwrap();
+        df.append(&Row::new(0, phys_columns.clone(), vec![
+            Field::new(StringValue("UNO".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(11.77)),
+        ])).unwrap();
+        df.append(&Row::new(1, phys_columns.clone(), vec![
+            Field::new(StringValue("DOS".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(33.22)),
+        ])).unwrap();
+        df.append(&Row::new(2, phys_columns, vec![
+            Field::new(StringValue("TRES".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(55.44)),
+        ])).unwrap();
+        assert_eq!(df.fold_left(0, |total, row| total + row.id).unwrap(), 3)
+    }
+
+    #[test]
+    fn test_fold_right() {
+        // create a dataframe with 3 rows, 3 columns
+        let columns = make_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let mut df = make_dataframe("dataframes", "fold_right", "quotes", columns).unwrap();
+        df.resize(0).unwrap();
+        df.append(&Row::new(0, phys_columns.clone(), vec![
+            Field::new(StringValue("ONE".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(11.77)),
+        ])).unwrap();
+        df.append(&Row::new(1, phys_columns.clone(), vec![
+            Field::new(StringValue("TWO".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(33.22)),
+        ])).unwrap();
+        df.append(&Row::new(2, phys_columns, vec![
+            Field::new(StringValue("THRE".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(55.44)),
+        ])).unwrap();
+        assert_eq!(df.fold_right(0, |total, row| total + row.id).unwrap(), 3)
+    }
+
+    #[test]
+    fn test_for_all() {
+        // create a dataframe with 3 rows, 3 columns
+        let columns = make_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let mut df = make_dataframe("dataframes", "for_all", "quotes", columns).unwrap();
+        df.append(&Row::new(0, phys_columns.clone(), vec![
+            Field::new(StringValue("ALPH".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(11.77)),
+        ])).unwrap();
+        df.append(&Row::new(1, phys_columns.clone(), vec![
+            Field::new(StringValue("BETA".into())),
+            Field::new(StringValue("NYSE".into())),
+            Field::new(Float64Value(33.22)),
+        ])).unwrap();
+        df.append(&Row::new(2, phys_columns, vec![
+            Field::new(StringValue("GMMA".into())),
+            Field::new(StringValue("NASD".into())),
+            Field::new(Float64Value(55.44)),
+        ])).unwrap();
+        assert_eq!(df.for_all(|row| row.id < 5).unwrap(), true)
+    }
+
+    #[test]
     fn test_foreach_row() {
-        // create a dataframe with a single (encoded) row
+        // create a dataframe with 3 (encoded) rows
         let mut df = make_rows_from_bytes(
-            "dataframes", "foreach_row", "quotes", make_columns(), &mut vec![
+            "dataframes", "foreach", "quotes", make_columns(), &mut vec![
                 // row 1
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'O', b'O', b'M',
@@ -309,7 +445,7 @@ mod tests {
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'A', b'S', b'D',
                 0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
             ]).unwrap();
-        df.foreach_row(|row| println!("{:?}", row)).unwrap()
+        df.foreach(|row| println!("{:?}", row)).unwrap()
     }
 
     #[test]
@@ -323,10 +459,34 @@ mod tests {
                 0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
             ]).unwrap();
         let df0 = DataFrame::load(ns.clone()).unwrap();
-        df0.foreach_row(|row| println!("{:?}", row)).unwrap();
+        df0.foreach(|row| println!("{:?}", row)).unwrap();
         let (row, metadata) = df0.read_row(0).unwrap();
         assert!(metadata.is_allocated);
         assert_eq!(row.id, 2);
+    }
+
+    #[test]
+    fn test_map() {
+        // create a dataframe with 3 (encoded) rows
+        let mut df = make_rows_from_bytes(
+            "dataframes", "foreach_row", "quotes", make_columns(), &mut vec![
+                // row 1
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 5,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'A', b'L', b'P', b'H',
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+                0b1000_0000, 64, 76, 21, 194, 143, 92, 40, 246,
+                // row 2
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 7,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'T', b'A',
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'A', b'M', b'E', b'X',
+                0b1000_0000, 64, 114, 0, 0, 0, 0, 0, 0,
+                // row 3
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 9,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'G', b'M', b'M', b'A',
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'A', b'S', b'D',
+                0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
+            ]).unwrap();
+        assert_eq!(df.map(|row| row.id).unwrap(), vec![5, 7, 9])
     }
 
     #[test]
@@ -392,5 +552,32 @@ mod tests {
         let _ = df.resize(0).unwrap();
         df.resize(5).unwrap();
         assert_eq!(df.length().unwrap(), (5 * df.record_size) as u64);
+    }
+
+    #[test]
+    fn test_reverse() {
+        // create a dataframe with 3 rows, 3 columns
+        let columns = make_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let mut df = make_dataframe("dataframes", "reverse", "quotes", columns).unwrap();
+        let row_a = Row::new(0, phys_columns.clone(), vec![
+            Field::new(StringValue("A".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(11.77)),
+        ]);
+        let row_b = Row::new(1, phys_columns.clone(), vec![
+            Field::new(StringValue("BB".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(11.77)),
+        ]);
+        let row_c = Row::new(2, phys_columns.clone(), vec![
+            Field::new(StringValue("CCC".into())),
+            Field::new(StringValue("AMEX".into())),
+            Field::new(Float64Value(55.44)),
+        ]);
+        df.append(&row_a).unwrap();
+        df.append(&row_b).unwrap();
+        df.append(&row_c).unwrap();
+        assert_eq!(df.reverse().unwrap(), vec![row_c, row_b, row_a])
     }
 }

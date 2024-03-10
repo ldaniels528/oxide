@@ -75,7 +75,7 @@ impl TypedValue {
             Int64Value(number) => number.to_be_bytes().to_vec(),
             NullValue => [0u8; 0].to_vec(),
             RecordNumberValue(id) => id.to_be_bytes().to_vec(),
-            StringValue(string) => codec::encode_u8x_n(string.bytes().collect()),
+            StringValue(string) => codec::encode_string(string),
             UUIDValue(guid) => guid.to_vec()
         }
     }

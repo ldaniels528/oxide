@@ -15,7 +15,7 @@ use crate::fields::Field;
 use crate::namespaces::Namespace;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
-use crate::typed_values::TypedValue::NullValue;
+use crate::typed_values::TypedValue::{Float64Value, NullValue, StringValue};
 
 pub fn make_columns() -> Vec<Column> {
     vec![
@@ -34,6 +34,18 @@ pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Col
 
 pub fn make_dataframe_config(columns: Vec<Column>) -> DataFrameConfig {
     DataFrameConfig::new(columns, Vec::new(), Vec::new())
+}
+
+pub fn make_encoded_row(id: usize, symbol: &str, exchange: &str, last_sale: f64) -> Vec<u8> {
+    Row::new(id, vec![
+        TableColumn::new("symbol", StringType(4), NullValue, 9),
+        TableColumn::new("exchange", StringType(4), NullValue, 22),
+        TableColumn::new("last_sale", StringType(4), NullValue, 35),
+    ], vec![
+        Field::new(StringValue(symbol.into())),
+        Field::new(StringValue(exchange.into())),
+        Field::new(Float64Value(last_sale))
+    ]).encode()
 }
 
 pub fn make_rows_from_bytes(database: &str,
