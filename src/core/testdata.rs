@@ -44,8 +44,19 @@ pub fn make_encoded_row(id: usize, symbol: &str, exchange: &str, last_sale: f64)
     ], vec![
         Field::new(StringValue(symbol.into())),
         Field::new(StringValue(exchange.into())),
-        Field::new(Float64Value(last_sale))
+        Field::new(Float64Value(last_sale)),
     ]).encode()
+}
+
+pub fn make_quote(id: usize,
+                  phys_columns: &Vec<TableColumn>,
+                  symbol: &str,
+                  exchange: &str,
+                  last_sale: f64) -> Row {
+    Row::new(id, phys_columns.clone(), vec![
+        Field::new(StringValue(symbol.into())),
+        Field::new(StringValue(exchange.into())),
+        Field::new(Float64Value(last_sale))])
 }
 
 pub fn make_rows_from_bytes(database: &str,
