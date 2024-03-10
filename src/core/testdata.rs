@@ -36,18 +36,6 @@ pub fn make_dataframe_config(columns: Vec<Column>) -> DataFrameConfig {
     DataFrameConfig::new(columns, Vec::new(), Vec::new())
 }
 
-pub fn make_encoded_row(id: usize, symbol: &str, exchange: &str, last_sale: f64) -> Vec<u8> {
-    Row::new(id, vec![
-        TableColumn::new("symbol", StringType(4), NullValue, 9),
-        TableColumn::new("exchange", StringType(4), NullValue, 22),
-        TableColumn::new("last_sale", StringType(4), NullValue, 35),
-    ], vec![
-        Field::new(StringValue(symbol.into())),
-        Field::new(StringValue(exchange.into())),
-        Field::new(Float64Value(last_sale)),
-    ]).encode()
-}
-
 pub fn make_quote(id: usize,
                   phys_columns: &Vec<TableColumn>,
                   symbol: &str,
@@ -69,10 +57,6 @@ pub fn make_rows_from_bytes(database: &str,
     df.file.write_all(row_data)?;
     df.file.flush()?;
     Ok(df)
-}
-
-pub fn make_row_from_fields(id: usize, fields: Vec<Field>) -> Row {
-    Row::new(id, make_table_columns(), fields)
 }
 
 pub fn make_table_columns() -> Vec<TableColumn> {

@@ -128,7 +128,7 @@ mod tests {
     use crate::row_collection::{FileRowCollection, RowCollection};
     use crate::rows::Row;
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_columns, make_row_from_fields, make_table_file, make_table_file_from_bytes};
+    use crate::testdata::{make_columns, make_quote, make_table_file, make_table_file_from_bytes};
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::{Float64Value, NullValue, StringValue};
 
@@ -200,11 +200,7 @@ mod tests {
 
         // create a new row
         let mut frc: FileRowCollection = FileRowCollection::new(record_size, file);
-        let row: Row = make_row_from_fields(2, vec![
-            Field::with_value(StringValue("AMD".into())),
-            Field::with_value(StringValue("NYSE".into())),
-            Field::with_value(Float64Value(88.78)),
-        ]);
+        let row = make_quote(2, &columns, "AMD", "NYSE", 88.78);
         assert_eq!(frc.overwrite(row.id, row.encode()).unwrap(), 1);
 
         // read and verify the row
@@ -282,7 +278,7 @@ mod tests {
     fn test_resize_shrink() {
         // create a dataframe with a single (encoded) row
         let (file, _, record_size) =
-            make_table_file_from_bytes("dataframes", "resize", "quotes", make_columns(), &mut vec![
+            make_table_file_from_bytes("dataframes", "resize_shrink", "quotes", make_columns(), &mut vec![
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'I', b'C', b'E',
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
@@ -298,7 +294,7 @@ mod tests {
     fn test_resize_grow() {
         // create a dataframe with a single (encoded) row
         let (file, _, record_size) =
-            make_table_file_from_bytes("dataframes", "resize", "quotes", make_columns(), &mut vec![
+            make_table_file_from_bytes("dataframes", "resize_grow", "quotes", make_columns(), &mut vec![
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'I', b'C', b'E',
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',

@@ -124,7 +124,7 @@ impl Row {
 mod tests {
     use crate::data_types::DataType::*;
     use crate::field_metadata::FieldMetadata;
-    use crate::testdata::{make_row_from_fields, make_table_columns};
+    use crate::testdata::{make_quote, make_table_columns};
     use crate::typed_values::TypedValue::*;
 
     use super::*;
@@ -157,11 +157,7 @@ mod tests {
 
     #[test]
     fn test_encode() {
-        let row: Row = make_row_from_fields(255, vec![
-            Field::with_value(StringValue("RED".into())),
-            Field::with_value(StringValue("NYSE".into())),
-            Field::with_value(Float64Value(78.35)),
-        ]);
+        let row = make_quote(255, &make_table_columns(), "RED", "NYSE", 78.35);
         assert_eq!(row.encode(), vec![
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 255,
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 3, b'R', b'E', b'D', 0,
@@ -172,11 +168,7 @@ mod tests {
 
     #[test]
     fn test_fields_by_index() {
-        let row = make_row_from_fields(213, vec![
-            Field::with_value(StringValue("YRU".into())),
-            Field::with_value(StringValue("OTC".into())),
-            Field::with_value(Float64Value(88.44)),
-        ]);
+        let row = make_quote(213, &make_table_columns(), "YRU", "OTC", 88.44);
         assert_eq!(row.id, 213);
         assert_eq!(row[0].value, StringValue("YRU".into()));
         assert_eq!(row[1].value, StringValue("OTC".into()));
@@ -185,11 +177,7 @@ mod tests {
 
     #[test]
     fn test_to_hash_map() {
-        let row = make_row_from_fields(111, vec![
-            Field::with_value(StringValue("AAA".into())),
-            Field::with_value(StringValue("TCE".into())),
-            Field::with_value(Float64Value(1230.78)),
-        ]);
+        let row = make_quote(111, &make_table_columns(), "AAA", "TCE", 1230.78);
         assert_eq!(row.to_hash_map(), hashmap!(
             "_id".into() => RecordNumberValue(111),
             "symbol".into() => StringValue("AAA".into()),
@@ -200,11 +188,7 @@ mod tests {
 
     #[test]
     fn test_unwrap() {
-        let row = make_row_from_fields(100, vec![
-            Field::with_value(StringValue("ZZZ".into())),
-            Field::with_value(StringValue("AMEX".into())),
-            Field::with_value(Float64Value(0.9876)),
-        ]);
+        let row = make_quote(100, &make_table_columns(), "ZZZ", "AMEX", 0.9876);
         assert_eq!(row.id, 100);
         assert_eq!(row.unwrap(), vec![
             &StringValue("ZZZ".into()), &StringValue("AMEX".into()), &Float64Value(0.9876),

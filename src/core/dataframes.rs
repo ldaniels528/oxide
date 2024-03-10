@@ -357,21 +357,9 @@ mod tests {
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let mut df = make_dataframe("dataframes", "fold_left", "quotes", columns).unwrap();
-        df.append(&Row::new(0, phys_columns.clone(), vec![
-            Field::new(StringValue("UNO".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(11.77)),
-        ])).unwrap();
-        df.append(&Row::new(1, phys_columns.clone(), vec![
-            Field::new(StringValue("DOS".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(33.22)),
-        ])).unwrap();
-        df.append(&Row::new(2, phys_columns, vec![
-            Field::new(StringValue("TRES".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(55.44)),
-        ])).unwrap();
+        df.append(&make_quote(0, &phys_columns, "UNO", "AMEX", 11.77)).unwrap();
+        df.append(&make_quote(1, &phys_columns, "DOS", "AMEX", 33.22)).unwrap();
+        df.append(&make_quote(2, &phys_columns, "TRES", "AMEX", 55.44)).unwrap();
         assert_eq!(df.fold_left(0, |total, row| total + row.id).unwrap(), 3)
     }
 
@@ -381,22 +369,9 @@ mod tests {
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let mut df = make_dataframe("dataframes", "fold_right", "quotes", columns).unwrap();
-        df.resize(0).unwrap();
-        df.append(&Row::new(0, phys_columns.clone(), vec![
-            Field::new(StringValue("ONE".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(11.77)),
-        ])).unwrap();
-        df.append(&Row::new(1, phys_columns.clone(), vec![
-            Field::new(StringValue("TWO".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(33.22)),
-        ])).unwrap();
-        df.append(&Row::new(2, phys_columns, vec![
-            Field::new(StringValue("THRE".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(55.44)),
-        ])).unwrap();
+        df.append(&make_quote(0, &phys_columns, "ONE", "AMEX", 11.77)).unwrap();
+        df.append(&make_quote(1, &phys_columns, "TWO", "AMEX", 33.22)).unwrap();
+        df.append(&make_quote(2, &phys_columns, "THRE", "AMEX", 55.44)).unwrap();
         assert_eq!(df.fold_right(0, |total, row| total + row.id).unwrap(), 3)
     }
 
@@ -406,21 +381,9 @@ mod tests {
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let mut df = make_dataframe("dataframes", "for_all", "quotes", columns).unwrap();
-        df.append(&Row::new(0, phys_columns.clone(), vec![
-            Field::new(StringValue("ALPH".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(11.77)),
-        ])).unwrap();
-        df.append(&Row::new(1, phys_columns.clone(), vec![
-            Field::new(StringValue("BETA".into())),
-            Field::new(StringValue("NYSE".into())),
-            Field::new(Float64Value(33.22)),
-        ])).unwrap();
-        df.append(&Row::new(2, phys_columns, vec![
-            Field::new(StringValue("GMMA".into())),
-            Field::new(StringValue("NASD".into())),
-            Field::new(Float64Value(55.44)),
-        ])).unwrap();
+        df.append(&make_quote(0, &phys_columns, "ALPH", "AMEX", 11.77)).unwrap();
+        df.append(&make_quote(1, &phys_columns, "BETA", "NYSE", 33.22)).unwrap();
+        df.append(&make_quote(2, &phys_columns, "GMMA", "NASD", 55.44)).unwrap();
         assert_eq!(df.for_all(|row| row.id < 5).unwrap(), true)
     }
 
@@ -493,11 +456,7 @@ mod tests {
     fn test_overwrite_row() {
         let mut df = make_dataframe(
             "dataframes", "overwrite_row", "quotes", make_columns()).unwrap();
-        let row = make_row_from_fields(2, vec![
-            Field::with_value(StringValue("AMD".into())),
-            Field::with_value(StringValue("NYSE".into())),
-            Field::with_value(Float64Value(123.45)),
-        ]);
+        let row = make_quote(2, &make_table_columns(), "AMD", "NYSE", 123.45);
         assert_eq!(df.overwrite(row).unwrap(), 1);
     }
 
@@ -560,21 +519,9 @@ mod tests {
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let mut df = make_dataframe("dataframes", "reverse", "quotes", columns).unwrap();
-        let row_a = Row::new(0, phys_columns.clone(), vec![
-            Field::new(StringValue("A".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(11.77)),
-        ]);
-        let row_b = Row::new(1, phys_columns.clone(), vec![
-            Field::new(StringValue("BB".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(11.77)),
-        ]);
-        let row_c = Row::new(2, phys_columns.clone(), vec![
-            Field::new(StringValue("CCC".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(55.44)),
-        ]);
+        let row_a = make_quote(0, &phys_columns, "A", "AMEX", 11.77);
+        let row_b = make_quote(1, &phys_columns, "BB", "AMEX", 33.22);
+        let row_c = make_quote(2, &phys_columns, "CCC", "AMEX", 55.44);
         df.append(&row_a).unwrap();
         df.append(&row_b).unwrap();
         df.append(&row_c).unwrap();
