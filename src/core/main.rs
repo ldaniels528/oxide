@@ -2,10 +2,17 @@
 //      TinyDB Server v0.1.0
 ////////////////////////////////////////////////////////////////////
 
+use std::io;
 use std::ops::Deref;
 
-use actix_web::{HttpResponse, Responder};
-use serde::Serialize;
+use actix_web::{HttpResponse, Responder, web};
+use serde::{Deserialize, Serialize};
+use crate::dataframe_config::DataFrameConfig;
+
+use crate::dataframes::DataFrame;
+use crate::namespaces::Namespace;
+use crate::rows::Row;
+use crate::server::{ColumnJs, RowJs, ServerError, SystemInfoJs};
 
 mod codec;
 mod columns;
@@ -18,6 +25,7 @@ mod namespaces;
 mod row_collection;
 mod row_metadata;
 mod rows;
+mod server;
 mod table_columns;
 mod token_slice;
 mod testdata;
@@ -25,23 +33,10 @@ mod tokenizer;
 mod tokens;
 mod typed_values;
 
-type ServerError = Box<dyn std::error::Error>;
-
-#[derive(Clone, Debug, PartialEq, Serialize)]
-struct SystemInfo {
-    title: String,
-    version: String,
-}
-
-// Define a handler function for the index route
-async fn index() -> impl Responder {
-    HttpResponse::Ok().json(create_system_info())
-}
-
 #[actix_web::main]
 async fn main() -> Result<(), ServerError> {
     println!("Welcome to TinyDB Server.\n");
-    match get_port_number(std::env::args().collect()).await {
+    match server::get_port_number(std::env::args().collect()).await {
         Ok(port) => {
             println!("Starting server on port {}.", port);
             listen_to(&port).await
@@ -50,77 +45,59 @@ async fn main() -> Result<(), ServerError> {
     }
 }
 
-fn create_system_info() -> SystemInfo {
-    SystemInfo {
-        title: "TinyDB".into(),
-        version: "0.1.0".into(),
-    }
-}
-
-fn get_address(port: &str) -> String {
-    format!("127.0.0.1:{}", port)
-}
-
-async fn get_port_number(args: Vec<String>) -> Result<String, ServerError> {
-    if args.len() > 1 {
-        let re = regex::Regex::new(r"^\d+$").unwrap();
-        let port: String = args[1].trim().into();
-        if re.is_match(&port) {
-            Ok(port)
-        } else {
-            Err(format!("Port '{}' is invalid", port).into())
-        }
-    } else {
-        Ok("8080".into())
-    }
-}
-
 async fn listen_to(port: &str) -> Result<(), ServerError> {
     let server = actix_web::HttpServer::new(|| {
         actix_web::App::new()
-            .route("/", actix_web::web::get().to(index))
+            .route("/", web::get().to(index))
+            .route("/{database}/{schema}/{name}/{id}", web::get().to(get_row))
+            .route("/{database}/{schema}/{name}", web::get().to(get_config))
     })
-        .bind(get_address(port))?
+        .bind(crate::server::get_address(port))?
         .run();
     server.await?;
     Ok(())
 }
 
-// Unit tests
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// handler function for the index route
+// ex: http://localhost:8080/
+async fn index() -> impl Responder {
+    HttpResponse::Ok().json(SystemInfoJs::new())
+}
 
-    #[test]
-    fn test_create_system_info() {
-        let sys_info = create_system_info();
-        assert_eq!(sys_info, SystemInfo {
-            title: "TinyDB".into(),
-            version: "0.1.0".into(),
-        })
+/// handler function for configuration by namespace (database, schema, name)
+// ex: http://localhost:8080/dataframes/create/quotes
+async fn get_config(path: web::Path<(String, String, String)>) -> impl Responder {
+    let (database, schema, name) = (&path.0, &path.1, &path.2);
+    match DataFrameConfig::load(&Namespace::new(database, schema, name)) {
+        Ok(cfg) => HttpResponse::Ok().json(cfg),
+        Err(err) => {
+            eprintln!("error {}", err.to_string());
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+/// handler function for row by namespace (database, schema, name) and row ID
+// ex: http://localhost:8080/dataframes/create/quotes/0
+async fn get_row(path: web::Path<(String, String, String, usize)>) -> impl Responder {
+    fn load_row(path: web::Path<(String, String, String, usize)>) -> io::Result<Option<Row>> {
+        let (database, schema, name, id) = (&path.0, &path.1, &path.2, path.3);
+        let df = DataFrame::load(Namespace::new(database, schema, name))?;
+        let (row, metadata) = df.read_row(id)?;
+        Ok(if metadata.is_allocated { Some(row) } else { None })
     }
 
-    #[test]
-    fn test_get_address() {
-        let address = get_address("8888");
-        assert_eq!(address, "127.0.0.1:8888")
+    fn to_json(row: Row) -> RowJs {
+        RowJs::new(row.id, row.fields.iter().zip(&row.columns)
+            .map(|(f, c)| ColumnJs::new(&c.name, f.value.to_json())).collect())
     }
 
-    #[tokio::test]
-    async fn test_get_port_number_valid_input() -> Result<(), ServerError> {
-        let args: Vec<String> = vec!["test_program".into(), "1234".into()];
-        let expected: String = "1234".into();
-        let actual: String = get_port_number(args).await?;
-        assert_eq!(actual, expected);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_get_port_number_no_input() -> Result<(), ServerError> {
-        let args: Vec<String> = vec!["test_program".into()];
-        let expected: String = "8080".into();
-        let actual: String = get_port_number(args).await?;
-        assert_eq!(actual, expected);
-        Ok(())
+    match load_row(path) {
+        Ok(Some(row)) => HttpResponse::Ok().json(to_json(row)),
+        Ok(None) => HttpResponse::Ok().json(serde_json::json!({})),
+        Err(err) => {
+            eprintln!("{}", err.to_string());
+            HttpResponse::InternalServerError().finish()
+        }
     }
 }

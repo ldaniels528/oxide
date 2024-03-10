@@ -39,7 +39,7 @@ impl TokenSlice {
 
     /// Returns the option of a Token at the current position within the slice.
     pub fn current(&self) -> Option<&Token> {
-        if self.pos >= 0 && self.pos < self.tokens.len() {
+        if self.pos < self.tokens.len() {
             return Some(&self.tokens[self.pos]);
         }
         None

@@ -103,6 +103,7 @@ impl Row {
         mapping
     }
 
+    /// Returns a [Vec] containing the values in order of the fields within the row.
     pub fn unwrap(&self) -> Vec<&TypedValue> {
         let mut values = vec![];
         for field in &self.fields {

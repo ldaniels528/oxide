@@ -2,11 +2,7 @@
 // namespaces module
 ////////////////////////////////////////////////////////////////////
 
-use std::fs;
-
 use serde::Serialize;
-
-use crate::dataframe_config::DataFrameConfig;
 
 // Namespace is a logical representation of a Lollypop object namespace or path
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -17,6 +13,7 @@ pub struct Namespace {
 }
 
 impl Namespace {
+    /// constructs a new [Namespace]
     pub fn new(database: &str, schema: &str, name: &str) -> Self {
         Self {
             database: database.to_string(),
@@ -70,23 +67,11 @@ impl Namespace {
     pub fn get_table_file_path(&self) -> String {
         self.get_file_path("table")
     }
-
-    pub fn write_config(&self, config: &DataFrameConfig) -> std::io::Result<()> {
-        // convert the config to a JSON string
-        let json_string = serde_json::to_string(&config)?;
-        // ensure the parent directory exists
-        fs::create_dir_all(&self.get_root_path())?;
-        // write the JSON config to disk
-        fs::write(&self.get_config_file_path(), json_string)
-    }
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::columns::Column;
-    use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
-
     use super::*;
 
     #[test]
@@ -120,30 +105,5 @@ mod tests {
         let ns = Namespace::new("securities", "nyse", "Stocks");
         let filename = ns.get_table_file_path();
         assert_eq!(filename, "lollypop_db/ns/securities/nyse/Stocks/Stocks.table")
-    }
-
-    #[test]
-    fn test_write_config() {
-        let columns: Vec<Column> = vec![
-            Column::new("symbol", "String(10)", ""),
-            Column::new("exchange", "String(10)", ""),
-            Column::new("lastSale", "Double", ""),
-        ];
-        let indices: Vec<HashIndexConfig> = Vec::with_capacity(0);
-        let partitions: Vec<String> = Vec::with_capacity(0);
-        let df: DataFrameConfig = DataFrameConfig::new(columns, indices, partitions);
-        let ns: Namespace = Namespace::new("securities", "other_otc", "Stocks");
-
-        ns.write_config(&df)
-            .expect("failed to write config");
-        assert_eq!(&df.columns[0].name, "symbol");
-        assert_eq!(&df.columns[0].column_type, "String(10)");
-        assert_eq!(&df.columns[0].default_value, "");
-        assert_eq!(&df.columns[1].name, "exchange");
-        assert_eq!(&df.columns[1].column_type, "String(10)");
-        assert_eq!(&df.columns[1].default_value, "");
-        assert_eq!(&df.columns[2].name, "lastSale");
-        assert_eq!(&df.columns[2].column_type, "Double");
-        assert_eq!(&df.columns[2].default_value, "");
     }
 }

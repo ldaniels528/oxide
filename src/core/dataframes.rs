@@ -30,16 +30,45 @@ pub struct DataFrame {
 
 impl AddAssign for DataFrame {
     fn add_assign(&mut self, rhs: Self) {
-        for id in 0..rhs.size().unwrap() {
-            let (row, metadata) = rhs.read_row(id).unwrap();
-            if metadata.is_allocated {
-                self.append(&row).unwrap();
+        fn do_add(lhs: &mut DataFrame, rhs: DataFrame) -> io::Result<()> {
+            for id in 0..rhs.size()? {
+                let (row, metadata) = rhs.read_row(id)?;
+                if metadata.is_allocated {
+                    lhs.append(&row)?;
+                }
             }
+            Ok(())
+        }
+
+        match do_add(self, rhs) {
+            Ok(_) => (),
+            Err(err) => panic!("{}", err.to_string())
         }
     }
 }
 
 impl DataFrame {
+    /// creates a new [DataFrame]; persisting its configuration to disk.
+    pub fn create(ns: Namespace, config: DataFrameConfig) -> io::Result<DataFrame> {
+        config.save(&ns)?;
+        let file = Self::open_crw(&ns)?;
+        Self::new(ns, config, file)
+    }
+
+    /// loads a dataframe from disk.
+    pub fn load(ns: Namespace) -> io::Result<DataFrame> {
+        let cfg = DataFrameConfig::load(&ns)?;
+        let file = Self::open_rw(&ns)?;
+        DataFrame::new(ns, cfg, file)
+    }
+
+    /// creates a new dataframe.
+    pub fn new(ns: Namespace, config: DataFrameConfig, file: File) -> io::Result<DataFrame> {
+        let columns = TableColumn::from_columns(&config.columns)?;
+        let record_size = Self::compute_record_size(&columns);
+        Ok(DataFrame { ns, columns, config, record_size, file })
+    }
+
     /// appends a new row to the table
     pub fn append(&mut self, row: &Row) -> io::Result<usize> {
         let file_len = (&self.file.metadata()?).len();
@@ -57,16 +86,6 @@ impl DataFrame {
         Row::overhead() + columns.iter().map(|c| c.max_physical_size).sum::<usize>()
     }
 
-    /// creates a new dataframe; persisting its configuration to disk.
-    pub fn create(ns: Namespace, config: DataFrameConfig) -> io::Result<DataFrame> {
-        // write the configuration file
-        ns.write_config(&config)?;
-        // open the file with read and write access
-        let file: File = OpenOptions::new().create(true).read(true).write(true).open(ns.get_table_file_path())?;
-        // return the dataframe
-        Self::new(ns, config, file)
-    }
-
     pub fn foreach_row(&self, f: fn(&Row) -> ()) -> io::Result<()> {
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
@@ -80,13 +99,14 @@ impl DataFrame {
         Ok(self.file.metadata()?.len())
     }
 
-    /// creates a new dataframe.
-    pub fn new(ns: Namespace, config: DataFrameConfig, file: File) -> io::Result<DataFrame> {
-        // convert the logical columns to "realized" physical columns
-        let columns = TableColumn::from_columns(&config.columns)?;
-        // compute the record size (+9 bytes for metadata and row ID)
-        let record_size = Self::compute_record_size(&columns);
-        Ok(DataFrame { ns, columns, config, record_size, file })
+    /// convenience function to create, read or write a file
+    fn open_crw(ns: &Namespace) -> io::Result<File> {
+        OpenOptions::new().create(true).read(true).write(true).open(ns.get_table_file_path())
+    }
+
+    /// convenience function to read or write a file
+    fn open_rw(ns: &Namespace) -> io::Result<File> {
+        OpenOptions::new().read(true).write(true).open(ns.get_table_file_path())
     }
 
     /// overwrites a specified row by ID
@@ -147,6 +167,7 @@ mod tests {
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::dataframes::DataFrame;
     use crate::fields::Field;
+    use crate::namespaces::Namespace;
     use crate::rows::Row;
     use crate::table_columns::TableColumn;
     use crate::testdata::*;
@@ -289,6 +310,23 @@ mod tests {
                 0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
             ]).unwrap();
         df.foreach_row(|row| println!("{:?}", row)).unwrap()
+    }
+
+    #[test]
+    fn test_load_row() {
+        let ns = Namespace::new("dataframes", "load_row", "quotes");
+        let df = make_rows_from_bytes(
+            "dataframes", "load_row", "quotes", make_columns(), &mut vec![
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 2,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'O', b'O', b'M',
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'A', b'S', b'D',
+                0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
+            ]).unwrap();
+        let df0 = DataFrame::load(ns.clone()).unwrap();
+        df0.foreach_row(|row| println!("{:?}", row)).unwrap();
+        let (row, metadata) = df0.read_row(0).unwrap();
+        assert!(metadata.is_allocated);
+        assert_eq!(row.id, 2);
     }
 
     #[test]

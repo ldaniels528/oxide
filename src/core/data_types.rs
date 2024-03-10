@@ -16,6 +16,7 @@ use crate::tokens::Token;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
     BLOBType(usize),
+    BooleanType,
     CLOBType(usize),
     DateType,
     EnumType(Vec<String>),
@@ -38,6 +39,7 @@ impl DataType {
         use crate::data_types::DataType::*;
         let width: usize = match self {
             BLOBType(size) => *size,
+            BooleanType => 1,
             CLOBType(size) => *size,
             DateType => 8,
             EnumType(..) => 2,
@@ -96,14 +98,12 @@ impl DataType {
 
         match name {
             "BLOB" => size_parameter(|size| BLOBType(size), args),
+            "Boolean" => parameterless(BooleanType, args),
             "Byte" => parameterless(Int8Type, args),
             "CLOB" => size_parameter(|size| CLOBType(size), args),
             "Date" => parameterless(DateType, args),
             "Double" => parameterless(Float64Type, args),
-            "Enum" => {
-                let values = args.iter().map(|s| s.to_string()).collect();
-                Ok(EnumType(values))
-            }
+            "Enum" => Ok(EnumType(args.iter().map(|s| s.to_string()).collect())),
             "Float" => parameterless(Float32Type, args),
             "Int" => parameterless(Int32Type, args),
             "Long" => parameterless(Int64Type, args),
@@ -120,6 +120,7 @@ impl DataType {
     pub fn to_column_type(&self) -> String {
         match self {
             BLOBType(size) => format!("BLOB({})", size),
+            BooleanType => "Boolean".into(),
             CLOBType(size) => format!("CLOB({})", size),
             DateType => "Date".into(),
             EnumType(values) => format!("Enum({:?})", values),
@@ -171,6 +172,7 @@ mod tests {
         }
 
         verify("BLOB(5566)", BLOBType(5566));
+        verify("Boolean", BooleanType);
         verify("Byte", Int8Type);
         verify("CLOB(3377)", CLOBType(3377));
         verify("Date", DateType);
@@ -180,6 +182,7 @@ mod tests {
         verify("Short", Int16Type);
         verify("Int", Int32Type);
         verify("Long", Int64Type);
+        verify("RecordNumber", RecordNumberType);
         verify("String(10)", StringType(10));
         verify("UUID", UUIDType);
     }
