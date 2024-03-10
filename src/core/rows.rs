@@ -14,6 +14,7 @@ use crate::fields::Field;
 use crate::row_metadata::RowMetadata;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::RecordNumberValue;
 
 /// Represents a row of a table structure.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -94,9 +95,10 @@ impl Row {
         Self::overhead() + self.columns.iter().map(|c| c.max_physical_size).sum::<usize>()
     }
 
-    /// Returns a [HashMap] containing name-values pairs that represent its internal state.
+    /// Returns a [HashMap] containing name-values pairs that represent the row's internal state.
     pub fn to_hash_map(&self) -> HashMap<String, TypedValue> {
         let mut mapping = HashMap::new();
+        mapping.insert("_id".into(), RecordNumberValue(self.id));
         for (field, column) in self.fields.iter().zip(&self.columns) {
             mapping.insert(column.name.to_string(), field.value.clone());
         }
@@ -188,8 +190,8 @@ mod tests {
             Field::with_value(StringValue("TCE".into())),
             Field::with_value(Float64Value(1230.78)),
         ]);
-        assert_eq!(row.id, 111);
         assert_eq!(row.to_hash_map(), hashmap!(
+            "_id".into() => RecordNumberValue(111),
             "symbol".into() => StringValue("AAA".into()),
             "exchange".into() => StringValue("TCE".into()),
             "lastSale".into() => Float64Value(1230.78),
