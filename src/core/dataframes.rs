@@ -221,7 +221,7 @@ impl DataFrame {
         Ok((self.file.metadata()?.len() as usize) / self.record_size)
     }
 
-    fn to_offset(&self, id: usize) -> u64 { (id * self.record_size) as u64 }
+    fn to_offset(&self, id: usize) -> u64 { (id as u64) * (self.record_size as u64) }
 }
 
 // Unit tests
