@@ -2,17 +2,11 @@
 // compiler module
 ////////////////////////////////////////////////////////////////////
 
-use std::ops::Deref;
-
-use serde::{Deserialize, Serialize};
-
 use crate::compiler::CompiledCode::CodeBlock;
 use crate::machine::{ErrorCode, MachineState};
 use crate::token_slice::TokenSlice;
 use crate::tokenizer::parse_fully;
 use crate::tokens::Token::Symbol;
-use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::Undefined;
 
 struct Compiler;
 
@@ -34,7 +28,7 @@ impl Compiler {
 
     fn process_slice(ts: &mut TokenSlice) -> Option<CompiledCode> {
         match ts.current() {
-            Some(Symbol(s, ..)) if s == "(" => Self::process_parens(ts),
+            Some(Symbol { text: s, .. }) if s == "(" => Self::process_parens(ts),
             _ => None
         }
     }

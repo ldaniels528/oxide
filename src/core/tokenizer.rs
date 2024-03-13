@@ -83,7 +83,7 @@ fn next_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
 }
 
 fn next_alphanumeric_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
-    next_eligible_token(inputs, pos, Token::AlphaNumeric, |inputs, pos| has_more(inputs, pos) && (inputs[*pos].is_alphanumeric()))
+    next_eligible_token(inputs, pos, Token::alpha, |inputs, pos| has_more(inputs, pos) && (inputs[*pos].is_alphanumeric()))
 }
 
 fn next_eligible_token(inputs: &CharSlice,
@@ -102,11 +102,11 @@ fn next_eligible_token(inputs: &CharSlice,
 }
 
 fn next_backticks_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
-    next_quoted_string_token(inputs, pos, Token::BackticksQuoted, '`')
+    next_quoted_string_token(inputs, pos, Token::backticks, '`')
 }
 
 fn next_double_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
-    next_quoted_string_token(inputs, pos, Token::DoubleQuoted, '"')
+    next_quoted_string_token(inputs, pos, Token::double_quoted, '"')
 }
 
 fn next_glyph_token(inputs: &CharSlice,
@@ -123,7 +123,7 @@ fn next_glyph_token(inputs: &CharSlice,
 }
 
 fn next_numeric_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
-    next_eligible_token(inputs, pos, Token::Numeric, |inputs, pos| {
+    next_eligible_token(inputs, pos, Token::numeric, |inputs, pos| {
         has_more(inputs, pos) && (inputs[*pos].is_numeric())
     })
 }
@@ -143,7 +143,7 @@ fn next_quoted_string_token(inputs: &CharSlice, pos: &mut usize, make_token: New
 }
 
 fn next_operator_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
-    next_glyph_token(inputs, pos, Token::Operator,
+    next_glyph_token(inputs, pos, Token::operator,
                      |inputs, pos| {
                          let chars = ['!', '%', '*', '&', '/', '+', '-', '<', '>', '=', '[', ']', '(', ')'];
                          has_more(inputs, pos) && chars.contains(&inputs[*pos])
@@ -151,11 +151,11 @@ fn next_operator_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
 }
 
 fn next_single_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
-    next_quoted_string_token(inputs, pos, Token::SingleQuoted, '\'')
+    next_quoted_string_token(inputs, pos, Token::single_quoted, '\'')
 }
 
 fn next_symbol_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
-    next_glyph_token(inputs, pos, Token::Symbol, has_more)
+    next_glyph_token(inputs, pos, Token::symbol, has_more)
 }
 
 // Unit tests

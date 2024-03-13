@@ -64,18 +64,18 @@ impl DataType {
         let token_slice: &[Token] = tokens.as_slice();
         match token_slice {
             // ex: Int
-            [Token::AlphaNumeric(name, ..)] =>
+            [Token::AlphaNumeric { text: name, .. }] =>
                 DataType::resolve(name, &[]),
             // ex: String(60)
-            [Token::AlphaNumeric(name, ..),
-            Token::Operator(op0, ..),
-            Token::Numeric(arg, ..),
-            Token::Operator(op1, ..)] if op0 == "(" && op1 == ")" =>
+            [Token::AlphaNumeric { text: name, .. },
+            Token::Operator { text: op0, .. },
+            Token::Numeric { text: arg, .. },
+            Token::Operator { text: op1, .. }] if op0 == "(" && op1 == ")" =>
                 DataType::resolve(name, &[arg]),
             // ex: Struct(symbol String(10), exchange String(10), last Double)
-            [Token::AlphaNumeric(name, ..),
-            Token::Operator(op0, ..), ..,
-            Token::Operator(op1, ..)] if op0 == "(" && op1 == ")" => {
+            [Token::AlphaNumeric { text: name, .. },
+            Token::Operator { text: op0, .. }, ..,
+            Token::Operator { text: op1, .. }] if op0 == "(" && op1 == ")" => {
                 let arg_tokens: &[Token] = &token_slice[1..(token_slice.len() - 1)];
                 DataType::resolve(name, DataType::transfer_to_string_array(arg_tokens).as_slice())
             }
@@ -142,12 +142,12 @@ impl DataType {
         token_slice.into_iter()
             .fold(Vec::new(), |mut acc, t| {
                 match t {
-                    Token::Symbol(value, ..) if value == "," => acc,
-                    Token::AlphaNumeric(value, ..) => {
+                    Token::Symbol { text: value, .. } if value == "," => acc,
+                    Token::AlphaNumeric { text: value, .. } => {
                         acc.push(value);
                         acc
                     }
-                    Token::Numeric(value, ..) => {
+                    Token::Numeric { text: value, .. } => {
                         acc.push(value);
                         acc
                     }
