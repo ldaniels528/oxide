@@ -525,9 +525,7 @@ mod tests {
         let row_a = make_quote(0, &phys_columns, "A", "AMEX", 11.77);
         let row_b = make_quote(1, &phys_columns, "BB", "AMEX", 33.22);
         let row_c = make_quote(2, &phys_columns, "CCC", "AMEX", 55.44);
-        df.append(&row_a).unwrap();
-        df.append(&row_b).unwrap();
-        df.append(&row_c).unwrap();
-        assert_eq!(df.reverse().unwrap(), vec![row_c, row_b, row_a])
+        for row in vec![&row_a, &row_b, &row_c] { df.append(row).unwrap(); }
+        assert_eq!(df.reverse().unwrap(), [row_c, row_b, row_a]);
     }
 }

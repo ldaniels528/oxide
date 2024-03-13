@@ -7,6 +7,12 @@ use std::fs::File;
 use std::io;
 use std::io::Write;
 
+use chrono::Utc;
+use rand::{Rng, RngCore, thread_rng};
+use rand::distributions::Uniform;
+use rand::prelude::ThreadRng;
+use serde::{Deserialize, Serialize};
+
 use crate::columns::Column;
 use crate::data_types::DataType::{Float64Type, StringType};
 use crate::dataframe_config::DataFrameConfig;
@@ -16,6 +22,49 @@ use crate::namespaces::Namespace;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
+
+struct StockQuote;
+
+impl StockQuote {
+    pub fn new() -> Row {
+        make_quote(0, &make_table_columns(),
+                   &Self::generate_random_symbol(),
+                   &Self::generate_random_exchange(),
+                   Self::generate_random_last_sale())
+    }
+
+    fn generate_quote_from_symbol_and_exchange(symbol: &str, exchange: &str) -> Row {
+        make_quote(0, &make_table_columns(), symbol, exchange, Self::generate_random_last_sale())
+    }
+
+    fn get_exchange_from_index(exchange_index: usize) -> String {
+        let exchanges = ["AMEX", "NASDAQ", "NYSE", "OTCBB", "OTHEROTC"];
+        exchanges[exchange_index % exchanges.len()].parse().unwrap()
+    }
+
+    fn generate_random_exchange() -> String {
+        let mut rng: ThreadRng = thread_rng();
+        let exchange_index = rng.next_u32();
+        Self::get_exchange_from_index(exchange_index as usize)
+    }
+
+    fn generate_random_last_sale() -> f64 {
+        let mut rng: ThreadRng = thread_rng();
+        400.0 * rng.sample(Uniform::new(0.0, 1.0))
+    }
+
+    fn generate_random_symbol() -> String {
+        let mut rng: ThreadRng = thread_rng();
+        (0..5)
+            .map(|_| rng.gen_range(b'A'..=b'Z') as char)
+            .collect()
+    }
+
+    fn generate_random_transaction_time() -> i64 {
+        let mut rng: ThreadRng = thread_rng();
+        Utc::now().timestamp_millis() - (rng.sample(Uniform::new(0, 10000)) as i64)
+    }
+}
 
 pub fn make_columns() -> Vec<Column> {
     vec![
