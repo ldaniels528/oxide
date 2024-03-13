@@ -14,7 +14,7 @@ use crate::fields::Field;
 use crate::row_metadata::RowMetadata;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::RecordNumberValue;
+use crate::typed_values::TypedValue::RecordNumber;
 
 /// Represents a row of a table structure.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,6 +85,13 @@ impl Row {
         buf
     }
 
+    pub fn find_field_by_name(&self, name: &str) -> Option<TypedValue> {
+        self.columns.iter().zip(self.fields.iter())
+            .find_map(|(c, f)| {
+                if c.name == name { Some(f.value.clone()) } else { None }
+            })
+    }
+
     /// Represents the number of bytes before the start of column data, which includes
     /// the embedded row metadata (1-byte) and row ID (4- or 8-bytes)
     pub fn overhead() -> usize {
@@ -98,7 +105,7 @@ impl Row {
     /// Returns a [HashMap] containing name-values pairs that represent the row's internal state.
     pub fn to_hash_map(&self) -> HashMap<String, TypedValue> {
         let mut mapping = HashMap::new();
-        mapping.insert("_id".into(), RecordNumberValue(self.id));
+        mapping.insert("_id".into(), RecordNumber(self.id));
         for (field, column) in self.fields.iter().zip(&self.columns) {
             mapping.insert(column.name.to_string(), field.value.clone());
         }
@@ -143,9 +150,9 @@ mod tests {
         assert_eq!(row, Row {
             id: 187,
             columns: vec![
-                TableColumn::new("symbol", StringType(4), NullValue, 9),
-                TableColumn::new("exchange", StringType(4), NullValue, 22),
-                TableColumn::new("lastSale", Float64Type, NullValue, 35),
+                TableColumn::new("symbol", StringType(4), Null, 9),
+                TableColumn::new("exchange", StringType(4), Null, 22),
+                TableColumn::new("lastSale", Float64Type, Null, 35),
             ],
             fields: vec![
                 Field::new(StringValue("MANA".into())),
@@ -179,7 +186,7 @@ mod tests {
     fn test_to_hash_map() {
         let row = make_quote(111, &make_table_columns(), "AAA", "TCE", 1230.78);
         assert_eq!(row.to_hash_map(), hashmap!(
-            "_id".into() => RecordNumberValue(111),
+            "_id".into() => RecordNumber(111),
             "symbol".into() => StringValue("AAA".into()),
             "exchange".into() => StringValue("TCE".into()),
             "lastSale".into() => Float64Value(1230.78),

@@ -21,7 +21,7 @@ impl Field {
         let metadata: FieldMetadata = FieldMetadata::decode(buffer[offset]);
         let value: TypedValue = if metadata.is_active {
             TypedValue::decode(&data_type, buffer, offset + 1)
-        } else { NullValue };
+        } else { Null };
         Self::new(value)
     }
 
@@ -42,7 +42,7 @@ impl Field {
     }
 
     pub fn with_null() -> Self {
-        Self::with_value(NullValue)
+        Self::with_value(Null)
     }
 
     pub fn with_value(value: TypedValue) -> Self {
@@ -69,7 +69,7 @@ mod tests {
     #[test]
     fn test_encode() {
         let buf: Vec<u8> = vec![0x80, 0, 0, 0, 0, 0, 0, 0, 4, b'H', b'A', b'N', b'D', 0];
-        let column: TableColumn = TableColumn::new("symbol", StringType(5), NullValue, 0);
+        let column: TableColumn = TableColumn::new("symbol", StringType(5), Null, 0);
         let field: Field = Field::with_value(StringValue("HAND".into()));
         assert_eq!(field.encode(column.max_physical_size), buf);
     }
@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn test_with_null() {
         let field: Field = Field::with_null();
-        assert_eq!(field.value, NullValue);
+        assert_eq!(field.value, Null);
     }
 
     #[test]

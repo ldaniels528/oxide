@@ -4,6 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::tokens::Token::*;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Token {
     // text, start, end, line_number, column_number
@@ -17,6 +19,20 @@ pub enum Token {
 }
 
 impl Token {
+    /// Returns the "raw" value of the [Token]
+    pub fn get_raw_value(&self) -> String {
+        let result = match &self {
+            AlphaNumeric(s, ..) => s,
+            BackticksQuoted(s, ..) => s,
+            DoubleQuoted(s, ..) => s,
+            Numeric(s, ..) => s,
+            Operator(s, ..) => s,
+            SingleQuoted(s, ..) => s,
+            Symbol(s, ..) => s,
+        };
+        result.to_string()
+    }
+
     /// Indicates whether the token is alphanumeric.
     pub fn is_alphanumeric(&self) -> bool {
         match self {

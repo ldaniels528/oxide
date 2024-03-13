@@ -72,16 +72,6 @@ pub enum Direction {
     Backward = 1,
 }
 
-impl Direction {
-    fn flip(&mut self) -> Direction {
-        use Direction::*;
-        match &self {
-            Forward => Backward,
-            Backward => Forward
-        }
-    }
-}
-
 // Unit tests
 #[cfg(test)]
 mod tests {
@@ -113,8 +103,7 @@ mod tests {
         // create a dataframe with 3 rows, 3 columns
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mut df = make_dataframe("dataframes", "forward_iterator", "quotes", columns).unwrap();
-        df.resize(0).unwrap();
+        let mut df = make_dataframe("dataframes", "reverse_iterator", "quotes", columns).unwrap();
         df.append(&make_quote(0, &phys_columns, "AAPL", "NYSE", 118.77)).unwrap();
         df.append(&make_quote(1, &phys_columns, "AMD", "NYSE", 93.22)).unwrap();
         df.append(&make_quote(2, &phys_columns, "INTC", "NYSE", 67.44)).unwrap();

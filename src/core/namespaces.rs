@@ -2,10 +2,10 @@
 // namespaces module
 ////////////////////////////////////////////////////////////////////
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 // Namespace is a logical representation of a Lollypop object namespace or path
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Namespace {
     pub database: String,
     pub schema: String,

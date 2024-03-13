@@ -130,7 +130,7 @@ mod tests {
     use crate::table_columns::TableColumn;
     use crate::testdata::{make_columns, make_quote, make_table_file, make_table_file_from_bytes};
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::{Float64Value, NullValue, StringValue};
+    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
     #[test]
     fn test_append_row_then_read_rows() {
@@ -166,9 +166,9 @@ mod tests {
         assert_eq!(rows[0], Row {
             id: 0,
             columns: vec![
-                TableColumn::new("symbol", StringType(4), NullValue, 9),
-                TableColumn::new("exchange", StringType(4), NullValue, 22),
-                TableColumn::new("lastSale", Float64Type, NullValue, 35),
+                TableColumn::new("symbol", StringType(4), Null, 9),
+                TableColumn::new("exchange", StringType(4), Null, 22),
+                TableColumn::new("lastSale", Float64Type, Null, 35),
             ],
             fields: vec![
                 Field::new(StringValue("RICE".into())),
@@ -179,9 +179,9 @@ mod tests {
         assert_eq!(rows[1], Row {
             id: 1,
             columns: vec![
-                TableColumn::new("symbol", StringType(4), NullValue, 9),
-                TableColumn::new("exchange", StringType(4), NullValue, 22),
-                TableColumn::new("lastSale", Float64Type, NullValue, 35),
+                TableColumn::new("symbol", StringType(4), Null, 9),
+                TableColumn::new("exchange", StringType(4), Null, 22),
+                TableColumn::new("lastSale", Float64Type, Null, 35),
             ],
             fields: vec![
                 Field::new(StringValue("BEEF".into())),
@@ -209,9 +209,9 @@ mod tests {
         assert_eq!(row, Row {
             id: 2,
             columns: vec![
-                TableColumn::new("symbol", StringType(4), NullValue, 9),
-                TableColumn::new("exchange", StringType(4), NullValue, 22),
-                TableColumn::new("lastSale", Float64Type, NullValue, 35),
+                TableColumn::new("symbol", StringType(4), Null, 9),
+                TableColumn::new("exchange", StringType(4), Null, 22),
+                TableColumn::new("lastSale", Float64Type, Null, 35),
             ],
             fields: vec![
                 Field::new(StringValue("AMD".into())),
@@ -262,9 +262,9 @@ mod tests {
         assert_eq!(row, Row {
             id: 5,
             columns: vec![
-                TableColumn::new("symbol", StringType(4), NullValue, 9),
-                TableColumn::new("exchange", StringType(4), NullValue, 22),
-                TableColumn::new("lastSale", Float64Type, NullValue, 35),
+                TableColumn::new("symbol", StringType(4), Null, 9),
+                TableColumn::new("exchange", StringType(4), Null, 22),
+                TableColumn::new("lastSale", Float64Type, Null, 35),
             ],
             fields: vec![
                 Field::new(StringValue("ROOM".into())),

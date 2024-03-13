@@ -15,7 +15,7 @@ use crate::fields::Field;
 use crate::namespaces::Namespace;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
-use crate::typed_values::TypedValue::{Float64Value, NullValue, StringValue};
+use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
 pub fn make_columns() -> Vec<Column> {
     vec![
@@ -61,9 +61,9 @@ pub fn make_rows_from_bytes(database: &str,
 
 pub fn make_table_columns() -> Vec<TableColumn> {
     vec![
-        TableColumn::new("symbol", StringType(4), NullValue, 9),
-        TableColumn::new("exchange", StringType(4), NullValue, 22),
-        TableColumn::new("lastSale", Float64Type, NullValue, 35),
+        TableColumn::new("symbol", StringType(4), Null, 9),
+        TableColumn::new("exchange", StringType(4), Null, 22),
+        TableColumn::new("lastSale", Float64Type, Null, 35),
     ]
 }
 
@@ -97,9 +97,9 @@ mod tests {
     fn test_differences() {
         let generated: Vec<TableColumn> = TableColumn::from_columns(&make_columns()).unwrap();
         let natural: Vec<TableColumn> = vec![
-            TableColumn::new("symbol", StringType(4), NullValue, 9),
-            TableColumn::new("exchange", StringType(4), NullValue, 22),
-            TableColumn::new("lastSale", Float64Type, NullValue, 35),
+            TableColumn::new("symbol", StringType(4), Null, 9),
+            TableColumn::new("exchange", StringType(4), Null, 22),
+            TableColumn::new("lastSale", Float64Type, Null, 35),
         ];
         assert_eq!(generated, natural);
     }

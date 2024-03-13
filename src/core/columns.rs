@@ -15,11 +15,7 @@ impl Column {
     pub fn new(name: impl Into<String>,
                column_type: impl Into<String>,
                default_value: Option<String>) -> Self {
-        Column {
-            name: name.into(),
-            column_type: column_type.into(),
-            default_value,
-        }
+        Column { name: name.into(), column_type: column_type.into(), default_value }
     }
 }
 

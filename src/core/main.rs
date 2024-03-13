@@ -16,12 +16,16 @@ use crate::server::{ColumnJs, RowJs, ServerError, SystemInfoJs};
 
 mod codec;
 mod columns;
+mod compiler;
 mod dataframes;
 mod dataframe_config;
 mod data_types;
+mod expression;
 mod field_metadata;
 mod fields;
+mod machine;
 mod namespaces;
+mod opcode;
 mod row_collection;
 mod row_metadata;
 mod rows;

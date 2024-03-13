@@ -9,6 +9,8 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::{Add, AddAssign, Index};
 use std::os::unix::fs::FileExt;
 
+use serde::{Deserialize, Serialize};
+
 use crate::dataframe_config::DataFrameConfig;
 use crate::fields::Field;
 use crate::namespaces::Namespace;
@@ -25,6 +27,7 @@ pub struct DataFrame {
     pub(crate) columns: Vec<TableColumn>,
     pub(crate) config: DataFrameConfig,
     pub(crate) record_size: usize,
+    //#[serde(skip_serializing, skip_deserializing)]
     pub(crate) file: File,
 }
 
@@ -235,7 +238,7 @@ mod tests {
     use crate::table_columns::TableColumn;
     use crate::testdata::*;
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::{Float64Value, NullValue, StringValue};
+    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
     #[test]
     fn test_add_assign() {
@@ -260,9 +263,9 @@ mod tests {
         // re-read the rows
         let rows = df0.read_rows(0, df0.size().unwrap()).unwrap();
         let columns = vec![
-            TableColumn::new("symbol", StringType(4), NullValue, 9),
-            TableColumn::new("exchange", StringType(4), NullValue, 22),
-            TableColumn::new("lastSale", Float64Type, NullValue, 35),
+            TableColumn::new("symbol", StringType(4), Null, 9),
+            TableColumn::new("exchange", StringType(4), Null, 22),
+            TableColumn::new("lastSale", Float64Type, Null, 35),
         ];
         assert_eq!(rows, vec![
             Row {
@@ -342,13 +345,13 @@ mod tests {
         assert_eq!(df.ns.name, "quotes");
         assert_eq!(df.columns[0].name, "symbol");
         assert_eq!(df.columns[0].data_type, StringType(4));
-        assert_eq!(df.columns[0].default_value, NullValue);
+        assert_eq!(df.columns[0].default_value, Null);
         assert_eq!(df.columns[1].name, "exchange");
         assert_eq!(df.columns[1].data_type, StringType(4));
-        assert_eq!(df.columns[1].default_value, NullValue);
+        assert_eq!(df.columns[1].default_value, Null);
         assert_eq!(df.columns[2].name, "lastSale");
         assert_eq!(df.columns[2].data_type, Float64Type);
-        assert_eq!(df.columns[2].default_value, NullValue);
+        assert_eq!(df.columns[2].default_value, Null);
     }
 
     #[test]
@@ -477,9 +480,9 @@ mod tests {
         assert_eq!(row, Row {
             id: 0xDEAD_BABE_BEEF_CAFE,
             columns: vec![
-                TableColumn::new("symbol", StringType(4), NullValue, 9),
-                TableColumn::new("exchange", StringType(4), NullValue, 22),
-                TableColumn::new("lastSale", Float64Type, NullValue, 35),
+                TableColumn::new("symbol", StringType(4), Null, 9),
+                TableColumn::new("exchange", StringType(4), Null, 22),
+                TableColumn::new("lastSale", Float64Type, Null, 35),
             ],
             fields: vec![
                 Field::new(StringValue("ROOM".into())),
