@@ -77,9 +77,8 @@ impl Template {
         let mut params = vec![];
         // capture the parent if named
         if let Some(name) = &self.name {
-            if let Some(parent_token) = ts.current() {
+            if let Some(parent_token) = ts.take() {
                 params.push((name.clone(), parent_token.clone()));
-                ts.next();
             }
         }
         // capture the children

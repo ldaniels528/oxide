@@ -7,8 +7,6 @@ use std::ops::Deref;
 
 use serde::{Deserialize, Serialize};
 
-use crate::compiler::{CompiledCode, OpCode};
-use crate::compiler::CompiledCode::CodeBlock;
 use crate::expression::Expression;
 use crate::machine::ErrorCode::*;
 use crate::rows::Row;
@@ -37,50 +35,37 @@ impl MachineState {
     pub fn evaluate(&self, expression: &Expression) -> TypedValue {
         use crate::expression::Expression::*;
         match expression {
-            And(a, b) => {
-                let (aa, bb) = (self.evaluate(a.deref()), self.evaluate(b.deref()));
-                aa.and(&bb).unwrap_or(Undefined)
-            }
-            Between(a, b, c) => {
-                let (aa, bb, cc) = (self.evaluate(a.deref()), self.evaluate(c.deref()), self.evaluate(b.deref()));
-                aa.between(&bb, &cc).unwrap_or(Undefined)
-            }
-            Contains(a, b) => todo!(),
-            Equal(a, b) => {
-                let (aa, bb) = (self.evaluate(a.deref()), self.evaluate(b.deref()));
-                aa.eq(&bb).unwrap_or(Undefined)
-            }
-            NotEqual(a, b) => {
-                let (aa, bb) = (self.evaluate(a.deref()), self.evaluate(b.deref()));
-                aa.ne(&bb).unwrap_or(Undefined)
-            }
-            GreaterThan(a, b) => {
-                let (aa, bb) = (self.evaluate(a.deref()), self.evaluate(b.deref()));
-                aa.gt(&bb).unwrap_or(Undefined)
-            }
-            GreaterOrEqual(a, b) => {
-                let (aa, bb) = (self.evaluate(a.deref()), self.evaluate(b.deref()));
-                aa.gte(&bb).unwrap_or(Undefined)
-            }
-            LessThan(a, b) => {
-                let (aa, bb) = (self.evaluate(a.deref()), self.evaluate(b.deref()));
-                aa.lt(&bb).unwrap_or(Undefined)
-            }
-            LessOrEqual(a, b) => {
-                let (aa, bb) = (self.evaluate(a.deref()), self.evaluate(b.deref()));
-                aa.lte(&bb).unwrap_or(Undefined)
-            }
-            Or(a, b) => {
-                let (aa, bb) = (self.evaluate(a.deref()), self.evaluate(b.deref()));
-                aa.or(&bb).unwrap_or(Undefined)
-            }
+            And(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.and(&bb)),
+            Between(a, b, c) =>
+                self.expand3(a, b, c, |aa, bb, cc| aa.between(&bb, &cc)),
+            CodeBlock(ops) =>
+                ops.iter().fold(Null, |_, op| self.evaluate(op)),
+            Contains(_a, _b) => todo!(),
+            Equal(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.eq(&bb)),
+            NotEqual(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.ne(&bb)),
+            GreaterThan(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.gt(&bb)),
+            GreaterOrEqual(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.gte(&bb)),
+            LessThan(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.lt(&bb)),
+            LessOrEqual(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.lte(&bb)),
+            Or(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.or(&bb)),
             Field(name) =>
-                match &self.current_row {
-                    Some(row) => row.find_field_by_name(&name).unwrap_or(Undefined),
-                    None => Undefined
-                }
+                if let Some(row) = &self.current_row {
+                    row.find_field_by_name(&name).unwrap_or(Undefined)
+                } else { Undefined }
             Literal(value) => value.clone(),
-            Variable(name) => self.get(&name).unwrap_or(Undefined)
+            Variable(name) => self.get(&name).unwrap_or(Undefined),
+            other => {
+                eprintln!("Unhandled expression: {:?}", other);
+               Undefined
+            }
         }
     }
 
@@ -91,19 +76,21 @@ impl MachineState {
         })
     }
 
-    /// executes the instruction on the supplied state machine
-    // move |vm: &mut MachineState| vm.execute(ops.clone())
-    pub fn invoke(&mut self, code: &CompiledCode) -> TypedValue {
-        match code {
-            CodeBlock(ops) => {
-                ops.iter().fold(Undefined, |_, cc| self.invoke(cc))
-            }
-            CompiledCode::Standard(op) => {
-                let f = op.deref();
-                f(self);
-                self.pop().unwrap_or(Undefined)
-            }
-        }
+    fn expand2(&self,
+               a: &Box<Expression>,
+               b: &Box<Expression>,
+               f: fn(TypedValue, TypedValue) -> Option<TypedValue>) -> TypedValue {
+        let (aa, bb) = (self.evaluate(a.deref()), self.evaluate(b.deref()));
+        f(aa, bb).unwrap_or(Undefined)
+    }
+
+    fn expand3(&self,
+               a: &Box<Expression>,
+               b: &Box<Expression>,
+               c: &Box<Expression>,
+               f: fn(TypedValue, TypedValue, TypedValue) -> Option<TypedValue>) -> TypedValue {
+        let (aa, bb, cc) = (self.evaluate(a.deref()), self.evaluate(c.deref()), self.evaluate(b.deref()));
+        f(aa, bb, cc).unwrap_or(Undefined)
     }
 
     /// returns a variable by name
@@ -159,6 +146,9 @@ impl MachineState {
 pub enum ErrorCode {
     UnsupportedValue(TypedValue)
 }
+
+/// represents an executable instruction (opcode)
+pub type OpCode = fn(&mut MachineState) -> Option<ErrorCode>;
 
 // Unit tests
 #[cfg(test)]

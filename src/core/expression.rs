@@ -2,14 +2,14 @@
 // expression module
 ////////////////////////////////////////////////////////////////////
 
-use std::ops::Add;
-
 use serde::{Deserialize, Serialize};
 
+use crate::columns::Column;
 use crate::expression::Expression::*;
+use crate::namespaces::Namespace;
 use crate::typed_values::TypedValue;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Expression {
     // conditional
     And(Box<Expression>, Box<Expression>),
@@ -20,13 +20,83 @@ pub enum Expression {
     GreaterOrEqual(Box<Expression>, Box<Expression>),
     LessThan(Box<Expression>, Box<Expression>),
     LessOrEqual(Box<Expression>, Box<Expression>),
+    Not(Box<Expression>),
     NotEqual(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
-    // direct values
-    Literal(TypedValue),
-    // referential
+    // mathematics
+    Divide(Box<Expression>, Box<Expression>),
+    Plus(Box<Expression>, Box<Expression>),
+    Minus(Box<Expression>, Box<Expression>),
+    Times(Box<Expression>, Box<Expression>),
+    // direct/reference values
     Field(String),
+    Literal(TypedValue),
+    Tuple(Vec<Expression>),
     Variable(String),
+    // control/flow
+    CodeBlock(Vec<Expression>),
+    If {
+        condition: Box<Expression>,
+        a: Box<Expression>,
+        b: Option<Box<Expression>>,
+    },
+    Return(Vec<Expression>),
+    While {
+        condition: Option<Box<Expression>>,
+        code: Box<Expression>,
+    },
+    // SQL
+    CreateIndex {
+        index: Box<Expression>,
+        columns: Vec<Column>,
+        table: Box<Expression>,
+    },
+    CreateTable {
+        table: Box<Expression>,
+        columns: Vec<Column>,
+        from: Option<Box<Expression>>,
+    },
+    Delete {
+        table: Box<Expression>,
+        condition: Option<Box<Expression>>,
+        limit: Option<TypedValue>,
+    },
+    Drop {
+        table: Box<Expression>,
+    },
+    Insert {
+        table: Box<Expression>,
+        fields: Vec<Expression>,
+        values: Vec<Expression>,
+    },
+    Ns(Namespace),
+    Overwrite {
+        table: Box<Expression>,
+        fields: Vec<Expression>,
+        values: Vec<Expression>,
+        condition: Option<Box<Expression>>,
+        limit: Option<TypedValue>,
+    },
+    Select {
+        fields: Vec<Expression>,
+        from: Option<Box<Expression>>,
+        condition: Option<Box<Expression>>,
+        group_by: Option<Vec<Expression>>,
+        having: Option<Vec<Expression>>,
+        order_by: Option<Vec<(Expression, bool)>>,
+        limit: Option<TypedValue>,
+    },
+    Truncate {
+        table: Box<Expression>,
+        limit: Option<TypedValue>,
+    },
+    Update {
+        table: Box<Expression>,
+        fields: Vec<Expression>,
+        values: Vec<Expression>,
+        condition: Option<Box<Expression>>,
+        limit: Option<TypedValue>,
+    },
 }
 
 impl Expression {
@@ -46,6 +116,13 @@ impl Expression {
         }
     }
 
+    pub fn is_control_flow(&self) -> bool {
+        match &self {
+            CodeBlock(..) | If { .. } | Return(..) | While { .. } => true,
+            _ => false
+        }
+    }
+
     pub fn is_referential(&self) -> bool {
         match &self {
             Field(..) => true,
@@ -58,13 +135,13 @@ impl Expression {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::expression::Expression::{And, Between, Equal, Field, GreaterOrEqual, GreaterThan, LessOrEqual, LessThan, Literal, NotEqual, Or, Variable};
+    use crate::expression::Expression::*;
     use crate::machine::MachineState;
     use crate::typed_values::TypedValue::{BooleanValue, Int32Value};
 
     #[test]
     fn test_and() {
-        let mut vm = MachineState::new();
+        let vm = MachineState::new();
         let result = vm.evaluate(&And(
             Box::from(Literal(BooleanValue(true))),
             Box::from(Literal(BooleanValue(false)))));
@@ -73,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_between() {
-        let mut vm = MachineState::new();
+        let vm = MachineState::new();
         let result = vm.evaluate(&Between(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1))),
@@ -83,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_eq() {
-        let mut vm = MachineState::new();
+        let vm = MachineState::new();
         let result = vm.evaluate(&Equal(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(5)))));
@@ -92,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_gt() {
-        let mut vm = MachineState::new();
+        let vm = MachineState::new();
         let result = vm.evaluate(&GreaterThan(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1)))));
@@ -101,7 +178,7 @@ mod tests {
 
     #[test]
     fn test_gte() {
-        let mut vm = MachineState::new();
+        let vm = MachineState::new();
         let result = vm.evaluate(&GreaterOrEqual(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1)))));
@@ -110,7 +187,7 @@ mod tests {
 
     #[test]
     fn test_lt() {
-        let mut vm = MachineState::new();
+        let vm = MachineState::new();
         let result = vm.evaluate(&LessThan(
             Box::from(Literal(Int32Value(4))),
             Box::from(Literal(Int32Value(5)))));
@@ -119,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_lte() {
-        let mut vm = MachineState::new();
+        let vm = MachineState::new();
         let result = vm.evaluate(&LessOrEqual(
             Box::from(Literal(Int32Value(1))),
             Box::from(Literal(Int32Value(5)))));
@@ -128,7 +205,7 @@ mod tests {
 
     #[test]
     fn test_ne() {
-        let mut vm = MachineState::new();
+        let vm = MachineState::new();
         let result = vm.evaluate(&NotEqual(
             Box::from(Literal(Int32Value(-5))),
             Box::from(Literal(Int32Value(5)))));
@@ -137,7 +214,7 @@ mod tests {
 
     #[test]
     fn test_or() {
-        let mut vm = MachineState::new();
+        let vm = MachineState::new();
         let result = vm.evaluate(&Or(
             Box::from(Literal(BooleanValue(true))),
             Box::from(Literal(BooleanValue(false)))));
@@ -152,6 +229,28 @@ mod tests {
             .is_conditional());
         assert!(Or(Box::from(Literal(BooleanValue(true))), Box::from(Literal(BooleanValue(false))))
             .is_conditional());
+    }
+
+    #[test]
+    fn test_if_is_control_flow() {
+        let op = If {
+            condition: Box::from(LessThan(Box::from(Variable("x".into())), Box::from(Variable("y".into())))),
+            a: Box::from(Literal(Int32Value(1))),
+            b: Some(Box::from(Literal(Int32Value(10))))
+        };
+        println!("op: {:?}", &op);
+        assert!(op.is_control_flow());
+    }
+
+    #[test]
+    fn test_while_is_control_flow() {
+        // CodeBlock(..) | If(..) | Return(..) | While { .. }
+        let op = While {
+            condition: Some(Box::from(LessThan(Box::from(Variable("x".into())), Box::from(Variable("y".into()))))),
+            code: Box::from(Literal(Int32Value(1))),
+        };
+        println!("op: {:?}", &op);
+        assert!(op.is_control_flow());
     }
 
     #[test]
