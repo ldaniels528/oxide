@@ -1,15 +1,13 @@
 ////////////////////////////////////////////////////////////////////
-// token slice module - responsible for matching/parsing language
+// token slice module - responsible for parsing language tokens
 ////////////////////////////////////////////////////////////////////
 
-use std::collections::HashMap;
 use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
 
 use crate::tokenizer;
 use crate::tokens::Token;
-use crate::tokens::Token::*;
 
 /// TokenSlice is a navigable sequence of tokens.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -19,6 +17,10 @@ pub struct TokenSlice {
 }
 
 impl TokenSlice {
+    ////////////////////////////////////////////////////////////////
+    // static methods
+    ////////////////////////////////////////////////////////////////
+    
     /// Creates a new Token Slice via a vector of tokens.
     pub fn new(tokens: Vec<Token>) -> Self {
         Self { tokens, pos: 0 }
@@ -29,6 +31,10 @@ impl TokenSlice {
         Self::new(tokenizer::parse_fully(text))
     }
 
+    ////////////////////////////////////////////////////////////////
+    // instance methods
+    ////////////////////////////////////////////////////////////////
+    
     pub fn capture(&mut self, start: &str, end: &str, delim: Option<&str>) -> Vec<&Token> {
         let inputs = &self.tokens;
         let mut pos = self.pos;
@@ -63,14 +69,6 @@ impl TokenSlice {
         }
     }
 
-    /// Extracts and returns values starting at the current position within the slice; which
-    /// moves the cursor forward within the slice.
-    pub fn extract(&self, template: impl Into<String>) -> HashMap<String, Token> {
-        let m = HashMap::new();
-        // TODO finish me
-        m
-    }
-
     /// Indicates whether at least one more token remains before the end of the slice.
     pub fn has_next(&self) -> bool { self.pos + 1 < self.tokens.len() }
 
@@ -82,11 +80,6 @@ impl TokenSlice {
             Some(tok) => tok.get_raw_value() == text,
             None => false
         }
-    }
-
-    /// Indicates whether the underlying tokens match the supplied template.
-    pub fn matches(&self, template: impl Into<String>) -> bool {
-        todo!()
     }
 
     /// Returns the option of a Token at the next position within the slice.
@@ -207,18 +200,5 @@ mod tests {
             Token::alpha("too".into(), 12, 15, 1, 14),
             Token::single_quoted("'fast!'".into(), 16, 23, 1, 18)
         ]);
-    }
-
-    #[test]
-    pub fn test_template_extraction() {
-        let mut ts = TokenSlice::from_string(r#"
-        select symbol, exchange
-        from stocks
-        where lastSale < 1.0
-        "#);
-        let m = ts.extract(r#"
-        select %E:fields ?from +?%q:source +?where +?%c:condition
-        "#);
-        println!("m {:?}", m)
     }
 }
