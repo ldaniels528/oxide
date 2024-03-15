@@ -70,7 +70,7 @@ pub fn sub(vm: &mut MachineState) -> Option<ErrorCode> {
 #[cfg(test)]
 mod tests {
     use crate::machine::MachineState;
-    use crate::opcode::{dec, fact, inc};
+    use crate::opcode::{add, dec, div, fact, inc, mul, sub};
     use crate::typed_values::TypedValue::{Float64Value, Int32Value, Int64Value};
 
     #[test]
@@ -104,4 +104,24 @@ mod tests {
         fact(&mut vm);
         assert_eq!(vm.pop(), Some(Float64Value(720.)));
     }
+
+    #[test]
+    fn test_multiple_opcodes() {
+        // execute the program
+        let mut vm = MachineState::new();
+        vm.push_all(vec![
+            2.0, 3.0, // add
+            4.0, // mul
+            5.0, // sub
+            2.0, // div
+        ].iter().map(|n| Float64Value(*n)).collect());
+        let err = vm.execute(vec![add, mul, sub, div]);
+        assert_eq!(err, None);
+
+        // get the return value
+        let ret_val = vm.pop();
+        assert_eq!(ret_val, Some(Float64Value(-0.08)));
+        assert_eq!(vm.stack_len(), 0)
+    }
+    
 }

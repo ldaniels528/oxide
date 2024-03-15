@@ -31,13 +31,13 @@ mod row_metadata;
 mod rows;
 mod server;
 mod table_columns;
-mod token_slice;
+mod table_view;
+mod template;
 mod testdata;
+mod token_slice;
 mod tokenizer;
 mod tokens;
 mod typed_values;
-mod table_view;
-mod template;
 
 #[actix_web::main]
 async fn main() -> Result<(), ServerError> {

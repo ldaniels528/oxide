@@ -12,88 +12,55 @@ pub enum Token {
     BackticksQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     DoubleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
-    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
+    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize },
     SingleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Symbol { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
 }
 
 impl Token {
+    ////////////////////////////////////////////////////////////////
+    // static methods
+    ////////////////////////////////////////////////////////////////
+
     /// creates a new alphanumeric token
     pub fn alpha(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        AlphaNumeric {
-            text,
-            start,
-            end,
-            line_number,
-            column_number,
-        }
+        AlphaNumeric { text, start, end, line_number, column_number }
     }
 
     /// creates a new backticks-quoted token
     pub fn backticks(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        BackticksQuoted {
-            text,
-            start,
-            end,
-            line_number,
-            column_number,
-        }
+        BackticksQuoted { text, start, end, line_number, column_number }
     }
 
     /// creates a new double-quoted token
     pub fn double_quoted(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        DoubleQuoted {
-            text,
-            start,
-            end,
-            line_number,
-            column_number,
-        }
+        DoubleQuoted { text, start, end, line_number, column_number }
     }
 
     /// creates a new numeric token
     pub fn numeric(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        Numeric {
-            text,
-            start,
-            end,
-            line_number,
-            column_number,
-        }
+        Numeric { text, start, end, line_number, column_number }
     }
 
     /// creates a new operator token
     pub fn operator(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        Operator {
-            text,
-            start,
-            end,
-            line_number,
-            column_number,
-        }
+        let precedence = determine_precedence(text.as_str());
+        Operator { text, start, end, line_number, column_number, precedence }
     }
 
     /// creates a new single-quoted token
     pub fn single_quoted(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        SingleQuoted {
-            text,
-            start,
-            end,
-            line_number,
-            column_number,
-        }
+        SingleQuoted { text, start, end, line_number, column_number }
     }
 
     /// creates a new symbol token
     pub fn symbol(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        Symbol {
-            text,
-            start,
-            end,
-            line_number,
-            column_number,
-        }
+        Symbol { text, start, end, line_number, column_number }
     }
+
+    ////////////////////////////////////////////////////////////////
+    // instance methods
+    ////////////////////////////////////////////////////////////////
 
     /// Returns the "raw" value of the [Token]
     pub fn get_raw_value(&self) -> String {
@@ -189,9 +156,19 @@ impl Token {
     }
 }
 
+pub fn determine_precedence(symbol: impl Into<String>) -> usize {
+    match symbol.into().as_str() {
+        "^" => 3,
+        "*" | "/" => 2,
+        "+" | "-" => 1,
+        _ => 0,
+    }
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::tokenizer::parse_fully;
     use crate::tokens::Token;
 
     use super::*;
@@ -244,5 +221,15 @@ mod tests {
         assert!(Token::operator(".".into(), 0, 3, 1, 2).is_type("Operator"));
         assert!(Token::single_quoted("'World'".into(), 11, 16, 1, 13).is_type("SingleQuoted"));
         assert!(Token::symbol("÷".into(), 3, 4, 1, 5).is_type("Symbol"));
+    }
+
+    #[test]
+    fn test_precedence() {
+        let tokens = parse_fully("3 + 4 * (2 - 1)^2");
+        let mut n = 1;
+        for token in tokens {
+            println!("{} tok {:?}", n, token);
+            n += 1;
+        }
     }
 }

@@ -145,7 +145,7 @@ fn next_quoted_string_token(inputs: &CharSlice, pos: &mut usize, make_token: New
 fn next_operator_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
     next_glyph_token(inputs, pos, Token::operator,
                      |inputs, pos| {
-                         let chars = ['!', '%', '*', '&', '/', '+', '-', '<', '>', '=', '[', ']', '(', ')'];
+                         let chars = ['!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '/', '+', '-', '<', '>', '=', '{', '}', '[', ']', ';', '?', '\\', '|'];
                          has_more(inputs, pos) && chars.contains(&inputs[*pos])
                      })
 }

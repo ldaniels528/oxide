@@ -25,12 +25,16 @@ pub enum Expression {
     Or(Box<Expression>, Box<Expression>),
     // mathematics
     Divide(Box<Expression>, Box<Expression>),
+    Factorial(Box<Expression>),
     Plus(Box<Expression>, Box<Expression>),
+    Pow(Box<Expression>, Box<Expression>),
     Minus(Box<Expression>, Box<Expression>),
+    Modulo(Box<Expression>, Box<Expression>),
     Times(Box<Expression>, Box<Expression>),
     // direct/reference values
     Field(String),
     Literal(TypedValue),
+    Range(Box<Expression>, Box<Expression>),
     Tuple(Vec<Expression>),
     Variable(String),
     // control/flow
@@ -101,34 +105,16 @@ pub enum Expression {
 
 impl Expression {
     pub fn is_conditional(&self) -> bool {
-        match &self {
-            And(..) => true,
-            Between(..) => true,
-            Contains(..) => true,
-            Equal(..) => true,
-            NotEqual(..) => true,
-            GreaterThan(..) => true,
-            GreaterOrEqual(..) => true,
-            LessThan(..) => true,
-            LessOrEqual(..) => true,
-            Or(..) => true,
-            _ => false
-        }
+        matches!(self, And(..) | Between(..) | Contains(..) | Equal(..) | NotEqual(..) |
+        GreaterThan(..) | GreaterOrEqual(..) | LessThan(..) | LessOrEqual(..) | Or(..))
     }
 
     pub fn is_control_flow(&self) -> bool {
-        match &self {
-            CodeBlock(..) | If { .. } | Return(..) | While { .. } => true,
-            _ => false
-        }
+        matches!(self, CodeBlock(..) | If { .. } | Return(..) | While { .. })
     }
 
     pub fn is_referential(&self) -> bool {
-        match &self {
-            Field(..) => true,
-            Variable(..) => true,
-            _ => false
-        }
+        matches!(self, Field(..) | Variable(..))
     }
 }
 
@@ -137,15 +123,15 @@ impl Expression {
 mod tests {
     use crate::expression::Expression::*;
     use crate::machine::MachineState;
-    use crate::typed_values::TypedValue::{BooleanValue, Int32Value};
+    use crate::typed_values::TypedValue::{Boolean, Int32Value};
 
     #[test]
     fn test_and() {
         let vm = MachineState::new();
         let result = vm.evaluate(&And(
-            Box::from(Literal(BooleanValue(true))),
-            Box::from(Literal(BooleanValue(false)))));
-        assert_eq!(result, BooleanValue(false));
+            Box::from(Literal(Boolean(true))),
+            Box::from(Literal(Boolean(false)))));
+        assert_eq!(result, Boolean(false));
     }
 
     #[test]
@@ -155,7 +141,7 @@ mod tests {
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1))),
             Box::from(Literal(Int32Value(10)))));
-        assert_eq!(result, BooleanValue(true));
+        assert_eq!(result, Boolean(true));
     }
 
     #[test]
@@ -164,7 +150,7 @@ mod tests {
         let result = vm.evaluate(&Equal(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(5)))));
-        assert_eq!(result, BooleanValue(true));
+        assert_eq!(result, Boolean(true));
     }
 
     #[test]
@@ -173,7 +159,7 @@ mod tests {
         let result = vm.evaluate(&GreaterThan(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1)))));
-        assert_eq!(result, BooleanValue(true));
+        assert_eq!(result, Boolean(true));
     }
 
     #[test]
@@ -182,7 +168,7 @@ mod tests {
         let result = vm.evaluate(&GreaterOrEqual(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1)))));
-        assert_eq!(result, BooleanValue(true));
+        assert_eq!(result, Boolean(true));
     }
 
     #[test]
@@ -191,7 +177,7 @@ mod tests {
         let result = vm.evaluate(&LessThan(
             Box::from(Literal(Int32Value(4))),
             Box::from(Literal(Int32Value(5)))));
-        assert_eq!(result, BooleanValue(true));
+        assert_eq!(result, Boolean(true));
     }
 
     #[test]
@@ -200,7 +186,7 @@ mod tests {
         let result = vm.evaluate(&LessOrEqual(
             Box::from(Literal(Int32Value(1))),
             Box::from(Literal(Int32Value(5)))));
-        assert_eq!(result, BooleanValue(true));
+        assert_eq!(result, Boolean(true));
     }
 
     #[test]
@@ -209,25 +195,25 @@ mod tests {
         let result = vm.evaluate(&NotEqual(
             Box::from(Literal(Int32Value(-5))),
             Box::from(Literal(Int32Value(5)))));
-        assert_eq!(result, BooleanValue(true));
+        assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_or() {
         let vm = MachineState::new();
         let result = vm.evaluate(&Or(
-            Box::from(Literal(BooleanValue(true))),
-            Box::from(Literal(BooleanValue(false)))));
-        assert_eq!(result, BooleanValue(true));
+            Box::from(Literal(Boolean(true))),
+            Box::from(Literal(Boolean(false)))));
+        assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_is_conditional() {
-        assert!(And(Box::from(Literal(BooleanValue(true))), Box::from(Literal(BooleanValue(false))))
+        assert!(And(Box::from(Literal(Boolean(true))), Box::from(Literal(Boolean(false))))
             .is_conditional());
         assert!(Between(Box::from(Literal(Int32Value(5))), Box::from(Literal(Int32Value(1))), Box::from(Literal(Int32Value(10))))
             .is_conditional());
-        assert!(Or(Box::from(Literal(BooleanValue(true))), Box::from(Literal(BooleanValue(false))))
+        assert!(Or(Box::from(Literal(Boolean(true))), Box::from(Literal(Boolean(false))))
             .is_conditional());
     }
 
@@ -236,7 +222,7 @@ mod tests {
         let op = If {
             condition: Box::from(LessThan(Box::from(Variable("x".into())), Box::from(Variable("y".into())))),
             a: Box::from(Literal(Int32Value(1))),
-            b: Some(Box::from(Literal(Int32Value(10))))
+            b: Some(Box::from(Literal(Int32Value(10)))),
         };
         println!("op: {:?}", &op);
         assert!(op.is_control_flow());

@@ -37,6 +37,7 @@ impl TokenSlice {
 
     pub fn capture(&mut self, start: &str, end: &str, delim: Option<&str>) -> Vec<Token> {
         let inputs = &self.tokens;
+        println!("capture: {:?}", inputs);
         let mut pos = self.pos;
         let mut tokens = vec![];
         if inputs[pos].get_raw_value() == start {
@@ -52,10 +53,6 @@ impl TokenSlice {
         }
         self.pos = pos;
         tokens
-    }
-
-    pub fn capture_slice(&mut self, start: &str, end: &str, delim: Option<&str>) -> TokenSlice {
-        TokenSlice::new(self.capture(start, end, delim))
     }
 
     pub fn exists(&self, f: fn(&Token) -> bool) -> bool {
@@ -111,6 +108,19 @@ impl TokenSlice {
             return Some(&self.tokens[n]);
         }
         None
+    }
+
+    /// Scans the slice moving the cursor forward until the desired match is found.
+    /// However, if the end of the sequence is reached before the token is found
+    /// there is no effect.
+    pub fn scan_to(&mut self, f: fn(&Token) -> bool) -> &[Token] {
+        let mut pos = self.pos;
+        while pos < self.tokens.len() && !f(&self.tokens[pos]) { pos += 1 }
+        if pos > self.pos && pos < self.tokens.len() {
+            let result = &self.tokens[self.pos..pos];
+            self.pos = pos;
+            result
+        } else { &[] }
     }
 
     /// Scans the slice moving the cursor forward until the desired match is found.
@@ -210,6 +220,23 @@ mod tests {
     fn test_indexing_into() {
         let ts = TokenSlice::from_string("the little brown fox");
         assert_eq!(ts[1], Token::alpha("little".into(), 4, 10, 1, 6))
+    }
+
+    #[test]
+    fn test_is_empty() {
+        let ts = TokenSlice::from_string("");
+        assert!(ts.is_empty());
+    }
+
+    #[test]
+    fn test_scan_to() {
+        let mut ts = TokenSlice::from_string("the fox was too 'fast!' for me");
+        assert_eq!(ts.scan_to(|t| t.is_single_quoted()), [
+            Token::alpha("the".into(), 0, 3, 1, 2),
+            Token::alpha("fox".into(), 4, 7, 1, 6),
+            Token::alpha("was".into(), 8, 11, 1, 10),
+            Token::alpha("too".into(), 12, 15, 1, 14)
+        ]);
     }
 
     #[test]

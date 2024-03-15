@@ -41,11 +41,15 @@ impl MachineState {
                 self.expand3(a, b, c, |aa, bb, cc| aa.between(&bb, &cc)),
             CodeBlock(ops) =>
                 ops.iter().fold(Null, |_, op| self.evaluate(op)),
-            Contains(_a, _b) => todo!(),
+            Divide(a, b) =>
+                self.expand2(a, b, |aa, bb| Some(aa / bb)),
             Equal(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.eq(&bb)),
-            NotEqual(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.ne(&bb)),
+            Factorial(a) => self.expand1(a, |aa| aa.factorial()),
+            Field(name) =>
+                if let Some(row) = &self.current_row {
+                    row.find_field_by_name(&name).unwrap_or(Undefined)
+                } else { Undefined }
             GreaterThan(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.gt(&bb)),
             GreaterOrEqual(a, b) =>
@@ -54,17 +58,28 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa.lt(&bb)),
             LessOrEqual(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.lte(&bb)),
+            Literal(value) => value.clone(),
+            Minus(a, b) =>
+                self.expand2(a, b, |aa, bb| Some(aa - bb)),
+            Modulo(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.modulo(&bb)),
+            NotEqual(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.ne(&bb)),
             Or(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.or(&bb)),
-            Field(name) =>
-                if let Some(row) = &self.current_row {
-                    row.find_field_by_name(&name).unwrap_or(Undefined)
-                } else { Undefined }
-            Literal(value) => value.clone(),
+            Not(a) => self.expand1(a, |aa| aa.not()),
+            Plus(a, b) =>
+                self.expand2(a, b, |aa, bb| Some(aa + bb)),
+            Pow(a, b) =>
+                self.expand2(a, b, |aa, bb| Some(aa ^ bb)),
+            Times(a, b) =>
+                self.expand2(a, b, |aa, bb| Some(aa * bb)),
+            Tuple(values) =>
+                Array(values.iter().map(|op| self.evaluate(op)).collect()),
             Variable(name) => self.get(&name).unwrap_or(Undefined),
             other => {
                 eprintln!("Unhandled expression: {:?}", other);
-               Undefined
+                Undefined
             }
         }
     }
@@ -74,6 +89,13 @@ impl MachineState {
         ops.iter().fold(None, |err, op| {
             if err.is_none() { op(self) } else { err }
         })
+    }
+
+    fn expand1(&self,
+               a: &Box<Expression>,
+               f: fn(TypedValue) -> Option<TypedValue>) -> TypedValue {
+        let aa = self.evaluate(a.deref());
+        f(aa).unwrap_or(Undefined)
     }
 
     fn expand2(&self,
@@ -121,6 +143,14 @@ impl MachineState {
         for value in values { self.stack.push(value); }
     }
 
+    /// evaluates the collection of [Expression]s; returning a [TypedValue] result.
+    pub fn run(&self, opcodes: Vec<Expression>) -> TypedValue {
+        opcodes.iter().fold(Undefined, |_, op| {
+            println!("machine::run - {:?}", op);
+            self.evaluate(op)
+        })
+    }
+
     pub fn stack_len(&self) -> usize {
         self.stack.len()
     }
@@ -150,34 +180,16 @@ pub enum ErrorCode {
 /// represents an executable instruction (opcode)
 pub type OpCode = fn(&mut MachineState) -> Option<ErrorCode>;
 
+/// represents an executable instruction (opcode)
+//pub type OpCodeDyn = dyn FnMut(&mut MachineState) -> Option<ErrorCode>;
+
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::expression::Expression::*;
-    use crate::opcode::*;
-    use crate::typed_values::TypedValue::*;
+    use crate::compiler::Compiler;
+    use crate::expression::Expression::{Divide, Factorial, Field, Literal};
 
     use super::*;
-
-    #[test]
-    fn test_math_opcodes() {
-        // execute the program
-        let mut vm = MachineState::new();
-        vm.push_all(vec![
-            2.0, 3.0, // add
-            4.0, // mul
-            5.0, // sub
-            2.0, // div
-        ].iter().map(|n| Float64Value(*n)).collect());
-        let err = vm.execute(vec![add, mul, sub, div]);
-        assert_eq!(err, None);
-
-        // get the return value
-        let ret_val = vm.pop();
-        println!("ret_val {:?}", ret_val);
-        assert_eq!(ret_val, Some(Float64Value(-0.08)));
-        assert_eq!(vm.stack_len(), 0)
-    }
 
     #[test]
     fn test_get_set_variables() {
@@ -186,5 +198,40 @@ mod tests {
         vm.set("xyz", Int32Value(58));
         assert_eq!(vm.get("abc"), Some(Int32Value(5)));
         assert_eq!(vm.get("xyz"), Some(Int32Value(58)));
+    }
+
+    #[test]
+    fn test_compile_5_x_5_and_run() {
+        let vm = MachineState::new();
+        let opcodes = Compiler::compile("5 * 5").unwrap();
+        let result = vm.run(opcodes);
+        assert_eq!(result, Float64Value(25.))
+    }
+
+    #[test]
+    fn test_compile_7_gt_5_and_run() {
+        let vm = MachineState::new();
+        let opcodes = Compiler::compile("7 > 5").unwrap();
+        let result = vm.run(opcodes);
+        assert_eq!(result, Boolean(true))
+    }
+
+    #[test]
+    fn test_model_factorial_and_run() {
+        let vm = MachineState::new();
+        let opcodes = vec![
+            Factorial(Box::new(Literal(Float64Value(6.))))
+        ];
+        let result = vm.run(opcodes);
+        assert_eq!(result, Float64Value(720.))
+    }
+
+    #[ignore]
+    #[test]
+    fn test_precedence() {
+        let vm = MachineState::new();
+        let opcodes = Compiler::compile("2 + 4 * 3").unwrap();
+        let result = vm.run(opcodes);
+        assert_eq!(result, Float64Value(14.))
     }
 }

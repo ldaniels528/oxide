@@ -3,10 +3,9 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::{i32, io};
-use std::error::Error;
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::{Add, BitXor, Div, Mul, Sub};
 
-use chrono::{DateTime, NaiveDateTime};
+use chrono::DateTime;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -20,9 +19,10 @@ const ISO_DATE_FORMAT: &str = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
-    BLOBValue(Vec<u8>),
-    BooleanValue(bool),
-    CLOBValue(Vec<char>),
+    Array(Vec<TypedValue>),
+    BLOB(Vec<u8>),
+    Boolean(bool),
+    CLOB(Vec<char>),
     DateValue(i64),
     Float32Value(f32),
     Float64Value(f64),
@@ -41,9 +41,9 @@ impl TypedValue {
     /// decodes the typed value based on the supplied data type and buffer
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> TypedValue {
         match data_type {
-            BLOBType(_size) => BLOBValue(vec![]),
-            BooleanType => codec::decode_u8(buffer, offset, |b| BooleanValue(b == 1)),
-            CLOBType(_size) => CLOBValue(vec![]),
+            BLOBType(_size) => BLOB(vec![]),
+            BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
+            CLOBType(_size) => CLOB(vec![]),
             DateType => codec::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
             EnumType(_) => todo!(),
             Int8Type => codec::decode_u8(buffer, offset, |b| Int8Value(b)),
@@ -52,7 +52,7 @@ impl TypedValue {
             Int64Type => codec::decode_u8x8(buffer, offset, |b| Int64Value(i64::from_be_bytes(b))),
             Float32Type => codec::decode_u8x4(buffer, offset, |b| Float32Value(f32::from_be_bytes(b))),
             Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
-            RecordNumberType => Int64Value(codec::decode_row_id(&buffer, 1) as i64),
+            RecordNumberType => RecordNumber(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
             StructType(_) => todo!(),
             TableType(_) => todo!(),
@@ -66,9 +66,15 @@ impl TypedValue {
 
     pub fn encode_value(value: &TypedValue) -> Vec<u8> {
         match value {
-            BLOBValue(bytes) => codec::encode_u8x_n(bytes.to_vec()),
-            BooleanValue(v) => [if *v { 1 } else { 0 }].to_vec(),
-            CLOBValue(chars) => codec::encode_chars(chars.to_vec()),
+            Array(items) => {
+                let mut bytes = vec![];
+                bytes.extend(items.len().to_be_bytes());
+                for item in items { bytes.extend(item.encode()); }
+                bytes
+            }
+            BLOB(bytes) => codec::encode_u8x_n(bytes.to_vec()),
+            Boolean(v) => [if *v { 1 } else { 0 }].to_vec(),
+            CLOB(chars) => codec::encode_chars(chars.to_vec()),
             DateValue(number) => number.to_be_bytes().to_vec(),
             Float32Value(number) => number.to_be_bytes().to_vec(),
             Float64Value(number) => number.to_be_bytes().to_vec(),
@@ -93,19 +99,20 @@ impl TypedValue {
         }
     }
 
-    fn millis_to_iso_date(millis: i64) -> String {
+    fn millis_to_iso_date(millis: i64) -> Option<String> {
         let seconds = millis / 1000;
         let nanoseconds = (millis % 1000) * 1_000_000;
-        let datetime = NaiveDateTime::from_timestamp_opt(seconds, nanoseconds as u32).unwrap();
+        let datetime = DateTime::from_timestamp(seconds, nanoseconds as u32)?;
         let iso_date = datetime.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string();
-        iso_date
+        Some(iso_date)
     }
 
     pub fn to_json(&self) -> serde_json::Value {
         match self {
-            BLOBValue(bytes) => serde_json::json!(bytes),
-            BooleanValue(b) => serde_json::json!(b),
-            CLOBValue(chars) => serde_json::json!(chars),
+            Array(items) => serde_json::json!(items),
+            BLOB(bytes) => serde_json::json!(bytes),
+            Boolean(b) => serde_json::json!(b),
+            CLOB(chars) => serde_json::json!(chars),
             DateValue(millis) => serde_json::json!(Self::millis_to_iso_date(*millis)),
             Float32Value(number) => serde_json::json!(number),
             Float64Value(number) => serde_json::json!(number),
@@ -123,10 +130,14 @@ impl TypedValue {
 
     pub fn unwrap_value(&self) -> String {
         match self {
-            BLOBValue(bytes) => hex::encode(bytes),
-            BooleanValue(b) => (if *b { "true" } else { "false" }).into(),
-            CLOBValue(chars) => chars.into_iter().collect(),
-            DateValue(millis) => Self::millis_to_iso_date(*millis),
+            Array(items) => {
+                let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
+                format!("[ {} ]", values.join(", "))
+            }
+            BLOB(bytes) => hex::encode(bytes),
+            Boolean(b) => (if *b { "true" } else { "false" }).into(),
+            CLOB(chars) => chars.into_iter().collect(),
+            DateValue(millis) => Self::millis_to_iso_date(*millis).unwrap_or("".into()),
             Float32Value(number) => number.to_string(),
             Float64Value(number) => number.to_string(),
             Int8Value(number) => number.to_string(),
@@ -151,9 +162,9 @@ impl TypedValue {
         let uuid_regex = Regex::new("^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$")
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
         let result = match raw_value.into().as_str() {
-            s if s == "false" => BooleanValue(false),
+            s if s == "false" => Boolean(false),
             s if s == "null" => Null,
-            s if s == "true" => BooleanValue(true),
+            s if s == "true" => Boolean(true),
             s if s.is_empty() => Null,
             s if int_regex.is_match(s) => Int64Value(s.parse::<i64>()
                 .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?),
@@ -181,48 +192,73 @@ impl TypedValue {
 
     pub fn and(&self, rhs: &TypedValue) -> Option<TypedValue> {
         let (a, b) = (self.assume_bool()?, rhs.assume_bool()?);
-        Some(BooleanValue(a && b))
+        Some(Boolean(a && b))
     }
 
     pub fn between(&self, lhs: &TypedValue, rhs: &TypedValue) -> Option<TypedValue> {
-        let (c, b, a) = (self.assume_numeric()?, lhs.assume_numeric()?, rhs.assume_numeric()?);
-        Some(BooleanValue((c >= a) && (c <= b)))
+        let (c, b, a) = (self.assume_f64()?, lhs.assume_f64()?, rhs.assume_f64()?);
+        Some(Boolean((c >= a) && (c <= b)))
     }
 
     pub fn eq(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_numeric()?, rhs.assume_numeric()?);
-        Some(BooleanValue(a == b))
+        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
+        Some(Boolean(a == b))
+    }
+
+    pub fn factorial(&self) -> Option<TypedValue> {
+        fn fact_f64(n: f64) -> TypedValue {
+            fn fact_f(n: f64) -> f64 { if n <= 1. { 1. } else { n * fact_f(n - 1.) } }
+            Float64Value(fact_f(n))
+        }
+        let num = self.assume_f64()?;
+        Some(fact_f64(num))
     }
 
     pub fn gt(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_numeric()?, rhs.assume_numeric()?);
-        Some(BooleanValue(a > b))
+        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
+        Some(Boolean(a > b))
     }
 
     pub fn gte(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_numeric()?, rhs.assume_numeric()?);
-        Some(BooleanValue(a >= b))
+        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
+        Some(Boolean(a >= b))
     }
 
     pub fn lt(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_numeric()?, rhs.assume_numeric()?);
-        Some(BooleanValue(a < b))
+        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
+        Some(Boolean(a < b))
     }
 
     pub fn lte(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_numeric()?, rhs.assume_numeric()?);
-        Some(BooleanValue(a <= b))
+        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
+        Some(Boolean(a <= b))
+    }
+
+    pub fn modulo(&self, rhs: &TypedValue) -> Option<TypedValue> {
+        let a = self.assume_i64()?;
+        let b = rhs.assume_i64()?;
+        Some(Int64Value(a % b))
     }
 
     pub fn ne(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_numeric()?, rhs.assume_numeric()?);
-        Some(BooleanValue(a != b))
+        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
+        Some(Boolean(a != b))
+    }
+
+    pub fn not(&self) -> Option<TypedValue> {
+        Some(Boolean(!self.assume_bool()?))
     }
 
     pub fn or(&self, rhs: &TypedValue) -> Option<TypedValue> {
         let a = self.assume_bool()?;
         let b = rhs.assume_bool()?;
-        Some(BooleanValue(a || b))
+        Some(Boolean(a || b))
+    }
+
+    pub fn pow(&self, rhs: &TypedValue) -> Option<TypedValue> {
+        let a = self.assume_i64()?;
+        let b = rhs.assume_i64()? as usize;
+        Some(Int64Value(num_traits::pow(a, b)))
     }
 
     ///////////////////////////////////////////////////////////////
@@ -231,12 +267,12 @@ impl TypedValue {
 
     fn assume_bool(&self) -> Option<bool> {
         match &self {
-            BooleanValue(b) => Some(*b),
+            Boolean(b) => Some(*b),
             _ => None
         }
     }
 
-    fn assume_numeric(&self) -> Option<f64> {
+    fn assume_f64(&self) -> Option<f64> {
         match &self {
             Float32Value(n) => Some(*n as f64),
             Float64Value(n) => Some(*n),
@@ -244,6 +280,18 @@ impl TypedValue {
             Int16Value(n) => Some(*n as f64),
             Int32Value(n) => Some(*n as f64),
             Int64Value(n) => Some(*n as f64),
+            _ => None
+        }
+    }
+
+    fn assume_i64(&self) -> Option<i64> {
+        match &self {
+            Float32Value(n) => Some(*n as i64),
+            Float64Value(n) => Some(*n as i64),
+            Int8Value(n) => Some(*n as i64),
+            Int16Value(n) => Some(*n as i64),
+            Int32Value(n) => Some(*n as i64),
+            Int64Value(n) => Some(*n),
             _ => None
         }
     }
@@ -262,6 +310,24 @@ impl Add for TypedValue {
                 (Int16Value(a), Int16Value(b)) => Int16Value(a + b),
                 (Int8Value(a), Int8Value(b)) => Int8Value(a + b),
                 (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
+                _ => Undefined
+            })
+    }
+}
+
+impl BitXor for TypedValue {
+    type Output = TypedValue;
+
+    fn bitxor(self, rhs: Self) -> Self::Output {
+        use num_traits::pow;
+        TypedValue::intercept_unknowns(&self, &rhs).unwrap_or(
+            match (&self, &rhs) {
+                (Float64Value(a), Float64Value(b)) => Float64Value(pow(*a, *b as usize)),
+                (Float32Value(a), Float32Value(b)) => Float32Value(pow(*a, *b as usize)),
+                (Int64Value(a), Int64Value(b)) => Int64Value(pow(*a, *b as usize)),
+                (Int32Value(a), Int32Value(b)) => Int32Value(pow(*a, *b as usize)),
+                (Int16Value(a), Int16Value(b)) => Int16Value(pow(*a, *b as usize)),
+                (Int8Value(a), Int8Value(b)) => Int8Value(pow(*a, *b as usize)),
                 _ => Undefined
             })
     }
@@ -368,8 +434,8 @@ mod tests {
 
     #[test]
     fn test_to_json() {
-        verify_to_json(BooleanValue(false), serde_json::json!(false));
-        verify_to_json(BooleanValue(true), serde_json::json!(true));
+        verify_to_json(Boolean(false), serde_json::json!(false));
+        verify_to_json(Boolean(true), serde_json::json!(true));
         verify_to_json(DateValue(1709163679081), serde_json::Value::String("2024-02-28T23:41:19.081Z".into()));
         verify_to_json(Float64Value(100.1), serde_json::json!(100.1));
         verify_to_json(Int64Value(100), serde_json::json!(100));
@@ -383,8 +449,8 @@ mod tests {
 
     #[test]
     fn test_wrap_and_unwrap_value() {
-        verify_wrap_unwrap("false", BooleanValue(false));
-        verify_wrap_unwrap("true", BooleanValue(true));
+        verify_wrap_unwrap("false", Boolean(false));
+        verify_wrap_unwrap("true", Boolean(true));
         verify_wrap_unwrap("2024-02-28T23:41:19.081Z", DateValue(1709163679081));
         verify_wrap_unwrap("100.1", Float64Value(100.1));
         verify_wrap_unwrap("100", Int64Value(100));
