@@ -43,14 +43,13 @@ impl Template {
     // instance methods
     ////////////////////////////////////////////////////////////////
     
-    pub fn capture(&self, text: &str) -> io::Result<Vec<(String, Token)>> {
-        let mut ts = TokenSlice::from_string(text);
-        self.capture_all_params(&mut ts)
+    pub fn capture(&self, text: &str) -> io::Result<(Vec<(String, Token)>, TokenSlice)> {
+        self.capture_all_params(TokenSlice::from_string(text))
     }
 
     /// Extracts and returns values starting at the current position within the slice; which
     /// moves the cursor forward within the slice.
-    fn capture_all_params(&self, ts: &mut TokenSlice) -> io::Result<Vec<(String, Token)>> {
+    fn capture_all_params(&self, ts: TokenSlice) -> io::Result<(Vec<(String, Token)>, TokenSlice)> {
         match self.pattern.trim() {
             // is it an atom tag?
             "%a" => self.capture_params(ts),
@@ -63,7 +62,7 @@ impl Template {
             // does the token match our pattern?
             s if ts.is(s) => self.capture_params(ts),
             // is it optional?
-            _  if self.is_optional => Ok(vec![]),
+            _  if self.is_optional => return Ok((vec![], ts)),
             // it's required... fail.
             x =>
                 Err(io::Error::new(
@@ -73,21 +72,25 @@ impl Template {
         }
     }
 
-    fn capture_params(&self, ts: &mut TokenSlice) -> io::Result<Vec<(String, Token)>> {
+    fn capture_params(&self, ts: TokenSlice) -> io::Result<(Vec<(String, Token)>, TokenSlice)> {
+        let mut ts_z = ts.clone();
         let mut params = vec![];
         // capture the parent if named
         if let Some(name) = &self.name {
-            if let Some(parent_token) = ts.take() {
+            if let (Some(parent_token), ts) = ts_z.next() {
+                ts_z = ts.clone();
                 params.push((name.clone(), parent_token.clone()));
             }
         }
         // capture the children
         if let Some(children) = &self.children {
             for child in children {
-                params.extend(child.capture_all_params(ts)?);
+                let (expr, ts) = child.capture_all_params(ts_z)?;
+                ts_z = ts.clone();
+                params.extend(expr);
             }
         }
-        Ok(params)
+        Ok((params, ts_z))
     }
 
     /// Returns a clone of the instance; replacing the `children` attribute.
@@ -230,7 +233,7 @@ mod tests {
                 }]
             }]
         }"#).unwrap();
-        let results = tpl.capture("select * from stocks where symbol is \"AMD\"").unwrap();
+        let (results, _) = tpl.capture("select * from stocks where symbol is \"AMD\"").unwrap();
         assert_eq!(results, vec![
             ("command".into(), Token::alpha("select".into(), 0, 6, 1, 2)),
             ("fields".into(), Token::operator("*".into(), 7, 8, 1, 9)),
