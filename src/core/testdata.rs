@@ -6,7 +6,6 @@ use std::fs::File;
 use std::io;
 use std::io::Write;
 
-use chrono::Utc;
 use rand::{Rng, RngCore, thread_rng};
 use rand::distributions::Uniform;
 use rand::prelude::ThreadRng;
@@ -20,49 +19,6 @@ use crate::namespaces::Namespace;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
-
-struct StockQuote;
-
-impl StockQuote {
-    pub fn new() -> Row {
-        make_quote(0, &make_table_columns(),
-                   &Self::generate_random_symbol(),
-                   &Self::generate_random_exchange(),
-                   Self::generate_random_last_sale())
-    }
-
-    fn generate_quote_from_symbol_and_exchange(symbol: &str, exchange: &str) -> Row {
-        make_quote(0, &make_table_columns(), symbol, exchange, Self::generate_random_last_sale())
-    }
-
-    fn get_exchange_from_index(exchange_index: usize) -> String {
-        let exchanges = ["AMEX", "NASDAQ", "NYSE", "OTCBB", "OTHEROTC"];
-        exchanges[exchange_index % exchanges.len()].parse().unwrap()
-    }
-
-    fn generate_random_exchange() -> String {
-        let mut rng: ThreadRng = thread_rng();
-        let exchange_index = rng.next_u32();
-        Self::get_exchange_from_index(exchange_index as usize)
-    }
-
-    fn generate_random_last_sale() -> f64 {
-        let mut rng: ThreadRng = thread_rng();
-        400.0 * rng.sample(Uniform::new(0.0, 1.0))
-    }
-
-    fn generate_random_symbol() -> String {
-        let mut rng: ThreadRng = thread_rng();
-        (0..5)
-            .map(|_| rng.gen_range(b'A'..=b'Z') as char)
-            .collect()
-    }
-
-    fn generate_random_transaction_time() -> i64 {
-        let mut rng: ThreadRng = thread_rng();
-        Utc::now().timestamp_millis() - (rng.sample(Uniform::new(0, 10000)) as i64)
-    }
-}
 
 pub fn make_columns() -> Vec<Column> {
     vec![
@@ -138,6 +94,10 @@ pub fn make_table_file(database: &str,
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use crate::cnv_error;
+
     use super::*;
 
     #[test]
@@ -149,5 +109,65 @@ mod tests {
             TableColumn::new("lastSale", Float64Type, Null, 35),
         ];
         assert_eq!(generated, natural);
+    }
+
+    #[ignore]
+    #[test]
+    fn performance_test() -> io::Result<()> {
+        let columns = vec![
+            TableColumn::new("symbol", StringType(4), Null, 9),
+            TableColumn::new("exchange", StringType(8), Null, 22),
+            TableColumn::new("lastSale", Float64Type, Null, 39),
+        ];
+        let total = 1_000_000;
+        let mut df = make_dataframe(
+            "dataframes", "performance_test", "quotes", make_columns()).unwrap();
+
+        test_write_performance(&mut df, &columns, total)?;
+        test_read_performance(&df)?;
+        Ok(())
+    }
+
+    fn test_write_performance(df: &mut DataFrame, columns: &Vec<TableColumn>, total: usize) -> io::Result<()> {
+        let exchanges = ["AMEX", "NASDAQ", "NYSE", "OTCBB", "OTHEROTC"];
+        let mut rng: ThreadRng = thread_rng();
+        let start_time = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| cnv_error!(e))?.as_millis();
+        for n in 0..total {
+            let symbol: String = (0..4)
+                .map(|_| rng.gen_range(b'A'..=b'Z') as char)
+                .collect();
+            let exchange = exchanges[rng.next_u32() as usize % exchanges.len()];
+            let last_sale = 400.0 * rng.sample(Uniform::new(0.0, 1.0));
+            let row = make_quote(0, &columns, &symbol, exchange, last_sale);
+            df.append(&row)?;
+        }
+        let end_time = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| cnv_error!(e))?.as_millis();
+        let elapsed_time = end_time - start_time;
+        let elapsed_time_sec = elapsed_time as f64 / 1000.;
+        let rpm = total as f64 / elapsed_time as f64;
+        println!("wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+                 total, elapsed_time, elapsed_time_sec, rpm);
+        Ok(())
+    }
+
+    fn test_read_performance(df: &DataFrame) -> io::Result<()> {
+        let limit = df.size()?;
+        let mut total = 0;
+        let start_time = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| cnv_error!(e))?.as_millis();
+        for id in 0..limit {
+            let (row, rmd) = df.read_row(id)?;
+            if rmd.is_allocated { total += 1; }
+        }
+        let end_time = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| cnv_error!(e))?.as_millis();
+        let elapsed_time = end_time - start_time;
+        let elapsed_time_sec = elapsed_time as f64 / 1000.;
+        let rpm = total as f64 / elapsed_time as f64;
+        println!("read  {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+                 total, elapsed_time, elapsed_time_sec, rpm);
+        Ok(())
     }
 }
