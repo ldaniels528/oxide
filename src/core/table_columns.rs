@@ -2,7 +2,6 @@
 // table columns module
 ////////////////////////////////////////////////////////////////////
 
-use std::error::Error;
 use std::io;
 
 use serde::{Deserialize, Serialize};
@@ -52,6 +51,8 @@ impl TableColumn {
         }
         Ok(physical_columns)
     }
+
+    pub fn get_name(&self) -> &String { &self.name }
 }
 
 // Unit tests

@@ -15,6 +15,7 @@ actix-web = "4.5.1"
 bytes = "1.5.0"
 chrono = "0.4.35"
 crossterm = "0.27.0"
+env_logger = "0.11.3"
 hex = "0.4.3"
 log = "0.4.21"
 maplit = "1.0.2"
@@ -27,9 +28,9 @@ uuid = { version = "1.7.0", features = ["v4"] }
 wasm-bindgen = "0.2.92"
 
 [[bin]]
-name = "tinydb_server"
+name = "oxide_server"
 path = "./src/core/main.rs"
 
 [[bin]]
-name = "tinydb_cli"
+name = "oxide_repl"
 path = "src/repl/main.rs"

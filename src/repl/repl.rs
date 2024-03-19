@@ -2,14 +2,10 @@
 // REPL module
 ////////////////////////////////////////////////////////////////////
 
-use std::error::Error;
-
-use serde::Serialize;
-
-pub type REPLError = Box<dyn Error>;
+use serde::{Deserialize, Serialize};
 
 /// REPL application state
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct REPLState {
     database: String,
     schema: String,
@@ -23,7 +19,7 @@ impl REPLState {
     /// default constructor
     pub fn new() -> REPLState {
         REPLState {
-            database: "tinydb".into(),
+            database: "oxide".into(),
             schema: "public".into(),
             history: vec![],
             chars: vec![],
@@ -48,7 +44,7 @@ impl REPLState {
         listing
     }
 
-    /// return the REPL prompt string (e.g. "tinydb.public[4]>")
+    /// return the REPL prompt string (e.g. "oxide.public[4]>")
     pub fn get_prompt(&self) -> String {
         format!("{}.{}[{}]> ", self.database, self.schema, self.counter)
     }
@@ -72,7 +68,7 @@ mod tests {
     #[test]
     fn test_get_prompt() {
         let r: REPLState = REPLState::new();
-        assert_eq!(r.get_prompt(), "tinydb.public[1]> ")
+        assert_eq!(r.get_prompt(), "oxide.public[1]> ")
     }
 
     #[test]

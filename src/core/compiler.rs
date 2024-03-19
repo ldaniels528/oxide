@@ -4,14 +4,19 @@
 
 use std::io;
 
+use log::info;
+use serde::{Deserialize, Serialize};
+
+use crate::cnv_error;
+use crate::error_mgmt::fail;
 use crate::expression::Expression;
 use crate::expression::Expression::*;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token::{AlphaNumeric, BackticksQuoted, DoubleQuoted, Numeric, Operator, SingleQuoted, Symbol};
-use crate::typed_values::TypedValue::{Float64Value, StringValue, Undefined};
+use crate::typed_values::TypedValue::{Boolean, Float64Value, Null, StringValue, Undefined};
 
 /// Represents the compiler state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Compiler {
     stack: Vec<Expression>,
 }
@@ -52,16 +57,19 @@ impl Compiler {
     pub fn compile_expr(&mut self, ts: TokenSlice) -> io::Result<(Expression, TokenSlice)> {
         match ts.next() {
             (Some(Operator { text, precedence, .. }), ts) =>
-                self.compile_operator(ts, text),
-            (Some(AlphaNumeric { text, .. } |
-                  BackticksQuoted { text, .. }), ts) => Ok((Field(text.into()), ts)),
+                self.compile_operator(ts, text, precedence),
+            (Some(BackticksQuoted { text, .. }), ts) =>
+                Ok((Field(text.into()), ts)),
+            (Some(AlphaNumeric { text, .. }), ts) =>
+                self.compile_alpha(ts, text),
             (Some(DoubleQuoted { text, .. } |
-                  SingleQuoted { text, .. }), ts) => Ok((Literal(StringValue(text.into())), ts)),
+                  SingleQuoted { text, .. }), ts) =>
+                Ok((Literal(StringValue(text.into())), ts)),
             (Some(Numeric { text, .. }), ts) =>
                 Ok((Literal(Float64Value(text.parse()
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?)), ts)),
-            (Some(Symbol { text, .. }), ts) => Ok((Variable(text.into()), ts)),
-            (Some(t), _) => fail(format!("Syntax error near {:?}", t)),
+                    .map_err(|e| cnv_error!(e))?)), ts)),
+            (Some(Symbol { text, .. }), ts) =>
+                Ok((Variable(text.into()), ts)),
             (None, _) => fail("Unexpected end of input")
         }
     }
@@ -84,12 +92,26 @@ impl Compiler {
     }
 
     /// compiles the [TokenSlice] into an operator-based [Expression]
-    pub fn compile_operator(&mut self, ts: TokenSlice, symbol: String) -> io::Result<(Expression, TokenSlice)> {
-        println!("compile_expr:Operator: symbol {:?}", symbol);
+    pub fn compile_alpha(&mut self, ts: TokenSlice, text: String) -> io::Result<(Expression, TokenSlice)> {
+        Ok((match text.as_str() {
+            "false" => Literal(Boolean(false)),
+            "null" => Literal(Null),
+            "true" => Literal(Boolean(true)),
+            "undefined" => Literal(Undefined),
+            name => Field(name.into()),
+        }, ts))
+    }
+
+    /// compiles the [TokenSlice] into an operator-based [Expression]
+    pub fn compile_operator(&mut self,
+                            ts: TokenSlice,
+                            symbol: String,
+                            _precedence: usize) -> io::Result<(Expression, TokenSlice)> {
+        info!("compile_operator:symbol {:?}", symbol);
         match symbol.as_str() {
             "!!" => self.compile_expr_1p(ts, Factorial),
             "!" => self.compile_expr_1p(ts, Not),
-            "(" => self.handle_parentheses(&ts),
+            "(" => self.handle_parentheses(ts),
             sym =>
                 if let Some(op0) = self.pop() {
                     match sym {
@@ -103,16 +125,16 @@ impl Compiler {
                         "%" => self.compile_expr_2p(ts, op0, Modulo),
                         "!=" => self.compile_expr_2p(ts, op0, NotEqual),
                         "+" => self.compile_expr_2p(ts, op0, Plus),
-                        "^" => self.compile_expr_2p(ts, op0, Pow),
+                        "**" => self.compile_expr_2p(ts, op0, Pow),
                         ".." => self.compile_expr_2p(ts, op0, Range),
                         "*" => self.compile_expr_2p(ts, op0, Times),
-                        unk => fail(format!("Invalid operator '{}'", unk))
+                        unknown => fail(format!("Invalid operator '{}'", unknown))
                     }
                 } else { fail(format!("Illegal start of expression '{}'", symbol)) }
         }
     }
 
-    pub fn handle_parentheses(&mut self, ts: &TokenSlice) -> io::Result<(Expression, TokenSlice)> {
+    pub fn handle_parentheses(&mut self, ts: TokenSlice) -> io::Result<(Expression, TokenSlice)> {
         let (tokens, ts_z) = ts.scan_until(|t| t.get_raw_value() == ")");
         let innards = TokenSlice::new(tokens[0..tokens.len()].to_vec());
         let (expression, _) = self.compile_all(innards)?;
@@ -130,33 +152,37 @@ impl Compiler {
     }
 
     pub fn push(&mut self, expression: Expression) {
-        println!("push -> {:?}", expression);
+        info!("push -> {:?}", expression);
         self.stack.push(expression)
     }
 
     pub fn pop(&mut self) -> Option<Expression> {
         let result = self.stack.pop();
-        println!("pop <- {:?}", result);
+        info!("pop <- {:?}", result);
         result
     }
-}
-
-pub fn fail<A>(message: impl Into<String>) -> io::Result<A> {
-    Err(io::Error::new(io::ErrorKind::Other, message.into()))
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::machine::MachineState;
+    use crate::typed_values::TypedValue::Boolean;
 
     use super::*;
 
     #[test]
-    fn test_compile_math_negate() {
-        let opcodes = Compiler::compile("!5").unwrap();
+    fn test_not_false() {
+        let opcodes = Compiler::compile("!false").unwrap();
         assert_eq!(opcodes, vec![
-            Not(Box::new(Literal(Float64Value(5.))))
+            Not(Box::new(Literal(Boolean(false))))
+        ]);
+    }
+
+    #[test]
+    fn test_not_true() {
+        let opcodes = Compiler::compile("!true").unwrap();
+        assert_eq!(opcodes, vec![
+            Not(Box::new(Literal(Boolean(true))))
         ]);
     }
 
@@ -178,7 +204,6 @@ mod tests {
 
     #[test]
     fn test_order_of_operations_1() {
-        let vm = MachineState::new();
         let opcodes = Compiler::compile("2 + (4 * 3)").unwrap();
         assert_eq!(opcodes, vec![
             Plus(Box::new(Literal(Float64Value(2.))),
@@ -190,12 +215,11 @@ mod tests {
     #[ignore]
     #[test]
     fn test_order_of_operations_2() {
-        let vm = MachineState::new();
-        let opcodes = Compiler::compile("2 + 4 * 3").unwrap();
+        let opcodes = Compiler::compile("2 - 4 * 3").unwrap();
         assert_eq!(opcodes, vec![
-            Plus(Box::new(Literal(Float64Value(2.))),
-                 Box::new(Times(Box::new(Literal(Float64Value(4.))),
-                                Box::new(Literal(Float64Value(3.))))))
+            Minus(Box::new(Literal(Float64Value(2.))),
+                  Box::new(Times(Box::new(Literal(Float64Value(4.))),
+                                 Box::new(Literal(Float64Value(3.))))))
         ]);
     }
 }

@@ -8,8 +8,10 @@ use std::ops::{Add, BitXor, Div, Mul, Sub};
 use chrono::DateTime;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use uuid::Uuid;
 
+use crate::cnv_error;
 use crate::codec;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
@@ -39,13 +41,16 @@ pub enum TypedValue {
 
 impl TypedValue {
     /// decodes the typed value based on the supplied data type and buffer
-    pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> TypedValue {
+    pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
         match data_type {
             BLOBType(_size) => BLOB(vec![]),
             BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             CLOBType(_size) => CLOB(vec![]),
             DateType => codec::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
-            EnumType(_) => todo!(),
+            EnumType(labels) => {
+                let index = codec::decode_u8x4(buffer, offset, |b| i32::from_be_bytes(b));
+                StringValue(labels[index as usize].to_string())
+            }
             Int8Type => codec::decode_u8(buffer, offset, |b| Int8Value(b)),
             Int16Type => codec::decode_u8x2(buffer, offset, |b| Int16Value(i16::from_be_bytes(b))),
             Int32Type => codec::decode_u8x4(buffer, offset, |b| Int32Value(i32::from_be_bytes(b))),
@@ -107,6 +112,17 @@ impl TypedValue {
         Some(iso_date)
     }
 
+    pub fn from_json(j_value: serde_json::Value) -> Self {
+        match j_value {
+            Value::Null => Null,
+            Value::Bool(b) => Boolean(b),
+            Value::Number(n) => n.as_f64().map(Float64Value).unwrap_or(Null),
+            Value::String(s) => StringValue(s),
+            Value::Array(a) => Array(a.iter().map(|v| Self::from_json(v.clone())).collect()),
+            Value::Object(_) => todo!()
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             Array(items) => serde_json::json!(items),
@@ -154,25 +170,25 @@ impl TypedValue {
 
     pub fn wrap_value(raw_value: impl Into<String>) -> io::Result<Self> {
         let decimal_regex = Regex::new(r"^-?\d+\.\d+$")
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(|e| cnv_error!(e))?;
         let int_regex = Regex::new(r"^-?\d+$")
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(|e| cnv_error!(e))?;
         let iso_date_regex = Regex::new(ISO_DATE_FORMAT)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(|e| cnv_error!(e))?;
         let uuid_regex = Regex::new("^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$")
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(|e| cnv_error!(e))?;
         let result = match raw_value.into().as_str() {
             s if s == "false" => Boolean(false),
             s if s == "null" => Null,
             s if s == "true" => Boolean(true),
             s if s.is_empty() => Null,
             s if int_regex.is_match(s) => Int64Value(s.parse::<i64>()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?),
+                .map_err(|e| cnv_error!(e))?),
             s if decimal_regex.is_match(s) => Float64Value(s.parse::<f64>()
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?),
+                .map_err(|e| cnv_error!(e))?),
             s if iso_date_regex.is_match(s) =>
                 DateValue(DateTime::parse_from_rfc3339(s)
-                    .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?.timestamp_millis()),
+                    .map_err(|e| cnv_error!(e))?.timestamp_millis()),
             s if uuid_regex.is_match(s) => UUIDValue(codec::decode_uuid(s)?),
             s => StringValue(s.to_string()),
         };
@@ -408,6 +424,13 @@ mod tests {
         assert_eq!(Int64Value(0x5555_FACE_CAFE_BABE), Int64Value(0x5555_FACE_CAFE_BABE));
         assert_eq!(Float32Value(45.0), Float32Value(45.0));
         assert_eq!(Float64Value(45.0), Float64Value(45.0));
+    }
+
+    #[test]
+    fn test_pow() {
+        let a = Float64Value(5.);
+        let b = Float64Value(2.);
+        assert_eq!(a.pow(&b), Some(Int64Value(25)))
     }
 
     #[test]

@@ -23,7 +23,7 @@ impl Template {
     ////////////////////////////////////////////////////////////////
     // static methods
     ////////////////////////////////////////////////////////////////
-    
+
     /// Build a template starting with the pattern
     pub fn build(pattern: &str) -> Self {
         Self { pattern: pattern.to_string(), name: None, is_optional: false, children: None }
@@ -42,7 +42,7 @@ impl Template {
     ////////////////////////////////////////////////////////////////
     // instance methods
     ////////////////////////////////////////////////////////////////
-    
+
     pub fn capture(&self, text: &str) -> io::Result<(Vec<(String, Token)>, TokenSlice)> {
         self.capture_all_params(TokenSlice::from_string(text))
     }

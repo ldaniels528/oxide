@@ -123,5 +123,4 @@ mod tests {
         assert_eq!(ret_val, Some(Float64Value(-0.08)));
         assert_eq!(vm.stack_len(), 0)
     }
-    
 }

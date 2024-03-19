@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn test_capture_with_delimiter() {
         let ts = TokenSlice::from_string("(123, 'Hello', abc)");
-        let (tokens, ts) = ts.capture("(", ")", Some(","));
+        let (tokens, _) = ts.capture("(", ")", Some(","));
         assert_eq!(tokens, vec![
             Token::numeric("123".into(), 1, 4, 1, 3),
             Token::single_quoted("'Hello'".into(), 6, 13, 1, 8),
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn test_capture_without_delimiter() {
         let ts = TokenSlice::from_string("(123, 'Hello', abc)");
-        let (tokens, ts) = ts.capture("(", ")", None);
+        let (tokens, _) = ts.capture("(", ")", None);
         assert_eq!(tokens, vec![
             Token::numeric("123".into(), 1, 4, 1, 3),
             Token::symbol(",".into(), 4, 5, 1, 6),
@@ -177,6 +177,7 @@ mod tests {
     #[test]
     fn test_cursor_current_next_and_previous() {
         let ts = TokenSlice::from_string("123, Hello World");
+        assert!(ts.has_next());
         assert_eq!(ts.get(), Some(&Token::numeric("123".into(), 0, 3, 1, 2)));
         let (row, ts) = ts.next();
         assert_eq!(row, Some(Token::numeric("123".into(), 0, 3, 1, 2)));
@@ -189,6 +190,7 @@ mod tests {
         let (row, ts) = ts.next();
         assert_eq!(row, None);
         assert_eq!(ts.get_position(), ts.len() as isize);
+        assert!(ts.has_previous());
         let (row, ts) = ts.previous();
         assert_eq!(row, Some(Token::alpha("World".into(), 11, 16, 1, 13)));
         let (row, ts) = ts.previous();
@@ -197,7 +199,7 @@ mod tests {
         assert_eq!(row, Some(Token::symbol(",".into(), 3, 4, 1, 5)));
         let (row, ts) = ts.previous();
         assert_eq!(row, Some(Token::numeric("123".into(), 0, 3, 1, 2)));
-        let (row, ts) = ts.previous();
+        let (row, _) = ts.previous();
         assert_eq!(row, None);
     }
 

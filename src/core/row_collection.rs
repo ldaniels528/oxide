@@ -2,10 +2,9 @@
 // row-collection module
 ////////////////////////////////////////////////////////////////////
 
-use std::error::Error;
 use std::fs::File;
 use std::io;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{Seek, SeekFrom, Write};
 use std::os::unix::fs::FileExt;
 
 use crate::row_metadata::RowMetadata;
@@ -206,7 +205,7 @@ mod tests {
         // read and verify the row
         let bytes = frc.read(row.id).unwrap();
         let (new_row, _) = Row::decode(&bytes, &columns);
-        assert_eq!(row, Row {
+        assert_eq!(new_row, Row {
             id: 2,
             columns: vec![
                 TableColumn::new("symbol", StringType(4), Null, 9),
@@ -234,7 +233,7 @@ mod tests {
 
         // read the first column
         let column: &TableColumn = &columns[0];
-        let mut frc: FileRowCollection = FileRowCollection::new(record_size, file);
+        let frc: FileRowCollection = FileRowCollection::new(record_size, file);
         let buf = frc.read_field(0, column.offset, column.max_physical_size).unwrap();
         let value: TypedValue = TypedValue::decode(&column.data_type, &buf, 1);
         assert_eq!(value, StringValue("FACT".into()));
@@ -253,7 +252,7 @@ mod tests {
                 ]);
 
         // read the row
-        let mut frc: FileRowCollection = FileRowCollection::new(record_size, file);
+        let frc: FileRowCollection = FileRowCollection::new(record_size, file);
         let bytes = frc.read(0).unwrap();
         let (row, metadata) = Row::decode(&bytes, &columns);
 

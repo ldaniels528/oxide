@@ -37,8 +37,8 @@ impl Field {
         Self { metadata: FieldMetadata::new(true), value }
     }
 
-    pub fn with_default(column: TableColumn) -> Self {
-        Self::with_value(column.default_value)
+    pub fn with_default(column: &TableColumn) -> Self {
+        Self::with_value(column.default_value.clone())
     }
 
     pub fn with_null() -> Self {
@@ -77,7 +77,7 @@ mod tests {
     #[test]
     fn test_with_default() {
         let column: TableColumn = TableColumn::new("symbol", StringType(4), StringValue("N/A".into()), 0);
-        let field: Field = Field::with_default(column);
+        let field: Field = Field::with_default(&column);
         assert_eq!(field.value, StringValue("N/A".into()));
     }
 

@@ -130,7 +130,6 @@ impl Row {
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::*;
-    use crate::field_metadata::FieldMetadata;
     use crate::testdata::{make_quote, make_table_columns};
     use crate::typed_values::TypedValue::*;
 
@@ -145,7 +144,6 @@ mod tests {
             0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
         ];
         let (row, rmd) = Row::decode(&buf, &make_table_columns());
-        let fmd = FieldMetadata::decode(0x80);
         assert!(rmd.is_allocated);
         assert_eq!(row, Row {
             id: 187,

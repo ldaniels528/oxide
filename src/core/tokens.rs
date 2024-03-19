@@ -171,8 +171,6 @@ mod tests {
     use crate::tokenizer::parse_fully;
     use crate::tokens::Token;
 
-    use super::*;
-
     #[test]
     fn test_is_alphanumeric() {
         assert!(Token::alpha("World".into(), 11, 16, 1, 13).is_alphanumeric());

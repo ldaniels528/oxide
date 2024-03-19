@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "tinydb_cli"
+name = "oxide_repl"
 path = "main.rs"
 
 [dev-dependencies]

@@ -2,7 +2,6 @@
 // test data module
 ////////////////////////////////////////////////////////////////////
 
-use std::error::Error;
 use std::fs::File;
 use std::io;
 use std::io::Write;
@@ -11,7 +10,6 @@ use chrono::Utc;
 use rand::{Rng, RngCore, thread_rng};
 use rand::distributions::Uniform;
 use rand::prelude::ThreadRng;
-use serde::{Deserialize, Serialize};
 
 use crate::columns::Column;
 use crate::data_types::DataType::{Float64Type, StringType};

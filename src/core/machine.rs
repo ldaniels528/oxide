@@ -165,7 +165,7 @@ impl MachineState {
             Int16Value(n) => self.push(fi(n as i64)),
             Int32Value(n) => self.push(fi(n as i64)),
             Int64Value(n) => self.push(fi(n)),
-            v => return Some(UnsupportedValue(v))
+            unknown => return Some(UnsupportedValue(unknown))
         }
         None
     }
@@ -187,7 +187,7 @@ pub type OpCode = fn(&mut MachineState) -> Option<ErrorCode>;
 #[cfg(test)]
 mod tests {
     use crate::compiler::Compiler;
-    use crate::expression::Expression::{Divide, Factorial, Field, Literal};
+    use crate::expression::Expression::{Factorial, Literal};
 
     use super::*;
 

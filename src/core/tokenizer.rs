@@ -2,8 +2,6 @@
 // tokenizer module
 ////////////////////////////////////////////////////////////////////
 
-use std::error::Error;
-
 use crate::tokens::Token;
 
 type CharSlice = Vec<char>;

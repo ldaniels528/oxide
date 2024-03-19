@@ -1,10 +1,10 @@
 ////////////////////////////////////////////////////////////////////
-//      TinyDB CLI v0.1.0
+//      Oxide REPL v0.1.0
 ////////////////////////////////////////////////////////////////////
 
+use std::{io, thread};
 use std::io::{stdout, Write};
 use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use crossterm::{
@@ -15,13 +15,13 @@ use crossterm::{
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, poll, read};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 
-use crate::repl::{REPLError, REPLState};
+use crate::repl::REPLState;
 
 mod repl;
 
-fn main() -> Result<(), REPLError> {
+fn main() -> io::Result<()> {
     let mut state: REPLState = REPLState::new();
-    println!("Welcome to TinyDB CLI. Enter \"q!\" to quit.\n");
+    println!("Welcome to Oxide REPL. Enter \"q!\" to quit.\n");
     print!("{}", state.get_prompt());
 
     enable_raw_mode().unwrap();
@@ -110,13 +110,13 @@ fn process_user_input(state: &mut REPLState, input: String) {
     }
 }
 
-fn process_statement(input: String) -> Result<(), REPLError> {
+fn process_statement(input: String) -> io::Result<()> {
     println!("[{input}]");
     Ok(())
 }
 
 // prints messages to STDOUT
-fn say(message: &str) -> Result<(), REPLError> {
+fn say(message: &str) -> io::Result<()> {
     execute!(
         stdout(),
         Clear(ClearType::CurrentLine),
