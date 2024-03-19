@@ -2,6 +2,7 @@
 // token slice module - responsible for parsing language tokens
 ////////////////////////////////////////////////////////////////////
 
+use std::io;
 use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
@@ -65,6 +66,17 @@ impl TokenSlice {
         }
     }
 
+    pub fn fold<A>(&self, init: A, f: fn(&A, &TokenSlice) -> (A, TokenSlice)) -> A {
+        let mut result = init;
+        let mut a_ts = self.clone();
+        while a_ts.has_more() {
+            let (result1, ts1) = f(&result, &a_ts);
+            result = result1;
+            a_ts = ts1;
+        }
+        result
+    }
+
     /// Returns the option of a Token at the current position within the slice.
     pub fn get(&self) -> Option<&Token> {
         if self.pos < self.tokens.len() as isize {
@@ -77,6 +89,12 @@ impl TokenSlice {
     pub fn get_position(&self) -> isize { self.pos }
 
     /// Indicates whether at least one more token remains before the end of the slice.
+    pub fn has_more(&self) -> bool {
+        self.has_next() || (!self.is_empty() && self.get_position() == 0
+            && (self.get_position() < self.len() as isize))
+    }
+
+    /// Indicates whether there is another token after the current token
     pub fn has_next(&self) -> bool { self.pos + 1 < self.tokens.len() as isize }
 
     /// Indicates whether at least one more token remains before the beginning of the slice.
@@ -134,6 +152,16 @@ impl TokenSlice {
         if pos > self.pos && pos < self.tokens.len() as isize {
             (&self.tokens[self.pos as usize..=pos as usize], self.copy(pos))
         } else { (&[], self.clone()) }
+    }
+
+    pub fn while_do<A>(&self,
+                       cond: fn(&TokenSlice) -> bool,
+                       f: fn(TokenSlice) -> io::Result<TokenSlice>) -> io::Result<TokenSlice> {
+        let mut a_ts = self.clone();
+        while cond(&a_ts) {
+            a_ts = f(a_ts)?
+        }
+        Ok(a_ts)
     }
 }
 

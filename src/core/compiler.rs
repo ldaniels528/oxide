@@ -41,16 +41,21 @@ impl Compiler {
 
     /// compiles the [TokenSlice] into a [Vec<Expression>]
     pub fn compile_all(&mut self, ts: TokenSlice) -> io::Result<(Vec<Expression>, TokenSlice)> {
-        let mut ts_z = ts;
-        while ts_z.has_next() {
-            let start = ts_z.get_position();
-            let (op, ts1) = self.compile_expr(ts_z)?;
-            ts_z = ts1;
+        fn push(compiler: &mut Compiler, ts0: TokenSlice) -> io::Result<TokenSlice> {
+            let start = ts0.get_position();
+            let (expr, ts1) = compiler.compile_expr(ts0)?;
             // ensure we actually moved the cursor
-            assert!(ts_z.get_position() > start);
-            self.push(op);
+            assert!(ts1.get_position() > start);
+            compiler.push(expr);
+            Ok(ts1)
         }
-        Ok((self.get_stack(), ts_z))
+
+        // consume the entire iterator
+        let mut a_ts = ts;
+        while a_ts.has_more() {
+            a_ts = push(self, a_ts)?;
+        }
+        Ok((self.get_stack(), a_ts))
     }
 
     /// compiles the [TokenSlice] into an [Expression]
@@ -171,6 +176,12 @@ mod tests {
     use crate::typed_values::TypedValue::Boolean;
 
     use super::*;
+
+    #[test]
+    fn test_literal_value() {
+        let opcodes = Compiler::compile("528").unwrap();
+        assert_eq!(opcodes, vec![Literal(Float64Value(528.))]);
+    }
 
     #[test]
     fn test_not_false() {
