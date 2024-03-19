@@ -4,16 +4,14 @@
 
 use crate::tokens::Token;
 
-type CharSlice = Vec<char>;
-
 type NewToken = fn(String, usize, usize, usize, usize) -> Token;
 
-type ParserFunction = fn(&CharSlice, &mut usize) -> Option<Token>;
+type ParserFunction = fn(&Vec<char>, &mut usize) -> Option<Token>;
 
-type ValidationFunction = fn(&CharSlice, &mut usize) -> bool;
+type ValidationFunction = fn(&Vec<char>, &mut usize) -> bool;
 
 pub fn parse_fully(text: &str) -> Vec<Token> {
-    let inputs: CharSlice = text.chars().collect();
+    let inputs: Vec<char> = text.chars().collect();
     let mut pos: usize = 0;
     let mut tokens: Vec<Token> = Vec::new();
     while has_next(&inputs, &mut pos) {
@@ -25,7 +23,7 @@ pub fn parse_fully(text: &str) -> Vec<Token> {
     tokens
 }
 
-fn determine_code_position(inputs: &CharSlice, start: usize) -> (usize, usize) {
+fn determine_code_position(inputs: &Vec<char>, start: usize) -> (usize, usize) {
     let mut line_no: usize = 1;
     let mut column_no: usize = 1;
     for pos in 0..=start {
@@ -40,7 +38,7 @@ fn determine_code_position(inputs: &CharSlice, start: usize) -> (usize, usize) {
     (line_no, column_no)
 }
 
-fn generate_token(inputs: &CharSlice,
+fn generate_token(inputs: &Vec<char>,
                   start: usize,
                   end: usize,
                   make_token: NewToken) -> Option<Token> {
@@ -48,11 +46,15 @@ fn generate_token(inputs: &CharSlice,
     return Some(make_token(inputs[start..end].iter().collect(), start, end, line_no, column_no));
 }
 
-fn has_more(inputs: &CharSlice, pos: &mut usize) -> bool {
+fn has_at_least(inputs: &Vec<char>, pos: &mut usize, n_chars: usize) -> bool {
+    *pos + n_chars <= (*inputs).len()
+}
+
+fn has_more(inputs: &Vec<char>, pos: &mut usize) -> bool {
     *pos < (*inputs).len()
 }
 
-fn has_next(inputs: &CharSlice, pos: &mut usize) -> bool {
+fn has_next(inputs: &Vec<char>, pos: &mut usize) -> bool {
     while is_whitespace(inputs, pos) {
         *pos += 1
     }
@@ -60,13 +62,14 @@ fn has_next(inputs: &CharSlice, pos: &mut usize) -> bool {
 }
 
 // Define the helper functions is_whitespace, has_more, and next_token here
-fn is_whitespace(inputs: &CharSlice, pos: &mut usize) -> bool {
+fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
     let chars = &['\t', '\n', '\r', ' '];
     has_more(inputs, pos) && chars.contains(&inputs[*pos])
 }
 
-fn next_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
+        next_compound_operator_token,
         next_operator_token,
         next_numeric_token,
         next_alphanumeric_token,
@@ -80,11 +83,11 @@ fn next_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
     return parsers.iter().find_map(|&p| p(&inputs, pos));
 }
 
-fn next_alphanumeric_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+fn next_alphanumeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_eligible_token(inputs, pos, Token::alpha, |inputs, pos| has_more(inputs, pos) && (inputs[*pos].is_alphanumeric()))
 }
 
-fn next_eligible_token(inputs: &CharSlice,
+fn next_eligible_token(inputs: &Vec<char>,
                        pos: &mut usize,
                        make_token: NewToken,
                        is_valid: ValidationFunction) -> Option<Token> {
@@ -99,15 +102,15 @@ fn next_eligible_token(inputs: &CharSlice,
     None
 }
 
-fn next_backticks_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+fn next_backticks_quoted_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_quoted_string_token(inputs, pos, Token::backticks, '`')
 }
 
-fn next_double_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+fn next_double_quoted_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_quoted_string_token(inputs, pos, Token::double_quoted, '"')
 }
 
-fn next_glyph_token(inputs: &CharSlice,
+fn next_glyph_token(inputs: &Vec<char>,
                     pos: &mut usize,
                     make_token: NewToken,
                     is_valid: ValidationFunction) -> Option<Token> {
@@ -120,13 +123,13 @@ fn next_glyph_token(inputs: &CharSlice,
     None
 }
 
-fn next_numeric_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+fn next_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_eligible_token(inputs, pos, Token::numeric, |inputs, pos| {
         has_more(inputs, pos) && (inputs[*pos].is_numeric())
     })
 }
 
-fn next_quoted_string_token(inputs: &CharSlice, pos: &mut usize, make_token: NewToken, q: char) -> Option<Token> {
+fn next_quoted_string_token(inputs: &Vec<char>, pos: &mut usize, make_token: NewToken, q: char) -> Option<Token> {
     if has_more(inputs, pos) && inputs[*pos] == q {
         let start = *pos;
         *pos += 1;
@@ -140,26 +143,77 @@ fn next_quoted_string_token(inputs: &CharSlice, pos: &mut usize, make_token: New
     None
 }
 
-fn next_operator_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+fn next_compound_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    fn same(a: &[char], b: &str) -> bool {
+        let aa: String = a.iter().collect();
+        let bb: String = b.into();
+        aa == bb
+    }
+    let compounds = [
+        "&&", "**", "!!", "||", "..",
+        "->", "<-", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", "=="
+    ];
+    let symbol_len = 2;
+    let start = *pos;
+    if has_at_least(inputs, pos, symbol_len) &&
+        compounds.iter().any(|gl| same(&inputs[start..(start + symbol_len)], gl)) {
+        *pos += symbol_len;
+        let end = *pos;
+        generate_token(&inputs, start, end, Token::operator)
+    } else { None }
+}
+
+fn next_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_glyph_token(inputs, pos, Token::operator,
                      |inputs, pos| {
-                         let chars = ['!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '/', '+', '-', '<', '>', '=', '{', '}', '[', ']', ';', '?', '\\', '|'];
+                         let chars = [
+                             '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '/', '+', '-',
+                             '<', '>', '=', '{', '}', '[', ']', ';', '?', '\\', '|', '~'
+                         ];
                          has_more(inputs, pos) && chars.contains(&inputs[*pos])
                      })
 }
 
-fn next_single_quoted_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+fn next_single_quoted_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_quoted_string_token(inputs, pos, Token::single_quoted, '\'')
 }
 
-fn next_symbol_token(inputs: &CharSlice, pos: &mut usize) -> Option<Token> {
+fn next_symbol_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_glyph_token(inputs, pos, Token::symbol, has_more)
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use std::vec;
+
     use super::*;
+
+    #[test]
+    fn test_compound_operators() {
+        let compounds = [
+            "&&", "**", "!!", "||", "->", "<-",
+            "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", "=="
+        ];
+        for op in compounds {
+            assert_eq!(parse_fully(op), vec![
+                Token::operator(op.to_string(), 0, op.len(), 1, op.len())
+            ])
+        }
+
+        assert_eq!(parse_fully("true && false"), vec![
+            Token::alpha("true".into(), 0, 4, 1, 2),
+            Token::operator("&&".into(), 5, 7, 1, 7),
+            Token::alpha("false".into(), 8, 13, 1, 10),
+        ])
+    }
+
+    #[test]
+    fn test_symbols() {
+        assert_eq!(parse_fully("_"), vec![
+            Token::symbol("_".to_string(), 0, 1, 1, 2)
+        ])
+    }
 
     #[test]
     fn test_determine_code_position() {

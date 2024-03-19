@@ -115,6 +115,8 @@ impl Compiler {
             sym =>
                 if let Some(op0) = self.pop() {
                     match sym {
+                        "&&" => self.compile_expr_2p(ts, op0, And),
+                        "||" => self.compile_expr_2p(ts, op0, Or),
                         "/" => self.compile_expr_2p(ts, op0, Divide),
                         "==" => self.compile_expr_2p(ts, op0, Equal),
                         ">" => self.compile_expr_2p(ts, op0, GreaterThan),
