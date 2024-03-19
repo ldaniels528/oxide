@@ -163,7 +163,7 @@ impl TypedValue {
             Null => "null".into(),
             RecordNumber(number) => number.to_string(),
             StringValue(string) => string.into(),
-            Undefined => "undef".into(),
+            Undefined => "undefined".into(),
             UUIDValue(guid) => Uuid::from_bytes(*guid).to_string(),
         }
     }
@@ -181,6 +181,7 @@ impl TypedValue {
             s if s == "false" => Boolean(false),
             s if s == "null" => Null,
             s if s == "true" => Boolean(true),
+            s if s == "undefined" => Undefined,
             s if s.is_empty() => Null,
             s if int_regex.is_match(s) => Int64Value(s.parse::<i64>()
                 .map_err(|e| cnv_error!(e))?),

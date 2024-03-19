@@ -7,8 +7,10 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
+use crate::cnv_error;
 use crate::columns::Column;
 use crate::data_types::DataType::*;
+use crate::error_mgmt::fail;
 use crate::tokenizer::parse_fully;
 use crate::tokens::Token;
 
@@ -79,7 +81,7 @@ impl DataType {
                 DataType::resolve(name, DataType::transfer_to_string_array(arg_tokens).as_slice())
             }
             // unrecognized - syntax error?
-            _ => Err(io::Error::new(io::ErrorKind::Other, "malformed type definition"))
+            _ => fail("malformed type definition")
         }
     }
 
@@ -91,8 +93,8 @@ impl DataType {
 
         fn size_parameter(f: fn(usize) -> DataType, args: &[&str]) -> io::Result<DataType> {
             if args.len() == 1 {
-                Ok(f(args[0].parse::<usize>().map_err(|e| io::Error::new(io::ErrorKind::Other, e))?))
-            } else { Err(io::Error::new(io::ErrorKind::Other, "a single parameter was expected for this type")) }
+                Ok(f(args[0].parse::<usize>().map_err(|e| cnv_error!(e))?))
+            } else { fail("a single parameter was expected for this type") }
         }
 
         match name {

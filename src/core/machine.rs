@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::ops::Deref;
 
+use log::info;
 use serde::{Deserialize, Serialize};
 
 use crate::expression::Expression;
@@ -146,7 +147,7 @@ impl MachineState {
     /// evaluates the collection of [Expression]s; returning a [TypedValue] result.
     pub fn run(&self, opcodes: Vec<Expression>) -> TypedValue {
         opcodes.iter().fold(Undefined, |_, op| {
-            println!("machine::run - {:?}", op);
+            info!("{:?}", op);
             self.evaluate(op)
         })
     }
@@ -205,7 +206,7 @@ mod tests {
         let vm = MachineState::new();
         let opcodes = Compiler::compile("5 * 5").unwrap();
         let result = vm.run(opcodes);
-        assert_eq!(result, Float64Value(25.))
+        assert_eq!(result, Int64Value(25))
     }
 
     #[test]

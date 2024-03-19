@@ -7,8 +7,8 @@ use std::io;
 use std::io::{Seek, SeekFrom, Write};
 use std::ops::AddAssign;
 use std::os::unix::fs::FileExt;
-use crate::columns::Column;
 
+use crate::columns::Column;
 use crate::dataframe_config::DataFrameConfig;
 use crate::fields::Field;
 use crate::namespaces::Namespace;
@@ -101,7 +101,7 @@ impl DataFrame {
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated && !f(&row) {
-                return Ok(false)
+                return Ok(false);
             }
         }
         Ok(true)
