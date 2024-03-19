@@ -14,9 +14,12 @@ use crossterm::{
 };
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, poll, read};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use tokio::runtime::Builder;
 
+use crate::peers::RemoteCallForm;
 use crate::repl::REPLState;
 
+mod peers;
 mod repl;
 
 fn main() -> io::Result<()> {
@@ -26,7 +29,7 @@ fn main() -> io::Result<()> {
 
     enable_raw_mode().unwrap();
     let mut stdout = stdout();
-    stdout.flush()?;
+    stdout.flush().unwrap();
 
     // channel for communication between input handling thread and main thread
     let (tx, rx) = mpsc::channel();
@@ -43,7 +46,7 @@ fn main() -> io::Result<()> {
     // main event loop
     while state.is_alive() {
         if let Ok((code, _modifiers, _kind, _state)) = rx.recv() {
-            process_keyboard_event(&mut state, code, _modifiers, _kind, _state);
+            process_keyboard_event(&mut state, code, _modifiers, _kind, _state)?;
             stdout.flush().unwrap();
         }
     }
@@ -54,7 +57,7 @@ fn process_keyboard_event(state: &mut REPLState,
                           code: KeyCode,
                           _modifiers: KeyModifiers,
                           _kind: KeyEventKind,
-                          _state: KeyEventState) {
+                          _state: KeyEventState) -> io::Result<()> {
     match code {
         KeyCode::Backspace => {
             if !state.chars.is_empty() {
@@ -74,7 +77,8 @@ fn process_keyboard_event(state: &mut REPLState,
             print!("\r\n");
             disable_raw_mode().unwrap();
             let input: String = state.chars.iter().collect();
-            process_user_input(state, input);
+            let response = process_user_input(state, input).unwrap_or_else(|err| Some(err.to_string()));
+            if let Some(message) = response { say(message.as_str())?; }
             print!("{}", state.get_prompt());
             enable_raw_mode().unwrap();
             state.chars.clear();
@@ -93,26 +97,36 @@ fn process_keyboard_event(state: &mut REPLState,
         }
         _ => {}
     }
+    Ok(())
 }
 
-fn process_user_input(state: &mut REPLState, input: String) {
+fn process_user_input(state: &mut REPLState, input: String) -> io::Result<Option<String>> {
     match input.trim() {
-        "" => {}
-        "history" => for s in state.get_history() { println!("{s}") },
-        "q!" => state.die(),
+        "" => Ok(None),
+        "history" => Ok(Some(state.get_history().join("\n"))),
+        "q!" => {
+            state.die();
+            Ok(None)
+        }
         cmd => {
             state.put_history(cmd);
-            match process_statement(cmd.into()) {
-                Ok(_) => {}
-                Err(msg) => eprintln!("{}", msg)
-            };
+            let response = process_statement(cmd.into())?;
+            Ok(Some(response))
         }
     }
 }
 
-fn process_statement(input: String) -> io::Result<()> {
-    println!("[{input}]");
-    Ok(())
+fn process_statement(user_input: String) -> io::Result<String> {
+    let body = serde_json::to_string(&RemoteCallForm::new(user_input))?;
+    let response = reqwest::Client::new()
+        .post(format!("http://{}:{}/rpc", "0.0.0.0", 8080))
+        .body(body)
+        .header("Content-type", "application/json")
+        .send();
+    let rt = Builder::new_current_thread().enable_time().enable_io().build()?;
+    let response = rt.block_on(response).map_err(|e| cnv_error!(e))?;
+    let text = rt.block_on(response.text()).map_err(|e| cnv_error!(e))?;
+    Ok(text)
 }
 
 // prints messages to STDOUT
@@ -133,7 +147,8 @@ mod tests {
 
     #[test]
     fn test_process_input() {
-        process_statement("history".into()).unwrap()
+        let response = process_statement("history".into()).unwrap();
+        println!("{:?}", response)
     }
 
     #[test]
