@@ -188,9 +188,9 @@ mod tests {
 
     #[test]
     fn test_compile_math_subtraction() {
-        let opcodes = Compiler::compile("12 - 7").unwrap();
+        let opcodes = Compiler::compile("_ - 7").unwrap();
         assert_eq!(opcodes, vec![
-            Minus(Box::new(Literal(Float64Value(12.))), Box::new(Literal(Float64Value(7.))))
+            Minus(Box::new(Variable("_".into())), Box::new(Literal(Float64Value(7.))))
         ]);
     }
 

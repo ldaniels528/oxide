@@ -9,7 +9,7 @@ use crate::fields::Field;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::Null;
+use crate::typed_values::TypedValue::{Null, Undefined};
 
 const VERSION: &str = "0.1.0";
 
@@ -90,7 +90,7 @@ pub fn determine_column_value(form: &RowForm, name: &str) -> TypedValue {
     for c in form.get_columns() {
         if c.get_name() == name { return TypedValue::from_json(c.get_value()); }
     }
-    Null
+    Undefined
 }
 
 pub fn to_json_row(row: Row) -> RowJs {
