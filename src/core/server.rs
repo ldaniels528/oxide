@@ -14,19 +14,6 @@ use crate::typed_values::TypedValue::{Null, Undefined};
 const VERSION: &str = "0.1.0";
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct RemoteCallForm {
-    code: String,
-}
-
-impl RemoteCallForm {
-    pub fn new(code: String) -> Self {
-        RemoteCallForm { code }
-    }
-
-    pub fn get_code(&self) -> &String { &self.code }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RowForm {
     columns: Vec<ColumnJs>,
 }

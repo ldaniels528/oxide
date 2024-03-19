@@ -14,6 +14,7 @@ use crate::dataframes::DataFrame;
 use crate::error_mgmt::fail;
 use crate::machine::MachineState;
 use crate::namespaces::Namespace;
+use crate::peers::{RemoteCallRequest, RemoteCallResponse};
 use crate::rows::Row;
 use crate::server::*;
 use crate::typed_values::TypedValue;
@@ -44,6 +45,7 @@ mod token_slice;
 mod tokenizer;
 mod tokens;
 mod typed_values;
+mod peers;
 
 #[actix_web::main]
 async fn main() -> io::Result<()> {
@@ -173,20 +175,20 @@ async fn put_row(data: web::Json<RowForm>, path: web::Path<(String, String, Stri
     }
 }
 
-async fn post_rpc(data: web::Json<RemoteCallForm>) -> impl Responder {
-    fn evaluate(data: web::Json<RemoteCallForm>) -> io::Result<TypedValue> {
+async fn post_rpc(data: web::Json<RemoteCallRequest>) -> impl Responder {
+    fn evaluate(data: web::Json<RemoteCallRequest>) -> io::Result<TypedValue> {
         let form = data.0;
         let opcodes = Compiler::compile(form.get_code())?;
         let machine = MachineState::new();
-        Ok(machine.run(opcodes))
+        let result = machine.run(opcodes);
+        Ok(result)
     }
 
     match evaluate(data) {
-        Ok(outcome) => HttpResponse::Ok().json(outcome.to_json()),
-        Err(err) => {
-            error!("error {}", err.to_string());
-            HttpResponse::InternalServerError().finish()
-        }
+        Ok(result) =>
+            HttpResponse::Ok().json(RemoteCallResponse::success(result.to_json())),
+        Err(err) =>
+            HttpResponse::Ok().json(RemoteCallResponse::fail(err.to_string()))
     }
 }
 

@@ -16,7 +16,7 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, Ke
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use tokio::runtime::Builder;
 
-use crate::peers::RemoteCallForm;
+use crate::peers::{RemoteCallRequest, RemoteCallResponse};
 use crate::repl::REPLState;
 
 mod peers;
@@ -111,13 +111,14 @@ fn process_user_input(state: &mut REPLState, input: String) -> io::Result<Option
         cmd => {
             state.put_history(cmd);
             let response = process_statement(cmd.into())?;
-            Ok(Some(response))
+            let outcome = response.get_message().unwrap_or(response.get_result().to_string());
+            Ok(Some(outcome))
         }
     }
 }
 
-fn process_statement(user_input: String) -> io::Result<String> {
-    let body = serde_json::to_string(&RemoteCallForm::new(user_input))?;
+fn process_statement(user_input: String) -> io::Result<RemoteCallResponse> {
+    let body = serde_json::to_string(&RemoteCallRequest::new(user_input))?;
     let response = reqwest::Client::new()
         .post(format!("http://{}:{}/rpc", "0.0.0.0", 8080))
         .body(body)
@@ -125,8 +126,8 @@ fn process_statement(user_input: String) -> io::Result<String> {
         .send();
     let rt = Builder::new_current_thread().enable_time().enable_io().build()?;
     let response = rt.block_on(response).map_err(|e| cnv_error!(e))?;
-    let text = rt.block_on(response.text()).map_err(|e| cnv_error!(e))?;
-    Ok(text)
+    let response_body = rt.block_on(response.text()).map_err(|e| cnv_error!(e))?;
+    RemoteCallResponse::from_string(response_body.as_str())
 }
 
 // prints messages to STDOUT
