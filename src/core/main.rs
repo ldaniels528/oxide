@@ -176,16 +176,15 @@ async fn put_row(data: web::Json<RowForm>, path: web::Path<(String, String, Stri
 }
 
 async fn post_rpc(data: web::Json<RemoteCallRequest>) -> impl Responder {
-    fn evaluate(data: web::Json<RemoteCallRequest>) -> io::Result<TypedValue> {
+    fn evaluate(data: web::Json<RemoteCallRequest>) -> io::Result<(MachineState, TypedValue)> {
         let form = data.0;
         let opcodes = Compiler::compile(form.get_code())?;
         let machine = MachineState::new();
-        let result = machine.run(opcodes);
-        Ok(result)
+        machine.run(opcodes)
     }
 
     match evaluate(data) {
-        Ok(result) =>
+        Ok((_, result)) =>
             HttpResponse::Ok().json(RemoteCallResponse::success(result.to_json())),
         Err(err) =>
             HttpResponse::Ok().json(RemoteCallResponse::fail(err.to_string()))

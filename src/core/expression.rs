@@ -37,6 +37,8 @@ pub enum Expression {
     Range(Box<Expression>, Box<Expression>),
     Tuple(Vec<Expression>),
     Variable(String),
+    // assignment
+    SetVariable(String, Box<Expression>),
     // control/flow
     CodeBlock(Vec<Expression>),
     If {
@@ -128,82 +130,82 @@ mod tests {
     #[test]
     fn test_and() {
         let vm = MachineState::new();
-        let result = vm.evaluate(&And(
+        let (_, result) = vm.evaluate(&And(
             Box::from(Literal(Boolean(true))),
-            Box::from(Literal(Boolean(false)))));
+            Box::from(Literal(Boolean(false))))).unwrap();
         assert_eq!(result, Boolean(false));
     }
 
     #[test]
     fn test_between() {
         let vm = MachineState::new();
-        let result = vm.evaluate(&Between(
+        let (_, result) = vm.evaluate(&Between(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1))),
-            Box::from(Literal(Int32Value(10)))));
+            Box::from(Literal(Int32Value(10))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_eq() {
         let vm = MachineState::new();
-        let result = vm.evaluate(&Equal(
+        let (_, result) = vm.evaluate(&Equal(
             Box::from(Literal(Int32Value(5))),
-            Box::from(Literal(Int32Value(5)))));
+            Box::from(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_gt() {
         let vm = MachineState::new();
-        let result = vm.evaluate(&GreaterThan(
+        let (_, result) = vm.evaluate(&GreaterThan(
             Box::from(Literal(Int32Value(5))),
-            Box::from(Literal(Int32Value(1)))));
+            Box::from(Literal(Int32Value(1))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_gte() {
         let vm = MachineState::new();
-        let result = vm.evaluate(&GreaterOrEqual(
+        let (_, result) = vm.evaluate(&GreaterOrEqual(
             Box::from(Literal(Int32Value(5))),
-            Box::from(Literal(Int32Value(1)))));
+            Box::from(Literal(Int32Value(1))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_lt() {
         let vm = MachineState::new();
-        let result = vm.evaluate(&LessThan(
+        let (_, result) = vm.evaluate(&LessThan(
             Box::from(Literal(Int32Value(4))),
-            Box::from(Literal(Int32Value(5)))));
+            Box::from(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_lte() {
         let vm = MachineState::new();
-        let result = vm.evaluate(&LessOrEqual(
+        let (_, result) = vm.evaluate(&LessOrEqual(
             Box::from(Literal(Int32Value(1))),
-            Box::from(Literal(Int32Value(5)))));
+            Box::from(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_ne() {
         let vm = MachineState::new();
-        let result = vm.evaluate(&NotEqual(
+        let (_, result) = vm.evaluate(&NotEqual(
             Box::from(Literal(Int32Value(-5))),
-            Box::from(Literal(Int32Value(5)))));
+            Box::from(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_or() {
         let vm = MachineState::new();
-        let result = vm.evaluate(&Or(
+        let (_, result) = vm.evaluate(&Or(
             Box::from(Literal(Boolean(true))),
-            Box::from(Literal(Boolean(false)))));
+            Box::from(Literal(Boolean(false))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
