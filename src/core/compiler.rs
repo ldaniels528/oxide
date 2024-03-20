@@ -13,6 +13,7 @@ use crate::expression::Expression;
 use crate::expression::Expression::*;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token::{AlphaNumeric, BackticksQuoted, DoubleQuoted, Numeric, Operator, SingleQuoted, Symbol};
+use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, Float64Value, Null, StringValue, Undefined};
 
 /// Represents the compiler state
@@ -71,8 +72,7 @@ impl Compiler {
                   SingleQuoted { text, .. }), ts) =>
                 Ok((Literal(StringValue(text.into())), ts)),
             (Some(Numeric { text, .. }), ts) =>
-                Ok((Literal(Float64Value(text.parse()
-                    .map_err(|e| cnv_error!(e))?)), ts)),
+                Ok((Literal(TypedValue::from_numeric(text.as_str())?), ts)),
             (Some(Symbol { text, .. }), ts) =>
                 Ok((Variable(text.into()), ts)),
             (None, _) => fail("Unexpected end of input")
@@ -173,14 +173,14 @@ impl Compiler {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::typed_values::TypedValue::Boolean;
+    use crate::typed_values::TypedValue::{Boolean, Int64Value};
 
     use super::*;
 
     #[test]
     fn test_literal_value() {
-        let opcodes = Compiler::compile("528").unwrap();
-        assert_eq!(opcodes, vec![Literal(Float64Value(528.))]);
+        let opcodes = Compiler::compile("1_234_567_890").unwrap();
+        assert_eq!(opcodes, vec![Literal(Int64Value(1_234_567_890))]);
     }
 
     #[test]
@@ -203,7 +203,7 @@ mod tests {
     fn test_compile_math_subtraction() {
         let opcodes = Compiler::compile("_ - 7").unwrap();
         assert_eq!(opcodes, vec![
-            Minus(Box::new(Variable("_".into())), Box::new(Literal(Float64Value(7.))))
+            Minus(Box::new(Field("_".into())), Box::new(Literal(Int64Value(7))))
         ]);
     }
 
@@ -211,7 +211,7 @@ mod tests {
     fn test_compile_math_division() {
         let opcodes = Compiler::compile("n / 3").unwrap();
         assert_eq!(opcodes, vec![
-            Divide(Box::new(Field("n".into())), Box::new(Literal(Float64Value(3.))))
+            Divide(Box::new(Field("n".into())), Box::new(Literal(Int64Value(3))))
         ]);
     }
 
@@ -219,9 +219,9 @@ mod tests {
     fn test_order_of_operations_1() {
         let opcodes = Compiler::compile("2 + (4 * 3)").unwrap();
         assert_eq!(opcodes, vec![
-            Plus(Box::new(Literal(Float64Value(2.))),
-                 Box::new(Times(Box::new(Literal(Float64Value(4.))),
-                                Box::new(Literal(Float64Value(3.))))))
+            Plus(Box::new(Literal(Int64Value(2))),
+                 Box::new(Times(Box::new(Literal(Int64Value(4))),
+                                Box::new(Literal(Int64Value(3))))))
         ]);
     }
 

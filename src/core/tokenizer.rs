@@ -84,7 +84,8 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
 }
 
 fn next_alphanumeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
-    next_eligible_token(inputs, pos, Token::alpha, |inputs, pos| has_more(inputs, pos) && (inputs[*pos].is_alphanumeric()))
+    next_eligible_token(inputs, pos, Token::alpha,
+                        |inputs, pos| has_more(inputs, pos) && (inputs[*pos].is_alphanumeric() || inputs[*pos] == '_'))
 }
 
 fn next_eligible_token(inputs: &Vec<char>,
@@ -124,9 +125,12 @@ fn next_glyph_token(inputs: &Vec<char>,
 }
 
 fn next_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
-    next_eligible_token(inputs, pos, Token::numeric, |inputs, pos| {
-        has_more(inputs, pos) && (inputs[*pos].is_numeric())
-    })
+    if inputs[*pos].is_numeric() || inputs[*pos] == '.' ||
+        (*pos + 1 < inputs.len() && inputs[*pos] == '_' && inputs[*pos + 1].is_numeric()) {
+        next_eligible_token(inputs, pos, Token::numeric, |inputs, pos| {
+            has_more(inputs, pos) && (inputs[*pos].is_numeric() || inputs[*pos] == '.' || inputs[*pos] == '_')
+        })
+    } else { None }
 }
 
 fn next_quoted_string_token(inputs: &Vec<char>, pos: &mut usize, make_token: NewToken, q: char) -> Option<Token> {
@@ -150,7 +154,7 @@ fn next_compound_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<T
         aa == bb
     }
     let compounds = [
-        "&&", "**", "!!", "||", "..",
+        "&&", "**", "!!", "||", "::", "..",
         "->", "<-", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", "=="
     ];
     let symbol_len = 2;
@@ -209,9 +213,21 @@ mod tests {
     }
 
     #[test]
+    fn test_numbers() {
+        assert_eq!(parse_fully("1 10 100.0 100_000_000 _ace .3567"), vec![
+            Token::numeric("1".to_string(), 0, 1, 1, 2),
+            Token::numeric("10".to_string(), 2, 4, 1, 4),
+            Token::numeric("100.0".to_string(), 5, 10, 1, 7),
+            Token::numeric("100_000_000".to_string(), 11, 22, 1, 13),
+            Token::alpha("_ace".to_string(), 23, 27, 1, 25),
+            Token::numeric(".3567".to_string(), 28, 33, 1, 30),
+        ])
+    }
+
+    #[test]
     fn test_symbols() {
         assert_eq!(parse_fully("_"), vec![
-            Token::symbol("_".to_string(), 0, 1, 1, 2)
+            Token::alpha("_".to_string(), 0, 1, 1, 2)
         ])
     }
 

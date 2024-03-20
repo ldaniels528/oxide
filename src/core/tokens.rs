@@ -2,8 +2,12 @@
 // tokens module
 ////////////////////////////////////////////////////////////////////
 
+use std::io;
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
+use crate::error_mgmt::fail;
 use crate::tokens::Token::*;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -152,6 +156,20 @@ impl Token {
             | (SingleQuoted { .. }, "SingleQuoted")
             | (Symbol { .. }, "Symbol") => true,
             _ => false,
+        }
+    }
+
+    /// Returns the numeric value of the [Token]
+    pub fn to_numeric<A: FromStr>(&self) -> io::Result<A> {
+        match &self {
+            AlphaNumeric { text, .. } | Numeric { text, .. } => {
+                let s: String = text.chars().filter(|c| *c != '_').collect();
+                match s.parse::<A>() {
+                    Ok(number) => Ok(number),
+                    Err(_) => fail(format!("Could not convert '{}' to numeric", s))
+                }
+            }
+            t => fail(format!("Cannot convert {} to numeric", t.get_raw_value()))
         }
     }
 }

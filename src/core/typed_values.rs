@@ -4,6 +4,7 @@
 
 use std::{i32, io};
 use std::ops::{Add, BitXor, Div, Mul, Sub};
+use std::str::FromStr;
 
 use chrono::DateTime;
 use regex::Regex;
@@ -17,7 +18,12 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::typed_values::TypedValue::*;
 
-const ISO_DATE_FORMAT: &str = r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$";
+const ISO_DATE_FORMAT: &str =
+    r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$";
+const DECIMAL_FORMAT: &str = r"^-?(?:\d+(?:_\d)*|\d+)(?:\.\d+)?$";
+const INTEGER_FORMAT: &str = r"^-?(?:\d+(?:_\d)*)?$";
+const UUID_FORMAT: &str =
+    "^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
@@ -123,6 +129,19 @@ impl TypedValue {
         }
     }
 
+    pub fn from_numeric(text: &str) -> io::Result<TypedValue> {
+        let decimal_regex = Regex::new(DECIMAL_FORMAT).map_err(|e| cnv_error!(e))?;
+        let int_regex = Regex::new(INTEGER_FORMAT).map_err(|e| cnv_error!(e))?;
+        let number: String = text.chars()
+            .filter(|c| *c != '_' && *c != ',')
+            .collect();
+        match number.trim() {
+            s if int_regex.is_match(s) => Ok(Int64Value(s.parse().map_err(|e| cnv_error!(e))?)),
+            s if decimal_regex.is_match(s) => Ok(Float64Value(s.parse().map_err(|e| cnv_error!(e))?)),
+            s => Ok(StringValue(s.to_string()))
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             Array(items) => serde_json::json!(items),
@@ -168,25 +187,22 @@ impl TypedValue {
         }
     }
 
-    pub fn wrap_value(raw_value: impl Into<String>) -> io::Result<Self> {
-        let decimal_regex = Regex::new(r"^-?\d+\.\d+$")
+    pub fn is_numeric(value: &str) -> io::Result<bool> {
+        let decimal_regex = Regex::new(DECIMAL_FORMAT)
             .map_err(|e| cnv_error!(e))?;
-        let int_regex = Regex::new(r"^-?\d+$")
-            .map_err(|e| cnv_error!(e))?;
-        let iso_date_regex = Regex::new(ISO_DATE_FORMAT)
-            .map_err(|e| cnv_error!(e))?;
-        let uuid_regex = Regex::new("^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$")
-            .map_err(|e| cnv_error!(e))?;
-        let result = match raw_value.into().as_str() {
+        Ok(decimal_regex.is_match(value))
+    }
+
+    pub fn wrap_value(raw_value: &str) -> io::Result<Self> {
+        let iso_date_regex = Regex::new(ISO_DATE_FORMAT).map_err(|e| cnv_error!(e))?;
+        let uuid_regex = Regex::new(UUID_FORMAT).map_err(|e| cnv_error!(e))?;
+        let result = match raw_value {
             s if s == "false" => Boolean(false),
             s if s == "null" => Null,
             s if s == "true" => Boolean(true),
             s if s == "undefined" => Undefined,
             s if s.is_empty() => Null,
-            s if int_regex.is_match(s) => Int64Value(s.parse::<i64>()
-                .map_err(|e| cnv_error!(e))?),
-            s if decimal_regex.is_match(s) => Float64Value(s.parse::<f64>()
-                .map_err(|e| cnv_error!(e))?),
+            s if Self::is_numeric(s)? => Self::from_numeric(s)?,
             s if iso_date_regex.is_match(s) =>
                 DateValue(DateTime::parse_from_rfc3339(s)
                     .map_err(|e| cnv_error!(e))?.timestamp_millis()),
