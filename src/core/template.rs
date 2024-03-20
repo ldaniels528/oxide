@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_from_json() {
-        // lollypop: select %E:fields ?from +?%q:source +?where +?%c:condition
+        // oxide: select %E:fields ?from +?%q:source +?where +?%c:condition
         let tpl = Template::from_json(r#"{
           "pattern": "select",
           "children": [{

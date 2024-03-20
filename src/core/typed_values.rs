@@ -118,7 +118,7 @@ impl TypedValue {
         Some(iso_date)
     }
 
-    pub fn from_json(j_value: serde_json::Value) -> Self {
+    pub fn from_json(j_value: Value) -> Self {
         match j_value {
             Value::Null => Null,
             Value::Bool(b) => Boolean(b),
@@ -229,7 +229,7 @@ impl TypedValue {
     }
 
     pub fn between(&self, lhs: &TypedValue, rhs: &TypedValue) -> Option<TypedValue> {
-        let (c, b, a) = (self.assume_f64()?, lhs.assume_f64()?, rhs.assume_f64()?);
+        let (c, a, b) = (self.assume_f64()?, lhs.assume_f64()?, rhs.assume_f64()?);
         Some(Boolean((c >= a) && (c <= b)))
     }
 

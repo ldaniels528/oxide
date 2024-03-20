@@ -3,5 +3,5 @@
 .idea/
 **/*.iml
 Cargo.lock
-lollypop_db/
+oxide_db/
 target/

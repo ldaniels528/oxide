@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Index;
 
-use maplit::hashmap;
 use serde::{Deserialize, Serialize};
 
 use crate::codec;
@@ -182,6 +181,7 @@ mod tests {
 
     #[test]
     fn test_to_hash_map() {
+        use maplit::hashmap;
         let row = make_quote(111, &make_table_columns(), "AAA", "TCE", 1230.78);
         assert_eq!(row.to_hash_map(), hashmap!(
             "_id".into() => RecordNumber(111),

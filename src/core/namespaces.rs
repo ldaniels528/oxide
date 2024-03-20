@@ -31,7 +31,7 @@ impl Namespace {
     }
 
     pub fn get_file_path(&self, extension: &str) -> String {
-        // ex: "lollypop_db/ns/database/schema/name/name.extension"
+        // ex: "oxide_db/ns/database/schema/name/name.extension"
         let mut builder = String::new();
         builder.push_str(&*self.get_root_path());
         builder.push('/');
@@ -53,9 +53,9 @@ impl Namespace {
     }
 
     pub fn get_root_path(&self) -> String {
-        // ex: "lollypop_db/ns/database/schema/name/"
+        // ex: "oxide_db/ns/database/schema/name/"
         let mut builder = String::new();
-        builder.push_str("lollypop_db/ns/");
+        builder.push_str("oxide_db/ns/");
         builder.push_str(&self.database);
         builder.push('/');
         builder.push_str(&*self.schema);
@@ -78,14 +78,14 @@ mod tests {
     fn test_get_blob_file_path() {
         let ns = Namespace::new("securities", "amex", "Stocks");
         let filename = ns.get_blob_file_path();
-        assert_eq!(filename, "lollypop_db/ns/securities/amex/Stocks/Stocks.blob")
+        assert_eq!(filename, "oxide_db/ns/securities/amex/Stocks/Stocks.blob")
     }
 
     #[test]
     fn test_get_config_file_path() {
         let ns = Namespace::new("securities", "otc", "Stocks");
         let filename = ns.get_config_file_path();
-        assert_eq!(filename, "lollypop_db/ns/securities/otc/Stocks/Stocks.json")
+        assert_eq!(filename, "oxide_db/ns/securities/otc/Stocks/Stocks.json")
     }
 
     #[test]
@@ -97,13 +97,13 @@ mod tests {
     #[test]
     fn test_get_root_path() {
         let ns = Namespace::new("securities", "nasdaq", "Stocks");
-        assert_eq!(ns.get_root_path(), "lollypop_db/ns/securities/nasdaq/Stocks")
+        assert_eq!(ns.get_root_path(), "oxide_db/ns/securities/nasdaq/Stocks")
     }
 
     #[test]
     fn test_get_table_file_path() {
         let ns = Namespace::new("securities", "nyse", "Stocks");
         let filename = ns.get_table_file_path();
-        assert_eq!(filename, "lollypop_db/ns/securities/nyse/Stocks/Stocks.table")
+        assert_eq!(filename, "oxide_db/ns/securities/nyse/Stocks/Stocks.table")
     }
 }
