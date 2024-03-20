@@ -146,6 +146,8 @@ fn say(message: &str) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    // requires the oxide server to be running
+    #[ignore]
     #[test]
     fn test_process_input() {
         let response = process_statement("history".into()).unwrap();
