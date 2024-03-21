@@ -8,9 +8,9 @@ use std::io;
 use serde::{Deserialize, Serialize};
 
 use crate::cnv_error;
-use crate::columns::Column;
 use crate::data_types::DataType::*;
 use crate::error_mgmt::fail;
+use crate::server::ColumnJs;
 use crate::tokenizer::parse_fully;
 use crate::tokens::Token;
 
@@ -29,8 +29,8 @@ pub enum DataType {
     Float64Type,
     RecordNumberType,
     StringType(usize),
-    StructType(Vec<Column>),
-    TableType(Vec<Column>),
+    StructType(Vec<ColumnJs>),
+    TableType(Vec<ColumnJs>),
     UUIDType,
 }
 

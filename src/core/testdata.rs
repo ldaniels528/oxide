@@ -10,32 +10,32 @@ use rand::{Rng, RngCore, thread_rng};
 use rand::distributions::Uniform;
 use rand::prelude::ThreadRng;
 
-use crate::columns::Column;
 use crate::data_types::DataType::{Float64Type, StringType};
 use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::fields::Field;
 use crate::namespaces::Namespace;
 use crate::rows::Row;
+use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
-pub fn make_columns() -> Vec<Column> {
+pub fn make_columns() -> Vec<ColumnJs> {
     vec![
-        Column::new("symbol", "String(4)", None),
-        Column::new("exchange", "String(4)", None),
-        Column::new("lastSale", "Double", None),
+        ColumnJs::new("symbol", "String(4)", None),
+        ColumnJs::new("exchange", "String(4)", None),
+        ColumnJs::new("lastSale", "Double", None),
     ]
 }
 
-pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Column>) -> io::Result<DataFrame> {
+pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<ColumnJs>) -> io::Result<DataFrame> {
     let ns = Namespace::new(database, schema, name);
     let mut df = DataFrame::create(ns, make_dataframe_config(columns))?;
     df.resize(0)?;
     Ok(df)
 }
 
-pub fn make_dataframe_config(columns: Vec<Column>) -> DataFrameConfig {
+pub fn make_dataframe_config(columns: Vec<ColumnJs>) -> DataFrameConfig {
     DataFrameConfig::new(columns, Vec::new(), Vec::new())
 }
 
@@ -53,7 +53,7 @@ pub fn make_quote(id: usize,
 pub fn make_rows_from_bytes(database: &str,
                             schema: &str,
                             name: &str,
-                            columns: Vec<Column>,
+                            columns: Vec<ColumnJs>,
                             row_data: &[u8]) -> io::Result<DataFrame> {
     let mut df = make_dataframe(database, schema, name, columns)?;
     df.file.set_len(0)?;
@@ -73,7 +73,7 @@ pub fn make_table_columns() -> Vec<TableColumn> {
 pub fn make_table_file_from_bytes(database: &str,
                                   schema: &str,
                                   name: &str,
-                                  columns: Vec<Column>,
+                                  columns: Vec<ColumnJs>,
                                   row_data: &[u8]) -> (File, Vec<TableColumn>, usize) {
     let (mut file, columns, record_size) =
         make_table_file(database, schema, name, columns);
@@ -85,7 +85,7 @@ pub fn make_table_file_from_bytes(database: &str,
 pub fn make_table_file(database: &str,
                        schema: &str,
                        name: &str,
-                       columns: Vec<Column>) -> (File, Vec<TableColumn>, usize) {
+                       columns: Vec<ColumnJs>) -> (File, Vec<TableColumn>, usize) {
     let df = make_dataframe(database, schema, name, columns).unwrap();
     df.file.set_len(0).unwrap();
     (df.file, df.columns, df.record_size)

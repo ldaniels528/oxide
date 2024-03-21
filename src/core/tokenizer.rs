@@ -154,8 +154,8 @@ fn next_compound_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<T
         aa == bb
     }
     let compounds = [
-        "&&", "**", "!!", "||", "::", "..",
-        "->", "<-", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", "=="
+        "&&", "**", "!!", "||", "::", "..", "==",
+        "->", "<-", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
     ];
     let symbol_len = 2;
     let start = *pos;

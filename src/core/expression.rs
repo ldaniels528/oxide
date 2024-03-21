@@ -4,9 +4,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::columns::Column;
 use crate::expression::Expression::*;
 use crate::namespaces::Namespace;
+use crate::server::ColumnJs;
 use crate::typed_values::TypedValue;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -54,12 +54,12 @@ pub enum Expression {
     // SQL
     CreateIndex {
         index: Box<Expression>,
-        columns: Vec<Column>,
+        columns: Vec<ColumnJs>,
         table: Box<Expression>,
     },
     CreateTable {
         table: Box<Expression>,
-        columns: Vec<Column>,
+        columns: Vec<ColumnJs>,
         from: Option<Box<Expression>>,
     },
     Delete {
@@ -226,7 +226,6 @@ mod tests {
             a: Box::from(Literal(Int32Value(1))),
             b: Some(Box::from(Literal(Int32Value(10)))),
         };
-        println!("op: {:?}", &op);
         assert!(op.is_control_flow());
     }
 
@@ -237,7 +236,6 @@ mod tests {
             condition: Some(Box::from(LessThan(Box::from(Variable("x".into())), Box::from(Variable("y".into()))))),
             code: Box::from(Literal(Int32Value(1))),
         };
-        println!("op: {:?}", &op);
         assert!(op.is_control_flow());
     }
 

@@ -20,16 +20,14 @@ use crate::typed_values::TypedValue::*;
 /// represents the state of the machine.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MachineState {
-    current_row: Option<Row>,
     stack: Vec<TypedValue>,
-    variables: HashMap<String, TypedValue>,
+    pub(crate) variables: HashMap<String, TypedValue>,
 }
 
 impl MachineState {
     /// creates a new state machine
     pub fn new() -> Self {
         Self {
-            current_row: None,
             stack: Vec::new(),
             variables: HashMap::new(),
         }
@@ -49,10 +47,6 @@ impl MachineState {
             Equal(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.eq(&bb)),
             Factorial(a) => self.expand1(a, |aa| aa.factorial()),
-            Field(name) =>
-                Ok((self.clone(), if let Some(row) = &self.current_row {
-                    row.find_field_by_name(name).unwrap_or(Undefined)
-                } else { Undefined })),
             GreaterThan(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.gt(&bb)),
             GreaterOrEqual(a, b) =>
@@ -77,7 +71,7 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| Some(aa ^ bb)),
             SetVariable(name, e) => {
                 let (vm, result) = self.evaluate(e)?;
-                Ok((vm.with_variable(name.into(), result.clone()), result))
+                Ok((vm.set(name, result), Undefined))
             }
             Times(a, b) =>
                 self.expand2(a, b, |aa, bb| Some(aa * bb)),
@@ -112,17 +106,18 @@ impl MachineState {
     }
 
     /// executes the specified instructions on this state machine.
-    pub fn execute(&self, ops: Vec<OpCode>) -> io::Result<MachineState> {
+    pub fn execute(&self, ops: &Vec<OpCode>) -> io::Result<(MachineState, TypedValue)> {
         let mut vm = self.clone();
         for op in ops { vm = op(&vm)? }
-        Ok(vm)
+        let (vm, result) = vm.pop_or(Undefined);
+        Ok((vm, result))
     }
 
     /// evaluates the boxed expression and applies the supplied function
     fn expand1(&self,
                a: &Box<Expression>,
                f: fn(TypedValue) -> Option<TypedValue>) -> io::Result<(MachineState, TypedValue)> {
-        let (vm, aa) = self.evaluate(a.deref())?;
+        let (vm, aa) = self.evaluate(a)?;
         Ok((vm, f(aa).unwrap_or(Undefined)))
     }
 
@@ -131,8 +126,8 @@ impl MachineState {
                a: &Box<Expression>,
                b: &Box<Expression>,
                f: fn(TypedValue, TypedValue) -> Option<TypedValue>) -> io::Result<(MachineState, TypedValue)> {
-        let (vm, aa) = self.evaluate(a.deref())?;
-        let (vm, bb) = vm.evaluate(b.deref())?;
+        let (vm, aa) = self.evaluate(a)?;
+        let (vm, bb) = vm.evaluate(b)?;
         Ok((vm, f(aa, bb).unwrap_or(Undefined)))
     }
 
@@ -142,23 +137,15 @@ impl MachineState {
                b: &Box<Expression>,
                c: &Box<Expression>,
                f: fn(TypedValue, TypedValue, TypedValue) -> Option<TypedValue>) -> io::Result<(MachineState, TypedValue)> {
-        let (vm, aa) = self.evaluate(a.deref())?;
-        let (vm, bb) = vm.evaluate(b.deref())?;
-        let (vm, cc) = vm.evaluate(c.deref())?;
+        let (vm, aa) = self.evaluate(a)?;
+        let (vm, bb) = vm.evaluate(b)?;
+        let (vm, cc) = vm.evaluate(c)?;
         Ok((vm, f(aa, bb, cc).unwrap_or(Undefined)))
     }
 
     /// returns a variable by name
     pub fn get(&self, name: &str) -> Option<TypedValue> {
-        match self.variables.get(name) {
-            Some(v) => Some(v.clone()),
-            None => None
-        }
-    }
-
-    /// sets the value of a variable by name
-    pub fn set(&self, name: &str, value: TypedValue) -> Self {
-        self.with_variable(name.to_string(), value)
+        self.variables.get(name).map(|x| x.clone())
     }
 
     /// returns the option of a value from the stack
@@ -166,7 +153,6 @@ impl MachineState {
         let mut stack = self.stack.clone();
         let value = stack.pop();
         let machine = MachineState {
-            current_row: self.current_row.clone(),
             stack,
             variables: self.variables.clone(),
         };
@@ -184,7 +170,6 @@ impl MachineState {
         let mut stack = self.stack.clone();
         stack.push(value);
         MachineState {
-            current_row: self.current_row.clone(),
             stack,
             variables: self.variables.clone(),
         }
@@ -226,19 +211,10 @@ impl MachineState {
         }
     }
 
-    pub fn with_current_row(&self, current_row: Option<Row>) -> Self {
-        MachineState {
-            current_row,
-            stack: self.stack.clone(),
-            variables: self.variables.clone(),
-        }
-    }
-
-    pub fn with_variable(&self, name: String, value: TypedValue) -> Self {
+    pub fn set(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.clone();
-        variables.insert(name, value);
+        variables.insert(name.to_string(), value);
         MachineState {
-            current_row: self.current_row.clone(),
             stack: self.stack.clone(),
             variables,
         }
@@ -281,17 +257,19 @@ mod tests {
     }
 
     #[test]
-    fn test_compile_5_x_5_and_run() {
-        let vm = MachineState::new();
-        let opcodes = Compiler::compile("5 * 5").unwrap();
+    fn test_compile_n_x_5_and_run() {
+        let vm = MachineState::new()
+            .set("n", Int64Value(5));
+        let opcodes = Compiler::compile("n ** 2").unwrap();
         let (_, result) = vm.run(opcodes).unwrap();
         assert_eq!(result, Int64Value(25))
     }
 
     #[test]
-    fn test_compile_7_gt_5_and_run() {
-        let vm = MachineState::new();
-        let opcodes = Compiler::compile("7 > 5").unwrap();
+    fn test_compile_n_gt_5_and_run() {
+        let vm = MachineState::new()
+            .set("n", Int64Value(7));
+        let opcodes = Compiler::compile("n > 5").unwrap();
         let (_, result) = vm.run(opcodes).unwrap();
         assert_eq!(result, Boolean(true))
     }

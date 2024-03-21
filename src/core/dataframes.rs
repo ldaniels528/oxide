@@ -8,12 +8,12 @@ use std::io::{Seek, SeekFrom, Write};
 use std::ops::AddAssign;
 use std::os::unix::fs::FileExt;
 
-use crate::columns::Column;
 use crate::dataframe_config::DataFrameConfig;
 use crate::fields::Field;
 use crate::namespaces::Namespace;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
+use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Null, Undefined};
@@ -44,7 +44,7 @@ impl DataFrame {
     }
 
     /// creates a new dataframe.
-    pub fn new(ns: Namespace, columns: &Vec<Column>, file: File) -> io::Result<DataFrame> {
+    pub fn new(ns: Namespace, columns: &Vec<ColumnJs>, file: File) -> io::Result<DataFrame> {
         let columns = TableColumn::from_columns(columns)?;
         let record_size = Self::compute_record_size(&columns);
         Ok(DataFrame { ns, columns, record_size, file })

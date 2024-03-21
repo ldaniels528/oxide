@@ -6,19 +6,19 @@ use std::fs;
 
 use serde::{Deserialize, Serialize};
 
-use crate::columns::Column;
 use crate::namespaces::Namespace;
+use crate::server::ColumnJs;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DataFrameConfig {
-    pub(crate) columns: Vec<Column>,
+    pub(crate) columns: Vec<ColumnJs>,
     pub(crate) indices: Vec<HashIndexConfig>,
     pub(crate) partitions: Vec<String>,
 }
 
 impl DataFrameConfig {
     /// instantiates a new dataframe configuration.
-    pub fn new(columns: Vec<Column>,
+    pub fn new(columns: Vec<ColumnJs>,
                indices: Vec<HashIndexConfig>,
                partitions: Vec<String>) -> Self {
         Self { columns, indices, partitions }
@@ -54,19 +54,19 @@ pub struct HashIndexConfig {
 mod tests {
     use tokio::io;
 
-    use crate::columns::Column;
-    use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
+    use crate::dataframe_config::DataFrameConfig;
     use crate::namespaces::Namespace;
+    use crate::server::ColumnJs;
 
     #[test]
     fn test_load_and_save_config() -> io::Result<()> {
-        let columns: Vec<Column> = vec![
-            Column::new("symbol", "String(10)", None),
-            Column::new("exchange", "String(10)", None),
-            Column::new("lastSale", "Double", Some("0.00".into())),
+        let columns: Vec<ColumnJs> = vec![
+            ColumnJs::new("symbol", "String(10)", None),
+            ColumnJs::new("exchange", "String(10)", None),
+            ColumnJs::new("lastSale", "Double", Some("0.00".into())),
         ];
-        let indices: Vec<HashIndexConfig> = Vec::with_capacity(0);
-        let partitions: Vec<String> = Vec::with_capacity(0);
+        let indices = Vec::with_capacity(0);
+        let partitions = Vec::with_capacity(0);
         let cfg = DataFrameConfig::new(columns, indices, partitions);
         let ns = Namespace::new("securities", "other_otc", "Stocks");
         cfg.save(&ns)?;
@@ -75,17 +75,17 @@ mod tests {
         let cfg = DataFrameConfig::load(&ns)?;
         assert_eq!(cfg, DataFrameConfig {
             columns: vec![
-                Column {
+                ColumnJs {
                     name: "symbol".into(),
                     column_type: "String(10)".into(),
                     default_value: None,
                 },
-                Column {
+                ColumnJs {
                     name: "exchange".into(),
                     column_type: "String(10)".into(),
                     default_value: None,
                 },
-                Column {
+                ColumnJs {
                     name: "lastSale".into(),
                     column_type: "Double".into(),
                     default_value: Some("0.00".into()),

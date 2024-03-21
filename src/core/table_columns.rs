@@ -6,9 +6,9 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::rows::Row;
+use crate::server::ColumnJs;
 use crate::typed_values::TypedValue;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,13 +35,13 @@ impl TableColumn {
         }
     }
 
-    pub fn from_column(column: &Column, offset: usize) -> io::Result<TableColumn> {
+    pub fn from_column(column: &ColumnJs, offset: usize) -> io::Result<TableColumn> {
         Ok(Self::new(&column.name,
                      DataType::parse(&column.column_type)?,
                      TypedValue::wrap_value_opt(&column.default_value)?, offset))
     }
 
-    pub fn from_columns(columns: &Vec<Column>) -> io::Result<Vec<TableColumn>> {
+    pub fn from_columns(columns: &Vec<ColumnJs>) -> io::Result<Vec<TableColumn>> {
         let mut offset: usize = Row::overhead();
         let mut physical_columns: Vec<TableColumn> = Vec::with_capacity(columns.len());
         for column in columns {
@@ -74,8 +74,8 @@ mod tests {
 
     #[test]
     fn test_from_column() {
-        let column_desc: Column = Column::new("exchange", "String(10)", Some("N/A".into()));
-        let column: TableColumn = TableColumn::from_column(&column_desc, 0)
+        let column_desc = ColumnJs::new("exchange", "String(10)", Some("N/A".into()));
+        let column = TableColumn::from_column(&column_desc, 0)
             .expect("Deserialization error");
         assert_eq!(column.name, "exchange");
         assert_eq!(column.data_type, StringType(10));

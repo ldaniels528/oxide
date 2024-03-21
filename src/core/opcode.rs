@@ -106,19 +106,18 @@ mod tests {
     #[test]
     fn test_multiple_opcodes() {
         // execute the program
-        let vm = MachineState::new()
+        let (vm, value) = MachineState::new()
             .push_all(vec![
-                2.0, 3.0, // add
-                4.0, // mul
-                5.0, // sub
-                2.0, // div
+                2., 3., // add
+                4., // mul
+                5., // sub
+                2., // div
             ].iter().map(|n| Float64Value(*n)).collect())
-            .execute(vec![add, mul, sub, div])
+            .execute(&vec![add, mul, sub, div])
             .unwrap();
 
-        // get the return value
-        let (vm, ret_val) = vm.pop();
-        assert_eq!(ret_val, Some(Float64Value(-0.08)));
+        // verify the result
+        assert_eq!(value, Float64Value(-0.08));
         assert_eq!(vm.stack_len(), 0)
     }
 }

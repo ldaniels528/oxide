@@ -2,6 +2,7 @@
 // compiler module
 ////////////////////////////////////////////////////////////////////
 
+use std::fmt::format;
 use std::io;
 
 use log::info;
@@ -65,7 +66,7 @@ impl Compiler {
             (Some(Operator { text, precedence, .. }), ts) =>
                 self.compile_operator(ts, text, precedence),
             (Some(BackticksQuoted { text, .. }), ts) =>
-                Ok((Field(text.into()), ts)),
+                Ok((Variable(text.into()), ts)),
             (Some(AlphaNumeric { text, .. }), ts) =>
                 self.compile_alpha(ts, text),
             (Some(DoubleQuoted { text, .. } |
@@ -96,6 +97,17 @@ impl Compiler {
         Ok((f(Box::new(expr0), Box::new(expr1)), ts_z))
     }
 
+    /// compiles the [TokenSlice] into a name-value parameter [Expression]
+    pub fn compile_expr_nv(&mut self,
+                           ts: TokenSlice,
+                           expr0: Expression,
+                           f: fn(String, Box<Expression>) -> Expression) -> io::Result<(Expression, TokenSlice)> {
+        if let (Field(name) | Variable(name)) = expr0 {
+            let (expr1, ts_z) = self.compile_expr(ts)?;
+            Ok((f(name, Box::new(expr1)), ts_z))
+        } else { fail(format!("an identifier name was expected near {:?}", ts)) }
+    }
+
     /// compiles the [TokenSlice] into an operator-based [Expression]
     pub fn compile_alpha(&mut self, ts: TokenSlice, text: String) -> io::Result<(Expression, TokenSlice)> {
         Ok((match text.as_str() {
@@ -103,7 +115,7 @@ impl Compiler {
             "null" => Literal(Null),
             "true" => Literal(Boolean(true)),
             "undefined" => Literal(Undefined),
-            name => Field(name.into()),
+            name => Variable(name.into()),
         }, ts))
     }
 
@@ -121,7 +133,6 @@ impl Compiler {
                 if let Some(op0) = self.pop() {
                     match sym {
                         "&&" => self.compile_expr_2p(ts, op0, And),
-                        "||" => self.compile_expr_2p(ts, op0, Or),
                         "/" => self.compile_expr_2p(ts, op0, Divide),
                         "==" => self.compile_expr_2p(ts, op0, Equal),
                         ">" => self.compile_expr_2p(ts, op0, GreaterThan),
@@ -131,9 +142,11 @@ impl Compiler {
                         "-" => self.compile_expr_2p(ts, op0, Minus),
                         "%" => self.compile_expr_2p(ts, op0, Modulo),
                         "!=" => self.compile_expr_2p(ts, op0, NotEqual),
+                        "||" => self.compile_expr_2p(ts, op0, Or),
                         "+" => self.compile_expr_2p(ts, op0, Plus),
                         "**" => self.compile_expr_2p(ts, op0, Pow),
                         ".." => self.compile_expr_2p(ts, op0, Range),
+                        ":=" => self.compile_expr_nv(ts, op0, SetVariable),
                         "*" => self.compile_expr_2p(ts, op0, Times),
                         unknown => fail(format!("Invalid operator '{}'", unknown))
                     }
@@ -203,7 +216,7 @@ mod tests {
     fn test_compile_math_subtraction() {
         let opcodes = Compiler::compile("_ - 7").unwrap();
         assert_eq!(opcodes, vec![
-            Minus(Box::new(Field("_".into())), Box::new(Literal(Int64Value(7))))
+            Minus(Box::new(Variable("_".into())), Box::new(Literal(Int64Value(7))))
         ]);
     }
 
@@ -211,7 +224,7 @@ mod tests {
     fn test_compile_math_division() {
         let opcodes = Compiler::compile("n / 3").unwrap();
         assert_eq!(opcodes, vec![
-            Divide(Box::new(Field("n".into())), Box::new(Literal(Int64Value(3))))
+            Divide(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(3))))
         ]);
     }
 
