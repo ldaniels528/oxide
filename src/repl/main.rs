@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-//      Oxide REPL v0.1.0
+//      Oxide REPL
 ////////////////////////////////////////////////////////////////////
 
 use std::{io, thread};
@@ -27,9 +27,10 @@ fn main() -> io::Result<()> {
     println!("Welcome to Oxide REPL. Enter \"q!\" to quit.\n");
     print!("{}", state.get_prompt());
 
-    enable_raw_mode().unwrap();
+    // put the console in raw mode
+    enable_raw_mode()?;
     let mut stdout = stdout();
-    stdout.flush().unwrap();
+    stdout.flush()?;
 
     // channel for communication between input handling thread and main thread
     let (tx, rx) = mpsc::channel();
@@ -37,8 +38,11 @@ fn main() -> io::Result<()> {
     // spawn a separate thread to handle input events
     thread::spawn(move || loop {
         if poll(Duration::from_millis(50)).unwrap() {
-            if let Event::Key(KeyEvent { code, modifiers, kind, state }) = read().unwrap() {
-                tx.send((code, modifiers, kind, state)).unwrap();
+            if let Ok(Event::Key(KeyEvent { code, modifiers, kind, state })) = read() {
+                match tx.send((code, modifiers, kind, state)) {
+                    Ok(_) => {}
+                    Err(err) => println!("{}", err)
+                }
             }
         }
     });
@@ -47,7 +51,7 @@ fn main() -> io::Result<()> {
     while state.is_alive() {
         if let Ok((code, _modifiers, _kind, _state)) = rx.recv() {
             process_keyboard_event(&mut state, code, _modifiers, _kind, _state)?;
-            stdout.flush().unwrap();
+            stdout.flush()?;
         }
     }
     Ok(())
@@ -75,12 +79,13 @@ fn process_keyboard_event(state: &mut REPLState,
         }
         KeyCode::Enter => {
             print!("\r\n");
-            disable_raw_mode().unwrap();
+            disable_raw_mode()?;
             let input: String = state.chars.iter().collect();
-            let response = process_user_input(state, input).unwrap_or_else(|err| Some(err.to_string()));
+            let response = process_user_input(state, input)
+                .unwrap_or_else(|err| Some(err.to_string()));
             if let Some(message) = response { say(message.as_str())?; }
             print!("{}", state.get_prompt());
-            enable_raw_mode().unwrap();
+            enable_raw_mode()?;
             state.chars.clear();
         }
         KeyCode::Down => {
