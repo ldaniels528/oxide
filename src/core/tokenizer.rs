@@ -4,6 +4,16 @@
 
 use crate::tokens::Token;
 
+const COMPOUND_OPERATORS: [&str; 20] = [
+    "&&", "**", "!!", "||", "::", "..", "==",
+    "->", "<-", ">>", "<<",
+    "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
+];
+const SIMPLE_OPERATORS: [char; 25] = [
+    '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '/', '+', '-',
+    '<', '>', '=', '{', '}', '[', ']', ';', '?', '\\', '|', '~'
+];
+
 type NewToken = fn(String, usize, usize, usize, usize) -> Token;
 
 type ParserFunction = fn(&Vec<char>, &mut usize) -> Option<Token>;
@@ -61,7 +71,6 @@ fn has_next(inputs: &Vec<char>, pos: &mut usize) -> bool {
     has_more(&inputs, pos)
 }
 
-// Define the helper functions is_whitespace, has_more, and next_token here
 fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
     let chars = &['\t', '\n', '\r', ' '];
     has_more(inputs, pos) && chars.contains(&inputs[*pos])
@@ -72,7 +81,7 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
         next_compound_operator_token,
         next_operator_token,
         next_numeric_token,
-        next_alphanumeric_token,
+        next_atom_token,
         next_backticks_quoted_token,
         next_double_quoted_token,
         next_single_quoted_token,
@@ -80,11 +89,11 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     ];
 
     // find and return the token
-    return parsers.iter().find_map(|&p| p(&inputs, pos));
+    parsers.iter().find_map(|&p| p(inputs, pos))
 }
 
-fn next_alphanumeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
-    next_eligible_token(inputs, pos, Token::alpha,
+fn next_atom_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    next_eligible_token(inputs, pos, Token::atom,
                         |inputs, pos| has_more(inputs, pos) && (inputs[*pos].is_alphanumeric() || inputs[*pos] == '_'))
 }
 
@@ -125,11 +134,41 @@ fn next_glyph_token(inputs: &Vec<char>,
 }
 
 fn next_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
-    if inputs[*pos].is_numeric() || inputs[*pos] == '.' ||
-        (*pos + 1 < inputs.len() && inputs[*pos] == '_' && inputs[*pos + 1].is_numeric()) {
-        next_eligible_token(inputs, pos, Token::numeric, |inputs, pos| {
-            has_more(inputs, pos) && (inputs[*pos].is_numeric() || inputs[*pos] == '.' || inputs[*pos] == '_')
-        })
+    fn is_digit(c: char) -> bool { "0123456789".contains(c) }
+    fn is_digit_or_underscore(c: char) -> bool { is_digit(c) || c == '_' }
+    fn is_dot(c: char) -> bool { c == '.' }
+
+    // can start with '.' or '0'..'9' (e.g. 123, 1_000.00_000, .5, 5.)
+    let start = *pos;
+    if has_more(inputs, pos) && (is_dot(inputs[start]) || is_digit(inputs[start])) {
+        // after the first '.' it cannot occur again
+        let mut has_dot = is_dot(inputs[start]);
+        *pos += 1;
+
+        // collect digits, underscores and up-to one dot.
+        while has_more(inputs, pos) && (is_digit_or_underscore(inputs[*pos]) ||
+            (!has_dot && is_dot(inputs[*pos]))) {
+            has_dot |= is_dot(inputs[*pos]);
+            *pos += 1
+        }
+
+        // is this a range (e.g. "..")?
+        if *pos < inputs.len() && *pos > 0 && has_dot &&
+            is_dot(inputs[*pos]) && is_dot(inputs[*pos - 1]) {
+            *pos -= 1;
+            return generate_token(inputs, start, *pos, Token::numeric);
+        }
+
+        // was the length only one?
+        match (*pos - start, inputs[start]) {
+            // if just an underscore, it must be an atom
+            (1, '_') => {
+                *pos = start;
+                next_atom_token(inputs, pos)
+            }
+            (1, '.') => generate_token(inputs, start, *pos, Token::operator),
+            _ => generate_token(inputs, start, *pos, Token::numeric)
+        }
     } else { None }
 }
 
@@ -153,14 +192,10 @@ fn next_compound_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<T
         let bb: String = b.into();
         aa == bb
     }
-    let compounds = [
-        "&&", "**", "!!", "||", "::", "..", "==",
-        "->", "<-", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
-    ];
     let symbol_len = 2;
     let start = *pos;
     if has_at_least(inputs, pos, symbol_len) &&
-        compounds.iter().any(|gl| same(&inputs[start..(start + symbol_len)], gl)) {
+        COMPOUND_OPERATORS.iter().any(|gl| same(&inputs[start..(start + symbol_len)], gl)) {
         *pos += symbol_len;
         let end = *pos;
         generate_token(&inputs, start, end, Token::operator)
@@ -170,11 +205,7 @@ fn next_compound_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<T
 fn next_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_glyph_token(inputs, pos, Token::operator,
                      |inputs, pos| {
-                         let chars = [
-                             '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '/', '+', '-',
-                             '<', '>', '=', '{', '}', '[', ']', ';', '?', '\\', '|', '~'
-                         ];
-                         has_more(inputs, pos) && chars.contains(&inputs[*pos])
+                         has_more(inputs, pos) && SIMPLE_OPERATORS.contains(&inputs[*pos])
                      })
 }
 
@@ -195,20 +226,16 @@ mod tests {
 
     #[test]
     fn test_compound_operators() {
-        let compounds = [
-            "&&", "**", "!!", "||", "->", "<-",
-            "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", "=="
-        ];
-        for op in compounds {
+        for op in COMPOUND_OPERATORS {
             assert_eq!(parse_fully(op), vec![
                 Token::operator(op.to_string(), 0, op.len(), 1, op.len())
             ])
         }
 
         assert_eq!(parse_fully("true && false"), vec![
-            Token::alpha("true".into(), 0, 4, 1, 2),
+            Token::atom("true".into(), 0, 4, 1, 2),
             Token::operator("&&".into(), 5, 7, 1, 7),
-            Token::alpha("false".into(), 8, 13, 1, 10),
+            Token::atom("false".into(), 8, 13, 1, 10),
         ])
     }
 
@@ -219,15 +246,24 @@ mod tests {
             Token::numeric("10".to_string(), 2, 4, 1, 4),
             Token::numeric("100.0".to_string(), 5, 10, 1, 7),
             Token::numeric("100_000_000".to_string(), 11, 22, 1, 13),
-            Token::alpha("_ace".to_string(), 23, 27, 1, 25),
+            Token::atom("_ace".to_string(), 23, 27, 1, 25),
             Token::numeric(".3567".to_string(), 28, 33, 1, 30),
+        ])
+    }
+
+    #[test]
+    fn test_range() {
+        assert_eq!(parse_fully("100..1000"), vec![
+            Token::numeric("100".to_string(), 0, 3, 1, 2),
+            Token::operator("..".to_string(), 3, 5, 1, 5),
+            Token::numeric("1000".to_string(), 5, 9, 1, 7),
         ])
     }
 
     #[test]
     fn test_symbols() {
         assert_eq!(parse_fully("_"), vec![
-            Token::alpha("_".to_string(), 0, 1, 1, 2)
+            Token::atom("_".to_string(), 0, 1, 1, 2)
         ])
     }
 

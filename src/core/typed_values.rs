@@ -4,7 +4,6 @@
 
 use std::{i32, io};
 use std::ops::{Add, BitXor, Div, Mul, Sub};
-use std::str::FromStr;
 
 use chrono::DateTime;
 use regex::Regex;
@@ -144,7 +143,8 @@ impl TypedValue {
 
     pub fn to_json(&self) -> serde_json::Value {
         match self {
-            Array(items) => serde_json::json!(items),
+            Array(items) =>
+                serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<Value>>()),
             BLOB(bytes) => serde_json::json!(bytes),
             Boolean(b) => serde_json::json!(b),
             CLOB(chars) => serde_json::json!(chars),
@@ -224,8 +224,7 @@ impl TypedValue {
     ///////////////////////////////////////////////////////////////
 
     pub fn and(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_bool()?, rhs.assume_bool()?);
-        Some(Boolean(a && b))
+        Some(Boolean(self.assume_bool()? && rhs.assume_bool()?))
     }
 
     pub fn between(&self, lhs: &TypedValue, rhs: &TypedValue) -> Option<TypedValue> {
@@ -234,8 +233,7 @@ impl TypedValue {
     }
 
     pub fn eq(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
-        Some(Boolean(a == b))
+        Some(Boolean(*self == *rhs))
     }
 
     pub fn factorial(&self) -> Option<TypedValue> {
@@ -247,51 +245,62 @@ impl TypedValue {
         Some(fact_f64(num))
     }
 
-    pub fn gt(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
-        Some(Boolean(a > b))
+    pub fn gt(&self, rhs: &Self) -> Option<Self> {
+        Some(Boolean(self.assume_f64()? > rhs.assume_f64()?))
     }
 
-    pub fn gte(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
-        Some(Boolean(a >= b))
+    pub fn gte(&self, rhs: &Self) -> Option<Self> {
+        Some(Boolean(self.assume_f64()? >= rhs.assume_f64()?))
     }
 
-    pub fn lt(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
-        Some(Boolean(a < b))
+    pub fn lt(&self, rhs: &Self) -> Option<Self> {
+        Some(Boolean(self.assume_f64()? < rhs.assume_f64()?))
     }
 
-    pub fn lte(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
-        Some(Boolean(a <= b))
+    pub fn lte(&self, rhs: &Self) -> Option<Self> {
+        Some(Boolean(self.assume_f64()? <= rhs.assume_f64()?))
     }
 
-    pub fn modulo(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let a = self.assume_i64()?;
-        let b = rhs.assume_i64()?;
-        Some(Int64Value(a % b))
+    pub fn modulo(&self, rhs: &Self) -> Option<Self> {
+        Self::numeric_op_2i(self, rhs, |a, b| a % b)
     }
 
-    pub fn ne(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let (a, b) = (self.assume_f64()?, rhs.assume_f64()?);
-        Some(Boolean(a != b))
+    pub fn ne(&self, rhs: &Self) -> Option<Self> {
+        Some(Boolean(self.assume_f64()? != rhs.assume_f64()?))
     }
 
-    pub fn not(&self) -> Option<TypedValue> {
+    pub fn not(&self) -> Option<Self> {
         Some(Boolean(!self.assume_bool()?))
     }
 
-    pub fn or(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let a = self.assume_bool()?;
-        let b = rhs.assume_bool()?;
-        Some(Boolean(a || b))
+    pub fn or(&self, rhs: &Self) -> Option<Self> {
+        Some(Boolean(self.assume_bool()? || rhs.assume_bool()?))
     }
 
-    pub fn pow(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        let a = self.assume_i64()?;
-        let b = rhs.assume_i64()? as usize;
-        Some(Int64Value(num_traits::pow(a, b)))
+    pub fn plus(&self, rhs: &Self) -> Option<Self> {
+        Self::numeric_op_2f(self, rhs, |a, b| a + b)
+    }
+
+    pub fn pow(&self, rhs: &Self) -> Option<Self> {
+        Self::numeric_op_2f(self, rhs, |a, b| num_traits::pow(a, b as usize))
+    }
+
+    pub fn range(&self, rhs: &Self) -> Option<Self> {
+        let mut values = vec![];
+        for n in self.assume_i64()?..rhs.assume_i64()? { values.push(Int64Value(n)) }
+        Some(Array(values))
+    }
+
+    pub fn shl(&self, rhs: &Self) -> Option<Self> {
+        Self::numeric_op_2i(self, rhs, |a, b| a << b)
+    }
+
+    pub fn shr(&self, rhs: &Self) -> Option<Self> {
+        Self::numeric_op_2i(self, rhs, |a, b| a >> b)
+    }
+
+    pub fn sub(&self, rhs: &Self) -> Option<Self> {
+        Self::numeric_op_2f(self, rhs, |a, b| a - b)
     }
 
     ///////////////////////////////////////////////////////////////
@@ -328,23 +337,51 @@ impl TypedValue {
             _ => None
         }
     }
+
+    fn numeric_op_2i(lhs: &Self, rhs: &Self, ff: fn(i64, i64) -> i64) -> Option<Self> {
+        match Self::intercept_unknowns(lhs, rhs) {
+            Some(value) => Some(value),
+            None => {
+                match (lhs, rhs) {
+                    (Float64Value(a), Float64Value(b)) => Some(Float64Value(ff(*a as i64, *b as i64) as f64)),
+                    (Float32Value(a), Float32Value(b)) => Some(Float32Value(ff(*a as i64, *b as i64) as f32)),
+                    (Int64Value(a), Int64Value(b)) => Some(Int64Value(ff(*a as i64, *b as i64) as i64)),
+                    (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as i64, *b as i64) as i32)),
+                    (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as i64, *b as i64) as i16)),
+                    (Int8Value(a), Int8Value(b)) => Some(Int8Value(ff(*a as i64, *b as i64) as u8)),
+                    _ => Some(Float64Value(lhs.assume_f64()? - rhs.assume_f64()?))
+                }
+            }
+        }
+    }
+
+    fn numeric_op_2f(lhs: &Self, rhs: &Self, ff: fn(f64, f64) -> f64) -> Option<Self> {
+        match Self::intercept_unknowns(lhs, rhs) {
+            Some(value) => Some(value),
+            None => {
+                match (lhs, rhs) {
+                    (Float64Value(a), Float64Value(b)) => Some(Float64Value(ff(*a, *b))),
+                    (Float32Value(a), Float32Value(b)) => Some(Float32Value(ff(*a as f64, *b as f64) as f32)),
+                    (Int64Value(a), Int64Value(b)) => Some(Int64Value(ff(*a as f64, *b as f64) as i64)),
+                    (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as f64, *b as f64) as i32)),
+                    (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as f64, *b as f64) as i16)),
+                    (Int8Value(a), Int8Value(b)) => Some(Int8Value(ff(*a as f64, *b as f64) as u8)),
+                    _ => Some(Float64Value(lhs.assume_f64()? - rhs.assume_f64()?))
+                }
+            }
+        }
+    }
 }
 
 impl Add for TypedValue {
     type Output = TypedValue;
 
     fn add(self, rhs: Self) -> Self::Output {
-        TypedValue::intercept_unknowns(&self, &rhs).unwrap_or(
-            match (&self, &rhs) {
-                (Float64Value(a), Float64Value(b)) => Float64Value(a + b),
-                (Float32Value(a), Float32Value(b)) => Float32Value(a + b),
-                (Int64Value(a), Int64Value(b)) => Int64Value(a + b),
-                (Int32Value(a), Int32Value(b)) => Int32Value(a + b),
-                (Int16Value(a), Int16Value(b)) => Int16Value(a + b),
-                (Int8Value(a), Int8Value(b)) => Int8Value(a + b),
-                (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
-                _ => Undefined
-            })
+        match (&self, &rhs) {
+            (Boolean(a), Boolean(b)) => Boolean(a | b),
+            (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
+            _ => Self::numeric_op_2f(&self, &rhs, |a, b| a + b).unwrap_or(Undefined)
+        }
     }
 }
 
@@ -352,17 +389,7 @@ impl BitXor for TypedValue {
     type Output = TypedValue;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
-        use num_traits::pow;
-        TypedValue::intercept_unknowns(&self, &rhs).unwrap_or(
-            match (&self, &rhs) {
-                (Float64Value(a), Float64Value(b)) => Float64Value(pow(*a, *b as usize)),
-                (Float32Value(a), Float32Value(b)) => Float32Value(pow(*a, *b as usize)),
-                (Int64Value(a), Int64Value(b)) => Int64Value(pow(*a, *b as usize)),
-                (Int32Value(a), Int32Value(b)) => Int32Value(pow(*a, *b as usize)),
-                (Int16Value(a), Int16Value(b)) => Int16Value(pow(*a, *b as usize)),
-                (Int8Value(a), Int8Value(b)) => Int8Value(pow(*a, *b as usize)),
-                _ => Undefined
-            })
+        Self::numeric_op_2i(&self, &rhs, |a, b| a ^ b).unwrap_or(Undefined)
     }
 }
 
@@ -370,16 +397,7 @@ impl Div for TypedValue {
     type Output = TypedValue;
 
     fn div(self, rhs: Self) -> Self::Output {
-        TypedValue::intercept_unknowns(&self, &rhs).unwrap_or(
-            match (&self, &rhs) {
-                (Float64Value(a), Float64Value(b)) => Float64Value(a / b),
-                (Float32Value(a), Float32Value(b)) => Float32Value(a / b),
-                (Int64Value(a), Int64Value(b)) => Int64Value(a / b),
-                (Int32Value(a), Int32Value(b)) => Int32Value(a / b),
-                (Int16Value(a), Int16Value(b)) => Int16Value(a / b),
-                (Int8Value(a), Int8Value(b)) => Int8Value(a / b),
-                _ => Undefined
-            })
+        Self::numeric_op_2f(&self, &rhs, |a, b| a / b).unwrap_or(Undefined)
     }
 }
 
@@ -387,16 +405,7 @@ impl Mul for TypedValue {
     type Output = TypedValue;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        TypedValue::intercept_unknowns(&self, &rhs).unwrap_or(
-            match (&self, &rhs) {
-                (Float64Value(a), Float64Value(b)) => Float64Value(a * b),
-                (Float32Value(a), Float32Value(b)) => Float32Value(a * b),
-                (Int64Value(a), Int64Value(b)) => Int64Value(a * b),
-                (Int32Value(a), Int32Value(b)) => Int32Value(a * b),
-                (Int16Value(a), Int16Value(b)) => Int16Value(a * b),
-                (Int8Value(a), Int8Value(b)) => Int8Value(a * b),
-                _ => Undefined
-            })
+        Self::numeric_op_2f(&self, &rhs, |a, b| a * b).unwrap_or(Undefined)
     }
 }
 
@@ -404,16 +413,10 @@ impl Sub for TypedValue {
     type Output = TypedValue;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        TypedValue::intercept_unknowns(&self, &rhs).unwrap_or(
-            match (&self, &rhs) {
-                (Float64Value(a), Float64Value(b)) => Float64Value(a - b),
-                (Float32Value(a), Float32Value(b)) => Float32Value(a - b),
-                (Int64Value(a), Int64Value(b)) => Int64Value(a - b),
-                (Int32Value(a), Int32Value(b)) => Int32Value(a - b),
-                (Int16Value(a), Int16Value(b)) => Int16Value(a - b),
-                (Int8Value(a), Int8Value(b)) => Int8Value(a - b),
-                _ => Undefined
-            })
+        match (&self, &rhs) {
+            (Boolean(a), Boolean(b)) => Boolean(a & b),
+            _ => Self::numeric_op_2f(&self, &rhs, |a, b| a - b).unwrap_or(Undefined)
+        }
     }
 }
 
@@ -430,6 +433,7 @@ mod tests {
         assert_eq!(Int32Value(45) + Int32Value(32), Int32Value(77));
         assert_eq!(Int16Value(45) + Int16Value(32), Int16Value(77));
         assert_eq!(Int8Value(45) + Int8Value(32), Int8Value(77));
+        assert_eq!(Boolean(true) + Boolean(true), Boolean(true));
         assert_eq!(StringValue("Hello".into()) + StringValue(" World".into()), StringValue("Hello World".into()));
     }
 
@@ -445,8 +449,8 @@ mod tests {
 
     #[test]
     fn test_pow() {
-        let a = Float64Value(5.);
-        let b = Float64Value(2.);
+        let a = Int64Value(5);
+        let b = Int64Value(2);
         assert_eq!(a.pow(&b), Some(Int64Value(25)))
     }
 

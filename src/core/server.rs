@@ -16,9 +16,9 @@ pub const VERSION: &str = "0.1.0";
 // JSON representation of a column
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnJs {
-    pub name: String,
-    pub column_type: String,
-    pub default_value: Option<String>,
+    pub(crate) name: String,
+    pub(crate) column_type: String,
+    pub(crate) default_value: Option<String>,
 }
 
 impl ColumnJs {
@@ -27,6 +27,12 @@ impl ColumnJs {
                default_value: Option<String>) -> Self {
         ColumnJs { name: name.into(), column_type: column_type.into(), default_value }
     }
+
+    pub fn get_name(&self) -> &String { &self.name }
+
+    pub fn get_column_type(&self) -> &String { &self.column_type }
+
+    pub fn get_default_value(&self) -> &Option<String> { &self.default_value }
 }
 
 // JSON representation of a field
@@ -59,8 +65,6 @@ pub struct RowJs {
 
 impl RowJs {
     pub fn new(id: Option<usize>, fields: Vec<FieldJs>) -> Self { Self { id, fields } }
-
-    pub fn from(fields: Vec<FieldJs>) -> Self { Self::new(None, fields) }
 
     pub fn get_id(&self) -> Option<usize> { self.id }
 
@@ -99,8 +103,8 @@ pub fn to_row(columns: &Vec<TableColumn>, form: RowJs, id: usize) -> Row {
 }
 
 pub fn to_row_json(row: Row) -> RowJs {
-    RowJs::new(Some(row.id), row.fields.iter().zip(&row.columns)
-        .map(|(f, c)| FieldJs::new(&c.name, f.value.to_json())).collect())
+    RowJs::new(Some(row.id), row.fields.iter().zip(row.get_columns())
+        .map(|(f, c)| FieldJs::new(c.get_name(), f.value.to_json())).collect())
 }
 
 // Unit tests

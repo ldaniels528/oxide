@@ -23,6 +23,10 @@ pub enum Expression {
     Not(Box<Expression>),
     NotEqual(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
+    // bitwise operations
+    ShiftLeft(Box<Expression>, Box<Expression>),
+    ShiftRight(Box<Expression>, Box<Expression>),
+    Xor(Box<Expression>, Box<Expression>),
     // mathematics
     Divide(Box<Expression>, Box<Expression>),
     Factorial(Box<Expression>),

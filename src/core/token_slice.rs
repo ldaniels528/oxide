@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(tokens, vec![
             Token::numeric("123".into(), 1, 4, 1, 3),
             Token::single_quoted("'Hello'".into(), 6, 13, 1, 8),
-            Token::alpha("abc".into(), 15, 18, 1, 17),
+            Token::atom("abc".into(), 15, 18, 1, 17),
         ])
     }
 
@@ -198,7 +198,7 @@ mod tests {
             Token::symbol(",".into(), 4, 5, 1, 6),
             Token::single_quoted("'Hello'".into(), 6, 13, 1, 8),
             Token::symbol(",".into(), 13, 14, 1, 15),
-            Token::alpha("abc".into(), 15, 18, 1, 17),
+            Token::atom("abc".into(), 15, 18, 1, 17),
         ])
     }
 
@@ -212,17 +212,17 @@ mod tests {
         let (row, ts) = ts.next();
         assert_eq!(row, Some(Token::symbol(",".into(), 3, 4, 1, 5)));
         let (row, ts) = ts.next();
-        assert_eq!(row, Some(Token::alpha("Hello".into(), 5, 10, 1, 7)));
+        assert_eq!(row, Some(Token::atom("Hello".into(), 5, 10, 1, 7)));
         let (row, ts) = ts.next();
-        assert_eq!(row, Some(Token::alpha("World".into(), 11, 16, 1, 13)));
+        assert_eq!(row, Some(Token::atom("World".into(), 11, 16, 1, 13)));
         let (row, ts) = ts.next();
         assert_eq!(row, None);
         assert_eq!(ts.get_position(), ts.len() as isize);
         assert!(ts.has_previous());
         let (row, ts) = ts.previous();
-        assert_eq!(row, Some(Token::alpha("World".into(), 11, 16, 1, 13)));
+        assert_eq!(row, Some(Token::atom("World".into(), 11, 16, 1, 13)));
         let (row, ts) = ts.previous();
-        assert_eq!(row, Some(Token::alpha("Hello".into(), 5, 10, 1, 7)));
+        assert_eq!(row, Some(Token::atom("Hello".into(), 5, 10, 1, 7)));
         let (row, ts) = ts.previous();
         assert_eq!(row, Some(Token::symbol(",".into(), 3, 4, 1, 5)));
         let (row, ts) = ts.previous();
@@ -240,7 +240,7 @@ mod tests {
     #[test]
     fn test_indexing_into() {
         let ts = TokenSlice::from_string("the little brown fox");
-        assert_eq!(ts[1], Token::alpha("little".into(), 4, 10, 1, 6))
+        assert_eq!(ts[1], Token::atom("little".into(), 4, 10, 1, 6))
     }
 
     #[test]
@@ -260,10 +260,10 @@ mod tests {
         let ts = TokenSlice::from_string("the fox was too 'fast!' for me");
         let (rows, ts) = ts.scan_to(|t| t.is_single_quoted());
         assert_eq!(rows, &[
-            Token::alpha("the".into(), 0, 3, 1, 2),
-            Token::alpha("fox".into(), 4, 7, 1, 6),
-            Token::alpha("was".into(), 8, 11, 1, 10),
-            Token::alpha("too".into(), 12, 15, 1, 14)
+            Token::atom("the".into(), 0, 3, 1, 2),
+            Token::atom("fox".into(), 4, 7, 1, 6),
+            Token::atom("was".into(), 8, 11, 1, 10),
+            Token::atom("too".into(), 12, 15, 1, 14)
         ]);
         assert_eq!(ts.get_position(), 4);
     }
@@ -273,10 +273,10 @@ mod tests {
         let ts = TokenSlice::from_string("the fox was too 'fast!' for me");
         let (rows, ts) = ts.scan_until(|t| t.is_single_quoted());
         assert_eq!(rows, &[
-            Token::alpha("the".into(), 0, 3, 1, 2),
-            Token::alpha("fox".into(), 4, 7, 1, 6),
-            Token::alpha("was".into(), 8, 11, 1, 10),
-            Token::alpha("too".into(), 12, 15, 1, 14),
+            Token::atom("the".into(), 0, 3, 1, 2),
+            Token::atom("fox".into(), 4, 7, 1, 6),
+            Token::atom("was".into(), 8, 11, 1, 10),
+            Token::atom("too".into(), 12, 15, 1, 14),
             Token::single_quoted("'fast!'".into(), 16, 23, 1, 18)
         ]);
         assert_eq!(ts.get_position(), 4);

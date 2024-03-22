@@ -13,7 +13,7 @@ use crate::typed_values::TypedValue;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TableColumn {
-    pub(crate) name: String,
+    name: String,
     pub(crate) data_type: DataType,
     pub(crate) default_value: TypedValue,
     pub(crate) max_physical_size: usize,
@@ -36,9 +36,9 @@ impl TableColumn {
     }
 
     pub fn from_column(column: &ColumnJs, offset: usize) -> io::Result<TableColumn> {
-        Ok(Self::new(&column.name,
-                     DataType::parse(&column.column_type)?,
-                     TypedValue::wrap_value_opt(&column.default_value)?, offset))
+        Ok(Self::new(column.get_name(),
+                     DataType::parse(column.get_column_type())?,
+                     TypedValue::wrap_value_opt(column.get_default_value())?, offset))
     }
 
     pub fn from_columns(columns: &Vec<ColumnJs>) -> io::Result<Vec<TableColumn>> {
@@ -80,7 +80,7 @@ mod tests {
         assert_eq!(column.name, "exchange");
         assert_eq!(column.data_type, StringType(10));
         assert_eq!(column.default_value, StringValue("N/A".into()));
-        assert_eq!(column.data_type.to_column_type(), column_desc.column_type);
+        assert_eq!(&column.data_type.to_column_type(), column_desc.get_column_type());
         assert_eq!(column.max_physical_size, 19);
     }
 }

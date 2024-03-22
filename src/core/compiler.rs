@@ -13,7 +13,7 @@ use crate::error_mgmt::fail;
 use crate::expression::Expression;
 use crate::expression::Expression::*;
 use crate::token_slice::TokenSlice;
-use crate::tokens::Token::{AlphaNumeric, BackticksQuoted, DoubleQuoted, Numeric, Operator, SingleQuoted, Symbol};
+use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted, Symbol};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, Float64Value, Null, StringValue, Undefined};
 
@@ -28,7 +28,8 @@ impl Compiler {
     // static methods
     ////////////////////////////////////////////////////////////////
 
-    /// compiles the source code into [Vec<Expression>]
+    /// compiles the source code into a [Vec<Expression>]; a graph representing
+    /// the program's executable code
     pub fn compile(source_code: &str) -> io::Result<Vec<Expression>> {
         let mut ctx = Compiler {
             stack: vec![],
@@ -65,9 +66,9 @@ impl Compiler {
         match ts.next() {
             (Some(Operator { text, precedence, .. }), ts) =>
                 self.compile_operator(ts, text, precedence),
-            (Some(BackticksQuoted { text, .. }), ts) =>
+            (Some(Backticks { text, .. }), ts) =>
                 Ok((Variable(text.into()), ts)),
-            (Some(AlphaNumeric { text, .. }), ts) =>
+            (Some(Atom { text, .. }), ts) =>
                 self.compile_alpha(ts, text),
             (Some(DoubleQuoted { text, .. } |
                   SingleQuoted { text, .. }), ts) =>
@@ -80,19 +81,19 @@ impl Compiler {
         }
     }
 
-    /// compiles the [TokenSlice] into a single-parameter [Expression]
-    pub fn compile_expr_1p(&mut self,
-                           ts: TokenSlice,
-                           f: fn(Box<Expression>) -> Expression) -> io::Result<(Expression, TokenSlice)> {
+    /// compiles the [TokenSlice] into a leading single-parameter [Expression] (e.g. !true)
+    pub fn compile_expr_1(&mut self,
+                          ts: TokenSlice,
+                          f: fn(Box<Expression>) -> Expression) -> io::Result<(Expression, TokenSlice)> {
         let (expr, ts_z) = self.compile_expr(ts)?;
         Ok((f(Box::new(expr)), ts_z))
     }
 
     /// compiles the [TokenSlice] into a two-parameter [Expression]
-    pub fn compile_expr_2p(&mut self,
-                           ts: TokenSlice,
-                           expr0: Expression,
-                           f: fn(Box<Expression>, Box<Expression>) -> Expression) -> io::Result<(Expression, TokenSlice)> {
+    pub fn compile_expr_2(&mut self,
+                          ts: TokenSlice,
+                          expr0: Expression,
+                          f: fn(Box<Expression>, Box<Expression>) -> Expression) -> io::Result<(Expression, TokenSlice)> {
         let (expr1, ts_z) = self.compile_expr(ts)?;
         Ok((f(Box::new(expr0), Box::new(expr1)), ts_z))
     }
@@ -126,28 +127,31 @@ impl Compiler {
                             _precedence: usize) -> io::Result<(Expression, TokenSlice)> {
         info!("compile_operator:symbol {:?}", symbol);
         match symbol.as_str() {
-            "!!" => self.compile_expr_1p(ts, Factorial),
-            "!" => self.compile_expr_1p(ts, Not),
+            "!" => self.compile_expr_1(ts, Not),
+            "!!" => self.compile_expr_1(ts, Factorial),
             "(" => self.handle_parentheses(ts),
             sym =>
                 if let Some(op0) = self.pop() {
                     match sym {
-                        "&&" => self.compile_expr_2p(ts, op0, And),
-                        "/" => self.compile_expr_2p(ts, op0, Divide),
-                        "==" => self.compile_expr_2p(ts, op0, Equal),
-                        ">" => self.compile_expr_2p(ts, op0, GreaterThan),
-                        ">=" => self.compile_expr_2p(ts, op0, GreaterOrEqual),
-                        "<" => self.compile_expr_2p(ts, op0, LessThan),
-                        "<=" => self.compile_expr_2p(ts, op0, LessOrEqual),
-                        "-" => self.compile_expr_2p(ts, op0, Minus),
-                        "%" => self.compile_expr_2p(ts, op0, Modulo),
-                        "!=" => self.compile_expr_2p(ts, op0, NotEqual),
-                        "||" => self.compile_expr_2p(ts, op0, Or),
-                        "+" => self.compile_expr_2p(ts, op0, Plus),
-                        "**" => self.compile_expr_2p(ts, op0, Pow),
-                        ".." => self.compile_expr_2p(ts, op0, Range),
+                        "&&" => self.compile_expr_2(ts, op0, And),
+                        "/" => self.compile_expr_2(ts, op0, Divide),
+                        "==" => self.compile_expr_2(ts, op0, Equal),
+                        ">" => self.compile_expr_2(ts, op0, GreaterThan),
+                        ">=" => self.compile_expr_2(ts, op0, GreaterOrEqual),
+                        "<" => self.compile_expr_2(ts, op0, LessThan),
+                        "<=" => self.compile_expr_2(ts, op0, LessOrEqual),
+                        "-" => self.compile_expr_2(ts, op0, Minus),
+                        "%" => self.compile_expr_2(ts, op0, Modulo),
+                        "!=" => self.compile_expr_2(ts, op0, NotEqual),
+                        "||" => self.compile_expr_2(ts, op0, Or),
+                        "+" => self.compile_expr_2(ts, op0, Plus),
+                        "**" => self.compile_expr_2(ts, op0, Pow),
+                        ".." => self.compile_expr_2(ts, op0, Range),
                         ":=" => self.compile_expr_nv(ts, op0, SetVariable),
-                        "*" => self.compile_expr_2p(ts, op0, Times),
+                        "<<" => self.compile_expr_2(ts, op0, ShiftLeft),
+                        ">>" => self.compile_expr_2(ts, op0, ShiftRight),
+                        "*" => self.compile_expr_2(ts, op0, Times),
+                        "^" => self.compile_expr_2(ts, op0, Xor),
                         unknown => fail(format!("Invalid operator '{}'", unknown))
                     }
                 } else { fail(format!("Illegal start of expression '{}'", symbol)) }
@@ -155,7 +159,7 @@ impl Compiler {
     }
 
     pub fn handle_parentheses(&mut self, ts: TokenSlice) -> io::Result<(Expression, TokenSlice)> {
-        let (tokens, ts_z) = ts.scan_until(|t| t.get_raw_value() == ")");
+        let (tokens, ts_z) = ts.scan_until(|t| t.contains(")"));
         let innards = TokenSlice::new(tokens[0..tokens.len()].to_vec());
         let (expression, _) = self.compile_all(innards)?;
         let result = match expression.as_slice() {
@@ -238,9 +242,19 @@ mod tests {
         ]);
     }
 
-    #[ignore]
     #[test]
     fn test_order_of_operations_2() {
+        let opcodes = Compiler::compile("(4. / 3.) + (4 * 3)").unwrap();
+        assert_eq!(opcodes, vec![
+            Plus(Box::new(Literal(Int64Value(2))),
+                 Box::new(Times(Box::new(Literal(Int64Value(4))),
+                                Box::new(Literal(Int64Value(3))))))
+        ]);
+    }
+
+    #[ignore]
+    #[test]
+    fn test_order_of_operations_3() {
         let opcodes = Compiler::compile("2 - 4 * 3").unwrap();
         assert_eq!(opcodes, vec![
             Minus(Box::new(Literal(Float64Value(2.))),

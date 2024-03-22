@@ -4,7 +4,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::io::{Seek, SeekFrom, Write};
+use std::io::{Seek, Write};
 use std::ops::AddAssign;
 use std::os::unix::fs::FileExt;
 
@@ -55,9 +55,8 @@ impl DataFrame {
         let file_len = (&self.file.metadata()?).len();
         let new_row_id = (file_len / self.record_size as u64) as usize;
         let new_row = row.with_row_id(new_row_id);
-        let offset = self.to_offset(new_row.id);
-        let _ = &self.file.seek(SeekFrom::Start(offset))?;
-        let _ = &self.file.write_all(&new_row.encode())?;
+        let offset = self.to_offset(new_row.get_id());
+        let _ = &self.file.write_at(&new_row.encode(), offset)?;
         self.file.flush()?;
         Ok(1)
     }
@@ -145,9 +144,8 @@ impl DataFrame {
 
     /// overwrites a specified row by ID
     pub fn overwrite(&mut self, row: Row) -> io::Result<usize> {
-        let offset = self.to_offset(row.id);
-        let _ = &self.file.seek(SeekFrom::Start(offset))?;
-        let _ = &self.file.write_all(&row.encode())?;
+        let offset = self.to_offset(row.get_id());
+        let _ = &self.file.write_at(&row.encode(), offset)?;
         self.file.flush()?;
         Ok(1)
     }
@@ -226,16 +224,16 @@ impl DataFrame {
     /// updates a specified row by ID
     pub fn update(&mut self, row: Row) -> io::Result<usize> {
         // retrieve the original row
-        let (orig_row, orig_rmd) = self.read_row(row.id)?;
+        let (orig_row, orig_rmd) = self.read_row(row.get_id())?;
 
         // if we retrieved an active row, construct a composite row
         let new_row = if orig_rmd.is_allocated {
             let mut fields = vec![];
-            for (b, a) in row.fields.iter().zip(orig_row.fields.iter()) {
+            for (b, a) in row.get_fields().iter().zip(orig_row.get_fields().iter()) {
                 let value = if b.value != Undefined { &b.value } else { &a.value };
                 fields.push(Field::new(value.clone()));
             }
-            Row::new(row.id, self.columns.clone(), fields)
+            Row::new(row.get_id(), self.columns.clone(), fields)
         } else { row };
 
         // update the table
@@ -244,7 +242,7 @@ impl DataFrame {
 
     fn replace_undefined_with_null(&self, row: Row) -> Row {
         let columns = self.columns.clone();
-        Row::new(row.id, columns.clone(), columns.iter().zip(row.fields.iter()).map(|(c, f)| {
+        Row::new(row.get_id(), columns.clone(), columns.iter().zip(row.get_fields().iter()).map(|(c, f)| {
             if f.value == Null || f.value == Undefined { Field::with_default(c) } else { f.clone() }
         }).collect())
     }
@@ -355,26 +353,26 @@ mod tests {
         // verify the rows
         let rows = df.read_rows(0..2).unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].id, 0);
-        assert_eq!(rows[0].fields[0].metadata.is_active, true);
-        assert_eq!(rows[0].fields[0].metadata.is_compressed, false);
-        assert_eq!(rows[0].fields[0].value, StringValue("RICE".into()));
-        assert_eq!(rows[0].fields[1].metadata.is_active, true);
-        assert_eq!(rows[0].fields[1].metadata.is_compressed, false);
-        assert_eq!(rows[0].fields[1].value, StringValue("PIPE".into()));
-        assert_eq!(rows[0].fields[2].metadata.is_active, true);
-        assert_eq!(rows[0].fields[2].metadata.is_compressed, false);
-        assert_eq!(rows[0].fields[2].value, Float64Value(42.11));
-        assert_eq!(rows[1].id, 1);
-        assert_eq!(rows[1].fields[0].metadata.is_active, true);
-        assert_eq!(rows[1].fields[0].metadata.is_compressed, false);
-        assert_eq!(rows[1].fields[0].value, StringValue("BEEF".into()));
-        assert_eq!(rows[1].fields[1].metadata.is_active, true);
-        assert_eq!(rows[1].fields[1].metadata.is_compressed, false);
-        assert_eq!(rows[1].fields[1].value, StringValue("CAKE".into()));
-        assert_eq!(rows[1].fields[2].metadata.is_active, true);
-        assert_eq!(rows[1].fields[2].metadata.is_compressed, false);
-        assert_eq!(rows[1].fields[2].value, Float64Value(100.0));
+        assert_eq!(rows[0].get_id(), 0);
+        assert_eq!(rows[0].get_fields()[0].metadata.is_active, true);
+        assert_eq!(rows[0].get_fields()[0].metadata.is_compressed, false);
+        assert_eq!(rows[0].get_fields()[0].value, StringValue("RICE".into()));
+        assert_eq!(rows[0].get_fields()[1].metadata.is_active, true);
+        assert_eq!(rows[0].get_fields()[1].metadata.is_compressed, false);
+        assert_eq!(rows[0].get_fields()[1].value, StringValue("PIPE".into()));
+        assert_eq!(rows[0].get_fields()[2].metadata.is_active, true);
+        assert_eq!(rows[0].get_fields()[2].metadata.is_compressed, false);
+        assert_eq!(rows[0].get_fields()[2].value, Float64Value(42.11));
+        assert_eq!(rows[1].get_id(), 1);
+        assert_eq!(rows[1].get_fields()[0].metadata.is_active, true);
+        assert_eq!(rows[1].get_fields()[0].metadata.is_compressed, false);
+        assert_eq!(rows[1].get_fields()[0].value, StringValue("BEEF".into()));
+        assert_eq!(rows[1].get_fields()[1].metadata.is_active, true);
+        assert_eq!(rows[1].get_fields()[1].metadata.is_compressed, false);
+        assert_eq!(rows[1].get_fields()[1].value, StringValue("CAKE".into()));
+        assert_eq!(rows[1].get_fields()[2].metadata.is_active, true);
+        assert_eq!(rows[1].get_fields()[2].metadata.is_compressed, false);
+        assert_eq!(rows[1].get_fields()[2].value, Float64Value(100.0));
         assert_eq!(df.size().unwrap(), 2);
     }
 
@@ -385,13 +383,13 @@ mod tests {
         assert_eq!(df.ns.database, "dataframes");
         assert_eq!(df.ns.schema, "create");
         assert_eq!(df.ns.name, "quotes");
-        assert_eq!(df.columns[0].name, "symbol");
+        assert_eq!(df.columns[0].get_name(), "symbol");
         assert_eq!(df.columns[0].data_type, StringType(4));
         assert_eq!(df.columns[0].default_value, Null);
-        assert_eq!(df.columns[1].name, "exchange");
+        assert_eq!(df.columns[1].get_name(), "exchange");
         assert_eq!(df.columns[1].data_type, StringType(4));
         assert_eq!(df.columns[1].default_value, Null);
-        assert_eq!(df.columns[2].name, "lastSale");
+        assert_eq!(df.columns[2].get_name(), "lastSale");
         assert_eq!(df.columns[2].data_type, Float64Type);
         assert_eq!(df.columns[2].default_value, Null);
     }
@@ -434,7 +432,7 @@ mod tests {
         df.append(&make_quote(0, &phys_columns, "UNO", "AMEX", 11.77)).unwrap();
         df.append(&make_quote(1, &phys_columns, "DOS", "AMEX", 33.22)).unwrap();
         df.append(&make_quote(2, &phys_columns, "TRES", "AMEX", 55.44)).unwrap();
-        assert_eq!(df.fold_left(0, |total, row| total + row.id).unwrap(), 3)
+        assert_eq!(df.fold_left(0, |total, row| total + row.get_id()).unwrap(), 3)
     }
 
     #[test]
@@ -446,7 +444,7 @@ mod tests {
         df.append(&make_quote(0, &phys_columns, "ONE", "AMEX", 11.77)).unwrap();
         df.append(&make_quote(1, &phys_columns, "TWO", "AMEX", 33.22)).unwrap();
         df.append(&make_quote(2, &phys_columns, "THRE", "AMEX", 55.44)).unwrap();
-        assert_eq!(df.fold_right(0, |total, row| total + row.id).unwrap(), 3)
+        assert_eq!(df.fold_right(0, |total, row| total + row.get_id()).unwrap(), 3)
     }
 
     #[test]
@@ -458,7 +456,7 @@ mod tests {
         df.append(&make_quote(0, &phys_columns, "ALPH", "AMEX", 11.77)).unwrap();
         df.append(&make_quote(1, &phys_columns, "BETA", "NYSE", 33.22)).unwrap();
         df.append(&make_quote(2, &phys_columns, "GMMA", "NASD", 55.44)).unwrap();
-        assert_eq!(df.for_all(|row| row.id < 5).unwrap(), true)
+        assert_eq!(df.for_all(|row| row.get_id() < 5).unwrap(), true)
     }
 
     #[test]
@@ -499,7 +497,7 @@ mod tests {
         df0.foreach(|row| println!("{:?}", row)).unwrap();
         let (row, metadata) = df0.read_row(0).unwrap();
         assert!(metadata.is_allocated);
-        assert_eq!(row.id, 2);
+        assert_eq!(row.get_id(), 2);
     }
 
     #[test]
@@ -523,7 +521,7 @@ mod tests {
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'A', b'S', b'D',
                 0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
             ]).unwrap();
-        assert_eq!(df.map(|row| row.id).unwrap(), vec![5, 7, 9])
+        assert_eq!(df.map(|row| row.get_id()).unwrap(), vec![5, 7, 9])
     }
 
     #[test]
@@ -661,7 +659,7 @@ mod tests {
         assert_eq!(df.update(row_to_update.clone()).unwrap(), 1);
 
         // verify the row was updated
-        let (updated_row, updated_rmd) = df.read_row(row_to_update.id).unwrap();
+        let (updated_row, updated_rmd) = df.read_row(row_to_update.get_id()).unwrap();
         assert!(updated_rmd.is_allocated);
         assert_eq!(updated_row, Row::new(1, phys_columns.clone(), vec![
             Field::new(StringValue("DORA".into())),

@@ -65,16 +65,16 @@ impl DataType {
         let token_slice: &[Token] = tokens.as_slice();
         match token_slice {
             // ex: Int
-            [Token::AlphaNumeric { text: name, .. }] =>
+            [Token::Atom { text: name, .. }] =>
                 DataType::resolve(name, &[]),
             // ex: String(60)
-            [Token::AlphaNumeric { text: name, .. },
+            [Token::Atom { text: name, .. },
             Token::Operator { text: op0, .. },
             Token::Numeric { text: arg, .. },
             Token::Operator { text: op1, .. }] if op0 == "(" && op1 == ")" =>
                 DataType::resolve(name, &[arg]),
             // ex: Struct(symbol String(10), exchange String(10), last Double)
-            [Token::AlphaNumeric { text: name, .. },
+            [Token::Atom { text: name, .. },
             Token::Operator { text: op0, .. }, ..,
             Token::Operator { text: op1, .. }] if op0 == "(" && op1 == ")" => {
                 let arg_tokens: &[Token] = &token_slice[1..(token_slice.len() - 1)];
@@ -144,7 +144,7 @@ impl DataType {
             .fold(Vec::new(), |mut acc, t| {
                 match t {
                     Token::Symbol { text: value, .. } if value == "," => acc,
-                    Token::AlphaNumeric { text: value, .. } => {
+                    Token::Atom { text: value, .. } => {
                         acc.push(value);
                         acc
                     }

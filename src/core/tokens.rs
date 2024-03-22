@@ -12,8 +12,8 @@ use crate::tokens::Token::*;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Token {
-    AlphaNumeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
-    BackticksQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
+    Atom { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
+    Backticks { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     DoubleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize },
@@ -26,14 +26,14 @@ impl Token {
     // static methods
     ////////////////////////////////////////////////////////////////
 
-    /// creates a new alphanumeric token
-    pub fn alpha(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        AlphaNumeric { text, start, end, line_number, column_number }
+    /// creates a new atom token
+    pub fn atom(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
+        Atom { text, start, end, line_number, column_number }
     }
 
     /// creates a new backticks-quoted token
     pub fn backticks(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        BackticksQuoted { text, start, end, line_number, column_number }
+        Backticks { text, start, end, line_number, column_number }
     }
 
     /// creates a new double-quoted token
@@ -66,11 +66,24 @@ impl Token {
     // instance methods
     ////////////////////////////////////////////////////////////////
 
+    pub fn contains(&self, text: &str) -> bool {
+        let contents = match self {
+            Atom { text, .. }
+            | Backticks { text, .. }
+            | DoubleQuoted { text, .. }
+            | Numeric { text, .. }
+            | Operator { text, .. }
+            | SingleQuoted { text, .. }
+            | Symbol { text, .. } => text
+        };
+        text == contents.as_str() || contents.contains(text)
+    }
+
     /// Returns the "raw" value of the [Token]
     pub fn get_raw_value(&self) -> String {
         (match &self {
-            AlphaNumeric { text, .. }
-            | BackticksQuoted { text, .. }
+            Atom { text, .. }
+            | Backticks { text, .. }
             | DoubleQuoted { text, .. }
             | Numeric { text, .. }
             | Operator { text, .. }
@@ -82,14 +95,14 @@ impl Token {
     /// Indicates whether the token is alphanumeric.
     pub fn is_alphanumeric(&self) -> bool {
         match self {
-            AlphaNumeric { .. } => true,
+            Atom { .. } => true,
             _ => false
         }
     }
 
     /// Indicates whether the token is an atom (alphanumeric or backticks-quoted).
     pub fn is_atom(&self) -> bool {
-        self.is_alphanumeric() || self.is_backticks_quoted()
+        self.is_alphanumeric() || self.is_backticks()
     }
 
     /// Indicates whether the token is a string; which could be backticks-quoted,
@@ -99,9 +112,9 @@ impl Token {
     }
 
     /// Indicates whether the token is a backticks-quoted string.
-    pub fn is_backticks_quoted(&self) -> bool {
+    pub fn is_backticks(&self) -> bool {
         match self {
-            BackticksQuoted { .. } => true,
+            Backticks { .. } => true,
             _ => false
         }
     }
@@ -148,8 +161,8 @@ impl Token {
 
     pub fn is_type(&self, variant: &str) -> bool {
         match (self, variant) {
-            (AlphaNumeric { .. }, "AlphaNumeric")
-            | (BackticksQuoted { .. }, "BackticksQuoted")
+            (Atom { .. }, "AlphaNumeric")
+            | (Backticks { .. }, "BackticksQuoted")
             | (DoubleQuoted { .. }, "DoubleQuoted")
             | (Numeric { .. }, "Numeric")
             | (Operator { .. }, "Operator")
@@ -162,7 +175,7 @@ impl Token {
     /// Returns the numeric value of the [Token]
     pub fn to_numeric<A: FromStr>(&self) -> io::Result<A> {
         match &self {
-            AlphaNumeric { text, .. } | Numeric { text, .. } => {
+            Atom { text, .. } | Numeric { text, .. } => {
                 let s: String = text.chars().filter(|c| *c != '_').collect();
                 match s.parse::<A>() {
                     Ok(number) => Ok(number),
@@ -176,9 +189,9 @@ impl Token {
 
 pub fn determine_precedence(symbol: impl Into<String>) -> usize {
     match symbol.into().as_str() {
-        "^" => 3,
-        "*" | "/" => 2,
-        "+" | "-" => 1,
+        "**" => 3,
+        "*" | "/" | "%" | ">>" | "<<" => 2,
+        "+" | "-" | "|" | "&" | "^" => 1,
         _ => 0,
     }
 }
@@ -191,18 +204,18 @@ mod tests {
 
     #[test]
     fn test_is_alphanumeric() {
-        assert!(Token::alpha("World".into(), 11, 16, 1, 13).is_alphanumeric());
+        assert!(Token::atom("World".into(), 11, 16, 1, 13).is_alphanumeric());
     }
 
     #[test]
     fn test_is_atom() {
-        assert!(Token::alpha("x".into(), 11, 16, 1, 13).is_atom());
+        assert!(Token::atom("x".into(), 11, 16, 1, 13).is_atom());
         assert!(Token::backticks("x".into(), 11, 16, 1, 13).is_atom());
     }
 
     #[test]
     fn test_is_string_backticks() {
-        assert!(Token::backticks("the".into(), 0, 3, 1, 2).is_backticks_quoted());
+        assert!(Token::backticks("the".into(), 0, 3, 1, 2).is_backticks());
     }
 
     #[test]
@@ -230,7 +243,7 @@ mod tests {
 
     #[test]
     fn test_is_type() {
-        assert!(Token::alpha("World".into(), 11, 16, 1, 13).is_type("AlphaNumeric"));
+        assert!(Token::atom("World".into(), 11, 16, 1, 13).is_type("AlphaNumeric"));
         assert!(Token::backticks("`World`".into(), 11, 16, 1, 13).is_type("BackticksQuoted"));
         assert!(Token::double_quoted("\"World\"".into(), 11, 16, 1, 13).is_type("DoubleQuoted"));
         assert!(Token::numeric("123".into(), 0, 3, 1, 2).is_type("Numeric"));

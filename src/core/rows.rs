@@ -23,14 +23,6 @@ pub struct Row {
     pub(crate) fields: Vec<Field>,
 }
 
-impl Index<usize> for Row {
-    type Output = Field;
-
-    fn index(&self, id: usize) -> &Self::Output {
-        &self.fields[id]
-    }
-}
-
 impl Row {
     // Primary Constructor
     pub fn new(id: usize, columns: Vec<TableColumn>, fields: Vec<Field>) -> Self {
@@ -87,9 +79,15 @@ impl Row {
     pub fn find_field_by_name(&self, name: &str) -> Option<TypedValue> {
         self.columns.iter().zip(self.fields.iter())
             .find_map(|(c, f)| {
-                if c.name == name { Some(f.value.clone()) } else { None }
+                if c.get_name() == name { Some(f.value.clone()) } else { None }
             })
     }
+
+    pub fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
+
+    pub fn get_fields(&self) -> &Vec<Field> { &self.fields }
+
+    pub fn get_id(&self) -> usize { self.id }
 
     /// Represents the number of bytes before the start of column data, which includes
     /// the embedded row metadata (1-byte) and row ID (4- or 8-bytes)
@@ -106,7 +104,7 @@ impl Row {
         let mut mapping = HashMap::new();
         mapping.insert("_id".into(), RecordNumber(self.id));
         for (field, column) in self.fields.iter().zip(&self.columns) {
-            mapping.insert(column.name.to_string(), field.value.clone());
+            mapping.insert(column.get_name().to_string(), field.value.clone());
         }
         mapping
     }
@@ -122,6 +120,14 @@ impl Row {
 
     pub fn with_row_id(&self, id: usize) -> Self {
         Self::new(id, self.columns.clone(), self.fields.clone())
+    }
+}
+
+impl Index<usize> for Row {
+    type Output = Field;
+
+    fn index(&self, id: usize) -> &Self::Output {
+        &self.fields[id]
     }
 }
 

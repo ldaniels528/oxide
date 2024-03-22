@@ -3,17 +3,15 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::collections::HashMap;
-use std::fmt::format;
-use std::ops::Deref;
+use std::ops::BitXor;
 
-use actix_web::http::header::q;
-use log::{error, info};
+use log::info;
 use serde::{Deserialize, Serialize};
 use tokio::io;
 
 use crate::error_mgmt::fail;
 use crate::expression::Expression;
-use crate::rows::Row;
+use crate::expression::Expression::Xor;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
@@ -57,7 +55,7 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa.lte(&bb)),
             Literal(value) => Ok((self.clone(), value.clone())),
             Minus(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa - bb)),
+                self.expand2(a, b, |aa, bb| aa.sub(&bb)),
             Modulo(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.modulo(&bb)),
             NotEqual(a, b) =>
@@ -68,7 +66,13 @@ impl MachineState {
             Plus(a, b) =>
                 self.expand2(a, b, |aa, bb| Some(aa + bb)),
             Pow(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa ^ bb)),
+                self.expand2(a, b, |aa, bb| aa.pow(&bb)),
+            Range(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.range(&bb)),
+            ShiftLeft(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.shl(&bb)),
+            ShiftRight(a, b) =>
+                self.expand2(a, b, |aa, bb| aa.shr(&bb)),
             SetVariable(name, e) => {
                 let (vm, result) = self.evaluate(e)?;
                 Ok((vm.set(name, result), Undefined))
@@ -77,6 +81,8 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| Some(aa * bb)),
             Tuple(values) => self.evaluate_array(values),
             Variable(name) => Ok((self.clone(), self.get(&name).unwrap_or(Undefined))),
+            Xor(a, b) =>
+                self.expand2(a, b, |aa, bb| Some(TypedValue::bitxor(aa, bb))),
             other => fail(format!("Unhandled expression: {:?}", other))
         }
     }

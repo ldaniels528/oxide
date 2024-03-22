@@ -235,11 +235,11 @@ mod tests {
         }"#).unwrap();
         let (results, _) = tpl.capture("select * from stocks where symbol is \"AMD\"").unwrap();
         assert_eq!(results, vec![
-            ("command".into(), Token::alpha("select".into(), 0, 6, 1, 2)),
+            ("command".into(), Token::atom("select".into(), 0, 6, 1, 2)),
             ("fields".into(), Token::operator("*".into(), 7, 8, 1, 9)),
-            ("from".into(), Token::alpha("from".into(), 9, 13, 1, 11)),
-            ("table".into(), Token::alpha("stocks".into(), 14, 20, 1, 16)),
-            ("condition".into(), Token::alpha("where".into(), 21, 26, 1, 23)),
+            ("from".into(), Token::atom("from".into(), 9, 13, 1, 11)),
+            ("table".into(), Token::atom("stocks".into(), 14, 20, 1, 16)),
+            ("condition".into(), Token::atom("where".into(), 21, 26, 1, 23)),
         ]);
     }
 }
