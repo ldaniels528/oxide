@@ -19,7 +19,7 @@ use crate::typed_values::TypedValue::*;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MachineState {
     stack: Vec<TypedValue>,
-    pub(crate) variables: HashMap<String, TypedValue>,
+    variables: HashMap<String, TypedValue>,
 }
 
 impl MachineState {
@@ -29,6 +29,14 @@ impl MachineState {
             stack: Vec::new(),
             variables: HashMap::new(),
         }
+    }
+
+    pub fn add_variables(&mut self, variables: HashMap<String, TypedValue>) {
+        self.variables.extend(variables)
+    }
+
+    pub fn get_variables(&self) -> &HashMap<String, TypedValue> {
+        &self.variables
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.

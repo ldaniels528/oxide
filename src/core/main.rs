@@ -179,7 +179,7 @@ async fn post_rpc(req: HttpRequest, data: web::Json<RemoteCallRequest>) -> impl 
         let mut machine = session_data.machine.lock().unwrap();
         let opcodes = Compiler::compile(data.0.get_code())?;
         let (new_state, result) = machine.run(opcodes)?;
-        machine.variables.extend(new_state.variables);
+        machine.add_variables(new_state.get_variables().clone());
         Ok(result.to_json())
     }
     match process(req, data) {
