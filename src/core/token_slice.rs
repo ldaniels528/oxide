@@ -154,6 +154,8 @@ impl TokenSlice {
         } else { (&[], self.clone()) }
     }
 
+    pub fn skip(&self) -> Self { self.next().1 }
+
     pub fn while_do<A>(&self,
                        cond: fn(&TokenSlice) -> bool,
                        f: fn(TokenSlice) -> io::Result<TokenSlice>) -> io::Result<TokenSlice> {

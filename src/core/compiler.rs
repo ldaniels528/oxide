@@ -160,15 +160,15 @@ impl Compiler {
 
     pub fn handle_parentheses(&mut self, ts: TokenSlice) -> io::Result<(Expression, TokenSlice)> {
         let (tokens, ts_z) = ts.scan_until(|t| t.contains(")"));
-        let innards = TokenSlice::new(tokens[0..tokens.len()].to_vec());
+        let innards = TokenSlice::new(tokens[0..(tokens.len() - 1)].to_vec());
         let (expression, _) = self.compile_all(innards)?;
         let result = match expression.as_slice() {
-            [] => Ok((Literal(Undefined), ts_z)),
-            [one] => Ok((one.clone(), ts_z)),
-            many => Ok((Tuple(many.to_vec()), ts_z))
+            [] => Literal(Undefined),
+            [one] => one.clone(),
+            many => Tuple(many.to_vec())
         };
         self.pop();
-        result
+        Ok((result, ts_z.skip())) // skip the trailing ')'
     }
 
     pub fn get_stack(&self) -> Vec<Expression> {
@@ -241,15 +241,15 @@ mod tests {
                                 Box::new(Literal(Int64Value(3))))))
         ]);
     }
-
-    #[ignore]
+    
     #[test]
     fn test_order_of_operations_2() {
-        let opcodes = Compiler::compile("(4. / 3.) + (4 * 3)").unwrap();
+        let opcodes = Compiler::compile("(4.0 / 3.0) + (4 * 3)").unwrap();
         assert_eq!(opcodes, vec![
-            Plus(Box::new(Literal(Int64Value(2))),
-                 Box::new(Times(Box::new(Literal(Int64Value(4))),
-                                Box::new(Literal(Int64Value(3))))))
+            Plus(
+                Box::new(Divide(Box::new(Literal(Float64Value(4.0))), Box::new(Literal(Float64Value(3.0))))),
+                Box::new(Times(Box::new(Literal(Int64Value(4))), Box::new(Literal(Int64Value(3)))))
+            )
         ]);
     }
 
