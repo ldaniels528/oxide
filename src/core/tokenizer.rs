@@ -4,14 +4,14 @@
 
 use crate::tokens::Token;
 
-const COMPOUND_OPERATORS: [&str; 20] = [
-    "&&", "**", "!!", "||", "::", "..", "==",
-    "->", "<-", ">>", "<<",
-    "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
+const COMPOUND_OPERATORS: [&str; 19] = [
+    "&&", "**", "||", "::", "..", "==", ">>", "<<",
+    "->", "<-", "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
 ];
-const SIMPLE_OPERATORS: [char; 25] = [
-    '!', '@', '#', '$', '%', '^', '&', '*', '(', ')', '/', '+', '-',
-    '<', '>', '=', '{', '}', '[', ']', ';', '?', '\\', '|', '~'
+const SIMPLE_OPERATORS: [char; 31] = [
+    '!', '¡', '@', '#', '$', '%', '^', '&', '×', '*', '÷', '/', '+', '-', '=',
+    '(', ')', '<', '>', '{', '}', '[', ']', ',', ';', '?', '\\', '|', '~',
+    '²', '³',
 ];
 
 type NewToken = fn(String, usize, usize, usize, usize) -> Token;
@@ -71,6 +71,10 @@ fn has_next(inputs: &Vec<char>, pos: &mut usize) -> bool {
     has_more(&inputs, pos)
 }
 
+fn is_operator(inputs: &Vec<char>, pos: usize) -> bool {
+    SIMPLE_OPERATORS.contains(&inputs[pos])
+}
+
 fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
     let chars = &['\t', '\n', '\r', ' '];
     has_more(inputs, pos) && chars.contains(&inputs[*pos])
@@ -94,7 +98,9 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
 
 fn next_atom_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_eligible_token(inputs, pos, Token::atom,
-                        |inputs, pos| has_more(inputs, pos) && (inputs[*pos].is_alphanumeric() || inputs[*pos] == '_'))
+                        |inputs, pos| has_more(inputs, pos) &&
+                            !is_operator(inputs, *pos) &&
+                            (inputs[*pos].is_alphanumeric() || inputs[*pos] == '_'))
 }
 
 fn next_eligible_token(inputs: &Vec<char>,
@@ -214,7 +220,7 @@ fn next_single_quoted_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token
 }
 
 fn next_symbol_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
-    next_glyph_token(inputs, pos, Token::symbol, has_more)
+    next_glyph_token(inputs, pos, Token::operator, has_more)
 }
 
 // Unit tests
@@ -236,6 +242,18 @@ mod tests {
             Token::atom("true".into(), 0, 4, 1, 2),
             Token::operator("&&".into(), 5, 7, 1, 7),
             Token::atom("false".into(), 8, 13, 1, 10),
+        ])
+    }
+
+    #[test]
+    fn test_exponent_literals() {
+        assert_eq!(parse_fully("x³ + 2y²"), vec![
+            Token::atom("x".to_string(), 0, 1, 1, 2),
+            Token::operator("³".to_string(), 1, 2, 1, 3),
+            Token::operator("+".to_string(), 3, 4, 1, 5),
+            Token::numeric("2".to_string(), 5, 6, 1, 7),
+            Token::atom("y".to_string(), 6, 7, 1, 8),
+            Token::operator("²".to_string(), 7, 8, 1, 9),
         ])
     }
 

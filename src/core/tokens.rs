@@ -16,9 +16,8 @@ pub enum Token {
     Backticks { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     DoubleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
-    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize },
+    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize, is_postfix: bool },
     SingleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
-    Symbol { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
 }
 
 impl Token {
@@ -48,8 +47,9 @@ impl Token {
 
     /// creates a new operator token
     pub fn operator(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        let precedence = determine_precedence(text.as_str());
-        Operator { text, start, end, line_number, column_number, precedence }
+        let precedence = Self::determine_precedence(text.as_str());
+        let is_postfix = text ==  "¡" || text == "²" || text == "³";
+        Operator { text, start, end, line_number, column_number, precedence, is_postfix }
     }
 
     /// creates a new single-quoted token
@@ -57,9 +57,13 @@ impl Token {
         SingleQuoted { text, start, end, line_number, column_number }
     }
 
-    /// creates a new symbol token
-    pub fn symbol(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        Symbol { text, start, end, line_number, column_number }
+    pub fn determine_precedence(symbol: impl Into<String>) -> usize {
+        match symbol.into().as_str() {
+            "¡" | "**" | "²" | "³" => 3,
+            "×" | "*" | "÷" | "/" | "%" | ">>" | "<<" => 2,
+            "+" | "-" | "|" | "&" | "^" => 1,
+            _ => 0,
+        }
     }
 
     ////////////////////////////////////////////////////////////////
@@ -73,8 +77,7 @@ impl Token {
             | DoubleQuoted { text, .. }
             | Numeric { text, .. }
             | Operator { text, .. }
-            | SingleQuoted { text, .. }
-            | Symbol { text, .. } => text
+            | SingleQuoted { text, .. } => text
         };
         text == contents.as_str() || contents.contains(text)
     }
@@ -87,8 +90,7 @@ impl Token {
             | DoubleQuoted { text, .. }
             | Numeric { text, .. }
             | Operator { text, .. }
-            | SingleQuoted { text, .. }
-            | Symbol { text, .. } => text
+            | SingleQuoted { text, .. } => text
         }).to_string()
     }
 
@@ -151,14 +153,6 @@ impl Token {
         }
     }
 
-    /// Indicates whether the token is a symbol.
-    pub fn is_symbol(&self) -> bool {
-        match self {
-            Symbol { .. } => true,
-            _ => false
-        }
-    }
-
     pub fn is_type(&self, variant: &str) -> bool {
         match (self, variant) {
             (Atom { .. }, "AlphaNumeric")
@@ -166,8 +160,7 @@ impl Token {
             | (DoubleQuoted { .. }, "DoubleQuoted")
             | (Numeric { .. }, "Numeric")
             | (Operator { .. }, "Operator")
-            | (SingleQuoted { .. }, "SingleQuoted")
-            | (Symbol { .. }, "Symbol") => true,
+            | (SingleQuoted { .. }, "SingleQuoted") => true,
             _ => false,
         }
     }
@@ -184,15 +177,6 @@ impl Token {
             }
             t => fail(format!("Cannot convert {} to numeric", t.get_raw_value()))
         }
-    }
-}
-
-pub fn determine_precedence(symbol: impl Into<String>) -> usize {
-    match symbol.into().as_str() {
-        "**" => 3,
-        "*" | "/" | "%" | ">>" | "<<" => 2,
-        "+" | "-" | "|" | "&" | "^" => 1,
-        _ => 0,
     }
 }
 
@@ -237,11 +221,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_symbol() {
-        assert!(Token::symbol(",".into(), 3, 4, 1, 5).is_symbol());
-    }
-
-    #[test]
     fn test_is_type() {
         assert!(Token::atom("World".into(), 11, 16, 1, 13).is_type("AlphaNumeric"));
         assert!(Token::backticks("`World`".into(), 11, 16, 1, 13).is_type("BackticksQuoted"));
@@ -249,7 +228,6 @@ mod tests {
         assert!(Token::numeric("123".into(), 0, 3, 1, 2).is_type("Numeric"));
         assert!(Token::operator(".".into(), 0, 3, 1, 2).is_type("Operator"));
         assert!(Token::single_quoted("'World'".into(), 11, 16, 1, 13).is_type("SingleQuoted"));
-        assert!(Token::symbol("÷".into(), 3, 4, 1, 5).is_type("Symbol"));
     }
 
     #[test]

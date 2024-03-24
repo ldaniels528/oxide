@@ -143,7 +143,7 @@ impl DataType {
         token_slice.into_iter()
             .fold(Vec::new(), |mut acc, t| {
                 match t {
-                    Token::Symbol { text: value, .. } if value == "," => acc,
+                    Token::Operator { text: value, .. } if value == "," => acc,
                     Token::Atom { text: value, .. } => {
                         acc.push(value);
                         acc

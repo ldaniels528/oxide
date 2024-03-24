@@ -197,9 +197,9 @@ mod tests {
         let (tokens, _) = ts.capture("(", ")", None);
         assert_eq!(tokens, vec![
             Token::numeric("123".into(), 1, 4, 1, 3),
-            Token::symbol(",".into(), 4, 5, 1, 6),
+            Token::operator(",".into(), 4, 5, 1, 6),
             Token::single_quoted("'Hello'".into(), 6, 13, 1, 8),
-            Token::symbol(",".into(), 13, 14, 1, 15),
+            Token::operator(",".into(), 13, 14, 1, 15),
             Token::atom("abc".into(), 15, 18, 1, 17),
         ])
     }
@@ -212,7 +212,7 @@ mod tests {
         let (row, ts) = ts.next();
         assert_eq!(row, Some(Token::numeric("123".into(), 0, 3, 1, 2)));
         let (row, ts) = ts.next();
-        assert_eq!(row, Some(Token::symbol(",".into(), 3, 4, 1, 5)));
+        assert_eq!(row, Some(Token::operator(",".into(), 3, 4, 1, 5)));
         let (row, ts) = ts.next();
         assert_eq!(row, Some(Token::atom("Hello".into(), 5, 10, 1, 7)));
         let (row, ts) = ts.next();
@@ -226,7 +226,7 @@ mod tests {
         let (row, ts) = ts.previous();
         assert_eq!(row, Some(Token::atom("Hello".into(), 5, 10, 1, 7)));
         let (row, ts) = ts.previous();
-        assert_eq!(row, Some(Token::symbol(",".into(), 3, 4, 1, 5)));
+        assert_eq!(row, Some(Token::operator(",".into(), 3, 4, 1, 5)));
         let (row, ts) = ts.previous();
         assert_eq!(row, Some(Token::numeric("123".into(), 0, 3, 1, 2)));
         let (row, _) = ts.previous();
