@@ -34,7 +34,7 @@ pub enum Expression {
     Pow(Box<Expression>, Box<Expression>),
     Minus(Box<Expression>, Box<Expression>),
     Modulo(Box<Expression>, Box<Expression>),
-    Times(Box<Expression>, Box<Expression>),
+    Multiply(Box<Expression>, Box<Expression>),
     // direct/reference values
     Field(String),
     Literal(TypedValue),

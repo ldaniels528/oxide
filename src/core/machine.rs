@@ -3,7 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::collections::HashMap;
-use std::ops::BitXor;
+use std::ops::{Add, BitXor, Div};
 
 use log::info;
 use serde::{Deserialize, Serialize};
@@ -63,14 +63,16 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa.lte(&bb)),
             Literal(value) => Ok((self.clone(), value.clone())),
             Minus(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.sub(&bb)),
+                self.expand2(a, b, |aa, bb| Some(aa - bb)),
             Modulo(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.modulo(&bb)),
+                self.expand2(a, b, |aa, bb| Some(aa % bb)),
+            Multiply(a, b) =>
+                self.expand2(a, b, |aa, bb| Some(aa * bb)),
             NotEqual(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.ne(&bb)),
             Or(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.or(&bb)),
-            Not(a) => self.expand1(a, |aa| aa.not()),
+            Not(a) => self.expand1(a, |aa| Some(!aa)),
             Plus(a, b) =>
                 self.expand2(a, b, |aa, bb| Some(aa + bb)),
             Pow(a, b) =>
@@ -78,19 +80,17 @@ impl MachineState {
             Range(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.range(&bb)),
             ShiftLeft(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.shl(&bb)),
+                self.expand2(a, b, |aa, bb| Some(aa << bb)),
             ShiftRight(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.shr(&bb)),
+                self.expand2(a, b, |aa, bb| Some(aa >> bb)),
             SetVariable(name, e) => {
                 let (vm, result) = self.evaluate(e)?;
                 Ok((vm.set(name, result), Undefined))
             }
-            Times(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa * bb)),
             Tuple(values) => self.evaluate_array(values),
             Variable(name) => Ok((self.clone(), self.get(&name).unwrap_or(Undefined))),
             Xor(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(TypedValue::bitxor(aa, bb))),
+                self.expand2(a, b, |aa, bb| Some(aa ^ bb)),
             other => fail(format!("Unhandled expression: {:?}", other))
         }
     }

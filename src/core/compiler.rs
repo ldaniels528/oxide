@@ -142,6 +142,7 @@ impl Compiler {
                         "<=" => self.compile_expr_2(ts, op0, LessOrEqual),
                         "-" => self.compile_expr_2(ts, op0, Minus),
                         "%" => self.compile_expr_2(ts, op0, Modulo),
+                        "*" => self.compile_expr_2(ts, op0, Multiply),
                         "!=" => self.compile_expr_2(ts, op0, NotEqual),
                         "||" => self.compile_expr_2(ts, op0, Or),
                         "+" => self.compile_expr_2(ts, op0, Plus),
@@ -150,7 +151,6 @@ impl Compiler {
                         ":=" => self.compile_expr_nv(ts, op0, SetVariable),
                         "<<" => self.compile_expr_2(ts, op0, ShiftLeft),
                         ">>" => self.compile_expr_2(ts, op0, ShiftRight),
-                        "*" => self.compile_expr_2(ts, op0, Times),
                         "^" => self.compile_expr_2(ts, op0, Xor),
                         unknown => fail(format!("Invalid operator '{}'", unknown))
                     }
@@ -237,8 +237,8 @@ mod tests {
         let opcodes = Compiler::compile("2 + (4 * 3)").unwrap();
         assert_eq!(opcodes, vec![
             Plus(Box::new(Literal(Int64Value(2))),
-                 Box::new(Times(Box::new(Literal(Int64Value(4))),
-                                Box::new(Literal(Int64Value(3))))))
+                 Box::new(Multiply(Box::new(Literal(Int64Value(4))),
+                                   Box::new(Literal(Int64Value(3))))))
         ]);
     }
     
@@ -248,7 +248,7 @@ mod tests {
         assert_eq!(opcodes, vec![
             Plus(
                 Box::new(Divide(Box::new(Literal(Float64Value(4.0))), Box::new(Literal(Float64Value(3.0))))),
-                Box::new(Times(Box::new(Literal(Int64Value(4))), Box::new(Literal(Int64Value(3)))))
+                Box::new(Multiply(Box::new(Literal(Int64Value(4))), Box::new(Literal(Int64Value(3)))))
             )
         ]);
     }
@@ -259,8 +259,8 @@ mod tests {
         let opcodes = Compiler::compile("2 - 4 * 3").unwrap();
         assert_eq!(opcodes, vec![
             Minus(Box::new(Literal(Float64Value(2.))),
-                  Box::new(Times(Box::new(Literal(Float64Value(4.))),
-                                 Box::new(Literal(Float64Value(3.))))))
+                  Box::new(Multiply(Box::new(Literal(Float64Value(4.))),
+                                    Box::new(Literal(Float64Value(3.))))))
         ]);
     }
 }
