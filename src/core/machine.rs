@@ -11,7 +11,6 @@ use tokio::io;
 
 use crate::error_mgmt::fail;
 use crate::expression::Expression;
-use crate::expression::Expression::Xor;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 

@@ -7,7 +7,8 @@ use std::sync::Mutex;
 
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use actix_web::web::Data;
-use log::{error, LevelFilter};
+use actix_web_actors::ws;
+use log::{error, info, LevelFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,7 +21,7 @@ use crate::namespaces::Namespace;
 use crate::peers::{RemoteCallRequest, RemoteCallResponse};
 use crate::rows::Row;
 use crate::server::{RowJs, SystemInfoJs, to_row, to_row_json};
-use crate::typed_values::TypedValue;
+use crate::websockets::OxideWebSocket;
 
 mod codec;
 mod compiler;
@@ -47,6 +48,7 @@ mod token_slice;
 mod tokenizer;
 mod tokens;
 mod typed_values;
+mod websockets;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AppState {
@@ -84,6 +86,7 @@ async fn main() -> io::Result<()> {
             .route("/{database}/{schema}/{name}/{id}", web::put().to(put_row))
             .route("/{database}/{schema}/{name}", web::get().to(get_config))
             .route("/{database}/{schema}/{name}", web::post().to(post_config))
+            .service(web::resource("/ws").to(ws_handler))
     })
         .bind(get_address(port.as_str()))?
         .run();
@@ -188,6 +191,11 @@ async fn post_rpc(req: HttpRequest, data: web::Json<RemoteCallRequest>) -> impl 
     }
 }
 
+async fn ws_handler(req: HttpRequest, stream: web::Payload) -> impl Responder {
+    info!("received ws <- {}", req.peer_addr().unwrap());
+    ws::start(OxideWebSocket::new(), &req, stream)
+}
+
 fn get_address(port: &str) -> String {
     format!("127.0.0.1:{}", port)
 }
@@ -196,9 +204,7 @@ fn get_port_number(args: Vec<String>) -> io::Result<String> {
     if args.len() > 1 {
         let re = regex::Regex::new(r"^\d+$").unwrap();
         let port: String = args[1].trim().into();
-        if re.is_match(&port) {
-            Ok(port)
-        } else {
+        if re.is_match(&port) { Ok(port) } else {
             fail(format!("Port '{}' is invalid", port))
         }
     } else { Ok("8080".into()) }

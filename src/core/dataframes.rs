@@ -4,7 +4,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::io::{Seek, Write};
+use std::io::Write;
 use std::ops::AddAssign;
 use std::os::unix::fs::FileExt;
 

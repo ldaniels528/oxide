@@ -2,13 +2,11 @@
 // compiler module
 ////////////////////////////////////////////////////////////////////
 
-use std::fmt::format;
 use std::io;
 
 use log::info;
 use serde::{Deserialize, Serialize};
 
-use crate::cnv_error;
 use crate::error_mgmt::fail;
 use crate::expression::Expression;
 use crate::expression::Expression::*;
