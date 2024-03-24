@@ -80,10 +80,9 @@ impl Compiler {
 
         // handle postfix operator?
         match ts.next() {
-            (Some(Operator { text, precedence, is_postfix, .. }), ts)
-            if is_postfix => {
+            (Some(Operator { is_barrier, .. }), _) if !is_barrier => {
                 self.push(expr);
-                self.compile_operator(ts, text.clone(), precedence)
+                self.compile_expr(ts)
             }
             _ => Ok((expr, ts))
         }

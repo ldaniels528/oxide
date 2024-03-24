@@ -16,7 +16,7 @@ pub enum Token {
     Backticks { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     DoubleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
-    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize, is_postfix: bool },
+    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize, is_postfix: bool, is_barrier: bool },
     SingleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
 }
 
@@ -49,7 +49,8 @@ impl Token {
     pub fn operator(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
         let precedence = Self::determine_precedence(text.as_str());
         let is_postfix = text ==  "¡" || text == "²" || text == "³";
-        Operator { text, start, end, line_number, column_number, precedence, is_postfix }
+        let is_barrier = text == "," || text == ";" || text == "]" || text == ")" || text == "}";
+        Operator { text, start, end, line_number, column_number, precedence, is_postfix, is_barrier }
     }
 
     /// creates a new single-quoted token
