@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::{i32, io};
+use std::cmp::Ordering;
 use std::collections::Bound;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Index, Mul, Neg, Not, RangeBounds, Rem, Shl, Shr, Sub};
 
@@ -228,15 +229,6 @@ impl TypedValue {
         Some(Boolean(self.assume_bool()? && rhs.assume_bool()?))
     }
 
-    pub fn between(&self, lhs: &TypedValue, rhs: &TypedValue) -> Option<TypedValue> {
-        let (c, a, b) = (self.assume_f64()?, lhs.assume_f64()?, rhs.assume_f64()?);
-        Some(Boolean((c >= a) && (c <= b)))
-    }
-
-    pub fn eq(&self, rhs: &TypedValue) -> Option<TypedValue> {
-        Some(Boolean(*self == *rhs))
-    }
-
     pub fn factorial(&self) -> Option<TypedValue> {
         fn fact_f64(n: f64) -> TypedValue {
             fn fact_f(n: f64) -> f64 { if n <= 1. { 1. } else { n * fact_f(n - 1.) } }
@@ -244,22 +236,6 @@ impl TypedValue {
         }
         let num = self.assume_f64()?;
         Some(fact_f64(num))
-    }
-
-    pub fn gt(&self, rhs: &Self) -> Option<Self> {
-        Some(Boolean(self.assume_f64()? > rhs.assume_f64()?))
-    }
-
-    pub fn gte(&self, rhs: &Self) -> Option<Self> {
-        Some(Boolean(self.assume_f64()? >= rhs.assume_f64()?))
-    }
-
-    pub fn lt(&self, rhs: &Self) -> Option<Self> {
-        Some(Boolean(self.assume_f64()? < rhs.assume_f64()?))
-    }
-
-    pub fn lte(&self, rhs: &Self) -> Option<Self> {
-        Some(Boolean(self.assume_f64()? <= rhs.assume_f64()?))
     }
 
     pub fn ne(&self, rhs: &Self) -> Option<Self> {
@@ -463,6 +439,32 @@ impl Rem for TypedValue {
     }
 }
 
+impl PartialOrd for TypedValue {
+    fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
+        match (&self, &rhs) {
+            (Array(a), Array(b)) => a.partial_cmp(b),
+            (BLOB(a), BLOB(b)) => a.partial_cmp(b),
+            (Boolean(a), Boolean(b)) => a.partial_cmp(b),
+            (CLOB(a), CLOB(b)) => a.partial_cmp(b),
+            (DateValue(a), DateValue(b)) => a.partial_cmp(b),
+            (Float32Value(a), Float32Value(b)) => a.partial_cmp(b),
+            (Float64Value(a), Float64Value(b)) => a.partial_cmp(b),
+            (Int8Value(a), Int8Value(b)) => a.partial_cmp(b),
+            (Int16Value(a), Int16Value(b)) => a.partial_cmp(b),
+            (Int32Value(a), Int32Value(b)) => a.partial_cmp(b),
+            (Int64Value(a), Int64Value(b)) => a.partial_cmp(b),
+            (RecordNumber(a), RecordNumber(b)) => a.partial_cmp(b),
+            (StringValue(a), StringValue(b)) => a.partial_cmp(b),
+            (UUIDValue(a), UUIDValue(b)) => a.partial_cmp(b),
+            (Null, Null) => Some(Ordering::Equal),
+            (Null, Undefined) => Some(Ordering::Greater),
+            (Undefined, Null) => Some(Ordering::Less),
+            (Undefined, Undefined) => Some(Ordering::Equal),
+            _ => None
+        }
+    }
+}
+
 impl Shl for TypedValue {
     type Output = TypedValue;
 
@@ -515,6 +517,17 @@ mod tests {
         assert_eq!(Int64Value(0x5555_FACE_CAFE_BABE), Int64Value(0x5555_FACE_CAFE_BABE));
         assert_eq!(Float32Value(45.0), Float32Value(45.0));
         assert_eq!(Float64Value(45.0), Float64Value(45.0));
+    }
+
+    #[test]
+    fn test_gt() {
+        assert!(Array(vec![Int8Value(0xCE), Int8Value(0xCE)]) > Array(vec![Int8Value(0x23), Int8Value(0xBE)]));
+        assert!(Int8Value(0xCE) > Int8Value(0xAA));
+        assert!(Int16Value(0x7ACE) > Int16Value(0x1111));
+        assert!(Int32Value(0x1111_BEEF) > Int32Value(0x0ABC_BEEF));
+        assert!(Int64Value(0x5555_FACE_CAFE_BABE) > Int64Value(0x0000_FACE_CAFE_BABE));
+        assert!(Float32Value(287.11) > Float32Value(45.3867));
+        assert!(Float64Value(359.7854) > Float64Value(99.992));
     }
 
     #[test]

@@ -44,45 +44,45 @@ impl MachineState {
         use crate::expression::Expression::*;
         match expression {
             And(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.and(&bb)),
+                self.expand2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
             Between(a, b, c) =>
-                self.expand3(a, b, c, |aa, bb, cc| aa.between(&bb, &cc)),
+                self.expand3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa <= cc))),
             CodeBlock(ops) => self.evaluate_all(ops),
             Divide(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa / bb)),
+                self.expand2(a, b, |aa, bb| aa / bb),
             Equal(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.eq(&bb)),
-            Factorial(a) => self.expand1(a, |aa| aa.factorial()),
+                self.expand2(a, b, |aa, bb| Boolean(aa == bb)),
+            Factorial(a) => self.expand1(a, |aa| aa.factorial().unwrap_or(Undefined)),
             GreaterThan(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.gt(&bb)),
+                self.expand2(a, b, |aa, bb| Boolean(aa > bb)),
             GreaterOrEqual(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.gte(&bb)),
+                self.expand2(a, b, |aa, bb| Boolean(aa >= bb)),
             LessThan(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.lt(&bb)),
+                self.expand2(a, b, |aa, bb| Boolean(aa < bb)),
             LessOrEqual(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.lte(&bb)),
+                self.expand2(a, b, |aa, bb| Boolean(aa <= bb)),
             Literal(value) => Ok((self.clone(), value.clone())),
             Minus(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa - bb)),
+                self.expand2(a, b, |aa, bb| aa - bb),
             Modulo(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa % bb)),
+                self.expand2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa * bb)),
+                self.expand2(a, b, |aa, bb| aa * bb),
             NotEqual(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.ne(&bb)),
+                self.expand2(a, b, |aa, bb| Boolean(aa != bb)),
             Or(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.or(&bb)),
-            Not(a) => self.expand1(a, |aa| Some(!aa)),
+                self.expand2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
+            Not(a) => self.expand1(a, |aa| !aa),
             Plus(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa + bb)),
+                self.expand2(a, b, |aa, bb| aa + bb),
             Pow(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.pow(&bb)),
+                self.expand2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
             Range(a, b) =>
-                self.expand2(a, b, |aa, bb| aa.range(&bb)),
+                self.expand2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
             ShiftLeft(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa << bb)),
+                self.expand2(a, b, |aa, bb| aa << bb),
             ShiftRight(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa >> bb)),
+                self.expand2(a, b, |aa, bb| aa >> bb),
             SetVariable(name, e) => {
                 let (vm, result) = self.evaluate(e)?;
                 Ok((vm.set(name, result), Undefined))
@@ -90,7 +90,7 @@ impl MachineState {
             Tuple(values) => self.evaluate_array(values),
             Variable(name) => Ok((self.clone(), self.get(&name).unwrap_or(Undefined))),
             Xor(a, b) =>
-                self.expand2(a, b, |aa, bb| Some(aa ^ bb)),
+                self.expand2(a, b, |aa, bb| aa ^ bb),
             other => fail(format!("Unhandled expression: {:?}", other))
         }
     }
@@ -130,19 +130,19 @@ impl MachineState {
     /// evaluates the boxed expression and applies the supplied function
     fn expand1(&self,
                a: &Box<Expression>,
-               f: fn(TypedValue) -> Option<TypedValue>) -> io::Result<(MachineState, TypedValue)> {
+               f: fn(TypedValue) -> TypedValue) -> io::Result<(MachineState, TypedValue)> {
         let (vm, aa) = self.evaluate(a)?;
-        Ok((vm, f(aa).unwrap_or(Undefined)))
+        Ok((vm, f(aa)))
     }
 
     /// evaluates the two boxed expressions and applies the supplied function
     fn expand2(&self,
                a: &Box<Expression>,
                b: &Box<Expression>,
-               f: fn(TypedValue, TypedValue) -> Option<TypedValue>) -> io::Result<(MachineState, TypedValue)> {
+               f: fn(TypedValue, TypedValue) -> TypedValue) -> io::Result<(MachineState, TypedValue)> {
         let (vm, aa) = self.evaluate(a)?;
         let (vm, bb) = vm.evaluate(b)?;
-        Ok((vm, f(aa, bb).unwrap_or(Undefined)))
+        Ok((vm, f(aa, bb)))
     }
 
     /// evaluates the three boxed expressions and applies the supplied function
@@ -150,11 +150,11 @@ impl MachineState {
                a: &Box<Expression>,
                b: &Box<Expression>,
                c: &Box<Expression>,
-               f: fn(TypedValue, TypedValue, TypedValue) -> Option<TypedValue>) -> io::Result<(MachineState, TypedValue)> {
+               f: fn(TypedValue, TypedValue, TypedValue) -> TypedValue) -> io::Result<(MachineState, TypedValue)> {
         let (vm, aa) = self.evaluate(a)?;
         let (vm, bb) = vm.evaluate(b)?;
         let (vm, cc) = vm.evaluate(c)?;
-        Ok((vm, f(aa, bb, cc).unwrap_or(Undefined)))
+        Ok((vm, f(aa, bb, cc)))
     }
 
     /// returns a variable by name
