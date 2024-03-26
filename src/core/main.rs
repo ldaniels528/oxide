@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::compiler::Compiler;
-use crate::dataframe_actor::{DataframeIO, IOMessage};
 use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::error_mgmt::fail;

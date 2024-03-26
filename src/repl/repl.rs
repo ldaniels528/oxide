@@ -7,8 +7,8 @@ use serde::{Deserialize, Serialize};
 #[macro_export]
 macro_rules! cnv_error {
     ($e:expr) => {
-        io::Error::new(io::ErrorKind::Other, $e)
-    };
+        std::io::Error::new(std::io::ErrorKind::Other, $e)
+    }
 }
 
 /// REPL application state
