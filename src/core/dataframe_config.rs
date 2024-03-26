@@ -6,6 +6,7 @@ use std::fs;
 
 use serde::{Deserialize, Serialize};
 
+use crate::cnv_error;
 use crate::namespaces::Namespace;
 use crate::server::ColumnJs;
 
@@ -28,11 +29,7 @@ impl DataFrameConfig {
     pub fn load(ns: &Namespace) -> std::io::Result<DataFrameConfig> {
         let cfg_path = ns.get_config_file_path();
         let config_string = fs::read_to_string(cfg_path)?;
-        let parsed: serde_json::Result<DataFrameConfig> = serde_json::from_str(&config_string);
-        match parsed {
-            Ok(cfg) => Ok(cfg),
-            Err(err) => Err(err.into())
-        }
+        serde_json::from_str::<DataFrameConfig>(&config_string).map_err(|e| cnv_error!(e))
     }
 
     /// saves a dataframe configuration to disk.

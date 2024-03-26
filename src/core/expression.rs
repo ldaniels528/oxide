@@ -8,6 +8,11 @@ use crate::expression::Expression::*;
 use crate::namespaces::Namespace;
 use crate::server::ColumnJs;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::{Boolean, Null};
+
+pub const FALSE: Expression = Literal(Boolean(false));
+pub const TRUE: Expression = Literal(Boolean(true));
+pub const NULL: Expression = Literal(Null);
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Expression {
@@ -69,7 +74,7 @@ pub enum Expression {
     Delete {
         table: Box<Expression>,
         condition: Option<Box<Expression>>,
-        limit: Option<TypedValue>,
+        limit: Option<Box<Expression>>,
     },
     Drop {
         table: Box<Expression>,
@@ -85,27 +90,27 @@ pub enum Expression {
         fields: Vec<Expression>,
         values: Vec<Expression>,
         condition: Option<Box<Expression>>,
-        limit: Option<TypedValue>,
+        limit: Option<Box<Expression>>,
     },
     Select {
         fields: Vec<Expression>,
         from: Option<Box<Expression>>,
         condition: Option<Box<Expression>>,
         group_by: Option<Vec<Expression>>,
-        having: Option<Vec<Expression>>,
-        order_by: Option<Vec<(Expression, bool)>>,
-        limit: Option<TypedValue>,
+        having: Option<Box<Expression>>,
+        order_by: Option<Vec<Expression>>,
+        limit: Option<Box<Expression>>,
     },
     Truncate {
         table: Box<Expression>,
-        limit: Option<TypedValue>,
+        limit: Option<Box<Expression>>,
     },
     Update {
         table: Box<Expression>,
         fields: Vec<Expression>,
         values: Vec<Expression>,
         condition: Option<Box<Expression>>,
-        limit: Option<TypedValue>,
+        limit: Option<Box<Expression>>,
     },
 }
 
@@ -127,6 +132,7 @@ impl Expression {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::expression::{FALSE, TRUE};
     use crate::expression::Expression::*;
     use crate::machine::MachineState;
     use crate::typed_values::TypedValue::{Boolean, Int32Value};
@@ -135,8 +141,8 @@ mod tests {
     fn test_and() {
         let vm = MachineState::new();
         let (_, result) = vm.evaluate(&And(
-            Box::from(Literal(Boolean(true))),
-            Box::from(Literal(Boolean(false))))).unwrap();
+            Box::from(TRUE),
+            Box::from(FALSE))).unwrap();
         assert_eq!(result, Boolean(false));
     }
 
@@ -208,18 +214,18 @@ mod tests {
     fn test_or() {
         let vm = MachineState::new();
         let (_, result) = vm.evaluate(&Or(
-            Box::from(Literal(Boolean(true))),
-            Box::from(Literal(Boolean(false))))).unwrap();
+            Box::from(TRUE),
+            Box::from(FALSE))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_is_conditional() {
-        assert!(And(Box::from(Literal(Boolean(true))), Box::from(Literal(Boolean(false))))
+        assert!(And(Box::from(TRUE), Box::from(FALSE))
             .is_conditional());
         assert!(Between(Box::from(Literal(Int32Value(5))), Box::from(Literal(Int32Value(1))), Box::from(Literal(Int32Value(10))))
             .is_conditional());
-        assert!(Or(Box::from(Literal(Boolean(true))), Box::from(Literal(Boolean(false))))
+        assert!(Or(Box::from(TRUE), Box::from(FALSE))
             .is_conditional());
     }
 

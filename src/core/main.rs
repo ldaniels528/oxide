@@ -3,8 +3,9 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::io;
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 
+use actix::{Actor, System};
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use actix_web::web::Data;
 use actix_web_actors::ws;
@@ -13,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::compiler::Compiler;
+use crate::dataframe_actor::{DataframeIO, IOMessage};
 use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::error_mgmt::fail;
@@ -25,8 +27,9 @@ use crate::websockets::OxideWebSocket;
 
 mod codec;
 mod compiler;
-mod dataframes;
+mod dataframe_actor;
 mod dataframe_config;
+mod dataframes;
 mod data_types;
 mod error_mgmt;
 mod expression;
@@ -70,11 +73,11 @@ async fn main() -> io::Result<()> {
         .init();
 
     println!("Welcome to Oxide Server.\n");
+    // get the port and new application state
     let port = get_port_number(std::env::args().collect())?;
-
-    println!("Starting server on port {}.", port);
     let app_state = web::Data::new(AppState::new());
 
+    info!("Starting server on port {}.", port);
     let server = actix_web::HttpServer::new(move || {
         actix_web::App::new()
             .app_data(app_state.clone())

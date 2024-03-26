@@ -22,6 +22,10 @@ impl Namespace {
         }
     }
 
+    pub fn id(&self) -> String {
+        format!("{}.{}.{}", self.database, self.schema, self.name)
+    }
+
     pub fn get_blob_file_path(&self) -> String {
         self.get_file_path("blob")
     }

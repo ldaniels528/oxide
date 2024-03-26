@@ -107,6 +107,8 @@ impl TokenSlice {
         }
     }
 
+    pub fn isnt(&self, text: &str) -> bool { !self.is(text) }
+
     pub fn is_empty(&self) -> bool {
         self.tokens.is_empty()
     }

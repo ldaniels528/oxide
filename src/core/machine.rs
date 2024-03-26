@@ -5,12 +5,15 @@
 use std::collections::HashMap;
 use std::ops::{Add, BitXor, Div};
 
+use actix_web::web::to;
+use futures_util::future::Select;
 use log::info;
 use serde::{Deserialize, Serialize};
 use tokio::io;
 
 use crate::error_mgmt::fail;
 use crate::expression::Expression;
+use crate::rows::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
@@ -78,14 +81,16 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
             Range(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
-            ShiftLeft(a, b) =>
-                self.expand2(a, b, |aa, bb| aa << bb),
-            ShiftRight(a, b) =>
-                self.expand2(a, b, |aa, bb| aa >> bb),
+            Select { fields, from, condition, group_by, having, order_by, limit } =>
+                self.sql_select(fields, from, condition, group_by, having, order_by, limit),
             SetVariable(name, e) => {
                 let (vm, result) = self.evaluate(e)?;
                 Ok((vm.set(name, result), Undefined))
             }
+            ShiftLeft(a, b) =>
+                self.expand2(a, b, |aa, bb| aa << bb),
+            ShiftRight(a, b) =>
+                self.expand2(a, b, |aa, bb| aa >> bb),
             Tuple(values) => self.evaluate_array(values),
             Variable(name) => Ok((self.clone(), self.get(&name).unwrap_or(Undefined))),
             Xor(a, b) =>
@@ -204,6 +209,39 @@ impl MachineState {
             result = result1;
         }
         Ok((vm, result))
+    }
+
+    fn sql_select(&self,
+                  fields: &Vec<Expression>,
+                  from: &Option<Box<Expression>>,
+                  condition: &Option<Box<Expression>>,
+                  group_by: &Option<Vec<Expression>>,
+                  having: &Option<Box<Expression>>,
+                  order_by: &Option<Vec<Expression>>,
+                  limit: &Option<Box<Expression>>) -> io::Result<(MachineState, TypedValue)> {
+        fn expand(ms: MachineState, expr: &Option<Box<Expression>>) -> io::Result<(MachineState, TypedValue)> {
+            match expr {
+                Some(e) => ms.evaluate(e),
+                None => Ok((ms, Undefined))
+            }
+        }
+
+        fn expand_vec(ms: MachineState, expr: &Option<Vec<Expression>>) -> io::Result<(MachineState, TypedValue)> {
+            match expr {
+                Some(array) => ms.evaluate_array(array),
+                None => Ok((ms, Undefined))
+            }
+        }
+
+        // resolve all attributes
+        let (ms, _fields) = self.evaluate_array(fields)?;
+        let (ms, _from) = expand(ms, from)?;
+        let (ms, _condition) = expand(ms, condition)?;
+        let (ms, _group_by) = expand_vec(ms, group_by)?;
+        let (ms, _having) = expand(ms, having)?;
+        let (ms, _order_by) = expand_vec(ms, order_by)?;
+        let (ms, _limit) = expand(ms, limit)?;
+        Ok((ms, TableRows(vec![])))
     }
 
     pub fn stack_len(&self) -> usize {

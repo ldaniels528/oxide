@@ -2,15 +2,13 @@
 // error management module
 ////////////////////////////////////////////////////////////////////
 
-use std::io;
-
 #[macro_export]
 macro_rules! cnv_error {
     ($e:expr) => {
-        io::Error::new(io::ErrorKind::Other, $e)
+        std::io::Error::new(std::io::ErrorKind::Other, $e)
     };
 }
 
-pub fn fail<A>(message: impl Into<String>) -> io::Result<A> {
-    Err(io::Error::new(io::ErrorKind::Other, message.into()))
+pub fn fail<A>(message: impl Into<String>) -> std::io::Result<A> {
+    Err(std::io::Error::new(std::io::ErrorKind::Other, message.into()))
 }

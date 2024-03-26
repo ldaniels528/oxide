@@ -48,7 +48,7 @@ impl Token {
     /// creates a new operator token
     pub fn operator(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
         let precedence = Self::determine_precedence(text.as_str());
-        let is_postfix = text ==  "¡" || text == "²" || text == "³";
+        let is_postfix = text == "¡" || text == "²" || text == "³";
         let is_barrier = text == "," || text == ";" || text == "]" || text == ")" || text == "}";
         Operator { text, start, end, line_number, column_number, precedence, is_postfix, is_barrier }
     }

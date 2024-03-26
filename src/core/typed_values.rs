@@ -17,6 +17,7 @@ use crate::cnv_error;
 use crate::codec;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
+use crate::rows::Row;
 use crate::typed_values::TypedValue::*;
 
 const ISO_DATE_FORMAT: &str =
@@ -42,6 +43,7 @@ pub enum TypedValue {
     Null,
     RecordNumber(usize),
     StringValue(String),
+    TableRows(Vec<Row>),
     Undefined,
     UUIDValue([u8; 16]),
 }
@@ -66,8 +68,8 @@ impl TypedValue {
             Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
             RecordNumberType => RecordNumber(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
-            StructType(_) => todo!(),
-            TableType(_) => todo!(),
+            StructType(_columns) => todo!(),
+            TableType(_columns) => todo!(),
             UUIDType => codec::decode_u8x16(buffer, offset, |b| UUIDValue(b))
         }
     }
@@ -97,6 +99,7 @@ impl TypedValue {
             Null | Undefined => [0u8; 0].to_vec(),
             RecordNumber(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
+            TableRows(_rows) => todo!(),
             UUIDValue(guid) => guid.to_vec(),
         }
     }
@@ -160,6 +163,7 @@ impl TypedValue {
             Null => serde_json::Value::Null,
             RecordNumber(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
+            TableRows(rows) => serde_json::json!(rows),
             Undefined => serde_json::Value::Null,
             UUIDValue(guid) => serde_json::json!(Uuid::from_bytes(*guid).to_string()),
         }
@@ -184,6 +188,7 @@ impl TypedValue {
             Null => "null".into(),
             RecordNumber(number) => number.to_string(),
             StringValue(string) => string.into(),
+            TableRows(rows) => serde_json::json!(rows).to_string(),
             Undefined => "undefined".into(),
             UUIDValue(guid) => Uuid::from_bytes(*guid).to_string(),
         }
