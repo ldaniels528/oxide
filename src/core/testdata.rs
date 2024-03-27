@@ -15,6 +15,7 @@ use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::fields::Field;
 use crate::namespaces::Namespace;
+use crate::row;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
@@ -44,10 +45,9 @@ pub fn make_quote(id: usize,
                   symbol: &str,
                   exchange: &str,
                   last_sale: f64) -> Row {
-    Row::new(id, phys_columns.clone(), vec![
-        Field::new(StringValue(symbol.into())),
-        Field::new(StringValue(exchange.into())),
-        Field::new(Float64Value(last_sale))])
+    row!(id, phys_columns, vec![
+        StringValue(symbol.into()), StringValue(exchange.into()), Float64Value(last_sale)
+    ])
 }
 
 pub fn make_rows_from_bytes(database: &str,

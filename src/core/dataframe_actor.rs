@@ -15,6 +15,7 @@ use crate::namespaces::Namespace;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::server::ColumnJs;
+use crate::typed_values::TypedValue::{Float64Value, StringValue};
 
 // define the Dataframe I/O actor
 pub struct DataframeIO {
@@ -42,7 +43,7 @@ impl DataframeIO {
     }
 
     fn get_namespaces(&mut self) -> std::io::Result<Vec<String>> { // .sort_by(|a, b| b.cmp(a))
-        Ok(self.resources.iter().map(|(s, _)|s.to_string()).collect::<Vec<String>>())
+        Ok(self.resources.iter().map(|(s, _)| s.to_string()).collect::<Vec<String>>())
     }
 
     fn get_or_create_dataframe(&mut self, ns: Namespace, columns: Vec<ColumnJs>) -> std::io::Result<&mut DataFrame> {
@@ -64,17 +65,11 @@ impl DataframeIO {
         self.get_or_load_dataframe(ns)?.overwrite(row)
     }
 
-    fn read_and_push(df: &mut DataFrame, rows: &mut Vec<Row>, id: usize) -> std::io::Result<()> {
-        let (row, rmd) = df.read_row(id)?;
-        if rmd.is_allocated { rows.push(row) }
-        Ok(())
-    }
-
     fn read_fully(&mut self, ns: Namespace) -> std::io::Result<Vec<Row>> {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = vec![];
         for id in 0..df.size()? {
-            Self::read_and_push(df, &mut rows, id)?
+            df.read_and_push(id, &mut rows)?
         }
         Ok(rows)
     }
@@ -83,7 +78,7 @@ impl DataframeIO {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = vec![];
         for id in range {
-            Self::read_and_push(df, &mut rows, id)?
+            df.read_and_push(id, &mut rows)?
         }
         Ok(rows)
     }
@@ -240,6 +235,7 @@ mod tests {
     use actix::prelude::*;
 
     use crate::fields::Field;
+    use crate::row;
     use crate::testdata::{make_columns, make_table_columns};
     use crate::typed_values::TypedValue::{Float64Value, StringValue, Undefined};
 
@@ -256,64 +252,48 @@ mod tests {
         assert_eq!(resp, "1");
 
         // append a new row to the table
-        let resp = append_row!(df_io, ns, Row::new(111, table_columns.clone(), vec![
-            Field::new(StringValue("JUNO".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(22.88)),
+        let resp = append_row!(df_io, ns, row!(111, table_columns, vec![
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(22.88),
         ])).await.unwrap();
         assert_eq!(resp, "1");
 
         // read the previous row
         let row = read_row!(df_io, ns, 0).unwrap();
-        assert_eq!(row, Row::new(0, table_columns.clone(), vec![
-            Field::new(StringValue("JUNO".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(22.88)),
+        assert_eq!(row, row!(0, table_columns, vec![
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(22.88),
         ]));
 
         // overwrite a new row over offset 1
-        let resp = overwrite_row!(df_io, ns, Row::new(1, table_columns.clone(), vec![
-            Field::new(StringValue("YARD".into())),
-            Field::new(StringValue("NYSE".into())),
-            Field::new(Float64Value(88.22)),
+        let resp = overwrite_row!(df_io, ns, row!(1, table_columns, vec![
+            StringValue("YARD".into()), StringValue("NYSE".into()), Float64Value(88.22),
         ])).await.unwrap();
         assert_eq!(resp, "1");
 
         // read rows
         let rows = read_range!(df_io, ns, 0..2).unwrap();
         assert_eq!(rows, vec![
-            Row::new(0, table_columns.clone(), vec![
-                Field::new(StringValue("JUNO".into())),
-                Field::new(StringValue("AMEX".into())),
-                Field::new(Float64Value(22.88)),
+            row!(0, table_columns, vec![
+                StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(22.88),
             ]),
-            Row::new(1, table_columns.clone(), vec![
-                Field::new(StringValue("YARD".into())),
-                Field::new(StringValue("NYSE".into())),
-                Field::new(Float64Value(88.22)),
+            row!(1, table_columns, vec![
+                StringValue("YARD".into()), StringValue("NYSE".into()), Float64Value(88.22),
             ]),
         ]);
 
         // update the row at offset 1
-        let resp = update_row!(df_io, ns.clone(), Row::new(1, table_columns.clone(), vec![
-            Field::new(Undefined),
-            Field::new(Undefined),
-            Field::new(Float64Value(88.99)),
+        let resp = update_row!(df_io, ns, row!(1, table_columns, vec![
+            Undefined, Undefined, Float64Value(88.99),
         ])).await.unwrap();
         assert_eq!(resp, "1");
 
         // re-read rows
         let rows = read_fully!(df_io, ns).unwrap();
         assert_eq!(rows, vec![
-            Row::new(0, table_columns.clone(), vec![
-                Field::new(StringValue("JUNO".into())),
-                Field::new(StringValue("AMEX".into())),
-                Field::new(Float64Value(22.88)),
+            row!(0, table_columns, vec![
+                StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(22.88),
             ]),
-            Row::new(1, table_columns.clone(), vec![
-                Field::new(StringValue("YARD".into())),
-                Field::new(StringValue("NYSE".into())),
-                Field::new(Float64Value(88.99)),
+            row!(1, table_columns, vec![
+                StringValue("YARD".into()), StringValue("NYSE".into()), Float64Value(88.99),
             ]),
         ]);
 
@@ -324,10 +304,8 @@ mod tests {
         // re-read rows
         let rows = read_fully!(df_io, ns).unwrap();
         assert_eq!(rows, vec![
-            Row::new(1, table_columns.clone(), vec![
-                Field::new(StringValue("YARD".into())),
-                Field::new(StringValue("NYSE".into())),
-                Field::new(Float64Value(88.99)),
+            row!(1, table_columns, vec![
+                StringValue("YARD".into()), StringValue("NYSE".into()), Float64Value(88.99),
             ]),
         ]);
     }
@@ -345,18 +323,14 @@ mod tests {
         assert_eq!(resp, "1");
 
         // append a new row to the table
-        let resp = append_row!(df_io, ns0, Row::new(111, make_table_columns(), vec![
-            Field::new(StringValue("GE".into())),
-            Field::new(StringValue("NYSE".into())),
-            Field::new(Float64Value(48.88)),
+        let resp = append_row!(df_io, ns0, row!(111, make_table_columns(), vec![
+            StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
         ])).await.unwrap();
         assert_eq!(resp, "1");
 
         // append a new row to the table
-        let resp = append_row!(df_io, ns1, Row::new(112, make_table_columns(), vec![
-            Field::new(StringValue("IBM".into())),
-            Field::new(StringValue("NYSE".into())),
-            Field::new(Float64Value(122.88)),
+        let resp = append_row!(df_io, ns1, row!(112, make_table_columns(), vec![
+            StringValue("IBM".into()), StringValue("NYSE".into()), Float64Value(122.88),
         ])).await.unwrap();
         assert_eq!(resp, "1");
 
@@ -366,5 +340,4 @@ mod tests {
         assert!(resp.contains(&"dataframe.namespaces1.stocks".to_string()));
         assert!(resp.contains(&"dataframe.namespaces2.stocks".to_string()));
     }
-
 }

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Index;
 
+use actix::ActorStreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::codec;
@@ -13,7 +14,7 @@ use crate::fields::Field;
 use crate::row_metadata::RowMetadata;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::RecordNumber;
+use crate::typed_values::TypedValue::{Null, RecordNumber};
 
 /// Represents a row of a table structure.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,16 +49,14 @@ impl Row {
         let mut rows = Vec::new();
         for row_bytes in row_data {
             let (row, metadata) = Self::decode(&row_bytes, &columns);
-            if metadata.is_allocated {
-                rows.push(row);
-            }
+            if metadata.is_allocated { rows.push(row); }
         }
         rows
     }
 
     /// Returns an empty row.
     pub fn empty(columns: &Vec<TableColumn>) -> Self {
-        Self::new(0, columns.clone(), vec![])
+        Self::new(0, columns.clone(), columns.iter().map(|_| Field::new(Null)).collect())
     }
 
     /// Returns the binary-encoded equivalent of the row.
@@ -128,6 +127,13 @@ impl Index<usize> for Row {
 
     fn index(&self, id: usize) -> &Self::Output {
         &self.fields[id]
+    }
+}
+
+#[macro_export]
+macro_rules! row {
+    ($id:expr, $columns:expr, $values:expr) => {
+        Row::new($id, $columns.clone(), $values.iter().map(|v| Field::new(v.clone())).collect())
     }
 }
 

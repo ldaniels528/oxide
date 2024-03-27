@@ -76,9 +76,7 @@ impl DataFrame {
         let mut result: A = init;
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
-            if metadata.is_allocated {
-                result = f(result, row);
-            }
+            if metadata.is_allocated { result = f(result, row) }
         }
         Ok(result)
     }
@@ -88,9 +86,7 @@ impl DataFrame {
         let mut result: A = init;
         for id in (0..self.size()?).rev() {
             let (row, metadata) = self.read_row(id)?;
-            if metadata.is_allocated {
-                result = f(result, row);
-            }
+            if metadata.is_allocated { result = f(result, row) }
         }
         Ok(result)
     }
@@ -100,7 +96,7 @@ impl DataFrame {
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated && !f(&row) {
-                return Ok(false);
+                return Ok(false)
             }
         }
         Ok(true)
@@ -110,7 +106,7 @@ impl DataFrame {
     pub fn foreach(&self, f: fn(&Row) -> ()) -> io::Result<()> {
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
-            if metadata.is_allocated { f(&row); }
+            if metadata.is_allocated { f(&row) }
         }
         Ok(())
     }
@@ -125,9 +121,7 @@ impl DataFrame {
         let mut rows = Vec::new();
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
-            if metadata.is_allocated {
-                rows.push(f(&row));
-            }
+            if metadata.is_allocated { rows.push(f(&row)) }
         }
         Ok(rows)
     }
@@ -159,6 +153,12 @@ impl DataFrame {
         Ok(1)
     }
 
+    pub fn read_and_push(&self, id: usize, rows: &mut Vec<Row>) -> std::io::Result<()> {
+        let (row, rmd) = self.read_row(id)?;
+        if rmd.is_allocated { rows.push(row) }
+        Ok(())
+    }
+
     /// reads the specified field value from the specified row ID
     pub fn read_field(&self, id: usize, column_id: usize) -> io::Result<TypedValue> {
         let column = &self.columns[column_id];
@@ -181,10 +181,7 @@ impl DataFrame {
     pub fn read_rows(&self, index: std::ops::Range<usize>) -> io::Result<Vec<Row>> {
         let mut rows: Vec<Row> = Vec::with_capacity(index.len());
         for id in index {
-            let (row, metadata) = self.read_row(id)?;
-            if metadata.is_allocated {
-                rows.push(row);
-            }
+            self.read_and_push(id, &mut rows)?;
         }
         Ok(rows)
     }
@@ -194,10 +191,7 @@ impl DataFrame {
         let size = self.size()?;
         let mut rows: Vec<Row> = Vec::with_capacity(size);
         for id in (0..size).rev() {
-            let (row, metadata) = self.read_row(id)?;
-            if metadata.is_allocated {
-                rows.push(row);
-            }
+            self.read_and_push(id, &mut rows)?;
         }
         Ok(rows)
     }
@@ -253,9 +247,7 @@ impl AddAssign for DataFrame {
         fn do_add(lhs: &mut DataFrame, rhs: DataFrame) -> io::Result<()> {
             for id in 0..rhs.size()? {
                 let (row, metadata) = rhs.read_row(id)?;
-                if metadata.is_allocated {
-                    lhs.append(&row)?;
-                }
+                if metadata.is_allocated { lhs.append(&row)?; }
             }
             Ok(())
         }
@@ -274,6 +266,7 @@ mod tests {
     use crate::dataframes::DataFrame;
     use crate::fields::Field;
     use crate::namespaces::Namespace;
+    use crate::row;
     use crate::rows::Row;
     use crate::table_columns::TableColumn;
     use crate::testdata::*;
@@ -410,15 +403,11 @@ mod tests {
         // verify the rows
         let rows = df.read_rows(0..df.size().unwrap()).unwrap();
         assert_eq!(rows, vec![
-            Row::new(0, phys_columns.clone(), vec![
-                Field::new(StringValue("UNO".into())),
-                Field::new(StringValue("AMEX".into())),
-                Field::new(Float64Value(11.77)),
+            row!(0, phys_columns, vec![
+                StringValue("UNO".into()), StringValue("AMEX".into()), Float64Value(11.77),
             ]),
-            Row::new(2, phys_columns.clone(), vec![
-                Field::new(StringValue("TRES".into())),
-                Field::new(StringValue("AMEX".into())),
-                Field::new(Float64Value(55.44)),
+            row!(2, phys_columns, vec![
+                StringValue("TRES".into()), StringValue("AMEX".into()), Float64Value(55.44),
             ]),
         ]);
     }
@@ -612,20 +601,14 @@ mod tests {
         assert_eq!(df.delete(1).unwrap(), 1);
 
         // define the verification rows
-        let row_0 = Row::new(0, phys_columns.clone(), vec![
-            Field::new(StringValue("UNO".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(11.77)),
+        let row_0 = row!(0, phys_columns, vec![
+            StringValue("UNO".into()), StringValue("AMEX".into()), Float64Value(11.77),
         ]);
-        let row_1 = Row::new(1, phys_columns.clone(), vec![
-            Field::new(StringValue("DOS".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(33.22)),
+        let row_1 = row!(1, phys_columns, vec![
+            StringValue("DOS".into()), StringValue("AMEX".into()), Float64Value(33.22),
         ]);
-        let row_2 = Row::new(2, phys_columns.clone(), vec![
-            Field::new(StringValue("TRES".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(55.44)),
+        let row_2 = row!(2, phys_columns, vec![
+            StringValue("TRES".into()), StringValue("AMEX".into()), Float64Value(55.44),
         ]);
 
         // verify the row was deleted
@@ -651,20 +634,16 @@ mod tests {
         df.append(&make_quote(2, &phys_columns, "INFO", "NASD", 22.00)).unwrap();
 
         // update the middle row
-        let row_to_update = Row::new(1, phys_columns.clone(), vec![
-            Field::new(Undefined),
-            Field::new(Undefined),
-            Field::new(Float64Value(33.33)),
+        let row_to_update = row!(1, phys_columns, vec![
+            Undefined, Undefined, Float64Value(33.33),
         ]);
         assert_eq!(df.update(row_to_update.clone()).unwrap(), 1);
 
         // verify the row was updated
         let (updated_row, updated_rmd) = df.read_row(row_to_update.get_id()).unwrap();
         assert!(updated_rmd.is_allocated);
-        assert_eq!(updated_row, Row::new(1, phys_columns.clone(), vec![
-            Field::new(StringValue("DORA".into())),
-            Field::new(StringValue("AMEX".into())),
-            Field::new(Float64Value(33.33)),
+        assert_eq!(updated_row, row!(1, phys_columns, vec![
+            StringValue("DORA".into()), StringValue("AMEX".into()), Float64Value(33.33),
         ]))
     }
 }

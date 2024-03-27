@@ -112,6 +112,7 @@ pub fn to_row_json(row: Row) -> RowJs {
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::{Float64Type, StringType};
+    use crate::row;
     use crate::server::SystemInfoJs;
     use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
@@ -159,10 +160,8 @@ mod tests {
             TableColumn::new("exchange", StringType(4), Null, 22),
             TableColumn::new("lastSale", Float64Type, Null, 35),
         ];
-        let row = Row::new(123, columns.clone(), vec![
-            Field::new(StringValue("FOX".into())),
-            Field::new(StringValue("NYSE".into())),
-            Field::new(Float64Value(37.65)),
+        let row = row!(123, columns, vec![
+            StringValue("FOX".into()), StringValue("NYSE".into()), Float64Value(37.65),
         ]);
         // define a row-js
         let fields_js = vec![
