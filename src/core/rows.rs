@@ -6,7 +6,6 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::ops::Index;
 
-use actix::ActorStreamExt;
 use serde::{Deserialize, Serialize};
 
 use crate::codec;
@@ -189,6 +188,16 @@ mod tests {
         assert_eq!(row[0].value, StringValue("YRU".into()));
         assert_eq!(row[1].value, StringValue("OTC".into()));
         assert_eq!(row[2].value, Float64Value(88.44));
+    }
+
+    #[test]
+    fn test_find_field_by_name() {
+        let row = row!(111, make_table_columns(), vec![
+            StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
+        ]);
+        assert_eq!(row.find_field_by_name("symbol"), Some(StringValue("GE".into())));
+        assert_eq!(row.find_field_by_name("exchange"), Some(StringValue("NYSE".into())));
+        assert_eq!(row.find_field_by_name("lastSale"), Some(Float64Value(48.88)));
     }
 
     #[test]
