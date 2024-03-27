@@ -203,10 +203,10 @@ impl DataFrame {
     }
 
     /// resizes the table
-    pub fn resize(&mut self, new_size: usize) -> io::Result<()> {
+    pub fn resize(&mut self, new_size: usize) -> io::Result<usize> {
         let new_length = new_size as u64 * self.record_size as u64;
         self.file.set_len(new_length)?;
-        Ok(())
+        Ok(1)
     }
 
     /// returns the allocated sizes the table (in numbers of rows)
