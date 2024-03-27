@@ -302,12 +302,12 @@ impl TypedValue {
 
     fn numeric_op_1f(lhs: &Self, ff: fn(f64) -> f64) -> Option<Self> {
         match lhs {
-            (Float64Value(a)) => Some(Float64Value(ff(*a))),
-            (Float32Value(a)) => Some(Float32Value(ff(*a as f64) as f32)),
+            Float64Value(a) => Some(Float64Value(ff(*a))),
+            Float32Value(a) => Some(Float32Value(ff(*a as f64) as f32)),
             Int64Value(a) => Some(Int64Value(ff(*a as f64) as i64)),
-            (Int32Value(a)) => Some(Int32Value(ff(*a as f64) as i32)),
-            (Int16Value(a)) => Some(Int16Value(ff(*a as f64) as i16)),
-            (Int8Value(a)) => Some(Int8Value(ff(*a as f64) as u8)),
+            Int32Value(a) => Some(Int32Value(ff(*a as f64) as i32)),
+            Int16Value(a) => Some(Int16Value(ff(*a as f64) as i16)),
+            Int8Value(a) => Some(Int8Value(ff(*a as f64) as u8)),
             _ => Some(Float64Value(lhs.assume_f64()?))
         }
     }
@@ -394,7 +394,7 @@ impl Div for TypedValue {
 impl Index<usize> for TypedValue {
     type Output = TypedValue;
 
-    fn index(&self, index: usize) -> &Self::Output {
+    fn index(&self, _index: usize) -> &Self::Output {
         todo!()
     }
 }

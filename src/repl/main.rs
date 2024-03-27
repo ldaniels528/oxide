@@ -142,7 +142,7 @@ fn say(message: &str) -> io::Result<()> {
         Clear(ClearType::CurrentLine),
         Print(format!("{}\n", message)),
         ResetColor
-    );
+    )?;
     Ok(())
 }
 

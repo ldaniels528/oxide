@@ -133,7 +133,7 @@ mod tests {
         let mut rng: ThreadRng = thread_rng();
         let start_time = SystemTime::now().duration_since(UNIX_EPOCH)
             .map_err(|e| cnv_error!(e))?.as_millis();
-        for n in 0..total {
+        for _ in 0..total {
             let symbol: String = (0..4)
                 .map(|_| rng.gen_range(b'A'..=b'Z') as char)
                 .collect();
@@ -158,7 +158,7 @@ mod tests {
         let start_time = SystemTime::now().duration_since(UNIX_EPOCH)
             .map_err(|e| cnv_error!(e))?.as_millis();
         for id in 0..limit {
-            let (row, rmd) = df.read_row(id)?;
+            let (_row, rmd) = df.read_row(id)?;
             if rmd.is_allocated { total += 1; }
         }
         let end_time = SystemTime::now().duration_since(UNIX_EPOCH)

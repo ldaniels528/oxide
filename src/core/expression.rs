@@ -139,8 +139,8 @@ mod tests {
 
     #[test]
     fn test_and() {
-        let vm = MachineState::new();
-        let (_, result) = vm.evaluate(&And(
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&And(
             Box::from(TRUE),
             Box::from(FALSE))).unwrap();
         assert_eq!(result, Boolean(false));
@@ -148,8 +148,8 @@ mod tests {
 
     #[test]
     fn test_between() {
-        let vm = MachineState::new();
-        let (_, result) = vm.evaluate(&Between(
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&Between(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1))),
             Box::from(Literal(Int32Value(10))))).unwrap();
@@ -158,8 +158,8 @@ mod tests {
 
     #[test]
     fn test_eq() {
-        let vm = MachineState::new();
-        let (_, result) = vm.evaluate(&Equal(
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&Equal(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
@@ -167,8 +167,8 @@ mod tests {
 
     #[test]
     fn test_gt() {
-        let vm = MachineState::new();
-        let (_, result) = vm.evaluate(&GreaterThan(
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&GreaterThan(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1))))).unwrap();
         assert_eq!(result, Boolean(true));
@@ -176,8 +176,8 @@ mod tests {
 
     #[test]
     fn test_gte() {
-        let vm = MachineState::new();
-        let (_, result) = vm.evaluate(&GreaterOrEqual(
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&GreaterOrEqual(
             Box::from(Literal(Int32Value(5))),
             Box::from(Literal(Int32Value(1))))).unwrap();
         assert_eq!(result, Boolean(true));
@@ -185,8 +185,8 @@ mod tests {
 
     #[test]
     fn test_lt() {
-        let vm = MachineState::new();
-        let (_, result) = vm.evaluate(&LessThan(
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&LessThan(
             Box::from(Literal(Int32Value(4))),
             Box::from(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
@@ -194,8 +194,8 @@ mod tests {
 
     #[test]
     fn test_lte() {
-        let vm = MachineState::new();
-        let (_, result) = vm.evaluate(&LessOrEqual(
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&LessOrEqual(
             Box::from(Literal(Int32Value(1))),
             Box::from(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
@@ -203,8 +203,8 @@ mod tests {
 
     #[test]
     fn test_ne() {
-        let vm = MachineState::new();
-        let (_, result) = vm.evaluate(&NotEqual(
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&NotEqual(
             Box::from(Literal(Int32Value(-5))),
             Box::from(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
@@ -212,8 +212,8 @@ mod tests {
 
     #[test]
     fn test_or() {
-        let vm = MachineState::new();
-        let (_, result) = vm.evaluate(&Or(
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&Or(
             Box::from(TRUE),
             Box::from(FALSE))).unwrap();
         assert_eq!(result, Boolean(true));

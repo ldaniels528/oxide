@@ -10,11 +10,10 @@ use serde::{Deserialize, Serialize};
 use crate::error_mgmt::fail;
 use crate::expression::{Expression, FALSE, NULL, TRUE};
 use crate::expression::Expression::*;
-use crate::opcode::fact;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Boolean, Float64Value, Int32Value, Int64Value, Null, StringValue, Undefined};
+use crate::typed_values::TypedValue::{Float64Value, Int64Value, StringValue, Undefined};
 
 /// Represents the compiler state
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -128,7 +127,7 @@ impl Compiler {
                             ts: TokenSlice,
                             expr0: Expression,
                             f: fn(String, Box<Expression>) -> Expression) -> io::Result<(Expression, TokenSlice)> {
-        if let (Field(name) | Variable(name)) = expr0 {
+        if let Field(name) | Variable(name) = expr0 {
             let (expr1, ts_z) = self.compile_expr(ts)?;
             Ok((f(name, Box::new(expr1)), ts_z))
         } else { fail(format!("an identifier name was expected near {:?}", ts)) }

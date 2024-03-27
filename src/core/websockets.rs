@@ -3,9 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use actix::{Actor, StreamHandler};
-use actix_web::{HttpRequest, web};
 use actix_web_actors::ws;
-use crossterm::style::Stylize;
 use log::info;
 
 // Oxide WebSocket
@@ -48,7 +46,6 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for OxideWebSocket {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use actix_web::test;
     use futures_util::SinkExt;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::protocol::Message;

@@ -2,7 +2,6 @@
 // server module
 ////////////////////////////////////////////////////////////////////
 
-use actix::{Actor, StreamHandler};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
