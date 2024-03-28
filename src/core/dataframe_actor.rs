@@ -271,13 +271,26 @@ mod tests {
     use std::vec;
 
     use actix::prelude::*;
+    use crate::data_types::DataType::{Float64Type, StringType};
 
     use crate::fields::Field;
     use crate::row;
     use crate::testdata::{make_columns, make_table_columns};
-    use crate::typed_values::TypedValue::{Float64Value, StringValue, Undefined};
+    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue, Undefined};
 
     use super::*;
+
+    #[actix::test]
+    async fn test_get_columns() {
+        let actor = DataframeIO::new().start();
+        let ns = Namespace::new("dataframe", "columns", "stocks");
+        assert_eq!(1, create_table!(actor, ns, make_columns()).unwrap());
+        assert_eq!(get_columns!(actor, ns).unwrap(), vec![
+            TableColumn::new("symbol", StringType(4), Null, 9),
+            TableColumn::new("exchange", StringType(4), Null, 22),
+            TableColumn::new("lastSale", Float64Type, Null, 35),
+        ]);
+    }
 
     #[actix::test]
     async fn test_actor_crud() {

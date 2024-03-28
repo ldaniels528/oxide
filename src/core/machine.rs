@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 
-use log::info;
 use serde::{Deserialize, Serialize};
 use tokio::io;
 
@@ -97,25 +96,25 @@ impl MachineState {
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
     pub fn evaluate_all(&self, ops: &Vec<Expression>) -> io::Result<(MachineState, TypedValue)> {
-        let mut result = Undefined;
-        let mut ms = self.clone();
-        for op in ops {
-            let (vm1, result1) = ms.evaluate(op)?;
-            ms = vm1;
-            result = result1
-        }
-        Ok((ms, result))
+        Ok(ops.iter().fold((self.clone(), Undefined),
+                           |(ms, _), op| match ms.evaluate(op) {
+                               Ok((ms, tv)) => (ms, tv),
+                               Err(err) => panic!("{}", err.to_string())
+                           }))
     }
+
 
     /// evaluates the specified [Expression]; returning an array ([TypedValue]) result.
     pub fn evaluate_array(&self, ops: &Vec<Expression>) -> io::Result<(MachineState, TypedValue)> {
-        let mut results = vec![];
-        let mut ms = self.clone();
-        for op in ops {
-            let (vm1, result1) = ms.evaluate(op)?;
-            ms = vm1;
-            results.push(result1);
-        }
+        let (ms, results) = ops.iter()
+            .fold((self.clone(), vec![]),
+                  |(ms, mut array), op| match ms.evaluate(op) {
+                      Ok((ms, tv)) => {
+                          array.push(tv);
+                          (ms, array)
+                      }
+                      Err(err) => panic!("{}", err.to_string())
+                  });
         Ok((ms, Array(results)))
     }
 
@@ -166,11 +165,8 @@ impl MachineState {
     pub fn pop(&self) -> (Self, Option<TypedValue>) {
         let mut stack = self.stack.clone();
         let value = stack.pop();
-        let machine = MachineState {
-            stack,
-            variables: self.variables.clone(),
-        };
-        (machine, value)
+        let variables = self.variables.clone();
+        (MachineState { stack, variables }, value)
     }
 
     /// returns a value from the stack or the default value if the stack is empty.
@@ -192,19 +188,6 @@ impl MachineState {
     /// pushes a collection of values unto the stack
     pub fn push_all(&self, values: Vec<TypedValue>) -> Self {
         values.iter().fold(self.clone(), |ms, tv| ms.push(tv.clone()))
-    }
-
-    /// evaluates the collection of [Expression]s; returning a [TypedValue] result.
-    pub fn run(&self, opcodes: Vec<Expression>) -> io::Result<(MachineState, TypedValue)> {
-        let mut result = Undefined;
-        let mut ms = self.clone();
-        for op in opcodes {
-            info!("{:?}", op);
-            let (vm1, result1) = ms.evaluate(&op)?;
-            ms = vm1;
-            result = result1;
-        }
-        Ok((ms, result))
     }
 
     fn sql_select(&self,
@@ -275,9 +258,46 @@ pub type OpCode = fn(&MachineState) -> io::Result<MachineState>;
 #[cfg(test)]
 mod tests {
     use crate::compiler::Compiler;
+    use crate::expression::{FALSE, NULL, TRUE};
     use crate::expression::Expression::{Factorial, Literal};
 
     use super::*;
+
+    #[test]
+    fn test_compile_and_evaluate_all_n_pow_2() {
+        let ms = MachineState::new()
+            .set("n", Int64Value(5));
+        let opcodes = Compiler::compile("n ** 2").unwrap();
+        let (_ms, result) = ms.evaluate_all(&opcodes).unwrap();
+        assert_eq!(result, Int64Value(25))
+    }
+
+    #[test]
+    fn test_compile_and_evaluate_all_n_gt_5() {
+        let ms = MachineState::new()
+            .set("n", Int64Value(7));
+        let opcodes = Compiler::compile("n > 5").unwrap();
+        let (_ms, result) = ms.evaluate_all(&opcodes).unwrap();
+        assert_eq!(result, Boolean(true))
+    }
+
+    #[test]
+    fn test_evaluate_all_factorial() {
+        let ms = MachineState::new();
+        let opcodes = vec![
+            Factorial(Box::new(Literal(Float64Value(6.))))
+        ];
+        let (_ms, result) = ms.evaluate_all(&opcodes).unwrap();
+        assert_eq!(result, Float64Value(720.))
+    }
+
+    #[test]
+    fn test_evaluate_array() {
+        let ms = MachineState::new();
+        let (ms, array) =
+            ms.evaluate_array(&vec![Literal(Float64Value(3.25)), TRUE, FALSE, NULL]).unwrap();
+        assert_eq!(array, Array(vec![Float64Value(3.25), Boolean(true), Boolean(false), Null]));
+    }
 
     #[test]
     fn test_push_all() {
@@ -303,40 +323,12 @@ mod tests {
         assert_eq!(ms.get("xyz"), Some(Int32Value(58)));
     }
 
-    #[test]
-    fn test_compile_n_x_5_and_run() {
-        let ms = MachineState::new()
-            .set("n", Int64Value(5));
-        let opcodes = Compiler::compile("n ** 2").unwrap();
-        let (_ms, result) = ms.run(opcodes).unwrap();
-        assert_eq!(result, Int64Value(25))
-    }
-
-    #[test]
-    fn test_compile_n_gt_5_and_run() {
-        let ms = MachineState::new()
-            .set("n", Int64Value(7));
-        let opcodes = Compiler::compile("n > 5").unwrap();
-        let (_ms, result) = ms.run(opcodes).unwrap();
-        assert_eq!(result, Boolean(true))
-    }
-
-    #[test]
-    fn test_model_factorial_and_run() {
-        let ms = MachineState::new();
-        let opcodes = vec![
-            Factorial(Box::new(Literal(Float64Value(6.))))
-        ];
-        let (_ms, result) = ms.run(opcodes).unwrap();
-        assert_eq!(result, Float64Value(720.))
-    }
-
     #[ignore]
     #[test]
     fn test_precedence() {
         let ms = MachineState::new();
         let opcodes = Compiler::compile("2 + 4 * 3").unwrap();
-        let (_ms, result) = ms.run(opcodes).unwrap();
+        let (_ms, result) = ms.evaluate_all(&opcodes).unwrap();
         assert_eq!(result, Float64Value(14.))
     }
 }
