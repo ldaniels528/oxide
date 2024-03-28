@@ -6,10 +6,6 @@ use std::fs::File;
 use std::io;
 use std::io::Write;
 
-use rand::{Rng, RngCore, thread_rng};
-use rand::distributions::Uniform;
-use rand::prelude::ThreadRng;
-
 use crate::data_types::DataType::{Float64Type, StringType};
 use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
@@ -96,6 +92,8 @@ pub fn make_table_file(database: &str,
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use rand::{Rng, RngCore, thread_rng};
+
     use crate::cnv_error;
 
     use super::*;
@@ -129,6 +127,8 @@ mod tests {
     }
 
     fn test_write_performance(df: &mut DataFrame, columns: &Vec<TableColumn>, total: usize) -> io::Result<()> {
+        use rand::distributions::Uniform;
+        use rand::prelude::ThreadRng;
         let exchanges = ["AMEX", "NASDAQ", "NYSE", "OTCBB", "OTHEROTC"];
         let mut rng: ThreadRng = thread_rng();
         let start_time = SystemTime::now().duration_since(UNIX_EPOCH)

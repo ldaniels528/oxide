@@ -16,10 +16,11 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, Ke
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use tokio::runtime::Builder;
 
-use crate::peers::{RemoteCallRequest, RemoteCallResponse};
+use shared_lib::{RemoteCallRequest, RemoteCallResponse};
+use shared_lib::cnv_error;
+
 use crate::repl::REPLState;
 
-mod peers;
 mod repl;
 
 fn main() -> io::Result<()> {
@@ -125,7 +126,7 @@ fn process_user_input(state: &mut REPLState, input: String) -> io::Result<Option
 fn process_statement(user_input: String) -> io::Result<RemoteCallResponse> {
     let body = serde_json::to_string(&RemoteCallRequest::new(user_input))?;
     let response = reqwest::Client::new()
-        .post(format!("http://{}:{}/rpc", "0.0.0.0", 8080))
+        .post(rpc_uri("0.0.0.0", "8080"))
         .body(body)
         .header("Content-type", "application/json")
         .send();
@@ -133,6 +134,10 @@ fn process_statement(user_input: String) -> io::Result<RemoteCallResponse> {
     let response = rt.block_on(response).map_err(|e| cnv_error!(e))?;
     let response_body = rt.block_on(response.text()).map_err(|e| cnv_error!(e))?;
     RemoteCallResponse::from_string(response_body.as_str())
+}
+
+fn rpc_uri(host: &str, port: &str) -> String {
+    format!("http://{}:{}/rpc", host, port)
 }
 
 // prints messages to STDOUT

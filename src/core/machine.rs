@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tokio::io;
 
-use crate::error_mgmt::fail;
+use shared_lib::fail;
 use crate::expression::Expression;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
@@ -294,7 +294,7 @@ mod tests {
     #[test]
     fn test_evaluate_array() {
         let ms = MachineState::new();
-        let (ms, array) =
+        let (_, array) =
             ms.evaluate_array(&vec![Literal(Float64Value(3.25)), TRUE, FALSE, NULL]).unwrap();
         assert_eq!(array, Array(vec![Float64Value(3.25), Boolean(true), Boolean(false), Null]));
     }

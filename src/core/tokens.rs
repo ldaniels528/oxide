@@ -7,7 +7,7 @@ use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 
-use crate::error_mgmt::fail;
+use shared_lib::fail;
 use crate::tokens::Token::*;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

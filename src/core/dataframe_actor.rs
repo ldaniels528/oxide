@@ -14,7 +14,6 @@ use crate::dataframes::DataFrame;
 use crate::namespaces::Namespace;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
-use crate::typed_values::TypedValue::{Float64Value, StringValue};
 
 // define the Dataframe I/O actor
 pub struct DataframeIO {

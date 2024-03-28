@@ -7,7 +7,8 @@ use std::io;
 use log::info;
 use serde::{Deserialize, Serialize};
 
-use crate::error_mgmt::fail;
+use shared_lib::fail;
+
 use crate::expression::{Expression, FALSE, NULL, TRUE};
 use crate::expression::Expression::*;
 use crate::token_slice::TokenSlice;

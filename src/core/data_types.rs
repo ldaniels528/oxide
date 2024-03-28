@@ -7,9 +7,8 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cnv_error;
+use shared_lib::{cnv_error, fail};
 use crate::data_types::DataType::*;
-use crate::error_mgmt::fail;
 use crate::server::ColumnJs;
 use crate::tokenizer::parse_fully;
 use crate::tokens::Token;

@@ -22,14 +22,18 @@ impl DataFrameConfig {
     pub fn new(columns: Vec<ColumnJs>,
                indices: Vec<HashIndexConfig>,
                partitions: Vec<String>) -> Self {
-        Self { columns, indices, partitions }
+        DataFrameConfig { columns, indices, partitions }
+    }
+
+    /// deletes a dataframe configuration from disk.
+    pub fn delete(ns: &Namespace) -> std::io::Result<()> {
+        fs::remove_file(ns.get_config_file_path())
     }
 
     /// loads a dataframe configuration from disk.
-    pub fn load(ns: &Namespace) -> std::io::Result<DataFrameConfig> {
-        let cfg_path = ns.get_config_file_path();
-        let config_string = fs::read_to_string(cfg_path)?;
-        serde_json::from_str::<DataFrameConfig>(&config_string).map_err(|e| cnv_error!(e))
+    pub fn load(ns: &Namespace) -> std::io::Result<Self> {
+        let config_string = fs::read_to_string(ns.get_config_file_path())?;
+        serde_json::from_str::<Self>(&config_string).map_err(|e| cnv_error!(e))
     }
 
     /// saves a dataframe configuration to disk.

@@ -1,4 +1,4 @@
-workspace = { members = ["src/core", "src/repl"] }
+workspace = { members = [ "shared_lib", "src/core", "src/repl"] }
 
 [package]
 name = "tiny_db"
@@ -11,6 +11,7 @@ tokio = { version = "1.36.0", features = ["full"] }
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+shared_lib = { path = "shared_lib" }
 actix = "0.13.3"
 actix-web = "4.5.1"
 actix-web-actors = "4.3.0"

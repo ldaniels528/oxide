@@ -4,13 +4,6 @@
 
 use serde::{Deserialize, Serialize};
 
-#[macro_export]
-macro_rules! cnv_error {
-    ($e:expr) => {
-        std::io::Error::new(std::io::ErrorKind::Other, $e)
-    }
-}
-
 /// REPL application state
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct REPLState {

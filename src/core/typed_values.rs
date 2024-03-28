@@ -525,6 +525,16 @@ mod tests {
     }
 
     #[test]
+    fn test_ne() {
+        assert_ne!(Int8Value(0xCE), Int8Value(0x00));
+        assert_ne!(Int16Value(0x7ACE), Int16Value(0xACE));
+        assert_ne!(Int32Value(0x1111_BEEF), Int32Value(0xBEEF));
+        assert_ne!(Int64Value(0x5555_FACE_CAFE_BABE), Int64Value(0xFACE_CAFE_BABE));
+        assert_ne!(Float32Value(45.0), Float32Value(45.7));
+        assert_ne!(Float64Value(99.142857), Float64Value(19.48));
+    }
+
+    #[test]
     fn test_gt() {
         assert!(Array(vec![Int8Value(0xCE), Int8Value(0xCE)]) > Array(vec![Int8Value(0x23), Int8Value(0xBE)]));
         assert!(Int8Value(0xCE) > Int8Value(0xAA));
@@ -536,10 +546,25 @@ mod tests {
     }
 
     #[test]
+    fn test_rem() {
+        assert_eq!(Int64Value(10) % Int64Value(3), Int64Value(1));
+    }
+
+    #[test]
     fn test_pow() {
         let a = Int64Value(5);
         let b = Int64Value(2);
         assert_eq!(a.pow(&b), Some(Int64Value(25)))
+    }
+
+    #[test]
+    fn test_shl() {
+        assert_eq!(Int64Value(1) << Int64Value(5), Int64Value(32));
+    }
+
+    #[test]
+    fn test_shr() {
+        assert_eq!(Int64Value(32) >> Int64Value(5), Int64Value(1));
     }
 
     #[test]
