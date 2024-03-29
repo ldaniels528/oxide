@@ -68,7 +68,15 @@ mod tests {
     #[test]
     fn test_get_prompt() {
         let r: REPLState = REPLState::new();
-        assert_eq!(r.get_prompt(), "oxide.public[1]> ")
+        assert_eq!(r.get_prompt(), "oxide.public[1]> ");
+        assert_eq!(r, REPLState {
+            database: "oxide".into(),
+            schema: "public".into(),
+            history: vec![],
+            chars: vec![],
+            counter: 1,
+            is_alive: true,
+        })
     }
 
     #[test]
