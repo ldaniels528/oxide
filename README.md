@@ -1,7 +1,7 @@
 Oxide 
 =====
 
-### Motivation
+## Motivation
 
 The purpose of this project is to create a development platform for small to medium software projects
 and proof of concept software projects. The system will offer:
@@ -14,17 +14,18 @@ Oxide is the spiritual successor to [Lollypop](https://github.com/ldaniels528/lo
 featuring integrated dataframes with SQL-like grammar for queries, but built for the JVM and 
 developed in the Scala programming language.
 
-### Project Status
+## Project Status
 
-The database server is now available and supports basic CRUD operations via REST for:
-* <a href="#create_table">creating tables</a>
-* <a href="#drop_table">dropping tables</a>
-* <a href="#overwrite_row">insert/overwrite a row by offset</a>
-* <a href="#read_row">retrieve a row by offset</a>
-* <a href="#delete_row">delete a row by offset</a>
-* <a href="#rpc">remote procedure calls</a>
+- The <a href="#REPL">REPL</a> is now available, and allows you to issue commands directly to the server.
+- The database server is also now available and supports basic CRUD operations via REST for:
+  - <a href="#create_table">creating tables</a>
+  - <a href="#drop_table">dropping tables</a>
+  - <a href="#overwrite_row">insert/overwrite a row by offset</a>
+  - <a href="#read_row">retrieve a row by offset</a>
+  - <a href="#delete_row">delete a row by offset</a>
+  - <a href="#rpc">remote procedure calls</a>
 
-### Development
+## Development
 
 #### Build the Oxide REPL and Server
 
@@ -44,7 +45,48 @@ To run the tests (~ 130 tests at the time of writing):
 cargo test
 ```
 
-### Getting Started
+## Getting Started
+
+<a name="REPL"></a>
+### REPL
+
+The Oxide REPL is now available, and with it, you can issue commands directly to the server.
+Oxide can evaluate basic expressions:
+
+```bash
+$ oxide_repl
+Welcome to Oxide REPL. Enter "q!" to quit.
+
+oxide.public[1]> 5 + 9
+14
+oxide.public[2]> (2 * 7) + 12
+26
+```
+
+Use the range operator (..) to creates slices (array-like structures):
+
+```bash
+oxide.public[3]> 1..7
+[1,2,3,4,5,6]
+```
+
+Use the factorial operator (¡):
+
+```bash
+oxide.public[4]> 5¡
+120.0
+```
+
+Use the exponent operators (², ³)
+
+```bash
+oxide.public[4]> 5²
+25
+oxide.public[5]> 5³
+125
+```
+
+### API/REST
 
 <a name="create_table"></a>
 #### Create a table
