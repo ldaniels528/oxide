@@ -32,7 +32,7 @@ impl TableView for TableIterator {
                 } else { None }
             }
             Forward => {
-                if self.position < self.data_frame.size()? {
+                if self.position < self.data_frame.len()? {
                     let (row, metadata) = self.data_frame.read_row(self.position)?;
                     let new_position = self.position + 1;
                     self.position = new_position;
@@ -55,7 +55,7 @@ impl TableIterator {
     }
 
     pub fn reverse(data_frame: DataFrame) -> TableIterator {
-        match data_frame.size() {
+        match data_frame.len() {
             Ok(size) => TableIterator {
                 data_frame,
                 direction: Backward,

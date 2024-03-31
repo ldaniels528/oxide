@@ -8,6 +8,10 @@ use std::sync::Arc;
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::file_row_collection::FileRowCollection;
+use crate::row_metadata::RowMetadata;
+use crate::rows::Row;
+use crate::table_columns::TableColumn;
+use crate::typed_values::TypedValue;
 
 /// represents the underlying storage resource for the dataframe
 pub trait RowCollection: Debug {
@@ -16,18 +20,18 @@ pub trait RowCollection: Debug {
     /// returns the number of active rows in the table
     fn len(&self) -> std::io::Result<usize>;
 
-    fn overwrite(&mut self, id: usize, block: Vec<u8>) -> std::io::Result<usize>;
+    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<usize>;
 
     /// overwrites the metadata of a specified row by ID
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: u8) -> std::io::Result<usize>;
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<usize>;
 
-    fn read(&self, id: usize) -> std::io::Result<Vec<u8>>;
+    fn read(&self, id: usize) -> std::io::Result<(Row, RowMetadata)>;
 
-    fn read_field(&self, id: usize, column_offset: usize, max_physical_size: usize) -> std::io::Result<Vec<u8>>;
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue>;
 
-    fn read_range(&self, from: usize, to: usize) -> std::io::Result<Vec<Vec<u8>>>;
+    fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>>;
 
-    /// resizes the table
+    /// resizes (shrink or grow) the table
     fn resize(&mut self, new_size: usize) -> std::io::Result<()>;
 
     fn to_row_offset(&self, id: usize) -> u64 { (id * self.get_record_size()) as u64 }
@@ -35,13 +39,13 @@ pub trait RowCollection: Debug {
 
 impl dyn RowCollection {
     /// creates a new in-memory [RowCollection] from a byte vector.
-    pub fn from_bytes(rows: Vec<Vec<u8>>, record_size: usize) -> impl RowCollection {
-        ByteRowCollection::new(rows, record_size)
+    pub fn from_bytes(columns: Vec<TableColumn>, rows: Vec<Vec<u8>>) -> impl RowCollection {
+        ByteRowCollection::new(columns, rows)
     }
 
     /// creates a new [RowCollection] from a file.
-    pub fn from_file(file: File, record_size: usize) -> impl RowCollection {
-        FileRowCollection::new(Arc::new(file), record_size)
+    pub fn from_file(columns: Vec<TableColumn>, file: File) -> impl RowCollection {
+        FileRowCollection::new(columns, Arc::new(file))
     }
 }
 
@@ -49,7 +53,6 @@ impl dyn RowCollection {
 #[cfg(test)]
 mod tests {
     use crate::row;
-    use crate::rows::Row;
     use crate::testdata::{make_columns, make_quote, make_table_columns, make_table_file_from_bytes};
     use crate::typed_values::TypedValue::{Float64Value, StringValue};
 
@@ -60,15 +63,13 @@ mod tests {
         // determine the record size of the row
         let columns = make_table_columns();
         let row = make_quote(0, &columns, "RICE", "NYSE", 78.78);
-        let record_size = row.get_record_size();
-        let mut rc = <dyn RowCollection>::from_bytes(vec![], record_size);
+        let mut rc = <dyn RowCollection>::from_bytes(columns.clone(), vec![]);
 
         // create a new row
-        assert_eq!(rc.overwrite(row.id, row.encode()).unwrap(), 1);
+        assert_eq!(rc.overwrite(row.id, &row).unwrap(), 1);
 
         // read and verify the row
-        let row_bytes = rc.read(0).unwrap();
-        let (row, rmd) = Row::decode(&row_bytes, &columns);
+        let (row, rmd) = rc.read(0).unwrap();
         assert!(rmd.is_allocated);
         assert_eq!(row, row!(0, make_table_columns(), vec![
             StringValue("RICE".into()), StringValue("NYSE".into()), Float64Value(78.78)
@@ -77,18 +78,17 @@ mod tests {
 
     #[test]
     fn test_from_file() {
-        let (file, columns, record_size) =
+        let (file, columns, _) =
             make_table_file_from_bytes("rows", "append_row", "quotes", make_columns(), vec![
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'A', b'M',
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
                 0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
             ].as_slice());
-        let rc = <dyn RowCollection>::from_file(file, record_size);
+        let rc = <dyn RowCollection>::from_file(columns.clone(), file);
 
         // read and verify the row
-        let row_bytes = rc.read(0).unwrap();
-        let (row, rmd) = Row::decode(&row_bytes, &columns);
+        let (row, rmd) = rc.read(0).unwrap();
         assert!(rmd.is_allocated);
         assert_eq!(row, row!(0, make_table_columns(), vec![
             StringValue("BEAM".into()), StringValue("NYSE".into()), Float64Value(78.35)

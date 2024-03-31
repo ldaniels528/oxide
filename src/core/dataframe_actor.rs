@@ -70,7 +70,7 @@ impl DataframeActor {
     fn read_fully(&mut self, ns: Namespace) -> std::io::Result<Vec<Row>> {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = vec![];
-        for id in 0..df.size()? {
+        for id in 0..df.len()? {
             df.read_and_push(id, &mut rows)?
         }
         Ok(rows)

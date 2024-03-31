@@ -28,8 +28,7 @@ impl DataFrame {
     pub fn create(ns: Namespace, config: DataFrameConfig) -> std::io::Result<Self> {
         config.save(&ns)?;
         let table_columns = TableColumn::from_columns(&config.columns)?;
-        let record_size = Row::compute_record_size(&table_columns);
-        let device = Box::new(FileRowCollection::create(ns.clone(), record_size)?);
+        let device = Box::new(FileRowCollection::create(ns.clone(), table_columns.clone())?);
         Ok(Self::new(ns, table_columns, device))
     }
 
@@ -49,18 +48,18 @@ impl DataFrame {
     /// appends a new row to the table
     pub fn append(&mut self, row: &Row) -> std::io::Result<usize> {
         let new_row_id = self.device.len()?;
-        self.device.overwrite(new_row_id, row.with_row_id(new_row_id).encode())
+        self.device.overwrite(new_row_id, &row.with_row_id(new_row_id))
     }
 
     /// deletes an existing row from the table
     pub fn delete(&mut self, id: usize) -> std::io::Result<usize> {
-        self.device.overwrite_row_metadata(id, RowMetadata::new(false).encode())
+        self.device.overwrite_row_metadata(id, &RowMetadata::new(false))
     }
 
     /// performs a top-down fold operation
     pub fn fold_left<A>(&self, init: A, f: fn(A, Row) -> A) -> std::io::Result<A> {
         let mut result: A = init;
-        for id in 0..self.size()? {
+        for id in 0..self.len()? {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated { result = f(result, row) }
         }
@@ -70,7 +69,7 @@ impl DataFrame {
     /// performs a bottom-up fold operation
     pub fn fold_right<A>(&self, init: A, f: fn(A, Row) -> A) -> std::io::Result<A> {
         let mut result: A = init;
-        for id in (0..self.size()?).rev() {
+        for id in (0..self.len()?).rev() {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated { result = f(result, row) }
         }
@@ -79,7 +78,7 @@ impl DataFrame {
 
     /// returns true if all allocated rows satisfy the provided function
     pub fn for_all(&self, f: fn(&Row) -> bool) -> std::io::Result<bool> {
-        for id in 0..self.size()? {
+        for id in 0..self.len()? {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated && !f(&row) { return Ok(false); }
         }
@@ -88,19 +87,25 @@ impl DataFrame {
 
     /// iterates through all allocated rows
     pub fn foreach(&self, f: fn(&Row) -> ()) -> std::io::Result<()> {
-        for id in 0..self.size()? {
+        for id in 0..self.len()? {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated { f(&row) }
         }
         Ok(())
     }
 
+    /// returns the columns that define the table structure
     pub fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
+
+    /// returns the allocated sizes the table (in numbers of rows)
+    pub fn len(&self) -> std::io::Result<usize> {
+        self.device.len()
+    }
 
     /// transforms the collection of rows into a collection of [A]
     pub fn map<A>(&self, f: fn(&Row) -> A) -> std::io::Result<Vec<A>> {
         let mut rows = Vec::new();
-        for id in 0..self.size()? {
+        for id in 0..self.len()? {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated { rows.push(f(&row)) }
         }
@@ -109,46 +114,39 @@ impl DataFrame {
 
     /// overwrites a specified row by ID
     pub fn overwrite(&mut self, row: Row) -> std::io::Result<usize> {
-        self.device.overwrite(row.get_id(), row.encode())
+        self.device.overwrite(row.get_id(), &row)
     }
 
     /// overwrites the metadata of a specified row by ID
     pub fn overwrite_row_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<usize> {
-        self.device.overwrite_row_metadata(id, metadata.encode())
+        self.device.overwrite_row_metadata(id, metadata)
     }
 
+    /// reads a row and pushes it into the specified vector if active
     pub fn read_and_push(&self, id: usize, rows: &mut Vec<Row>) -> std::io::Result<()> {
-        let (row, rmd) = self.read_row(id)?;
-        if rmd.is_allocated { rows.push(row) }
+        let (row, metadata) = self.read_row(id)?;
+        if metadata.is_allocated { rows.push(row) }
         Ok(())
     }
 
     /// reads the specified field value from the specified row ID
     pub fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
-        let column = &self.columns[column_id];
-        let buffer = self.device.read_field(id, column.offset, column.max_physical_size)?;
-        let field = Field::decode(&column.data_type, &buffer, 0);
-        Ok(field.value)
+        self.device.read_field(id, column_id)
+    }
+
+    /// reads a range of rows
+    pub fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>> {
+        self.device.read_range(index)
     }
 
     /// reads a row by ID
     pub fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
-        let buffer = self.device.read(id)?;
-        Ok(Row::decode(&buffer, &self.columns))
-    }
-
-    /// reads a range of rows
-    pub fn read_rows(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>> {
-        let mut rows: Vec<Row> = Vec::with_capacity(index.len());
-        for id in index {
-            self.read_and_push(id, &mut rows)?;
-        }
-        Ok(rows)
+        self.device.read(id)
     }
 
     /// returns the rows in reverse order
     pub fn reverse(&self) -> std::io::Result<Vec<Row>> {
-        let size = self.size()?;
+        let size = self.len()?;
         let mut rows: Vec<Row> = Vec::with_capacity(size);
         for id in (0..size).rev() {
             self.read_and_push(id, &mut rows)?;
@@ -160,11 +158,6 @@ impl DataFrame {
     pub fn resize(&mut self, new_size: usize) -> std::io::Result<usize> {
         self.device.resize(new_size)?;
         Ok(1)
-    }
-
-    /// returns the allocated sizes the table (in numbers of rows)
-    pub fn size(&self) -> std::io::Result<usize> {
-        self.device.len()
     }
 
     /// restores a deleted row to an active state
@@ -204,7 +197,7 @@ impl DataFrame {
 impl AddAssign for DataFrame {
     fn add_assign(&mut self, rhs: Self) {
         fn do_add(lhs: &mut DataFrame, rhs: DataFrame) -> std::io::Result<()> {
-            for id in 0..rhs.size()? {
+            for id in 0..rhs.len()? {
                 let (row, metadata) = rhs.read_row(id)?;
                 if metadata.is_allocated { lhs.append(&row)?; }
             }
@@ -259,7 +252,7 @@ mod tests {
         // concatenate the dataframes
         df0 += df1;
         // re-read the rows
-        let rows = df0.read_rows(0..df0.size().unwrap()).unwrap();
+        let rows = df0.read_range(0..df0.len().unwrap()).unwrap();
         let columns = vec![
             TableColumn::new("symbol", StringType(4), Null, 9),
             TableColumn::new("exchange", StringType(4), Null, 22),
@@ -309,7 +302,7 @@ mod tests {
         assert_eq!(df.append(&row).unwrap(), 1);
 
         // verify the rows
-        let rows = df.read_rows(0..2).unwrap();
+        let rows = df.read_range(0..2).unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].get_id(), 0);
         assert_eq!(rows[0].get_fields()[0].metadata.is_active, true);
@@ -331,7 +324,7 @@ mod tests {
         assert_eq!(rows[1].get_fields()[2].metadata.is_active, true);
         assert_eq!(rows[1].get_fields()[2].metadata.is_compressed, false);
         assert_eq!(rows[1].get_fields()[2].value, Float64Value(100.0));
-        assert_eq!(df.size().unwrap(), 2);
+        assert_eq!(df.len().unwrap(), 2);
     }
 
     #[test]
@@ -366,7 +359,7 @@ mod tests {
         assert_eq!(df.delete(1).unwrap(), 1);
 
         // verify the rows
-        let rows = df.read_rows(0..df.size().unwrap()).unwrap();
+        let rows = df.read_range(0..df.len().unwrap()).unwrap();
         assert_eq!(rows, vec![
             row!(0, phys_columns, vec![
                 StringValue("UNO".into()), StringValue("AMEX".into()), Float64Value(11.77),
@@ -536,7 +529,7 @@ mod tests {
             "dataframes", "resize", "quotes", make_columns()).unwrap();
         let _ = df.resize(0).unwrap();
         df.resize(5).unwrap();
-        assert_eq!(df.size().unwrap(), 5);
+        assert_eq!(df.len().unwrap(), 5);
     }
 
     #[test]
@@ -577,14 +570,14 @@ mod tests {
         ]);
 
         // verify the row was deleted
-        let rows = df.read_rows(0..df.size().unwrap()).unwrap();
+        let rows = df.read_range(0..df.len().unwrap()).unwrap();
         assert_eq!(rows, vec![row_0.clone(), row_2.clone()]);
 
         // restore the middle row
         assert_eq!(df.undelete(1).unwrap(), 1);
 
         // verify the row was restored
-        let rows = df.read_rows(0..df.size().unwrap()).unwrap();
+        let rows = df.read_range(0..df.len().unwrap()).unwrap();
         assert_eq!(rows, vec![row_0.clone(), row_1.clone(), row_2.clone()]);
     }
 
@@ -655,7 +648,7 @@ mod tests {
     }
 
     fn test_read_performance(df: &DataFrame) -> std::io::Result<()> {
-        let limit = df.size()?;
+        let limit = df.len()?;
         let mut total = 0;
         let start_time = SystemTime::now().duration_since(UNIX_EPOCH)
             .map_err(|e| cnv_error!(e))?.as_millis();

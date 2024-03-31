@@ -51,9 +51,9 @@ pub fn make_rows_from_bytes(database: &str,
                             name: &str,
                             columns: Vec<ColumnJs>,
                             row_data: &[u8]) -> std::io::Result<DataFrame> {
-    let (file, table_columns, record_size) =
+    let (file, table_columns, _) =
         make_table_file_from_bytes(database, schema, name, columns, row_data);
-    let device = Box::new(<dyn RowCollection>::from_file(file, record_size));
+    let device = Box::new(<dyn RowCollection>::from_file(table_columns.clone(), file));
     let df = DataFrame::new(Namespace::new(database, schema, name), table_columns, device);
     Ok(df)
 }
@@ -84,7 +84,7 @@ pub fn make_table_file(database: &str,
     let table_columns = TableColumn::from_columns(&columns).unwrap();
     let record_size = Row::compute_record_size(&table_columns);
     let ns = Namespace::new(database, schema, name);
-    let mut file = FileRowCollection::open_crw(&ns).unwrap();
+    let file = FileRowCollection::open_crw(&ns).unwrap();
     file.set_len(0).unwrap();
     (file, table_columns, record_size)
 }
