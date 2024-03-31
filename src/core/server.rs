@@ -14,7 +14,7 @@ use crate::typed_values::TypedValue::Undefined;
 pub const VERSION: &str = "0.1.0";
 
 // JSON representation of a column
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ColumnJs {
     pub(crate) name: String,
     pub(crate) column_type: String,
@@ -36,7 +36,7 @@ impl ColumnJs {
 }
 
 // JSON representation of a field
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FieldJs {
     name: String,
     value: Value,
@@ -57,7 +57,7 @@ impl FieldJs {
 }
 
 // JSON representation of a row
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RowJs {
     id: Option<usize>,
     fields: Vec<FieldJs>,

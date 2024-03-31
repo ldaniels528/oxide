@@ -10,7 +10,7 @@ use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::*;
 use crate::typed_values::TypedValue;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Field {
     pub(crate) metadata: FieldMetadata,
     pub(crate) value: TypedValue,

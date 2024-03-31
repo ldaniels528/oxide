@@ -8,9 +8,10 @@ use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
+
 use crate::tokens::Token::*;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Token {
     Atom { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Backticks { text: String, start: usize, end: usize, line_number: usize, column_number: usize },

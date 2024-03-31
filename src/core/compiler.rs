@@ -17,7 +17,7 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Float64Value, Int64Value, StringValue, Undefined};
 
 /// Represents the compiler state
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Compiler {
     stack: Vec<Expression>,
 }

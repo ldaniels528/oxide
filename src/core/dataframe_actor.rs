@@ -16,14 +16,14 @@ use crate::rows::Row;
 use crate::table_columns::TableColumn;
 
 // define the Dataframe I/O actor
-pub struct DataframeIO {
+pub struct DataframeActor {
     resources: HashMap<String, DataFrame>,
 }
 
-impl DataframeIO {
+impl DataframeActor {
     /// default constructor
     pub fn new() -> Self {
-        DataframeIO {
+        DataframeActor {
             resources: HashMap::new()
         }
     }
@@ -41,7 +41,7 @@ impl DataframeIO {
     }
 
     fn get_columns(&mut self, ns: Namespace) -> std::io::Result<&Vec<TableColumn>> {
-        Ok(&self.get_or_load_dataframe(ns)?.columns)
+        Ok(&self.get_or_load_dataframe(ns)?.get_columns())
     }
 
     fn get_namespaces(&mut self) -> std::io::Result<Vec<String>> { // .sort_by(|a, b| b.cmp(a))
@@ -96,11 +96,11 @@ impl DataframeIO {
     }
 }
 
-impl Actor for DataframeIO {
+impl Actor for DataframeActor {
     type Context = Context<Self>;
 }
 
-impl Handler<IORequest> for DataframeIO {
+impl Handler<IORequest> for DataframeActor {
     type Result = String;
 
     fn handle(&mut self, msg: IORequest, _: &mut Self::Context) -> Self::Result {
@@ -270,9 +270,8 @@ mod tests {
     use std::vec;
 
     use actix::prelude::*;
-    use crate::data_types::DataType::{Float64Type, StringType};
 
-    use crate::fields::Field;
+    use crate::data_types::DataType::{Float64Type, StringType};
     use crate::row;
     use crate::testdata::{make_columns, make_table_columns};
     use crate::typed_values::TypedValue::{Float64Value, Null, StringValue, Undefined};
@@ -281,7 +280,7 @@ mod tests {
 
     #[actix::test]
     async fn test_get_columns() {
-        let actor = DataframeIO::new().start();
+        let actor = DataframeActor::new().start();
         let ns = Namespace::new("dataframe", "columns", "stocks");
         assert_eq!(1, create_table!(actor, ns, make_columns()).unwrap());
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
@@ -293,7 +292,7 @@ mod tests {
 
     #[actix::test]
     async fn test_actor_crud() {
-        let actor = DataframeIO::new().start();
+        let actor = DataframeActor::new().start();
         let ns = Namespace::new("dataframe", "actor_crud", "stocks");
         let table_columns = make_table_columns();
 
@@ -354,7 +353,7 @@ mod tests {
 
     #[actix::test]
     async fn test_namespaces() {
-        let actor = DataframeIO::new().start();
+        let actor = DataframeActor::new().start();
         let ns0 = Namespace::new("dataframe", "namespaces1", "stocks");
         let ns1 = Namespace::new("dataframe", "namespaces2", "stocks");
 

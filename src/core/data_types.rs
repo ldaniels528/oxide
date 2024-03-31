@@ -8,12 +8,13 @@ use std::io;
 use serde::{Deserialize, Serialize};
 
 use shared_lib::{cnv_error, fail};
+
 use crate::data_types::DataType::*;
 use crate::server::ColumnJs;
 use crate::tokenizer::parse_fully;
 use crate::tokens::Token;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
     BLOBType(usize),
     BooleanType,

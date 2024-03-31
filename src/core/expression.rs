@@ -14,7 +14,7 @@ pub const FALSE: Expression = Literal(Boolean(false));
 pub const TRUE: Expression = Literal(Boolean(true));
 pub const NULL: Expression = Literal(Null);
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Expression {
     // conditional
     And(Box<Expression>, Box<Expression>),
@@ -43,6 +43,7 @@ pub enum Expression {
     // direct/reference values
     Field(String),
     Literal(TypedValue),
+    NS { database: String, schema: String, name: String },
     Range(Box<Expression>, Box<Expression>),
     Tuple(Vec<Expression>),
     Variable(String),

@@ -2,18 +2,15 @@
 // dataframes module
 ////////////////////////////////////////////////////////////////////
 
-use std::fs::{File, OpenOptions};
-use std::io;
-use std::io::Write;
 use std::ops::AddAssign;
-use std::os::unix::fs::FileExt;
 
 use crate::dataframe_config::DataFrameConfig;
 use crate::fields::Field;
+use crate::file_row_collection::FileRowCollection;
 use crate::namespaces::Namespace;
+use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
-use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Null, Undefined};
@@ -21,58 +18,47 @@ use crate::typed_values::TypedValue::{Null, Undefined};
 /// DataFrame is a logical representation of table
 #[derive(Debug)]
 pub struct DataFrame {
-    pub(crate) ns: Namespace,
-    pub(crate) columns: Vec<TableColumn>,
-    pub(crate) record_size: usize,
-    //#[serde(skip_serializing, skip_deserializing)]
-    pub(crate) file: File,
+    ns: Namespace,
+    columns: Vec<TableColumn>,
+    device: Box<dyn RowCollection>,
 }
 
 impl DataFrame {
     /// creates a new [DataFrame]; persisting its configuration to disk.
-    pub fn create(ns: Namespace, config: DataFrameConfig) -> io::Result<DataFrame> {
+    pub fn create(ns: Namespace, config: DataFrameConfig) -> std::io::Result<Self> {
         config.save(&ns)?;
-        let file = Self::open_crw(&ns)?;
-        Self::new(ns, &config.columns, file)
+        let table_columns = TableColumn::from_columns(&config.columns)?;
+        let record_size = Row::compute_record_size(&table_columns);
+        let device = Box::new(FileRowCollection::create(ns.clone(), record_size)?);
+        Ok(Self::new(ns, table_columns, device))
     }
 
     /// loads a dataframe from disk.
-    pub fn load(ns: Namespace) -> io::Result<DataFrame> {
+    pub fn load(ns: Namespace) -> std::io::Result<Self> {
         let cfg = DataFrameConfig::load(&ns)?;
-        let file = Self::open_rw(&ns)?;
-        DataFrame::new(ns, &cfg.columns, file)
+        let device = Box::new(FileRowCollection::open(&ns)?);
+        let table_columns = TableColumn::from_columns(&cfg.columns)?;
+        Ok(Self::new(ns, table_columns, device))
     }
 
     /// creates a new dataframe.
-    pub fn new(ns: Namespace, columns: &Vec<ColumnJs>, file: File) -> io::Result<DataFrame> {
-        let columns = TableColumn::from_columns(columns)?;
-        let record_size = Self::compute_record_size(&columns);
-        Ok(DataFrame { ns, columns, record_size, file })
+    pub fn new(ns: Namespace, columns: Vec<TableColumn>, device: Box<dyn RowCollection>) -> Self {
+        Self { ns, columns, device }
     }
 
     /// appends a new row to the table
-    pub fn append(&mut self, row: &Row) -> io::Result<usize> {
-        let file_len = (&self.file.metadata()?).len();
-        let new_row_id = (file_len / self.record_size as u64) as usize;
-        let new_row = row.with_row_id(new_row_id);
-        let offset = self.to_offset(new_row.get_id());
-        let _ = &self.file.write_at(&new_row.encode(), offset)?;
-        self.file.flush()?;
-        Ok(1)
-    }
-
-    /// computes the total record size (in bytes)
-    fn compute_record_size(columns: &Vec<TableColumn>) -> usize {
-        Row::overhead() + columns.iter().map(|c| c.max_physical_size).sum::<usize>()
+    pub fn append(&mut self, row: &Row) -> std::io::Result<usize> {
+        let new_row_id = self.device.len()?;
+        self.device.overwrite(new_row_id, row.with_row_id(new_row_id).encode())
     }
 
     /// deletes an existing row from the table
-    pub fn delete(&mut self, id: usize) -> io::Result<usize> {
-        self.overwrite_row_metadata(id, &RowMetadata::new(false))
+    pub fn delete(&mut self, id: usize) -> std::io::Result<usize> {
+        self.device.overwrite_row_metadata(id, RowMetadata::new(false).encode())
     }
 
     /// performs a top-down fold operation
-    pub fn fold_left<A>(&self, init: A, f: fn(A, Row) -> A) -> io::Result<A> {
+    pub fn fold_left<A>(&self, init: A, f: fn(A, Row) -> A) -> std::io::Result<A> {
         let mut result: A = init;
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
@@ -82,7 +68,7 @@ impl DataFrame {
     }
 
     /// performs a bottom-up fold operation
-    pub fn fold_right<A>(&self, init: A, f: fn(A, Row) -> A) -> io::Result<A> {
+    pub fn fold_right<A>(&self, init: A, f: fn(A, Row) -> A) -> std::io::Result<A> {
         let mut result: A = init;
         for id in (0..self.size()?).rev() {
             let (row, metadata) = self.read_row(id)?;
@@ -92,18 +78,16 @@ impl DataFrame {
     }
 
     /// returns true if all allocated rows satisfy the provided function
-    pub fn for_all(&self, f: fn(&Row) -> bool) -> io::Result<bool> {
+    pub fn for_all(&self, f: fn(&Row) -> bool) -> std::io::Result<bool> {
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
-            if metadata.is_allocated && !f(&row) {
-                return Ok(false)
-            }
+            if metadata.is_allocated && !f(&row) { return Ok(false); }
         }
         Ok(true)
     }
 
     /// iterates through all allocated rows
-    pub fn foreach(&self, f: fn(&Row) -> ()) -> io::Result<()> {
+    pub fn foreach(&self, f: fn(&Row) -> ()) -> std::io::Result<()> {
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated { f(&row) }
@@ -111,13 +95,10 @@ impl DataFrame {
         Ok(())
     }
 
-    /// returns the size of the underlying physical table
-    pub fn length(&self) -> io::Result<u64> {
-        Ok(self.file.metadata()?.len())
-    }
+    pub fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
 
     /// transforms the collection of rows into a collection of [A]
-    pub fn map<A>(&self, f: fn(&Row) -> A) -> io::Result<Vec<A>> {
+    pub fn map<A>(&self, f: fn(&Row) -> A) -> std::io::Result<Vec<A>> {
         let mut rows = Vec::new();
         for id in 0..self.size()? {
             let (row, metadata) = self.read_row(id)?;
@@ -126,31 +107,14 @@ impl DataFrame {
         Ok(rows)
     }
 
-    /// convenience function to create, read or write a table file
-    fn open_crw(ns: &Namespace) -> io::Result<File> {
-        OpenOptions::new().create(true).read(true).write(true).open(ns.get_table_file_path())
-    }
-
-    /// convenience function to read or write a table file
-    fn open_rw(ns: &Namespace) -> io::Result<File> {
-        OpenOptions::new().read(true).write(true).open(ns.get_table_file_path())
-    }
-
     /// overwrites a specified row by ID
-    pub fn overwrite(&mut self, row: Row) -> io::Result<usize> {
-        let offset = self.to_offset(row.get_id());
-        let _ = &self.file.write_at(&row.encode(), offset)?;
-        self.file.flush()?;
-        Ok(1)
+    pub fn overwrite(&mut self, row: Row) -> std::io::Result<usize> {
+        self.device.overwrite(row.get_id(), row.encode())
     }
 
     /// overwrites the metadata of a specified row by ID
-    pub fn overwrite_row_metadata(&mut self, id: usize, metadata: &RowMetadata) -> io::Result<usize> {
-        let offset = self.to_offset(id);
-        let bytes = [metadata.encode()];
-        let _ = &self.file.write_at(&bytes, offset)?;
-        self.file.flush()?;
-        Ok(1)
+    pub fn overwrite_row_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<usize> {
+        self.device.overwrite_row_metadata(id, metadata.encode())
     }
 
     pub fn read_and_push(&self, id: usize, rows: &mut Vec<Row>) -> std::io::Result<()> {
@@ -160,25 +124,21 @@ impl DataFrame {
     }
 
     /// reads the specified field value from the specified row ID
-    pub fn read_field(&self, id: usize, column_id: usize) -> io::Result<TypedValue> {
+    pub fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         let column = &self.columns[column_id];
-        let mut buffer: Vec<u8> = vec![0; column.max_physical_size];
-        let row_offset = self.to_offset(id);
-        let _ = &self.file.read_at(&mut buffer, row_offset + column.offset as u64)?;
+        let buffer = self.device.read_field(id, column.offset, column.max_physical_size)?;
         let field = Field::decode(&column.data_type, &buffer, 0);
         Ok(field.value)
     }
 
     /// reads a row by ID
-    pub fn read_row(&self, id: usize) -> io::Result<(Row, RowMetadata)> {
-        let offset = self.to_offset(id);
-        let mut buffer: Vec<u8> = vec![0; self.record_size];
-        let _ = &self.file.read_at(&mut buffer, offset)?;
+    pub fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
+        let buffer = self.device.read(id)?;
         Ok(Row::decode(&buffer, &self.columns))
     }
 
     /// reads a range of rows
-    pub fn read_rows(&self, index: std::ops::Range<usize>) -> io::Result<Vec<Row>> {
+    pub fn read_rows(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>> {
         let mut rows: Vec<Row> = Vec::with_capacity(index.len());
         for id in index {
             self.read_and_push(id, &mut rows)?;
@@ -187,7 +147,7 @@ impl DataFrame {
     }
 
     /// returns the rows in reverse order
-    pub fn reverse(&self) -> io::Result<Vec<Row>> {
+    pub fn reverse(&self) -> std::io::Result<Vec<Row>> {
         let size = self.size()?;
         let mut rows: Vec<Row> = Vec::with_capacity(size);
         for id in (0..size).rev() {
@@ -197,36 +157,35 @@ impl DataFrame {
     }
 
     /// resizes the table
-    pub fn resize(&mut self, new_size: usize) -> io::Result<usize> {
-        let new_length = new_size as u64 * self.record_size as u64;
-        self.file.set_len(new_length)?;
+    pub fn resize(&mut self, new_size: usize) -> std::io::Result<usize> {
+        self.device.resize(new_size)?;
         Ok(1)
     }
 
     /// returns the allocated sizes the table (in numbers of rows)
-    pub fn size(&self) -> io::Result<usize> {
-        Ok((self.file.metadata()?.len() as usize) / self.record_size)
+    pub fn size(&self) -> std::io::Result<usize> {
+        self.device.len()
     }
 
-    fn to_offset(&self, id: usize) -> u64 { (id as u64) * (self.record_size as u64) }
-
     /// restores a deleted row to an active state
-    pub fn undelete(&mut self, id: usize) -> io::Result<usize> {
+    pub fn undelete(&mut self, id: usize) -> std::io::Result<usize> {
         self.overwrite_row_metadata(id, &RowMetadata::new(true))
     }
 
     /// updates a specified row by ID
-    pub fn update(&mut self, row: Row) -> io::Result<usize> {
+    pub fn update(&mut self, row: Row) -> std::io::Result<usize> {
         // retrieve the original row
         let (orig_row, orig_rmd) = self.read_row(row.get_id())?;
 
         // if we retrieved an active row, construct a composite row
         let new_row = if orig_rmd.is_allocated {
-            let mut fields = vec![];
-            for (b, a) in row.get_fields().iter().zip(orig_row.get_fields().iter()) {
-                let value = if b.value != Undefined { &b.value } else { &a.value };
-                fields.push(Field::new(value.clone()));
-            }
+            let fields = orig_row.get_fields().iter().zip(row.get_fields().iter()).map(|(a, b)| {
+                Field::new(match (&b.value, &a.value) {
+                    (b, _)  if *b != Undefined => b.clone(),
+                    (_, a)  if *a != Undefined => a.clone(),
+                    _ => Null
+                })
+            }).collect();
             Row::new(row.get_id(), self.columns.clone(), fields)
         } else { row };
 
@@ -244,7 +203,7 @@ impl DataFrame {
 
 impl AddAssign for DataFrame {
     fn add_assign(&mut self, rhs: Self) {
-        fn do_add(lhs: &mut DataFrame, rhs: DataFrame) -> io::Result<()> {
+        fn do_add(lhs: &mut DataFrame, rhs: DataFrame) -> std::io::Result<()> {
             for id in 0..rhs.size()? {
                 let (row, metadata) = rhs.read_row(id)?;
                 if metadata.is_allocated { lhs.append(&row)?; }
@@ -262,6 +221,12 @@ impl AddAssign for DataFrame {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use rand::{Rng, RngCore, thread_rng};
+
+    use shared_lib::cnv_error;
+
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::dataframes::DataFrame;
     use crate::fields::Field;
@@ -276,7 +241,7 @@ mod tests {
     #[test]
     fn test_add_assign() {
         // create a dataframe with a single (encoded) row
-        let mut df0: DataFrame = make_rows_from_bytes(
+        let mut df0 = make_rows_from_bytes(
             "add_assign", "stocks", "quotes0", make_columns(), &mut vec![
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'A', b'C', b'E',
@@ -284,7 +249,7 @@ mod tests {
                 0b1000_0000, 64, 94, 220, 204, 204, 204, 204, 205,
             ]).unwrap();
         // decode a second dataframe with a single (encoded) row
-        let df1: DataFrame = make_rows_from_bytes(
+        let df1 = make_rows_from_bytes(
             "add_assign", "stocks", "quotes1", make_columns(), &mut vec![
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 1,
                 0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'E', b'R',
@@ -571,7 +536,7 @@ mod tests {
             "dataframes", "resize", "quotes", make_columns()).unwrap();
         let _ = df.resize(0).unwrap();
         df.resize(5).unwrap();
-        assert_eq!(df.length().unwrap(), (5 * df.record_size) as u64);
+        assert_eq!(df.size().unwrap(), 5);
     }
 
     #[test]
@@ -645,5 +610,66 @@ mod tests {
         assert_eq!(updated_row, row!(1, phys_columns, vec![
             StringValue("DORA".into()), StringValue("AMEX".into()), Float64Value(33.33),
         ]))
+    }
+
+    #[test]
+    fn performance_test() -> std::io::Result<()> {
+        let columns = vec![
+            TableColumn::new("symbol", StringType(4), Null, 9),
+            TableColumn::new("exchange", StringType(8), Null, 22),
+            TableColumn::new("lastSale", Float64Type, Null, 39),
+        ];
+        let total = 100_000;
+        let mut df = make_dataframe(
+            "dataframes", "performance_test", "quotes", make_columns()).unwrap();
+
+        test_write_performance(&mut df, &columns, total)?;
+        test_read_performance(&df)?;
+        Ok(())
+    }
+
+    fn test_write_performance(df: &mut DataFrame, columns: &Vec<TableColumn>, total: usize) -> std::io::Result<()> {
+        use rand::distributions::Uniform;
+        use rand::prelude::ThreadRng;
+        let exchanges = ["AMEX", "NASDAQ", "NYSE", "OTCBB", "OTHEROTC"];
+        let mut rng: ThreadRng = thread_rng();
+        let start_time = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| cnv_error!(e))?.as_millis();
+        for _ in 0..total {
+            let symbol: String = (0..4)
+                .map(|_| rng.gen_range(b'A'..=b'Z') as char)
+                .collect();
+            let exchange = exchanges[rng.next_u32() as usize % exchanges.len()];
+            let last_sale = 400.0 * rng.sample(Uniform::new(0.0, 1.0));
+            let row = make_quote(0, &columns, &symbol, exchange, last_sale);
+            df.append(&row)?;
+        }
+        let end_time = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| cnv_error!(e))?.as_millis();
+        let elapsed_time = end_time - start_time;
+        let elapsed_time_sec = elapsed_time as f64 / 1000.;
+        let rpm = total as f64 / elapsed_time as f64;
+        println!("wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+                 total, elapsed_time, elapsed_time_sec, rpm);
+        Ok(())
+    }
+
+    fn test_read_performance(df: &DataFrame) -> std::io::Result<()> {
+        let limit = df.size()?;
+        let mut total = 0;
+        let start_time = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| cnv_error!(e))?.as_millis();
+        for id in 0..limit {
+            let (_row, rmd) = df.read_row(id)?;
+            if rmd.is_allocated { total += 1; }
+        }
+        let end_time = SystemTime::now().duration_since(UNIX_EPOCH)
+            .map_err(|e| cnv_error!(e))?.as_millis();
+        let elapsed_time = end_time - start_time;
+        let elapsed_time_sec = elapsed_time as f64 / 1000.;
+        let rpm = total as f64 / elapsed_time as f64;
+        println!("read {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+                 total, elapsed_time, elapsed_time_sec, rpm);
+        Ok(())
     }
 }

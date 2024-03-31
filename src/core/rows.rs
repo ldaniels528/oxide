@@ -16,7 +16,7 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Null, RecordNumber};
 
 /// Represents a row of a table structure.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Row {
     pub(crate) id: usize,
     pub(crate) columns: Vec<TableColumn>,
@@ -58,9 +58,14 @@ impl Row {
         Self::new(0, columns.clone(), columns.iter().map(|_| Field::new(Null)).collect())
     }
 
+    /// computes the total record size (in bytes)
+    pub fn compute_record_size(columns: &Vec<TableColumn>) -> usize {
+        Row::overhead() + columns.iter().map(|c| c.max_physical_size).sum::<usize>()
+    }
+
     /// Returns the binary-encoded equivalent of the row.
     pub fn encode(&self) -> Vec<u8> {
-        let capacity = self.record_size();
+        let capacity = self.get_record_size();
         let mut buf = Vec::with_capacity(capacity);
         // include the field metadata and row ID
         buf.push(RowMetadata::new(true).encode());
@@ -87,15 +92,12 @@ impl Row {
 
     pub fn get_id(&self) -> usize { self.id }
 
+    /// returns the total record size (in bytes)
+    pub fn get_record_size(&self) -> usize { Self::compute_record_size(&self.columns) }
+
     /// Represents the number of bytes before the start of column data, which includes
     /// the embedded row metadata (1-byte) and row ID (4- or 8-bytes)
-    pub fn overhead() -> usize {
-        1 + size_of::<usize>()
-    }
-
-    pub fn record_size(&self) -> usize {
-        Self::overhead() + self.columns.iter().map(|c| c.max_physical_size).sum::<usize>()
-    }
+    pub fn overhead() -> usize { 1 + size_of::<usize>() }
 
     /// Returns a [HashMap] containing name-values pairs that represent the row's internal state.
     pub fn to_hash_map(&self) -> HashMap<String, TypedValue> {
@@ -106,6 +108,8 @@ impl Row {
         }
         mapping
     }
+
+    fn to_row_offset(&self, id: usize) -> u64 { (id as u64) * (Self::compute_record_size(&self.columns) as u64) }
 
     /// Returns a [Vec] containing the values in order of the fields within the row.
     pub fn unwrap(&self) -> Vec<&TypedValue> {
@@ -132,7 +136,8 @@ impl Index<usize> for Row {
 #[macro_export]
 macro_rules! row {
     ($id:expr, $columns:expr, $values:expr) => {
-        Row::new($id, $columns.clone(), $values.iter().map(|v| Field::new(v.clone())).collect())
+        crate::rows::Row::new($id, $columns.clone(), $values.iter()
+            .map(|v| crate::fields::Field::new(v.clone())).collect())
     }
 }
 

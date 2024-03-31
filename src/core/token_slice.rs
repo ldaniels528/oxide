@@ -11,7 +11,7 @@ use crate::tokenizer;
 use crate::tokens::Token;
 
 /// TokenSlice is an immutable navigable sequence of tokens.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct TokenSlice {
     tokens: Vec<Token>,
     pos: isize,

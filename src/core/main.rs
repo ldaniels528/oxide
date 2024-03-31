@@ -15,7 +15,7 @@ use shared_lib::{cnv_error, fail, get_host_and_port};
 use shared_lib::{RemoteCallRequest, RemoteCallResponse};
 
 use crate::compiler::Compiler;
-use crate::dataframe_actor::DataframeIO;
+use crate::dataframe_actor::DataframeActor;
 use crate::dataframe_config::DataFrameConfig;
 use crate::machine::MachineState;
 use crate::namespaces::Namespace;
@@ -24,6 +24,7 @@ use crate::server::{RowJs, SystemInfoJs, to_row, to_row_json};
 use crate::table_columns::TableColumn;
 use crate::websockets::OxideWebSocket;
 
+mod byte_row_collection;
 mod codec;
 mod compiler;
 mod dataframe_actor;
@@ -33,6 +34,7 @@ mod data_types;
 mod expression;
 mod field_metadata;
 mod fields;
+mod file_row_collection;
 mod machine;
 mod namespaces;
 mod opcode;
@@ -52,14 +54,14 @@ mod websockets;
 
 #[derive(Debug)]
 pub struct AppState {
-    actor: Addr<DataframeIO>,
+    actor: Addr<DataframeActor>,
     machine: Mutex<MachineState>,
 }
 
 impl AppState {
     pub fn new() -> Self {
         AppState {
-            actor: DataframeIO::new().start(),
+            actor: DataframeActor::new().start(),
             machine: Mutex::new(MachineState::new()),
         }
     }
@@ -437,7 +439,7 @@ mod tests {
 
     #[actix::test]
     async fn test_websocket() {
-        let app = test::init_service(web_routes!()).await;
+        let _ = test::init_service(web_routes!()).await;
         match send_message("Hello, WebSocket Server!").await {
             Ok(_) => {
                 match send_message("I need some info!").await {

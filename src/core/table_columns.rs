@@ -59,7 +59,8 @@ impl TableColumn {
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::{Float64Type, StringType};
-    use crate::typed_values::TypedValue::{Float64Value, StringValue};
+    use crate::testdata::make_columns;
+    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
     use super::*;
 
@@ -82,5 +83,16 @@ mod tests {
         assert_eq!(column.default_value, StringValue("N/A".into()));
         assert_eq!(&column.data_type.to_column_type(), column_desc.get_column_type());
         assert_eq!(column.max_physical_size, 19);
+    }
+
+    #[test]
+    fn test_differences() {
+        let generated: Vec<TableColumn> = TableColumn::from_columns(&make_columns()).unwrap();
+        let natural: Vec<TableColumn> = vec![
+            TableColumn::new("symbol", StringType(4), Null, 9),
+            TableColumn::new("exchange", StringType(4), Null, 22),
+            TableColumn::new("lastSale", Float64Type, Null, 35),
+        ];
+        assert_eq!(generated, natural);
     }
 }

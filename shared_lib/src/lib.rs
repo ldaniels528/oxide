@@ -2,8 +2,6 @@
 // shared libraries
 ////////////////////////////////////////////////////////////////////
 
-use std::io;
-
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -14,7 +12,7 @@ macro_rules! cnv_error {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct RemoteCallRequest {
     code: String,
 }
@@ -27,14 +25,14 @@ impl RemoteCallRequest {
     pub fn get_code(&self) -> &String { &self.code }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RemoteCallResponse {
     result: Value,
     message: Option<String>,
 }
 
 impl RemoteCallResponse {
-    pub fn from_string(json_string: &str) -> io::Result<RemoteCallResponse> {
+    pub fn from_string(json_string: &str) -> std::io::Result<RemoteCallResponse> {
         serde_json::from_str(json_string).map_err(|e| cnv_error!(e))
     }
 
@@ -75,7 +73,7 @@ pub fn get_host_and_port(args: Vec<String>) -> std::io::Result<(String, String)>
     let port_regex = regex::Regex::new(r"^\d+$").map_err(|e| cnv_error!(e))?;
     if !port_regex.is_match(&port) {
         return fail(format!("Port number '{}' is invalid", port));
-    };
+    }
     Ok((host, port))
 }
 

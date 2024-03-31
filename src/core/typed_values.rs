@@ -30,6 +30,7 @@ const UUID_FORMAT: &str =
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     Array(Vec<TypedValue>),
+    ArrayOfRows(Vec<Row>),
     BLOB(Vec<u8>),
     Boolean(bool),
     CLOB(Vec<char>),
@@ -43,7 +44,7 @@ pub enum TypedValue {
     Null,
     RecordNumber(usize),
     StringValue(String),
-    TableRows(Vec<Row>),
+    StructValue(Row),
     Undefined,
     UUIDValue([u8; 16]),
 }
@@ -86,6 +87,7 @@ impl TypedValue {
                 for item in items { bytes.extend(item.encode()); }
                 bytes
             }
+            ArrayOfRows(_rows) => todo!(),
             BLOB(bytes) => codec::encode_u8x_n(bytes.to_vec()),
             Boolean(v) => [if *v { 1 } else { 0 }].to_vec(),
             CLOB(chars) => codec::encode_chars(chars.to_vec()),
@@ -99,7 +101,7 @@ impl TypedValue {
             Null | Undefined => [0u8; 0].to_vec(),
             RecordNumber(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
-            TableRows(_rows) => todo!(),
+            StructValue(_row) => todo!(),
             UUIDValue(guid) => guid.to_vec(),
         }
     }
@@ -150,6 +152,7 @@ impl TypedValue {
         match self {
             Array(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<Value>>()),
+            ArrayOfRows(rows) => serde_json::json!(rows),
             BLOB(bytes) => serde_json::json!(bytes),
             Boolean(b) => serde_json::json!(b),
             CLOB(chars) => serde_json::json!(chars),
@@ -163,7 +166,7 @@ impl TypedValue {
             Null => serde_json::Value::Null,
             RecordNumber(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
-            TableRows(rows) => serde_json::json!(rows),
+            StructValue(row) => serde_json::json!(row),
             Undefined => serde_json::Value::Null,
             UUIDValue(guid) => serde_json::json!(Uuid::from_bytes(*guid).to_string()),
         }
@@ -175,6 +178,7 @@ impl TypedValue {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("[ {} ]", values.join(", "))
             }
+            ArrayOfRows(rows) => serde_json::json!(rows).to_string(),
             BLOB(bytes) => hex::encode(bytes),
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
             CLOB(chars) => chars.into_iter().collect(),
@@ -188,7 +192,7 @@ impl TypedValue {
             Null => "null".into(),
             RecordNumber(number) => number.to_string(),
             StringValue(string) => string.into(),
-            TableRows(rows) => serde_json::json!(rows).to_string(),
+            StructValue(row) => serde_json::json!(row).to_string(),
             Undefined => "undefined".into(),
             UUIDValue(guid) => Uuid::from_bytes(*guid).to_string(),
         }

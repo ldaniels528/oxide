@@ -4,16 +4,32 @@
 
 use std::collections::HashMap;
 
+use actix::Addr;
+use log::error;
 use serde::{Deserialize, Serialize};
 use tokio::io;
 
 use shared_lib::fail;
+
+use crate::dataframe_actor::DataframeActor;
 use crate::expression::Expression;
+use crate::namespaces::Namespace;
+use crate::read_fully;
+use crate::rows::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
+/// returns a filtered collection of rows based on the supplied condition.
+macro_rules! filter_rows {
+    ($ms:expr, $condition:expr, $rows:expr, $limit:expr, $f:expr) => {
+        for row in $rows {
+            if $ms.is_true(&row, $condition) { $f(row.clone()); }
+        }
+    }
+}
+
 /// represents the state of the machine.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MachineState {
     stack: Vec<TypedValue>,
     variables: HashMap<String, TypedValue>,
@@ -45,6 +61,8 @@ impl MachineState {
             Between(a, b, c) =>
                 self.expand3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa <= cc))),
             CodeBlock(ops) => self.evaluate_all(ops),
+            Delete { table, condition, limit } =>
+                self.sql_delete(table, condition, limit),
             Divide(a, b) =>
                 self.expand2(a, b, |aa, bb| aa / bb),
             Equal(a, b) =>
@@ -126,6 +144,20 @@ impl MachineState {
         Ok((ms, result))
     }
 
+    fn expand(ms: MachineState, expr: &Option<Box<Expression>>) -> io::Result<(MachineState, TypedValue)> {
+        match expr {
+            Some(item) => ms.evaluate(item),
+            None => Ok((ms, Undefined))
+        }
+    }
+
+    fn expand_vec(ms: MachineState, expr: &Option<Vec<Expression>>) -> io::Result<(MachineState, TypedValue)> {
+        match expr {
+            Some(items) => ms.evaluate_array(items),
+            None => Ok((ms, Undefined))
+        }
+    }
+
     /// evaluates the boxed expression and applies the supplied function
     fn expand1(&self,
                a: &Box<Expression>,
@@ -190,6 +222,59 @@ impl MachineState {
         values.iter().fold(self.clone(), |ms, tv| ms.push(tv.clone()))
     }
 
+    fn filter_rows_in_memory(&self,
+                             condition: &Option<Box<Expression>>,
+                             rows: Vec<Row>,
+                             limit: TypedValue) -> io::Result<(MachineState, TypedValue)> {
+        let ms = self.clone();
+        let mut out = vec![];
+        filter_rows!(ms, condition.clone(), rows, limit, |row| out.push(row));
+        Ok((self.clone(), ArrayOfRows(out)))
+    }
+
+    async fn filter_rows_on_disk(&self,
+                                 ns: Namespace,
+                                 condition: &Option<Box<Expression>>,
+                                 actor: Addr<DataframeActor>,
+                                 limit: TypedValue) -> io::Result<(MachineState, TypedValue)> {
+        let ms = self.clone();
+        let mut out = vec![];
+        let rows = read_fully!(actor, ns)?;
+        filter_rows!(ms, condition.clone(), rows, limit, |row: Row| out.push(row.clone()));
+        Ok((self.clone(), ArrayOfRows(out)))
+    }
+
+    fn is_true(&self, row: &Row, condition: Option<Box<Expression>>) -> bool {
+        condition.is_none() || condition.is_some_and(|expr|
+            match self.with_row(row).evaluate(&expr) {
+                Ok((_, result)) => result == Boolean(true),
+                Err(err) => {
+                    error!("{}", err);
+                    false
+                }
+            })
+    }
+
+    pub fn set(&self, name: &str, value: TypedValue) -> Self {
+        let mut variables = self.variables.clone();
+        variables.insert(name.to_string(), value);
+        MachineState {
+            stack: self.stack.clone(),
+            variables,
+        }
+    }
+
+    fn sql_delete(&self,
+                  from: &Box<Expression>,
+                  condition: &Option<Box<Expression>>,
+                  limit: &Option<Box<Expression>>) -> io::Result<(MachineState, TypedValue)> {
+        let (ms, _limit) = Self::expand(self.clone(), limit)?;
+        match Self::expand(ms, &Some(from.clone()))? {
+            //(ms, ArrayOfRows(rows)) => ms.process_delete_rows(condition, rows, _limit),
+            (_, x) => fail(format!("Type mismatch: expected an iterable - {:?}", x))
+        }
+    }
+
     fn sql_select(&self,
                   fields: &Vec<Expression>,
                   from: &Option<Box<Expression>>,
@@ -198,29 +283,12 @@ impl MachineState {
                   having: &Option<Box<Expression>>,
                   order_by: &Option<Vec<Expression>>,
                   limit: &Option<Box<Expression>>) -> io::Result<(MachineState, TypedValue)> {
-        fn expand(ms: MachineState, expr: &Option<Box<Expression>>) -> io::Result<(MachineState, TypedValue)> {
-            match expr {
-                Some(e) => ms.evaluate(e),
-                None => Ok((ms, Undefined))
-            }
+        let (ms, _limit) = Self::expand(self.clone(), limit)?;
+        match Self::expand(ms, from)? {
+            (ms, Undefined) => ms.evaluate_array(fields),
+            (ms, ArrayOfRows(rows)) => ms.filter_rows_in_memory(condition, rows, _limit),
+            (_, x) => fail(format!("Type mismatch: expected an iterable - {:?}", x))
         }
-
-        fn expand_vec(ms: MachineState, expr: &Option<Vec<Expression>>) -> io::Result<(MachineState, TypedValue)> {
-            match expr {
-                Some(array) => ms.evaluate_array(array),
-                None => Ok((ms, Undefined))
-            }
-        }
-
-        // resolve all attributes
-        let (ms, _fields) = self.evaluate_array(fields)?;
-        let (ms, _from) = expand(ms, from)?;
-        let (ms, _condition) = expand(ms, condition)?;
-        let (ms, _group_by) = expand_vec(ms, group_by)?;
-        let (ms, _having) = expand(ms, having)?;
-        let (ms, _order_by) = expand_vec(ms, order_by)?;
-        let (ms, _limit) = expand(ms, limit)?;
-        Ok((ms, TableRows(vec![])))
     }
 
     pub fn stack_len(&self) -> usize {
@@ -241,7 +309,14 @@ impl MachineState {
         }
     }
 
-    pub fn set(&self, name: &str, value: TypedValue) -> Self {
+    pub fn with_row(&self, row: &Row) -> Self {
+        row.fields.iter().zip(row.columns.iter())
+            .fold(self.clone(), |ms, (f, c)| {
+                ms.with_variable(c.get_name(), f.value.clone())
+            })
+    }
+
+    pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.clone();
         variables.insert(name.to_string(), value);
         MachineState {
@@ -259,14 +334,16 @@ pub type OpCode = fn(&MachineState) -> io::Result<MachineState>;
 mod tests {
     use crate::compiler::Compiler;
     use crate::expression::{FALSE, NULL, TRUE};
-    use crate::expression::Expression::{Factorial, Literal};
+    use crate::expression::Expression::{Divide, Factorial, Literal, Variable};
+    use crate::row;
+    use crate::table_columns::TableColumn;
+    use crate::testdata::make_columns;
 
     use super::*;
 
     #[test]
     fn test_compile_and_evaluate_all_n_pow_2() {
-        let ms = MachineState::new()
-            .set("n", Int64Value(5));
+        let ms = MachineState::new().set("n", Int64Value(5));
         let opcodes = Compiler::compile("n ** 2").unwrap();
         let (_ms, result) = ms.evaluate_all(&opcodes).unwrap();
         assert_eq!(result, Int64Value(25))
@@ -274,8 +351,7 @@ mod tests {
 
     #[test]
     fn test_compile_and_evaluate_all_n_gt_5() {
-        let ms = MachineState::new()
-            .set("n", Int64Value(7));
+        let ms = MachineState::new().set("n", Int64Value(7));
         let opcodes = Compiler::compile("n > 5").unwrap();
         let (_ms, result) = ms.evaluate_all(&opcodes).unwrap();
         assert_eq!(result, Boolean(true))
@@ -301,12 +377,11 @@ mod tests {
 
     #[test]
     fn test_push_all() {
-        let ms = MachineState::new()
-            .push_all(vec![
-                Float32Value(2.), Float64Value(3.),
-                Int16Value(4), Int32Value(5),
-                Int64Value(6), StringValue("Hello World".into()),
-            ]);
+        let ms = MachineState::new().push_all(vec![
+            Float32Value(2.), Float64Value(3.),
+            Int16Value(4), Int32Value(5),
+            Int64Value(6), StringValue("Hello World".into()),
+        ]);
         assert_eq!(ms.stack, vec![
             Float32Value(2.), Float64Value(3.),
             Int16Value(4), Int32Value(5),
@@ -315,12 +390,74 @@ mod tests {
     }
 
     #[test]
-    fn test_variables() {
+    fn test_sql_select() {
+        let ops = Compiler::compile(r#"
+            select symbol, exchange, lastSale from stocks
+            where lastSale < 1.0
+            order by symbol
+            limit 5
+            "#).unwrap();
+        let columns = make_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let ms = MachineState::new()
+            .with_variable("stocks", ArrayOfRows(vec![
+                row!(0, phys_columns, vec![
+                    StringValue("ABC".into()), StringValue("AMEX".into()), Float64Value(11.77),
+                ]),
+                row!(1, phys_columns, vec![
+                    StringValue("UNO".into()), StringValue("OTC".into()), Float64Value(0.2456),
+                ]),
+                row!(2, phys_columns, vec![
+                    StringValue("BIZ".into()), StringValue("NYSE".into()), Float64Value(23.66),
+                ]),
+                row!(3, phys_columns, vec![
+                    StringValue("GOTO".into()), StringValue("OTC".into()), Float64Value(0.1428),
+                ]),
+                row!(4, phys_columns, vec![
+                    StringValue("BOOM".into()), StringValue("NASD".into()), Float64Value(56.87),
+                ]),
+            ]));
+        let (_, result) = ms.evaluate_all(&ops).unwrap();
+        assert_eq!(result, ArrayOfRows(vec![
+            row!(1, phys_columns, vec![
+                StringValue("UNO".into()), StringValue("OTC".into()), Float64Value(0.2456),
+            ]),
+            row!(3, phys_columns, vec![
+                StringValue("GOTO".into()), StringValue("OTC".into()), Float64Value(0.1428),
+            ]),
+        ]));
+    }
+
+    #[test]
+    fn test_variables_directly_1() {
         let ms = MachineState::new()
             .set("abc", Int32Value(5))
             .set("xyz", Int32Value(58));
         assert_eq!(ms.get("abc"), Some(Int32Value(5)));
         assert_eq!(ms.get("xyz"), Some(Int32Value(58)));
+    }
+
+    #[test]
+    fn test_variables_directly_2() {
+        let ms = MachineState::new()
+            .set("x", Int64Value(50));
+        let (ms, result) = ms.evaluate(
+            &Divide(Box::new(Variable("x".into())), Box::new(Literal(Int64Value(7))))
+        ).unwrap();
+        assert_eq!(result, Int64Value(7));
+        assert_eq!(ms.get("x"), Some(Int64Value(50)));
+    }
+
+    #[test]
+    fn test_variables_indirectly() {
+        let ops = Compiler::compile(r#"
+            x := 5
+            y := 7
+            x * y
+        "#).unwrap();
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate_all(&ops).unwrap();
+        assert_eq!(result, Int64Value(35));
     }
 
     #[ignore]
