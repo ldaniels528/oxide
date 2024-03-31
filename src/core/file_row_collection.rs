@@ -6,6 +6,7 @@ use std::fmt::{Debug, Formatter};
 use std::fs::{File, OpenOptions};
 use std::io::{Seek, Write};
 use std::os::unix::fs::FileExt;
+use std::sync::Arc;
 
 use crate::dataframe_config::DataFrameConfig;
 use crate::namespaces::Namespace;
@@ -15,18 +16,19 @@ use crate::rows::Row;
 use crate::table_columns::TableColumn;
 
 /// File-based RowCollection implementation
+#[derive(Clone)]
 pub struct FileRowCollection {
-    file: File,
+    file: Arc<File>,
     record_size: usize,
 }
 
 impl FileRowCollection {
     pub fn create(ns: Namespace, record_size: usize) -> std::io::Result<FileRowCollection> {
-        let file = Self::open_crw(&ns)?;
+        let file = Arc::new(Self::open_crw(&ns)?);
         Ok(Self::new(file, record_size))
     }
 
-    pub fn new(file: File, record_size: usize) -> FileRowCollection {
+    pub fn new(file: Arc<File>, record_size: usize) -> FileRowCollection {
         FileRowCollection { file, record_size }
     }
 
@@ -34,7 +36,7 @@ impl FileRowCollection {
         let cfg = DataFrameConfig::load(&ns)?;
         let columns = TableColumn::from_columns(&cfg.columns)?;
         let record_size = Row::compute_record_size(&columns);
-        let file = Self::open_rw(&ns)?;
+        let file = Arc::new(Self::open_rw(&ns)?);
         Ok(Self::new(file, record_size))
     }
 
@@ -65,14 +67,12 @@ impl RowCollection for FileRowCollection {
     fn overwrite(&mut self, id: usize, block: Vec<u8>) -> std::io::Result<usize> {
         let offset = self.to_row_offset(id);
         let _ = &self.file.write_at(&block, offset)?;
-        self.file.flush()?;
         Ok(1)
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: u8) -> std::io::Result<usize> {
         let offset = self.to_row_offset(id);
         let _ = &self.file.write_at(&[metadata], offset)?;
-        self.file.flush()?;
         Ok(1)
     }
 
@@ -106,7 +106,6 @@ impl RowCollection for FileRowCollection {
         let new_length = new_size as u64 * self.record_size as u64;
         // modify the file
         self.file.set_len(new_length)?;
-        self.file.flush()?;
         Ok(())
     }
 }
@@ -114,6 +113,8 @@ impl RowCollection for FileRowCollection {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use crate::codec;
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::fields::Field;
@@ -189,7 +190,7 @@ mod tests {
         // create a new empty table file
         let (file, columns, record_size) =
             make_table_file("finance", "stocks", "quotes", make_columns());
-        let mut frc = FileRowCollection::new(file, record_size);
+        let mut frc = FileRowCollection::new(Arc::new(file), record_size);
         frc.resize(0).unwrap();
 
         // create a new row
@@ -228,7 +229,7 @@ mod tests {
 
         // read the first column
         let column: &TableColumn = &columns[0];
-        let frc = FileRowCollection::new(file, record_size);
+        let frc = FileRowCollection::new(Arc::new(file), record_size);
         let buf = frc.read_field(0, column.offset, column.max_physical_size).unwrap();
         let value: TypedValue = TypedValue::decode(&column.data_type, &buf, 1);
         assert_eq!(value, StringValue("FACT".into()));
@@ -247,7 +248,7 @@ mod tests {
                 ]);
 
         // read the row
-        let frc = FileRowCollection::new(file, record_size);
+        let frc = FileRowCollection::new(Arc::new(file), record_size);
         let bytes = frc.read(0).unwrap();
         let (row, metadata) = Row::decode(&bytes, &columns);
 
@@ -279,7 +280,7 @@ mod tests {
                 0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
             ]);
 
-        let mut frc = FileRowCollection::new(file, record_size);
+        let mut frc = FileRowCollection::new(Arc::new(file), record_size);
         let _ = frc.resize(0).unwrap();
         assert_eq!(frc.len().unwrap(), 0);
     }
@@ -295,7 +296,7 @@ mod tests {
                 0b1000_0000, 64, 96, 99, 102, 102, 102, 102, 102,
             ]);
 
-        let mut frc = FileRowCollection::new(file, record_size);
+        let mut frc = FileRowCollection::new(Arc::new(file), record_size);
         let _ = frc.resize(5).unwrap();
         assert_eq!(frc.len().unwrap(), 5);
     }

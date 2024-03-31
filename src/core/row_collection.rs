@@ -4,6 +4,7 @@
 
 use std::fmt::Debug;
 use std::fs::File;
+use std::sync::Arc;
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::file_row_collection::FileRowCollection;
@@ -40,7 +41,7 @@ impl dyn RowCollection {
 
     /// creates a new [RowCollection] from a file.
     pub fn from_file(file: File, record_size: usize) -> impl RowCollection {
-        FileRowCollection::new(file, record_size)
+        FileRowCollection::new(Arc::new(file), record_size)
     }
 }
 
