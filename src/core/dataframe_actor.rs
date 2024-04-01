@@ -71,7 +71,7 @@ impl DataframeActor {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = vec![];
         for id in 0..df.len()? {
-            df.read_and_push(id, &mut rows)?
+            df.read_then_push(id, &mut rows)?
         }
         Ok(rows)
     }
@@ -80,7 +80,7 @@ impl DataframeActor {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = vec![];
         for id in range {
-            df.read_and_push(id, &mut rows)?
+            df.read_then_push(id, &mut rows)?
         }
         Ok(rows)
     }

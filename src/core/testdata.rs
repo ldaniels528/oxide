@@ -5,7 +5,6 @@
 use std::fs::File;
 use std::io::Write;
 
-use crate::data_types::DataType::{Float64Type, StringType};
 use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::file_row_collection::FileRowCollection;
@@ -15,7 +14,7 @@ use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
-use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
+use crate::typed_values::TypedValue::{Float64Value, StringValue};
 
 pub fn make_columns() -> Vec<ColumnJs> {
     vec![
@@ -70,11 +69,7 @@ pub fn make_table(database: &str,
 }
 
 pub fn make_table_columns() -> Vec<TableColumn> {
-    vec![
-        TableColumn::new("symbol", StringType(4), Null, 9),
-        TableColumn::new("exchange", StringType(4), Null, 22),
-        TableColumn::new("lastSale", Float64Type, Null, 35),
-    ]
+    TableColumn::from_columns(&make_columns()).unwrap()
 }
 
 pub fn make_table_file(database: &str,

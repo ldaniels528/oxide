@@ -20,6 +20,7 @@ pub trait RowCollection: Debug {
     /// returns the number of active rows in the table
     fn len(&self) -> std::io::Result<usize>;
 
+    /// overwrites the specified row by ID
     fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<usize>;
 
     /// overwrites the metadata of a specified row by ID

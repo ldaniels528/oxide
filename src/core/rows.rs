@@ -13,7 +13,7 @@ use crate::fields::Field;
 use crate::row_metadata::RowMetadata;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Null, RecordNumber};
+use crate::typed_values::TypedValue::{Null, RecordNumber, Undefined};
 
 /// Represents a row of a table structure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -84,6 +84,10 @@ impl Row {
             .find_map(|(c, f)| {
                 if c.get_name() == name { Some(f.value.clone()) } else { None }
             })
+    }
+
+    pub fn get(&self, name: &str) -> TypedValue {
+        self.find_field_by_name(name).unwrap_or(Undefined)
     }
 
     pub fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
@@ -176,6 +180,35 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_rows() {
+        let columns = make_table_columns();
+        let rows_a = vec![
+            make_quote(0, &make_table_columns(), "BEAM", "NYSE", 11.99),
+            make_quote(1, &make_table_columns(), "LITE", "AMEX", 78.35),
+        ];
+        let rows_b = Row::decode_rows(&columns, vec![vec![
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'A', b'M',
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+            0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
+        ], vec![
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 1,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'L', b'I', b'T', b'E',
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'A', b'M', b'E', b'X',
+            0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
+        ]]);
+        assert_eq!(rows_a, rows_b);
+    }
+
+    #[test]
+    fn test_empty() {
+        let columns = make_table_columns();
+        let row_a = Row::empty(&columns);
+        let row_b = row!(0, &columns, vec![Null, Null, Null]);
+        assert_eq!(row_a, row_b);
+    }
+
+    #[test]
     fn test_encode() {
         let row = make_quote(255, &make_table_columns(), "RED", "NYSE", 78.35);
         assert_eq!(row.encode(), vec![
@@ -203,6 +236,18 @@ mod tests {
         assert_eq!(row.find_field_by_name("symbol"), Some(StringValue("GE".into())));
         assert_eq!(row.find_field_by_name("exchange"), Some(StringValue("NYSE".into())));
         assert_eq!(row.find_field_by_name("lastSale"), Some(Float64Value(48.88)));
+        assert_eq!(row.find_field_by_name("rating"), None);
+    }
+
+    #[test]
+    fn test_get_by_name() {
+        let row = row!(111, make_table_columns(), vec![
+            StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
+        ]);
+        assert_eq!(row.get("symbol"), StringValue("GE".into()));
+        assert_eq!(row.get("exchange"), StringValue("NYSE".into()));
+        assert_eq!(row.get("lastSale"), Float64Value(48.88));
+        assert_eq!(row.get("rating"), Undefined);
     }
 
     #[test]
@@ -215,6 +260,14 @@ mod tests {
             "exchange".into() => StringValue("TCE".into()),
             "lastSale".into() => Float64Value(1230.78),
         ));
+    }
+
+    #[test]
+    fn test_to_row_offset() {
+        let row = row!(111, make_table_columns(), vec![
+            StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
+        ]);
+        assert_eq!(row.to_row_offset(2), 2 * row.get_record_size() as u64);
     }
 
     #[test]
