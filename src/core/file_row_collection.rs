@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::{Debug, Formatter};
+use std::fs;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::FileExt;
 use std::sync::Arc;
@@ -44,7 +45,9 @@ impl FileRowCollection {
 
     /// convenience function to create, read or write a table file
     pub(crate) fn open_crw(ns: &Namespace) -> std::io::Result<File> {
-        OpenOptions::new().create(true).read(true).write(true).open(ns.get_table_file_path())
+        let root_path = ns.get_root_path();
+        fs::create_dir_all(root_path.clone())?;
+        OpenOptions::new().truncate(true).create(true).read(true).write(true).open(root_path)
     }
 
     /// convenience function to read or write a table file
