@@ -77,6 +77,18 @@ pub fn get_host_and_port(args: Vec<String>) -> std::io::Result<(String, String)>
     Ok((host, port))
 }
 
+pub fn ns_uri(database: &str, schema: &str, name: &str) -> String {
+    format!("/{}/{}/{}", database, schema, name)
+}
+
+pub fn range_uri(database: &str, schema: &str, name: &str, a: usize, b: usize) -> String {
+    format!("/{}/{}/{}/{}/{}", database, schema, name, a, b)
+}
+
+pub fn row_uri(database: &str, schema: &str, name: &str, id: usize) -> String {
+    format!("/{}/{}/{}/{}", database, schema, name, id)
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {

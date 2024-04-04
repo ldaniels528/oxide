@@ -2,10 +2,12 @@
 // namespaces module
 ////////////////////////////////////////////////////////////////////
 
+use std::env;
+
 use serde::{Deserialize, Serialize};
 
 // Namespace is a logical representation of a Lollypop object namespace or path
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub struct Namespace {
     pub database: String,
     pub schema: String,
@@ -22,6 +24,10 @@ impl Namespace {
         }
     }
 
+    fn oxide_home() -> String {
+        env::var("OXIDE_HOME").unwrap_or("./oxide_db".to_string())
+    }
+
     pub fn id(&self) -> String {
         format!("{}.{}.{}", self.database, self.schema, self.name)
     }
@@ -35,10 +41,9 @@ impl Namespace {
     }
 
     pub fn get_file_path(&self, extension: &str) -> String {
-        // ex: "oxide_db/ns/database/schema/name/name.extension"
+        // ex:  "$OXIDE_HOME/ns/database/schema/name/name.extension"
         let mut builder = String::new();
         builder.push_str(&*self.get_root_path());
-        builder.push('/');
         builder.push_str(&*self.name);
         builder.push('.');
         builder.push_str(&extension);
@@ -57,14 +62,16 @@ impl Namespace {
     }
 
     pub fn get_root_path(&self) -> String {
-        // ex: "oxide_db/ns/database/schema/name/"
+        // ex:  "$OXIDE_HOME/ns/database/schema/name/"
         let mut builder = String::new();
-        builder.push_str("oxide_db/ns/");
+        builder.push_str(&*Self::oxide_home());
+        builder.push_str("/ns/");
         builder.push_str(&self.database);
         builder.push('/');
         builder.push_str(&*self.schema);
         builder.push('/');
         builder.push_str(&*self.name);
+        builder.push('/');
         builder
     }
 
@@ -80,16 +87,18 @@ mod tests {
 
     #[test]
     fn test_get_blob_file_path() {
+        let oxide_home = Namespace::oxide_home();
         let ns = Namespace::new("securities", "amex", "Stocks");
         let filename = ns.get_blob_file_path();
-        assert_eq!(filename, "oxide_db/ns/securities/amex/Stocks/Stocks.blob")
+        assert_eq!(filename, format!("{}/ns/securities/amex/Stocks/Stocks.blob", oxide_home))
     }
 
     #[test]
     fn test_get_config_file_path() {
+        let oxide_home = Namespace::oxide_home();
         let ns = Namespace::new("securities", "otc", "Stocks");
         let filename = ns.get_config_file_path();
-        assert_eq!(filename, "oxide_db/ns/securities/otc/Stocks/Stocks.json")
+        assert_eq!(filename, format!("{}/ns/securities/otc/Stocks/Stocks.json", oxide_home))
     }
 
     #[test]
@@ -100,14 +109,16 @@ mod tests {
 
     #[test]
     fn test_get_root_path() {
+        let oxide_home = Namespace::oxide_home();
         let ns = Namespace::new("securities", "nasdaq", "Stocks");
-        assert_eq!(ns.get_root_path(), "oxide_db/ns/securities/nasdaq/Stocks")
+        assert_eq!(ns.get_root_path(), format!("{}/ns/securities/nasdaq/Stocks/", oxide_home))
     }
 
     #[test]
     fn test_get_table_file_path() {
+        let oxide_home = Namespace::oxide_home();
         let ns = Namespace::new("securities", "nyse", "Stocks");
         let filename = ns.get_table_file_path();
-        assert_eq!(filename, "oxide_db/ns/securities/nyse/Stocks/Stocks.table")
+        assert_eq!(filename, format!("{}/ns/securities/nyse/Stocks/Stocks.table", oxide_home))
     }
 }

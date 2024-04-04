@@ -14,7 +14,7 @@ use crate::expression::Expression::*;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Float64Value, Int64Value, StringValue, Undefined};
+use crate::typed_values::TypedValue::{Int64Value, StringValue, Undefined};
 
 /// Represents the compiler state
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -286,7 +286,7 @@ impl Compiler {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::typed_values::TypedValue::Int64Value;
+    use crate::typed_values::TypedValue::{Float64Value, Int64Value};
 
     use super::*;
 

@@ -102,7 +102,7 @@ pub fn to_row(columns: &Vec<TableColumn>, form: RowJs, id: usize) -> Row {
     Row::new(id, columns.clone(), fields)
 }
 
-pub fn to_row_json(row: Row) -> RowJs {
+pub fn to_row_json(row: &Row) -> RowJs {
     RowJs::new(Some(row.id), row.fields.iter().zip(row.get_columns())
         .map(|(f, c)| FieldJs::new(c.get_name(), f.value.to_json())).collect())
 }
@@ -190,7 +190,7 @@ mod tests {
         assert_eq!(determine_column_value(&row_js, "exchange"), StringValue("NYSE".into()));
         assert_eq!(determine_column_value(&row_js, "lastSale"), Float64Value(37.65));
         // cross-convert and verify
-        assert_eq!(to_row_json(row.clone()), row_js.clone());
+        assert_eq!(to_row_json(&row), row_js.clone());
         assert_eq!(to_row(&columns, row_js, 123), row);
     }
 }

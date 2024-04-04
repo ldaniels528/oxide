@@ -246,97 +246,37 @@ mod tests {
 
     #[test]
     fn test_add_assign() {
-        // create a dataframe with a single (encoded) row
-        let mut df0 = make_rows_from_bytes(
-            "add_assign", "stocks", "quotes0", make_columns(), &mut vec![
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'A', b'C', b'E',
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'A', b'S', b'D',
-                0b1000_0000, 64, 94, 220, 204, 204, 204, 204, 205,
-            ]).unwrap();
-        // decode a second dataframe with a single (encoded) row
-        let df1 = make_rows_from_bytes(
-            "add_assign", "stocks", "quotes1", make_columns(), &mut vec![
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 1,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'E', b'R',
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'A', b'M', b'E', b'X',
-                0b1000_0000, 64, 118, 81, 235, 133, 30, 184, 82,
-            ]).unwrap();
+        let columns = make_table_columns();
+        // create a dataframe with a single row
+        let mut df0 = make_dataframe("dataframes", "add_assign", "quotes0", make_columns()).unwrap();
+        df0.append(&make_quote(0, &columns, "RACE", "NASD", 123.45)).unwrap();
+        // create a second dataframe with a single row
+        let mut df1 = make_dataframe("dataframes", "add_assign", "quotes1", make_columns()).unwrap();
+        df1.append(&make_quote(0, &columns, "BEER", "AMEX", 357.12)).unwrap();
         // concatenate the dataframes
         df0 += df1;
         // re-read the rows
         let rows = df0.read_range(0..df0.len().unwrap()).unwrap();
-        let columns = vec![
-            TableColumn::new("symbol", StringType(4), Null, 9),
-            TableColumn::new("exchange", StringType(4), Null, 22),
-            TableColumn::new("lastSale", Float64Type, Null, 35),
-        ];
         assert_eq!(rows, vec![
-            Row {
-                id: 0,
-                columns: columns.clone(),
-                fields: vec![
-                    Field::new(StringValue("RACE".into())),
-                    Field::new(StringValue("NASD".into())),
-                    Field::new(Float64Value(123.45)),
-                ],
-            },
-            Row {
-                id: 1,
-                columns: columns.clone(),
-                fields: vec![
-                    Field::new(StringValue("BEER".into())),
-                    Field::new(StringValue("AMEX".into())),
-                    Field::new(Float64Value(357.12)),
-                ],
-            },
+            make_quote(0, &columns, "RACE", "NASD", 123.45),
+            make_quote(1, &columns, "BEER", "AMEX", 357.12),
         ]);
     }
 
     #[test]
     fn test_append_row_then_read_rows() {
-        // create a dataframe with a single (encoded) row
-        let mut df = make_rows_from_bytes(
-            "dataframes", "stocks", "quotes", make_columns(), &mut vec![
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'R', b'I', b'C', b'E',
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'P', b'I', b'P', b'E',
-                0b1000_0000, 64, 69, 14, 20, 122, 225, 71, 174,
-            ]).unwrap();
-
-        // decode a second row and append it to the dataframe
         let columns = make_table_columns();
-        let (row, _) = Row::decode(&vec![
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 1,
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'E', b'F',
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'C', b'A', b'K', b'E',
-            0b1000_0000, 64, 89, 0, 0, 0, 0, 0, 0,
-        ], &columns);
-        assert_eq!(df.append(&row).unwrap(), 1);
+        // create a dataframe with a single (encoded) row
+        let mut df = make_dataframe("dataframes", "append", "quotes", make_columns()).unwrap();
+        assert_eq!(1, df.append(&make_quote(0, &columns, "RICE", "PIPE", 42.11)).unwrap());
+        // create a second row and append it to the dataframe
+        assert_eq!(1, df.append(&make_quote(0, &columns, "BEEF", "CAKE", 100.0)).unwrap());
 
         // verify the rows
-        let rows = df.read_range(0..2).unwrap();
+        let rows = df.read_range(0..df.len().unwrap()).unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].get_id(), 0);
-        assert_eq!(rows[0].get_fields()[0].metadata.is_active, true);
-        assert_eq!(rows[0].get_fields()[0].metadata.is_compressed, false);
-        assert_eq!(rows[0].get_fields()[0].value, StringValue("RICE".into()));
-        assert_eq!(rows[0].get_fields()[1].metadata.is_active, true);
-        assert_eq!(rows[0].get_fields()[1].metadata.is_compressed, false);
-        assert_eq!(rows[0].get_fields()[1].value, StringValue("PIPE".into()));
-        assert_eq!(rows[0].get_fields()[2].metadata.is_active, true);
-        assert_eq!(rows[0].get_fields()[2].metadata.is_compressed, false);
-        assert_eq!(rows[0].get_fields()[2].value, Float64Value(42.11));
-        assert_eq!(rows[1].get_id(), 1);
-        assert_eq!(rows[1].get_fields()[0].metadata.is_active, true);
-        assert_eq!(rows[1].get_fields()[0].metadata.is_compressed, false);
-        assert_eq!(rows[1].get_fields()[0].value, StringValue("BEEF".into()));
-        assert_eq!(rows[1].get_fields()[1].metadata.is_active, true);
-        assert_eq!(rows[1].get_fields()[1].metadata.is_compressed, false);
-        assert_eq!(rows[1].get_fields()[1].value, StringValue("CAKE".into()));
-        assert_eq!(rows[1].get_fields()[2].metadata.is_active, true);
-        assert_eq!(rows[1].get_fields()[2].metadata.is_compressed, false);
-        assert_eq!(rows[1].get_fields()[2].value, Float64Value(100.0));
+        assert_eq!(rows[0], make_quote(0, &columns, "RICE", "PIPE", 42.11));
+        assert_eq!(rows[1], make_quote(1, &columns, "BEEF", "CAKE", 100.0));
         assert_eq!(df.len().unwrap(), 2);
     }
 
@@ -455,7 +395,7 @@ mod tests {
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "AWAY", "AMEX", 9.73)).unwrap(), 1);
         assert_eq!(df.map(|row| row.get("lastSale")).unwrap(), vec![
             Float64Value(123.45), Float64Value(88.22), Float64Value(51.11),
-            Float64Value(42.33), Float64Value(9.73)
+            Float64Value(42.33), Float64Value(9.73),
         ])
     }
 

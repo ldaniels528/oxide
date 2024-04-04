@@ -43,7 +43,7 @@ pub enum Expression {
     // direct/reference values
     Field(String),
     Literal(TypedValue),
-    NS { database: String, schema: String, name: String },
+    Ns(Namespace),
     Range(Box<Expression>, Box<Expression>),
     Tuple(Vec<Expression>),
     Variable(String),
@@ -85,7 +85,6 @@ pub enum Expression {
         fields: Vec<Expression>,
         values: Vec<Expression>,
     },
-    Ns(Namespace),
     Overwrite {
         table: Box<Expression>,
         fields: Vec<Expression>,

@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::collections::HashMap;
+use std::sync::Mutex;
 
 use actix::Addr;
 use log::error;
@@ -13,6 +14,7 @@ use shared_lib::fail;
 
 use crate::dataframe_actor::DataframeActor;
 use crate::expression::Expression;
+use crate::expression::Expression::Ns;
 use crate::namespaces::Namespace;
 use crate::read_fully;
 use crate::rows::Row;
@@ -42,10 +44,6 @@ impl MachineState {
             stack: Vec::new(),
             variables: HashMap::new(),
         }
-    }
-
-    pub fn add_variables(&mut self, variables: HashMap<String, TypedValue>) {
-        self.variables.extend(variables)
     }
 
     pub fn get_variables(&self) -> &HashMap<String, TypedValue> {
@@ -284,10 +282,22 @@ impl MachineState {
                   order_by: &Option<Vec<Expression>>,
                   limit: &Option<Box<Expression>>) -> io::Result<(MachineState, TypedValue)> {
         let (ms, _limit) = Self::expand(self.clone(), limit)?;
-        match Self::expand(ms, from)? {
-            (ms, Undefined) => ms.evaluate_array(fields),
-            (ms, ArrayOfRows(rows)) => ms.filter_rows_in_memory(condition, rows, _limit),
-            (_, x) => fail(format!("Type mismatch: expected an iterable - {:?}", x))
+        match from.clone() {
+            None => ms.evaluate_array(fields),
+            Some(my_from) => {
+                match *my_from {
+                    Ns(ns) => {
+                        //ms.filter_rows_on_disk(ns, condition, actor, _limit);
+                        Ok((ms, Undefined))
+                    }
+                    _ =>
+                        match Self::expand(ms, from)? {
+                            (ms, Undefined) => ms.evaluate_array(fields),
+                            (ms, ArrayOfRows(rows)) => ms.filter_rows_in_memory(condition, rows, _limit),
+                            (_, x) => fail(format!("Type mismatch: expected an iterable - {:?}", x))
+                        }
+                }
+            }
         }
     }
 

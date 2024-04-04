@@ -54,7 +54,7 @@ impl dyn RowCollection {
 #[cfg(test)]
 mod tests {
     use crate::row;
-    use crate::testdata::{make_columns, make_quote, make_table_columns, make_table_file_from_bytes};
+    use crate::testdata::{make_columns, make_dataframe, make_quote, make_table_columns, make_table_file, make_table_file_from_bytes};
     use crate::typed_values::TypedValue::{Float64Value, StringValue};
 
     use super::*;
@@ -80,13 +80,9 @@ mod tests {
     #[test]
     fn test_from_file() {
         let (file, columns, _) =
-            make_table_file_from_bytes("rows", "append_row", "quotes", make_columns(), vec![
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'A', b'M',
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
-                0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
-            ].as_slice());
-        let rc = <dyn RowCollection>::from_file(columns.clone(), file);
+            make_table_file("rows", "append_row", "quotes", make_columns());
+        let mut rc = <dyn RowCollection>::from_file(columns.clone(), file);
+        rc.overwrite(0, &make_quote(0, &columns, "BEAM", "NYSE", 78.35)).unwrap();
 
         // read and verify the row
         let (row, rmd) = rc.read(0).unwrap();

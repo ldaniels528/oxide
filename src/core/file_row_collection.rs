@@ -45,9 +45,8 @@ impl FileRowCollection {
 
     /// convenience function to create, read or write a table file
     pub(crate) fn open_crw(ns: &Namespace) -> std::io::Result<File> {
-        let root_path = ns.get_root_path();
-        fs::create_dir_all(root_path.clone())?;
-        OpenOptions::new().truncate(true).create(true).read(true).write(true).open(root_path)
+        fs::create_dir_all(ns.get_root_path())?;
+        OpenOptions::new().truncate(true).create(true).read(true).write(true).open(ns.get_table_file_path())
     }
 
     /// convenience function to read or write a table file

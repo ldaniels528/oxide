@@ -26,8 +26,7 @@ pub fn make_columns() -> Vec<ColumnJs> {
 
 pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<ColumnJs>) -> std::io::Result<DataFrame> {
     let ns = Namespace::new(database, schema, name);
-    let mut df = DataFrame::create(ns, make_dataframe_config(columns))?;
-    df.resize(0)?;
+    let df = DataFrame::create(ns, make_dataframe_config(columns))?;
     Ok(df)
 }
 
@@ -80,7 +79,6 @@ pub fn make_table_file(database: &str,
     let record_size = Row::compute_record_size(&table_columns);
     let ns = Namespace::new(database, schema, name);
     let file = FileRowCollection::open_crw(&ns).unwrap();
-    file.set_len(0).unwrap();
     (file, table_columns, record_size)
 }
 
@@ -93,7 +91,6 @@ pub fn make_table_file_from_bytes(database: &str,
     let record_size = Row::compute_record_size(&table_columns);
     let ns = Namespace::new(database, schema, name);
     let mut file = FileRowCollection::open_crw(&ns).unwrap();
-    file.set_len(0).unwrap();
     file.write_all(row_data).unwrap();
     (file, table_columns, record_size)
 }
