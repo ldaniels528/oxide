@@ -130,7 +130,7 @@ impl DataType {
             Int32Type => "Int32".into(),
             Int64Type => "Int64".into(),
             Float32Type => "Float32".into(),
-            Float64Type => "Float64".into(),
+            Float64Type => "Double".into(),
             RecordNumberType => "RecordNumber".into(),
             StringType(size) => format!("String({})", size),
             StructType(columns) => format!("Struct({:?})", columns),

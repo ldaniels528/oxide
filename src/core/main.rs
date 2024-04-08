@@ -2,15 +2,11 @@
 //      Oxide Server v0.1.0
 ////////////////////////////////////////////////////////////////////
 
-use std::cell::Cell;
-use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-use std::sync::Mutex;
 
 use actix::{Actor, Addr};
-use actix_session::{Session, SessionGetError, SessionInsertError};
-use actix_session::config::BrowserSession;
+use actix_session::{Session, SessionInsertError};
 use actix_session::storage::CookieSessionStore;
 use actix_web::{cookie, FromRequest, HttpRequest, HttpResponse, Responder, web};
 use actix_web::cookie::Key;
@@ -359,7 +355,7 @@ fn get_shared_state(req: &HttpRequest) -> std::io::Result<&web::Data<SharedState
 }
 
 async fn get_range_by_id(req: HttpRequest,
-                       path: web::Path<(String, String, String, usize, usize)>) -> std::io::Result<Vec<Row>> {
+                         path: web::Path<(String, String, String, usize, usize)>) -> std::io::Result<Vec<Row>> {
     let (ns, a, b) = (Namespace::new(&path.0, &path.1, &path.2), path.3, path.4);
     let actor = get_shared_state(&req)?.actor.clone();
     read_range!(actor, ns, a..b)
@@ -398,6 +394,7 @@ mod tests {
     use serde_json::json;
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message;
+
     use shared_lib::{ns_uri, range_uri, row_uri};
 
     use super::*;
@@ -578,5 +575,4 @@ mod tests {
         ws_stream.send(Message::Text(message.to_string())).await?;
         Ok(())
     }
-
 }

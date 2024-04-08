@@ -109,7 +109,7 @@ impl Handler<IORequest> for DataframeActor {
             IORequest::AppendRow { ns, row } =>
                 handle_result(self.append_row(ns, row)),
             IORequest::CreateTable { ns, cfg } =>
-                handle_result(self.create_table(ns, cfg).map(|_|1usize)),
+                handle_result(self.create_table(ns, cfg).map(|_| 1usize)),
             IORequest::DeleteRow { ns, id } =>
                 handle_result(self.delete_row(ns, id)),
             IORequest::GetColumns { ns } =>
@@ -285,9 +285,9 @@ mod tests {
         let ns = Namespace::new("dataframe", "columns", "stocks");
         assert_eq!(1, create_table!(actor, ns, make_columns()).unwrap());
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
-            TableColumn::new("symbol", StringType(4), Null, 9),
-            TableColumn::new("exchange", StringType(4), Null, 22),
-            TableColumn::new("lastSale", Float64Type, Null, 35),
+            TableColumn::new("symbol", StringType(8), Null, 9),
+            TableColumn::new("exchange", StringType(8), Null, 26),
+            TableColumn::new("lastSale", Float64Type, Null, 43),
         ]);
     }
 

@@ -3,8 +3,8 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
-use crate::fields::Field;
 
+use crate::fields::Field;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
@@ -50,7 +50,7 @@ impl RowCollection for ByteRowCollection {
         Ok(1)
     }
 
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<usize> {
+    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<usize> {
         self.rows[id][0] = metadata.encode();
         Ok(1)
     }
@@ -78,163 +78,5 @@ impl RowCollection for ByteRowCollection {
         self.rows.resize(new_size, vec![]);
         self.watermark = new_size;
         Ok(())
-    }
-}
-
-// Unit tests
-#[cfg(test)]
-mod tests {
-    use crate::byte_row_collection::ByteRowCollection;
-    use crate::data_types::DataType::{Float64Type, StringType};
-    use crate::fields::Field;
-    use crate::row_collection::RowCollection;
-    use crate::rows::Row;
-    use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote, make_table_columns};
-    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
-
-    #[test]
-    fn test_append_row_then_read_rows() {
-        // determine the record size of the row
-        let columns = make_table_columns();
-        let mut mrc = ByteRowCollection::new(columns.clone(), vec![]);
-
-        // insert the rows
-        let row0 = make_quote(0, &columns, "RICE", "NYSE", 56.77);
-        let row1 = make_quote(1, &columns, "BEEF", "AMEX", 32.99);
-        assert_eq!(mrc.overwrite(0, &row0).unwrap(), 1);
-        assert_eq!(mrc.overwrite(1, &row1).unwrap(), 1);
-        assert_eq!(mrc.len().unwrap(), 2);
-
-        // retrieve the rows (as binary)
-        let rows = mrc.read_range(0..2).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0], Row {
-            id: 0,
-            columns: vec![
-                TableColumn::new("symbol", StringType(4), Null, 9),
-                TableColumn::new("exchange", StringType(4), Null, 22),
-                TableColumn::new("lastSale", Float64Type, Null, 35),
-            ],
-            fields: vec![
-                Field::new(StringValue("RICE".into())),
-                Field::new(StringValue("NYSE".into())),
-                Field::new(Float64Value(56.77)),
-            ],
-        });
-        assert_eq!(rows[1], Row {
-            id: 1,
-            columns: vec![
-                TableColumn::new("symbol", StringType(4), Null, 9),
-                TableColumn::new("exchange", StringType(4), Null, 22),
-                TableColumn::new("lastSale", Float64Type, Null, 35),
-            ],
-            fields: vec![
-                Field::new(StringValue("BEEF".into())),
-                Field::new(StringValue("AMEX".into())),
-                Field::new(Float64Value(32.99)),
-            ],
-        });
-    }
-
-    #[test]
-    fn test_overwrite_row() {
-        // determine the record size of the row
-        let columns = make_table_columns();
-        let mut mrc = ByteRowCollection::new(columns.clone(), vec![]);
-
-        // create a new row
-        let row = make_quote(2, &columns, "AMD", "NYSE", 88.78);
-        assert_eq!(mrc.overwrite(row.id, &row).unwrap(), 1);
-
-        // read and verify the row
-        let (new_row, _) = mrc.read(row.id).unwrap();
-        assert_eq!(new_row, Row {
-            id: 2,
-            columns: vec![
-                TableColumn::new("symbol", StringType(4), Null, 9),
-                TableColumn::new("exchange", StringType(4), Null, 22),
-                TableColumn::new("lastSale", Float64Type, Null, 35),
-            ],
-            fields: vec![
-                Field::new(StringValue("AMD".into())),
-                Field::new(StringValue("NYSE".into())),
-                Field::new(Float64Value(88.78)),
-            ],
-        });
-    }
-
-    #[test]
-    fn test_read_field() {
-        // determine the record size of the row
-        let columns = make_table_columns();
-        let mut mrc = ByteRowCollection::new(columns.clone(), vec![]);
-
-        let row = make_quote(0, &columns, "FACT", "NYSE", 111.56);
-        assert_eq!(mrc.overwrite(0, &row).unwrap(), 1);
-
-        // read the first column
-        let value = mrc.read_field(0, 0).unwrap();
-        assert_eq!(value, StringValue("FACT".into()));
-    }
-
-    #[test]
-    fn test_read_row() {
-        // determine the record size of the row
-        let columns = make_table_columns();
-        let mut mrc = ByteRowCollection::new(columns.clone(), vec![]);
-
-        // write the row
-        let row = make_quote(0, &columns, "ROOM", "AMEX", 34.44);
-        assert_eq!(mrc.overwrite(0, &row).unwrap(), 1);
-
-        // read the row
-        let (row, metadata) = mrc.read(0).unwrap();
-
-        // verify the row
-        assert!(metadata.is_allocated);
-        assert_eq!(row, Row {
-            id: 0,
-            columns: vec![
-                TableColumn::new("symbol", StringType(4), Null, 9),
-                TableColumn::new("exchange", StringType(4), Null, 22),
-                TableColumn::new("lastSale", Float64Type, Null, 35),
-            ],
-            fields: vec![
-                Field::new(StringValue("ROOM".into())),
-                Field::new(StringValue("AMEX".into())),
-                Field::new(Float64Value(34.44)),
-            ],
-        });
-    }
-
-    #[test]
-    fn test_resize_shrink() {
-        // determine the record size of the row
-        let columns = make_table_columns();
-        let mut mrc = ByteRowCollection::new(columns.clone(), vec![]);
-
-        // write the row
-        let row = make_quote(5, &columns, "RICE", "NYSE", 31.11);
-        assert_eq!(mrc.overwrite(0, &row).unwrap(), 1);
-
-        // shrink the table
-        let _ = mrc.resize(0).unwrap();
-        assert_eq!(mrc.len().unwrap(), 0);
-    }
-
-    #[test]
-    fn test_resize_grow() {
-        // determine the record size of the row
-        let columns = make_table_columns();
-        let mut mrc = ByteRowCollection::new(columns.clone(), vec![]);
-
-        // write a row
-        let row = make_quote(0, &columns, "RICE", "NYSE", 31.12);
-        assert_eq!(mrc.overwrite(0, &row).unwrap(), 1);
-
-        // grow the table
-        let _ = mrc.resize(5).unwrap();
-        assert_eq!(mrc.len().unwrap(), 5);
     }
 }

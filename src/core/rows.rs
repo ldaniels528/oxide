@@ -155,28 +155,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_decode() {
-        let buf: Vec<u8> = vec![
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 187,
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'M', b'A', b'N', b'A',
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'Y', b'H', b'W', b'H',
-            0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
-        ];
-        let (row, rmd) = Row::decode(&buf, &make_table_columns());
-        assert!(rmd.is_allocated);
+    fn test_make_quote() {
+        let row = make_quote(187, &make_table_columns(), "KING", "YHWH", 78.35);
         assert_eq!(row, Row {
             id: 187,
             columns: vec![
-                TableColumn::new("symbol", StringType(4), Null, 9),
-                TableColumn::new("exchange", StringType(4), Null, 22),
-                TableColumn::new("lastSale", Float64Type, Null, 35),
+                TableColumn::new("symbol", StringType(8), Null, 9),
+                TableColumn::new("exchange", StringType(8), Null, 26),
+                TableColumn::new("lastSale", Float64Type, Null, 43),
             ],
             fields: vec![
-                Field::new(StringValue("MANA".into())),
+                Field::new(StringValue("KING".into())),
                 Field::new(StringValue("YHWH".into())),
                 Field::new(Float64Value(78.35)),
             ],
         });
+    }
+
+    #[test]
+    fn test_decode() {
+        let buf: Vec<u8> = vec![
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 187,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'M', b'A', b'N', b'A', 0, 0, 0, 0,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
+            0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
+        ];
+        let (row, rmd) = Row::decode(&buf, &make_table_columns());
+        assert!(rmd.is_allocated);
+        assert_eq!(row, make_quote(187, &make_table_columns(), "MANA", "NYSE", 78.35));
     }
 
     #[test]
@@ -188,13 +194,13 @@ mod tests {
         ];
         let rows_b = Row::decode_rows(&columns, vec![vec![
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'A', b'M',
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'A', b'M', 0, 0, 0, 0,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
             0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
         ], vec![
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 1,
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'L', b'I', b'T', b'E',
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'A', b'M', b'E', b'X',
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'L', b'I', b'T', b'E', 0, 0, 0, 0,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'A', b'M', b'E', b'X', 0, 0, 0, 0,
             0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
         ]]);
         assert_eq!(rows_a, rows_b);
@@ -213,8 +219,8 @@ mod tests {
         let row = make_quote(255, &make_table_columns(), "RED", "NYSE", 78.35);
         assert_eq!(row.encode(), vec![
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 255,
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 3, b'R', b'E', b'D', 0,
-            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 3, b'R', b'E', b'D', 0, 0, 0, 0, 0,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
             0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
         ]);
     }

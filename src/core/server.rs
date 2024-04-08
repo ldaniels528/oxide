@@ -28,6 +28,17 @@ impl ColumnJs {
         ColumnJs { name: name.into(), column_type: column_type.into(), default_value }
     }
 
+    pub fn from_physical_column(column: &TableColumn) -> Self {
+        ColumnJs::new(column.get_name(), column.data_type.to_column_type(), match &column.default_value {
+            TypedValue::Null | Undefined => None,
+            v => Some(v.to_json().to_string())
+        })
+    }
+
+    pub fn from_physical_columns(phys_columns: &Vec<TableColumn>) -> Vec<Self> {
+        phys_columns.iter().map(|c| Self::from_physical_column(c)).collect()
+    }
+
     pub fn get_name(&self) -> &String { &self.name }
 
     pub fn get_column_type(&self) -> &String { &self.column_type }
@@ -113,6 +124,7 @@ mod tests {
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::row;
     use crate::server::SystemInfoJs;
+    use crate::testdata::{make_columns, make_table_columns};
     use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
     use super::*;
@@ -123,6 +135,12 @@ mod tests {
             title: "Oxide".into(),
             version: VERSION.into(),
         })
+    }
+
+    #[test]
+    fn test_column_conversion() {
+        let columns = ColumnJs::from_physical_columns(&make_table_columns());
+        assert_eq!(columns, make_columns());
     }
 
     #[test]

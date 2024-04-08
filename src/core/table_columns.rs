@@ -89,9 +89,9 @@ mod tests {
     fn test_differences() {
         let generated: Vec<TableColumn> = TableColumn::from_columns(&make_columns()).unwrap();
         let natural: Vec<TableColumn> = vec![
-            TableColumn::new("symbol", StringType(4), Null, 9),
-            TableColumn::new("exchange", StringType(4), Null, 22),
-            TableColumn::new("lastSale", Float64Type, Null, 35),
+            TableColumn::new("symbol", StringType(8), Null, 9),
+            TableColumn::new("exchange", StringType(8), Null, 26),
+            TableColumn::new("lastSale", Float64Type, Null, 43),
         ];
         assert_eq!(generated, natural);
     }

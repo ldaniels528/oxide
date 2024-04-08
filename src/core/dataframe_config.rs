@@ -19,6 +19,11 @@ pub struct DataFrameConfig {
 
 impl DataFrameConfig {
     /// instantiates a new dataframe configuration.
+    pub fn build(columns: Vec<ColumnJs>) -> Self {
+        DataFrameConfig { columns, indices: vec![], partitions: vec![] }
+    }
+
+    /// instantiates a new dataframe configuration.
     pub fn new(columns: Vec<ColumnJs>,
                indices: Vec<HashIndexConfig>,
                partitions: Vec<String>) -> Self {
