@@ -5,6 +5,7 @@
 use std::{i32, io};
 use std::cmp::Ordering;
 use std::collections::Bound;
+use std::fmt::Display;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Index, Mul, Neg, Not, RangeBounds, Rem, Shl, Shr, Sub};
 
 use chrono::DateTime;
@@ -27,6 +28,7 @@ const INTEGER_FORMAT: &str = r"^-?(?:\d+(?:_\d)*)?$";
 const UUID_FORMAT: &str =
     "^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$";
 
+/// Basic value unit
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     Array(Vec<TypedValue>),
@@ -304,6 +306,18 @@ impl TypedValue {
         }
     }
 
+    pub fn assume_usize(&self) -> Option<usize> {
+        match &self {
+            Float32Value(n) => Some(*n as usize),
+            Float64Value(n) => Some(*n as usize),
+            Int8Value(n) => Some(*n as usize),
+            Int16Value(n) => Some(*n as usize),
+            Int32Value(n) => Some(*n as usize),
+            Int64Value(n) => Some(*n as usize),
+            _ => None
+        }
+    }
+
     fn numeric_op_1f(lhs: &Self, ff: fn(f64) -> f64) -> Option<Self> {
         match lhs {
             Float64Value(a) => Some(Float64Value(ff(*a))),
@@ -387,6 +401,12 @@ impl BitXor for TypedValue {
     }
 }
 
+impl Display for TypedValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.unwrap_value())
+    }
+}
+
 impl Div for TypedValue {
     type Output = TypedValue;
 
@@ -399,7 +419,13 @@ impl Index<usize> for TypedValue {
     type Output = TypedValue;
 
     fn index(&self, _index: usize) -> &Self::Output {
-        todo!()
+        match self {
+            Array(items) => &items[_index],
+            //ArrayOfRows(rows) => &StructValue(*rows[_index]),
+            Null => &Null,
+            Undefined => &Undefined,
+            x => panic!("illegal value for index {}", x)
+        }
     }
 }
 

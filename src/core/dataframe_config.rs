@@ -74,7 +74,7 @@ mod tests {
         let indices = Vec::with_capacity(0);
         let partitions = Vec::with_capacity(0);
         let cfg = DataFrameConfig::new(columns, indices, partitions);
-        let ns = Namespace::new("securities", "other_otc", "Stocks");
+        let ns = Namespace::parse("securities.other_otc.stocks")?;
         cfg.save(&ns)?;
 
         // retrieve and verify

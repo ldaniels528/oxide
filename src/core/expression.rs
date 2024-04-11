@@ -8,11 +8,12 @@ use crate::expression::Expression::*;
 use crate::namespaces::Namespace;
 use crate::server::ColumnJs;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Boolean, Null};
+use crate::typed_values::TypedValue::{Boolean, Null, Undefined};
 
 pub const FALSE: Expression = Literal(Boolean(false));
 pub const TRUE: Expression = Literal(Boolean(true));
 pub const NULL: Expression = Literal(Null);
+pub const UNDEFINED: Expression = Literal(Undefined);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Expression {
@@ -40,10 +41,11 @@ pub enum Expression {
     Minus(Box<Expression>, Box<Expression>),
     Modulo(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
+    Neg(Box<Expression>),
     // direct/reference values
     Field(String),
     Literal(TypedValue),
-    Ns(Namespace),
+    Ns(Box<Expression>),
     Range(Box<Expression>, Box<Expression>),
     Tuple(Vec<Expression>),
     Variable(String),
@@ -85,6 +87,7 @@ pub enum Expression {
         fields: Vec<Expression>,
         values: Vec<Expression>,
     },
+    OpenTable(Namespace),
     Overwrite {
         table: Box<Expression>,
         fields: Vec<Expression>,
@@ -141,8 +144,8 @@ mod tests {
     fn test_and() {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&And(
-            Box::from(TRUE),
-            Box::from(FALSE))).unwrap();
+            Box::new(TRUE),
+            Box::new(FALSE))).unwrap();
         assert_eq!(result, Boolean(false));
     }
 
@@ -150,9 +153,9 @@ mod tests {
     fn test_between() {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&Between(
-            Box::from(Literal(Int32Value(5))),
-            Box::from(Literal(Int32Value(1))),
-            Box::from(Literal(Int32Value(10))))).unwrap();
+            Box::new(Literal(Int32Value(5))),
+            Box::new(Literal(Int32Value(1))),
+            Box::new(Literal(Int32Value(10))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
@@ -160,8 +163,8 @@ mod tests {
     fn test_eq() {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&Equal(
-            Box::from(Literal(Int32Value(5))),
-            Box::from(Literal(Int32Value(5))))).unwrap();
+            Box::new(Literal(Int32Value(5))),
+            Box::new(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
@@ -169,8 +172,8 @@ mod tests {
     fn test_gt() {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&GreaterThan(
-            Box::from(Literal(Int32Value(5))),
-            Box::from(Literal(Int32Value(1))))).unwrap();
+            Box::new(Literal(Int32Value(5))),
+            Box::new(Literal(Int32Value(1))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
@@ -178,8 +181,8 @@ mod tests {
     fn test_gte() {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&GreaterOrEqual(
-            Box::from(Literal(Int32Value(5))),
-            Box::from(Literal(Int32Value(1))))).unwrap();
+            Box::new(Literal(Int32Value(5))),
+            Box::new(Literal(Int32Value(1))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
@@ -187,8 +190,8 @@ mod tests {
     fn test_lt() {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&LessThan(
-            Box::from(Literal(Int32Value(4))),
-            Box::from(Literal(Int32Value(5))))).unwrap();
+            Box::new(Literal(Int32Value(4))),
+            Box::new(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
@@ -196,8 +199,8 @@ mod tests {
     fn test_lte() {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&LessOrEqual(
-            Box::from(Literal(Int32Value(1))),
-            Box::from(Literal(Int32Value(5))))).unwrap();
+            Box::new(Literal(Int32Value(1))),
+            Box::new(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
@@ -205,8 +208,8 @@ mod tests {
     fn test_ne() {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&NotEqual(
-            Box::from(Literal(Int32Value(-5))),
-            Box::from(Literal(Int32Value(5))))).unwrap();
+            Box::new(Literal(Int32Value(-5))),
+            Box::new(Literal(Int32Value(5))))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
@@ -214,27 +217,27 @@ mod tests {
     fn test_or() {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&Or(
-            Box::from(TRUE),
-            Box::from(FALSE))).unwrap();
+            Box::new(TRUE),
+            Box::new(FALSE))).unwrap();
         assert_eq!(result, Boolean(true));
     }
 
     #[test]
     fn test_is_conditional() {
-        assert!(And(Box::from(TRUE), Box::from(FALSE))
+        assert!(And(Box::new(TRUE), Box::new(FALSE))
             .is_conditional());
-        assert!(Between(Box::from(Literal(Int32Value(5))), Box::from(Literal(Int32Value(1))), Box::from(Literal(Int32Value(10))))
+        assert!(Between(Box::new(Literal(Int32Value(5))), Box::new(Literal(Int32Value(1))), Box::new(Literal(Int32Value(10))))
             .is_conditional());
-        assert!(Or(Box::from(TRUE), Box::from(FALSE))
+        assert!(Or(Box::new(TRUE), Box::new(FALSE))
             .is_conditional());
     }
 
     #[test]
     fn test_if_is_control_flow() {
         let op = If {
-            condition: Box::from(LessThan(Box::from(Variable("x".into())), Box::from(Variable("y".into())))),
-            a: Box::from(Literal(Int32Value(1))),
-            b: Some(Box::from(Literal(Int32Value(10)))),
+            condition: Box::new(LessThan(Box::new(Variable("x".into())), Box::new(Variable("y".into())))),
+            a: Box::new(Literal(Int32Value(1))),
+            b: Some(Box::new(Literal(Int32Value(10)))),
         };
         assert!(op.is_control_flow());
     }
@@ -243,8 +246,8 @@ mod tests {
     fn test_while_is_control_flow() {
         // CodeBlock(..) | If(..) | Return(..) | While { .. }
         let op = While {
-            condition: Some(Box::from(LessThan(Box::from(Variable("x".into())), Box::from(Variable("y".into()))))),
-            code: Box::from(Literal(Int32Value(1))),
+            condition: Some(Box::new(LessThan(Box::new(Variable("x".into())), Box::new(Variable("y".into()))))),
+            code: Box::new(Literal(Int32Value(1))),
         };
         assert!(op.is_control_flow());
     }

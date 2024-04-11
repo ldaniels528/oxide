@@ -188,7 +188,7 @@ fn next_quoted_string_token(inputs: &Vec<char>, pos: &mut usize, make_token: New
         }
         *pos += 1;
         let end = *pos;
-        return generate_token(inputs, start, end, make_token);
+        return generate_token(inputs, start + 1, end - 1, make_token);
     }
     None
 }

@@ -9,7 +9,9 @@ use std::ops::Index;
 use serde::{Deserialize, Serialize};
 
 use crate::codec;
+use crate::expression::Expression;
 use crate::fields::Field;
+use crate::machine::MachineState;
 use crate::row_metadata::RowMetadata;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
@@ -98,6 +100,13 @@ impl Row {
 
     /// returns the total record size (in bytes)
     pub fn get_record_size(&self) -> usize { Self::compute_record_size(&self.columns) }
+
+    pub fn matches(&self, ms: &MachineState, condition: &Option<Box<Expression>>) -> bool {
+        if let Some(condition) = condition {
+            let ms = ms.with_row(self);
+            if let Ok((_, TypedValue::Boolean(v))) = ms.evaluate(condition) { v } else { true }
+        } else { true }
+    }
 
     /// Represents the number of bytes before the start of column data, which includes
     /// the embedded row metadata (1-byte) and row ID (4- or 8-bytes)

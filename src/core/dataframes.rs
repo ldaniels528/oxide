@@ -5,8 +5,10 @@
 use std::ops::AddAssign;
 
 use crate::dataframe_config::DataFrameConfig;
+use crate::expression::Expression;
 use crate::fields::Field;
 use crate::file_row_collection::FileRowCollection;
+use crate::machine::MachineState;
 use crate::namespaces::Namespace;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
@@ -51,9 +53,29 @@ impl DataFrame {
         self.device.overwrite(new_row_id, &row.with_row_id(new_row_id))
     }
 
-    /// deletes an existing row from the table
+    /// deletes an existing row by ID from the table
     pub fn delete(&mut self, id: usize) -> std::io::Result<usize> {
         self.device.overwrite_metadata(id, &RowMetadata::new(false))
+    }
+
+    /// deletes rows from the table based on a condition
+    pub fn delete_where(
+        &mut self,
+        ms: &MachineState,
+        condition: &Option<Box<Expression>>,
+        limit: TypedValue,
+    ) -> std::io::Result<usize> {
+        let mut deleted = 0;
+        for id in 0..limit.assume_usize().unwrap_or(self.len()?) {
+            // read an active row
+            if let Some(row) = self.read_one(id)? {
+                // if the predicate matches the condition, delete the row.
+                if row.matches(ms, condition) {
+                    deleted += self.delete(id)?;
+                }
+            }
+        }
+        Ok(deleted)
     }
 
     /// performs a top-down fold operation
@@ -122,6 +144,11 @@ impl DataFrame {
     /// reads the specified field value from the specified row ID
     pub fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         self.device.read_field(id, column_id)
+    }
+
+    /// reads all rows
+    pub fn read_fully(&self) -> std::io::Result<Vec<Row>> {
+        self.device.read_range(0..self.len()?)
     }
 
     /// reads a row by ID
@@ -249,7 +276,7 @@ mod tests {
         // concatenate the dataframes
         df0 += df1;
         // re-read the rows
-        let rows = df0.read_range(0..df0.len().unwrap()).unwrap();
+        let rows = df0.read_fully().unwrap();
         assert_eq!(rows, vec![
             make_quote(0, &columns, "RACE", "NASD", 123.45),
             make_quote(1, &columns, "BEER", "AMEX", 357.12),
@@ -284,7 +311,7 @@ mod tests {
         assert_eq!(1, df.append(&make_quote(0, &columns, "BEEF", "CAKE", 100.0)).unwrap());
 
         // verify the rows
-        let rows = df.read_range(0..df.len().unwrap()).unwrap();
+        let rows = df.read_fully().unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0], make_quote(0, &columns, "RICE", "PIPE", 42.11));
         assert_eq!(rows[1], make_quote(1, &columns, "BEEF", "CAKE", 100.0));
@@ -305,7 +332,7 @@ mod tests {
         assert_eq!(df.delete(1).unwrap(), 1);
 
         // verify the rows
-        let rows = df.read_range(0..df.len().unwrap()).unwrap();
+        let rows = df.read_fully().unwrap();
         assert_eq!(rows, vec![
             row!(0, phys_columns, vec![
                 StringValue("UNO".into()), StringValue("AMEX".into()), Float64Value(11.77),
@@ -366,7 +393,7 @@ mod tests {
 
     #[test]
     fn test_load() {
-        let ns = Namespace::new("dataframes", "load", "quotes");
+        let ns = Namespace::parse("dataframes.load.quotes").unwrap();
         let mut df = make_dataframe(&ns.database, &ns.schema, &ns.name, make_columns()).unwrap();
         let columns = make_table_columns();
         df.append(&make_quote(0, &columns, "SPAM", "NYSE", 11.99)).unwrap();
@@ -495,14 +522,14 @@ mod tests {
         ]);
 
         // verify the row was deleted
-        let rows = df.read_range(0..df.len().unwrap()).unwrap();
+        let rows = df.read_fully().unwrap();
         assert_eq!(rows, vec![row_0.clone(), row_2.clone()]);
 
         // restore the middle row
         assert_eq!(df.undelete(1).unwrap(), 1);
 
         // verify the row was restored
-        let rows = df.read_range(0..df.len().unwrap()).unwrap();
+        let rows = df.read_fully().unwrap();
         assert_eq!(rows, vec![row_0.clone(), row_1.clone(), row_2.clone()]);
     }
 

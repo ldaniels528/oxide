@@ -3,8 +3,11 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::env;
+use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
+
+use shared_lib::fail;
 
 // Namespace is a logical representation of a Lollypop object namespace or path
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -21,6 +24,14 @@ impl Namespace {
             database: database.to_string(),
             schema: schema.to_string(),
             name: name.to_string(),
+        }
+    }
+
+    pub fn parse(text: &str) -> std::io::Result<Namespace> {
+        let result: Vec<&str> = text.split(".").collect();
+        match result.as_slice() {
+            [a, b, c] => Ok(Namespace::new(a, b, c)),
+            _ => fail(format!("Failed to parse namespace '{}'", text))
         }
     }
 
@@ -80,45 +91,75 @@ impl Namespace {
     }
 }
 
+impl Display for Namespace {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.get_full_name())
+    }
+}
+
+impl Into<String> for Namespace {
+    fn into(self) -> String {
+        self.get_full_name()
+    }
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn test_into_string() {
+        let ns = Namespace::parse("securities.nyse.stocks").unwrap();
+        assert_eq!(Into::<String>::into(ns), "securities.nyse.stocks");
+    }
+
+    #[test]
+    fn test_to_string() {
+        let ns = Namespace::parse("securities.nasdaq.stocks").unwrap();
+        assert_eq!(ns.to_string(), "securities.nasdaq.stocks");
+    }
+
+    #[test]
+    fn test_parse() {
+        let ns = Namespace::parse("securities.nyse.stocks").unwrap();
+        assert_eq!(ns, Namespace::new("securities", "nyse", "stocks"));
+    }
+
+    #[test]
     fn test_get_blob_file_path() {
         let oxide_home = Namespace::oxide_home();
-        let ns = Namespace::new("securities", "amex", "Stocks");
+        let ns = Namespace::parse("securities.amex.stocks").unwrap();
         let filename = ns.get_blob_file_path();
-        assert_eq!(filename, format!("{}/ns/securities/amex/Stocks/Stocks.blob", oxide_home))
+        assert_eq!(filename, format!("{}/ns/securities/amex/stocks/stocks.blob", oxide_home))
     }
 
     #[test]
     fn test_get_config_file_path() {
         let oxide_home = Namespace::oxide_home();
-        let ns = Namespace::new("securities", "otc", "Stocks");
+        let ns = Namespace::parse("securities.otc.stocks").unwrap();
         let filename = ns.get_config_file_path();
-        assert_eq!(filename, format!("{}/ns/securities/otc/Stocks/Stocks.json", oxide_home))
+        assert_eq!(filename, format!("{}/ns/securities/otc/stocks/stocks.json", oxide_home))
     }
 
     #[test]
     fn test_get_full_name() {
-        let ns = Namespace::new("securities", "otc", "Stocks");
-        assert_eq!(ns.get_full_name(), "securities.otc.Stocks")
+        let ns = Namespace::parse("securities.otc.stocks").unwrap();
+        assert_eq!(ns.get_full_name(), "securities.otc.stocks")
     }
 
     #[test]
     fn test_get_root_path() {
         let oxide_home = Namespace::oxide_home();
-        let ns = Namespace::new("securities", "nasdaq", "Stocks");
-        assert_eq!(ns.get_root_path(), format!("{}/ns/securities/nasdaq/Stocks/", oxide_home))
+        let ns = Namespace::parse("securities.nasdaq.stocks").unwrap();
+        assert_eq!(ns.get_root_path(), format!("{}/ns/securities/nasdaq/stocks/", oxide_home))
     }
 
     #[test]
     fn test_get_table_file_path() {
         let oxide_home = Namespace::oxide_home();
-        let ns = Namespace::new("securities", "nyse", "Stocks");
+        let ns = Namespace::parse("securities.nyse.stocks").unwrap();
         let filename = ns.get_table_file_path();
-        assert_eq!(filename, format!("{}/ns/securities/nyse/Stocks/Stocks.table", oxide_home))
+        assert_eq!(filename, format!("{}/ns/securities/nyse/stocks/stocks.table", oxide_home))
     }
 }

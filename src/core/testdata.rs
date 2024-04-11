@@ -24,7 +24,10 @@ pub fn make_columns() -> Vec<ColumnJs> {
 }
 
 pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<ColumnJs>) -> std::io::Result<DataFrame> {
-    let ns = Namespace::new(database, schema, name);
+    make_dataframe_ns(Namespace::new(database, schema, name), columns)
+}
+
+pub fn make_dataframe_ns(ns: Namespace, columns: Vec<ColumnJs>) -> std::io::Result<DataFrame> {
     DataFrame::create(ns, make_dataframe_config(columns))
 }
 

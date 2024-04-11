@@ -7,8 +7,11 @@ use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
 
+use shared_lib::fail;
+
 use crate::tokenizer;
 use crate::tokens::Token;
+use crate::tokens::Token::Operator;
 
 /// TokenSlice is an immutable navigable sequence of tokens.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -66,6 +69,17 @@ impl TokenSlice {
         }
     }
 
+    pub fn expect(&self, term: &str) -> std::io::Result<Self> {
+        if let (Some(tok), ts) = self.next() {
+            match tok {
+                Operator { text: s, .. } if s == term => Ok(ts),
+                _ => fail(format!("Expected '{}'", term))
+            }
+        } else {
+            fail(format!("Expected '{}'", term))
+        }
+    }
+
     pub fn fold<A>(&self, init: A, f: fn(&A, &TokenSlice) -> (A, TokenSlice)) -> A {
         let mut result = init;
         let mut a_ts = self.clone();
@@ -90,8 +104,7 @@ impl TokenSlice {
 
     /// Indicates whether at least one more token remains before the end of the slice.
     pub fn has_more(&self) -> bool {
-        self.has_next() || (!self.is_empty() && self.get_position() == 0
-            && (self.get_position() < self.len() as isize))
+        self.has_next() || (self.get_position() < self.len() as isize)
     }
 
     /// Indicates whether there is another token after the current token
@@ -188,7 +201,7 @@ mod tests {
         let (tokens, _) = ts.capture("(", ")", Some(","));
         assert_eq!(tokens, vec![
             Token::numeric("123".into(), 1, 4, 1, 3),
-            Token::single_quoted("'Hello'".into(), 6, 13, 1, 8),
+            Token::single_quoted("Hello".into(), 7, 12, 1, 9),
             Token::atom("abc".into(), 15, 18, 1, 17),
         ])
     }
@@ -200,7 +213,7 @@ mod tests {
         assert_eq!(tokens, vec![
             Token::numeric("123".into(), 1, 4, 1, 3),
             Token::operator(",".into(), 4, 5, 1, 6),
-            Token::single_quoted("'Hello'".into(), 6, 13, 1, 8),
+            Token::single_quoted("Hello".into(), 7, 12, 1, 9),
             Token::operator(",".into(), 13, 14, 1, 15),
             Token::atom("abc".into(), 15, 18, 1, 17),
         ])
@@ -281,7 +294,7 @@ mod tests {
             Token::atom("fox".into(), 4, 7, 1, 6),
             Token::atom("was".into(), 8, 11, 1, 10),
             Token::atom("too".into(), 12, 15, 1, 14),
-            Token::single_quoted("'fast!'".into(), 16, 23, 1, 18)
+            Token::single_quoted("fast!".into(), 17, 22, 1, 19)
         ]);
         assert_eq!(ts.get_position(), 4);
     }

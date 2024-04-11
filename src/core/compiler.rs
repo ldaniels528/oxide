@@ -2,6 +2,7 @@
 // compiler module
 ////////////////////////////////////////////////////////////////////
 
+use std::fmt::format;
 use std::io;
 
 use log::info;
@@ -9,8 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
 
-use crate::expression::{Expression, FALSE, NULL, TRUE};
+use crate::expression::{Expression, FALSE, NULL, TRUE, UNDEFINED};
 use crate::expression::Expression::*;
+use crate::namespaces::Namespace;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted};
 use crate::typed_values::TypedValue;
@@ -140,7 +142,7 @@ impl Compiler {
             "false" => Ok((FALSE, ts)),
             "null" => Ok((NULL, ts)),
             "true" => Ok((TRUE, ts)),
-            "undefined" => Ok((Literal(Undefined), ts)),
+            "undefined" => Ok((UNDEFINED, ts)),
             name => self.compile_statement(name, ts.clone()),
         }
     }
@@ -188,6 +190,7 @@ impl Compiler {
     pub fn compile_statement(&mut self, command: &str, ts: TokenSlice) -> io::Result<(Expression, TokenSlice)> {
         match command {
             "delete" => self.compile_delete(ts),
+            "ns" => self.compile_ns(ts),
             "select" => self.compile_select(ts),
             name => Ok((Variable(name.into()), ts))
         }
@@ -203,6 +206,11 @@ impl Compiler {
             condition: condition.map(Box::new),
             limit: limit.map(Box::new),
         }, ts))
+    }
+
+    fn compile_ns(&mut self, ts: TokenSlice) -> io::Result<(Expression, TokenSlice)> {
+        let (path, ts) = self.compile_expr(ts)?;
+        Ok((Ns(Box::new(path)), ts))
     }
 
     fn compile_select(&mut self, ts: TokenSlice) -> io::Result<(Expression, TokenSlice)> {
@@ -225,6 +233,10 @@ impl Compiler {
         }, ts))
     }
 
+    fn error_expected_operator<A>(&self, symbol: &str) -> io::Result<(A, TokenSlice)> {
+        fail(format!(r#"operator '{}' was expected; e.g.: ns("securities", "etf", "stocks")"#, symbol))
+    }
+
     pub fn get_stack(&self) -> Vec<Expression> {
         self.stack.iter().map(|x| x.clone()).collect()
     }
@@ -234,7 +246,7 @@ impl Compiler {
         let innards = TokenSlice::new(tokens[0..(tokens.len() - 1)].to_vec());
         let (expression, _) = self.compile_all(innards)?;
         let result = match expression.as_slice() {
-            [] => Literal(Undefined),
+            [] => UNDEFINED,
             [one] => one.clone(),
             many => Tuple(many.to_vec())
         };
@@ -242,6 +254,24 @@ impl Compiler {
         Ok((result, ts_z.skip())) // skip the trailing parenthesis
     }
 
+    /// parse an argument list from tge [TokenSlice] (e.g. Vec('(', 'x', ',', 'y', ',', 'z', ')')
+    fn next_argument_list(&mut self, ts: TokenSlice) -> io::Result<(Vec<Expression>, TokenSlice)> {
+        // parse: ("abc", "123", ..)
+        let ts = ts.expect("(")?;
+        let (tokens, ts) = ts.scan_until(|t| t.contains(")"));
+        let mut args = vec![];
+        let mut innards = TokenSlice::new(tokens[0..(tokens.len() - 1)].to_vec());
+        while innards.has_more() {
+            let (expr, its) = self.compile_expr(innards)?;
+            args.push(expr);
+            innards = if its.has_more() { its.expect(",")? } else { its };
+        }
+
+        //self.pop();
+        Ok((args, ts.skip()))
+    }
+
+    /// parse an expression list from tge [TokenSlice] (e.g. Vec('x', ',', 'y', ',', 'z')
     fn next_expression_list(&mut self, ts: TokenSlice) -> io::Result<(Option<Vec<Expression>>, TokenSlice)> {
         let mut items = vec![];
         // get the first item
@@ -256,7 +286,7 @@ impl Compiler {
         Ok((Some(items), ts))
     }
 
-    // Returns the option of an expression based the next token matching the specified keyword
+    /// Returns the option of an expression based the next token matching the specified keyword
     fn next_keyword_expr(&mut self, keyword: &str, ts: TokenSlice) -> io::Result<(Option<Expression>, TokenSlice)> {
         if ts.isnt(keyword) { Ok((None, ts)) } else {
             let (expr, ts) = self.compile_expr(ts.skip())?;
@@ -264,7 +294,7 @@ impl Compiler {
         }
     }
 
-    // Returns the option of a list of expressions based the next token matching the specified keywords
+    /// Returns the option of a list of expressions based the next token matching the specified keywords
     fn next_keyword_expr_list(&mut self, keyword0: &str, keyword1: &str, ts: TokenSlice) -> io::Result<(Option<Vec<Expression>>, TokenSlice)> {
         if ts.isnt(keyword0) || ts.skip().isnt(keyword1) { Ok((None, ts)) } else {
             self.next_expression_list(ts.skip().skip())
@@ -421,6 +451,14 @@ mod tests {
             fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
             values: vec![Literal(StringValue("ABC".into())), Literal(StringValue("NYSE".into())), Literal(Float64Value(0.1008))],
         }])
+    }
+
+    #[test]
+    fn test_sql_ns() {
+        let opcodes = Compiler::compile(r#"ns("securities.etf.stocks")"#).unwrap();
+        assert_eq!(opcodes, vec![
+            Ns(Box::new(Literal(StringValue("securities.etf.stocks".to_string()))))
+        ])
     }
 
     #[test]

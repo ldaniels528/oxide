@@ -282,7 +282,7 @@ mod tests {
     #[actix::test]
     async fn test_get_columns() {
         let actor = DataframeActor::new().start();
-        let ns = Namespace::new("dataframe", "columns", "stocks");
+        let ns = Namespace::parse("dataframe.columns.stocks").unwrap();
         assert_eq!(1, create_table!(actor, ns, make_columns()).unwrap());
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
             TableColumn::new("symbol", StringType(8), Null, 9),
@@ -294,7 +294,7 @@ mod tests {
     #[actix::test]
     async fn test_append_then_read() {
         let actor = DataframeActor::new().start();
-        let ns = Namespace::new("actors", "append_then_read", "stocks");
+        let ns = Namespace::parse("actors.append_then_read.stocks").unwrap();
         let table_columns = make_table_columns();
 
         // create the new empty table
@@ -314,7 +314,7 @@ mod tests {
     #[actix::test]
     async fn test_dataframe_lifecycle() {
         let actor = DataframeActor::new().start();
-        let ns = Namespace::new("dataframe", "actor_crud", "stocks");
+        let ns = Namespace::parse("dataframe.actor_crud.stocks").unwrap();
         let table_columns = make_table_columns();
 
         // create the new empty table
@@ -375,8 +375,8 @@ mod tests {
     #[actix::test]
     async fn test_namespaces() {
         let actor = DataframeActor::new().start();
-        let ns0 = Namespace::new("dataframe", "namespaces1", "stocks");
-        let ns1 = Namespace::new("dataframe", "namespaces2", "stocks");
+        let ns0 = Namespace::parse("dataframe.namespaces1.stocks").unwrap();
+        let ns1 = Namespace::parse("dataframe.namespaces2.stocks").unwrap();
 
         // create the new empty tables
         assert_eq!(1, create_table!(actor, ns0, make_columns()).unwrap());

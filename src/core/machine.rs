@@ -13,8 +13,9 @@ use tokio::io;
 use shared_lib::fail;
 
 use crate::dataframe_actor::DataframeActor;
+use crate::dataframes::DataFrame;
 use crate::expression::Expression;
-use crate::expression::Expression::Ns;
+use crate::expression::Expression::{Not, Ns};
 use crate::namespaces::Namespace;
 use crate::read_fully;
 use crate::rows::Row;
@@ -83,6 +84,7 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa * bb),
             NotEqual(a, b) =>
                 self.expand2(a, b, |aa, bb| Boolean(aa != bb)),
+            Ns(a) => self.sql_ns(a),
             Or(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
             Not(a) => self.expand1(a, |aa| !aa),
@@ -157,29 +159,35 @@ impl MachineState {
     }
 
     /// evaluates the boxed expression and applies the supplied function
-    fn expand1(&self,
-               a: &Box<Expression>,
-               f: fn(TypedValue) -> TypedValue) -> io::Result<(MachineState, TypedValue)> {
+    fn expand1(
+        &self,
+        a: &Box<Expression>,
+        f: fn(TypedValue) -> TypedValue,
+    ) -> io::Result<(MachineState, TypedValue)> {
         let (ms, aa) = self.evaluate(a)?;
         Ok((ms, f(aa)))
     }
 
     /// evaluates the two boxed expressions and applies the supplied function
-    fn expand2(&self,
-               a: &Box<Expression>,
-               b: &Box<Expression>,
-               f: fn(TypedValue, TypedValue) -> TypedValue) -> io::Result<(MachineState, TypedValue)> {
+    fn expand2(
+        &self,
+        a: &Box<Expression>,
+        b: &Box<Expression>,
+        f: fn(TypedValue, TypedValue) -> TypedValue,
+    ) -> io::Result<(MachineState, TypedValue)> {
         let (ms, aa) = self.evaluate(a)?;
         let (ms, bb) = ms.evaluate(b)?;
         Ok((ms, f(aa, bb)))
     }
 
     /// evaluates the three boxed expressions and applies the supplied function
-    fn expand3(&self,
-               a: &Box<Expression>,
-               b: &Box<Expression>,
-               c: &Box<Expression>,
-               f: fn(TypedValue, TypedValue, TypedValue) -> TypedValue) -> io::Result<(MachineState, TypedValue)> {
+    fn expand3(
+        &self,
+        a: &Box<Expression>,
+        b: &Box<Expression>,
+        c: &Box<Expression>,
+        f: fn(TypedValue, TypedValue, TypedValue) -> TypedValue,
+    ) -> io::Result<(MachineState, TypedValue)> {
         let (ms, aa) = self.evaluate(a)?;
         let (ms, bb) = ms.evaluate(b)?;
         let (ms, cc) = ms.evaluate(c)?;
@@ -220,25 +228,41 @@ impl MachineState {
         values.iter().fold(self.clone(), |ms, tv| ms.push(tv.clone()))
     }
 
-    fn filter_rows_in_memory(&self,
-                             condition: &Option<Box<Expression>>,
-                             rows: Vec<Row>,
-                             limit: TypedValue) -> io::Result<(MachineState, TypedValue)> {
+    fn delete_rows_on_disk(
+        &self,
+        ns: Namespace,
+        condition: &Option<Box<Expression>>,
+        limit: TypedValue,
+    ) -> io::Result<(MachineState, TypedValue)> {
+        let ms = self.clone();
+        let mut df = DataFrame::load(ns)?;
+        let mut deleted = df.delete_where(&ms, condition, limit)?;
+        Ok((ms, Int64Value(deleted as i64)))
+    }
+
+    fn filter_rows_in_memory(
+        &self,
+        rows: Vec<Row>,
+        condition: &Option<Box<Expression>>,
+        limit: TypedValue,
+    ) -> io::Result<(MachineState, TypedValue)> {
         let ms = self.clone();
         let mut out = vec![];
         filter_rows!(ms, condition.clone(), rows, limit, |row| out.push(row));
         Ok((self.clone(), ArrayOfRows(out)))
     }
 
-    async fn filter_rows_on_disk(&self,
-                                 ns: Namespace,
-                                 condition: &Option<Box<Expression>>,
-                                 actor: Addr<DataframeActor>,
-                                 limit: TypedValue) -> io::Result<(MachineState, TypedValue)> {
+    fn filter_rows_on_disk(
+        &self,
+        ns: Namespace,
+        condition: &Option<Box<Expression>>,
+        limit: TypedValue,
+    ) -> io::Result<(MachineState, TypedValue)> {
         let ms = self.clone();
         let mut out = vec![];
-        let rows = read_fully!(actor, ns)?;
-        filter_rows!(ms, condition.clone(), rows, limit, |row: Row| out.push(row.clone()));
+        let df = DataFrame::load(ns)?;
+        let rows = df.read_fully()?;
+        filter_rows!(ms, condition.clone(), rows, limit, |row: Row | out.push(row.clone()));
         Ok((self.clone(), ArrayOfRows(out)))
     }
 
@@ -262,40 +286,61 @@ impl MachineState {
         }
     }
 
-    fn sql_delete(&self,
-                  from: &Box<Expression>,
-                  condition: &Option<Box<Expression>>,
-                  limit: &Option<Box<Expression>>) -> io::Result<(MachineState, TypedValue)> {
+    fn sql_delete(
+        &self,
+        from: &Box<Expression>,
+        condition: &Option<Box<Expression>>,
+        limit: &Option<Box<Expression>>,
+    ) -> io::Result<(MachineState, TypedValue)> {
         let (ms, _limit) = Self::expand(self.clone(), limit)?;
-        match Self::expand(ms, &Some(from.clone()))? {
-            //(ms, ArrayOfRows(rows)) => ms.process_delete_rows(condition, rows, _limit),
-            (_, x) => fail(format!("Type mismatch: expected an iterable - {:?}", x))
+        let (ms, result) = ms.evaluate(from)?;
+        match result {
+            ArrayOfRows(rows) => {
+                let condition = condition.clone().map(|e| Box::new(Not(e)));
+                ms.filter_rows_in_memory(rows, &condition, _limit)
+            }
+            Null | Undefined =>
+                Ok((ms, Undefined)),
+            StringValue(path) =>
+                ms.delete_rows_on_disk(Namespace::parse(path.as_str())?, condition, _limit),
+            x => fail(format!("Type mismatch: expected an iterable: {}", x))
         }
     }
 
-    fn sql_select(&self,
-                  fields: &Vec<Expression>,
-                  from: &Option<Box<Expression>>,
-                  condition: &Option<Box<Expression>>,
-                  group_by: &Option<Vec<Expression>>,
-                  having: &Option<Box<Expression>>,
-                  order_by: &Option<Vec<Expression>>,
-                  limit: &Option<Box<Expression>>) -> io::Result<(MachineState, TypedValue)> {
+    fn sql_ns(&self, expr: &Box<Expression>) -> io::Result<(MachineState, TypedValue)> {
+        let (ms, result) = self.evaluate(expr)?;
+        match result {
+            StringValue(path) => {
+                //let ns = Namespace::parse(path.as_str())?;
+                Ok((ms, StringValue(path)))
+            }
+            x => fail(format!("Expected a String but got {}", x))
+        }
+    }
+
+    fn sql_select(
+        &self,
+        fields: &Vec<Expression>,
+        from: &Option<Box<Expression>>,
+        condition: &Option<Box<Expression>>,
+        group_by: &Option<Vec<Expression>>,
+        having: &Option<Box<Expression>>,
+        order_by: &Option<Vec<Expression>>,
+        limit: &Option<Box<Expression>>,
+    ) -> io::Result<(MachineState, TypedValue)> {
         let (ms, _limit) = Self::expand(self.clone(), limit)?;
-        match from.clone() {
+        match from {
             None => ms.evaluate_array(fields),
-            Some(my_from) => {
-                match *my_from {
-                    Ns(ns) => {
-                        //ms.filter_rows_on_disk(ns, condition, actor, _limit);
-                        Ok((ms, Undefined))
-                    }
-                    _ =>
-                        match Self::expand(ms, from)? {
-                            (ms, Undefined) => ms.evaluate_array(fields),
-                            (ms, ArrayOfRows(rows)) => ms.filter_rows_in_memory(condition, rows, _limit),
-                            (_, x) => fail(format!("Type mismatch: expected an iterable - {:?}", x))
-                        }
+            Some(source) => {
+                let (ms, result) = ms.evaluate(source)?;
+                match result {
+                    ArrayOfRows(rows) =>
+                        ms.filter_rows_in_memory(rows, condition, _limit),
+                    Null | Undefined =>
+                        ms.evaluate_array(fields),
+                    StringValue(path) =>
+                        ms.filter_rows_on_disk(Namespace::parse(path.as_str())?, condition, _limit),
+                    x => fail(format!("Type mismatch: expected an iterable: {}", x))
                 }
             }
         }
@@ -345,9 +390,8 @@ mod tests {
     use crate::compiler::Compiler;
     use crate::expression::{FALSE, NULL, TRUE};
     use crate::expression::Expression::{Divide, Factorial, Literal, Variable};
-    use crate::row;
     use crate::table_columns::TableColumn;
-    use crate::testdata::make_columns;
+    use crate::testdata::{make_columns, make_dataframe_ns, make_quote};
 
     use super::*;
 
@@ -400,42 +444,78 @@ mod tests {
     }
 
     #[test]
-    fn test_sql_select() {
-        let ops = Compiler::compile(r#"
-            select symbol, exchange, lastSale from stocks
+    fn test_sql_select_from_variable() {
+        let phys_columns = TableColumn::from_columns(&make_columns()).unwrap();
+        let ms = MachineState::new()
+            .with_variable("stocks", ArrayOfRows(vec![
+                make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
+                make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+                make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+                make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
+            ]));
+        let (_, result) = ms.evaluate_all(&Compiler::compile(r#"
+            select symbol, exchange, lastSale
+            from stocks
             where lastSale < 1.0
             order by symbol
             limit 5
-            "#).unwrap();
+            "#).unwrap()).unwrap();
+        assert_eq!(result, ArrayOfRows(vec![
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+        ]));
+    }
+
+    #[test]
+    fn test_sql_select_from_namespace() {
+        // create a table with test data
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let ms = MachineState::new()
-            .with_variable("stocks", ArrayOfRows(vec![
-                row!(0, phys_columns, vec![
-                    StringValue("ABC".into()), StringValue("AMEX".into()), Float64Value(11.77),
-                ]),
-                row!(1, phys_columns, vec![
-                    StringValue("UNO".into()), StringValue("OTC".into()), Float64Value(0.2456),
-                ]),
-                row!(2, phys_columns, vec![
-                    StringValue("BIZ".into()), StringValue("NYSE".into()), Float64Value(23.66),
-                ]),
-                row!(3, phys_columns, vec![
-                    StringValue("GOTO".into()), StringValue("OTC".into()), Float64Value(0.1428),
-                ]),
-                row!(4, phys_columns, vec![
-                    StringValue("BOOM".into()), StringValue("NASD".into()), Float64Value(56.87),
-                ]),
-            ]));
-        let (_, result) = ms.evaluate_all(&ops).unwrap();
+        let ns = Namespace::parse("machine.namespace.stocks").unwrap();
+        let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
+        assert_eq!(1, df.append(&make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
+        assert_eq!(1, df.append(&make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
+        assert_eq!(1, df.append(&make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
+        assert_eq!(1, df.append(&make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
+        assert_eq!(1, df.append(&make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)).unwrap());
+
+        // compile and execute the code
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate_all(&Compiler::compile(r#"
+            select symbol, exchange, lastSale
+            from ns("machine.namespace.stocks")
+            where lastSale > 1.0
+            order by symbol
+            limit 5
+            "#).unwrap()).unwrap();
         assert_eq!(result, ArrayOfRows(vec![
-            row!(1, phys_columns, vec![
-                StringValue("UNO".into()), StringValue("OTC".into()), Float64Value(0.2456),
-            ]),
-            row!(3, phys_columns, vec![
-                StringValue("GOTO".into()), StringValue("OTC".into()), Float64Value(0.1428),
-            ]),
+            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
+            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+            make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
         ]));
+    }
+
+    #[test]
+    fn test_sql_delete_from_namespace() {
+        // create a table with test data
+        let columns = make_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let ns = Namespace::parse("machine.delete.stocks").unwrap();
+        let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
+        assert_eq!(1, df.append(&make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
+        assert_eq!(1, df.append(&make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
+        assert_eq!(1, df.append(&make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
+        assert_eq!(1, df.append(&make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
+        assert_eq!(1, df.append(&make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)).unwrap());
+
+        // delete some rows
+        let ms = MachineState::new();
+        let (ms, result) = ms.evaluate_all(&Compiler::compile(r#"
+            delete from ns("machine.delete.stocks")
+            where lastSale > 1.0
+            "#).unwrap()).unwrap();
+        assert_eq!(result, Int64Value(3));
     }
 
     #[test]
