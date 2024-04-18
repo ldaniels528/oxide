@@ -287,7 +287,7 @@ mod tests {
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
             TableColumn::new("symbol", StringType(8), Null, 9),
             TableColumn::new("exchange", StringType(8), Null, 26),
-            TableColumn::new("lastSale", Float64Type, Null, 43),
+            TableColumn::new("last_sale", Float64Type, Null, 43),
         ]);
     }
 

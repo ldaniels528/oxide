@@ -2,7 +2,10 @@
 // dataframes module
 ////////////////////////////////////////////////////////////////////
 
+use std::collections::HashMap;
 use std::ops::AddAssign;
+
+use shared_lib::fail;
 
 use crate::dataframe_config::DataFrameConfig;
 use crate::expression::Expression;
@@ -29,16 +32,21 @@ impl DataFrame {
     /// creates a new [DataFrame]; persisting its configuration to disk.
     pub fn create(ns: Namespace, config: DataFrameConfig) -> std::io::Result<Self> {
         config.save(&ns)?;
-        let table_columns = TableColumn::from_columns(&config.columns)?;
+        let table_columns = TableColumn::from_columns(config.get_columns())?;
         let device = Box::new(FileRowCollection::create(ns.clone(), table_columns.clone())?);
         Ok(Self::new(ns, table_columns, device))
+    }
+
+    /// creates a new [DataFrame] from an existing [RowCollection]
+    pub fn from_row_collection(ns: Namespace, rc: Box<dyn RowCollection>) -> Self {
+        Self::new(ns, rc.get_columns().clone(), rc)
     }
 
     /// loads a dataframe from disk.
     pub fn load(ns: Namespace) -> std::io::Result<Self> {
         let cfg = DataFrameConfig::load(&ns)?;
         let device = Box::new(FileRowCollection::open(&ns)?);
-        let table_columns = TableColumn::from_columns(&cfg.columns)?;
+        let table_columns = TableColumn::from_columns(cfg.get_columns())?;
         Ok(Self::new(ns, table_columns, device))
     }
 
@@ -141,6 +149,32 @@ impl DataFrame {
         self.device.overwrite(row.get_id(), &row)
     }
 
+    /// overwrites rows that match the supplied criteria
+    pub fn overwrite_where(
+        &mut self,
+        ms: &MachineState,
+        fields: &Vec<Expression>,
+        values: &Vec<Expression>,
+        condition: &Option<Box<Expression>>,
+        limit: TypedValue,
+    ) -> std::io::Result<usize> {
+        let mut overwritten = 0;
+        for id in 0..limit.assume_usize().unwrap_or(self.len()?) {
+            // read an active row
+            if let Some(row) = self.read_one(id)? {
+                // if the predicate matches the condition, overwrite the row.
+                if row.matches(ms, condition) {
+                    let (ms, my_fields) = ms.with_row(&row).evaluate_atoms(fields)?;
+                    if let (_, TypedValue::Array(my_values)) = ms.evaluate_array(values)? {
+                        let new_row = Self::transform_row(row, my_fields, my_values)?;
+                        overwritten += self.overwrite(new_row)?;
+                    }
+                }
+            }
+        }
+        Ok(overwritten)
+    }
+
     /// reads the specified field value from the specified row ID
     pub fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         self.device.read_field(id, column_id)
@@ -177,6 +211,24 @@ impl DataFrame {
     pub fn read_then_push(&self, id: usize, rows: &mut Vec<Row>) -> std::io::Result<()> {
         let (row, metadata) = self.read_row(id)?;
         Ok(if metadata.is_allocated { rows.push(row) } else { () })
+    }
+
+    /// reads all rows matching the supplied condition
+    pub fn read_where(
+        &self,
+        ms: &MachineState,
+        condition: &Option<Box<Expression>>,
+        limit: TypedValue,
+    ) -> std::io::Result<Vec<Row>> {
+        let mut out = vec![];
+        for id in 0..limit.assume_usize().unwrap_or(self.len()?) {
+            // read an active row
+            if let Some(row) = self.read_one(id)? {
+                // if the predicate matches the condition, include the row.
+                if row.matches(ms, condition) { out.push(row); }
+            }
+        }
+        Ok(out)
     }
 
     /// resizes the table
@@ -221,11 +273,57 @@ impl DataFrame {
         self.overwrite(self.replace_undefined_with_null(new_row))
     }
 
+    /// overwrites rows that match the supplied criteria
+    pub fn update_where(
+        &mut self,
+        ms: &MachineState,
+        fields: &Vec<Expression>,
+        values: &Vec<Expression>,
+        condition: &Option<Box<Expression>>,
+        limit: TypedValue,
+    ) -> std::io::Result<usize> {
+        let mut updated = 0;
+        for id in 0..limit.assume_usize().unwrap_or(self.len()?) {
+            // read an active row
+            if let Some(row) = self.read_one(id)? {
+                // if the predicate matches the condition, overwrite the row.
+                if row.matches(ms, condition) {
+                    let (ms, field_names) = ms.with_row(&row).evaluate_atoms(fields)?;
+                    if let (_, TypedValue::Array(field_values)) = ms.evaluate_array(values)? {
+                        let new_row = Self::transform_row(row, field_names, field_values)?;
+                        updated += self.update(new_row)?;
+                    }
+                }
+            }
+        }
+        Ok(updated)
+    }
+
     fn replace_undefined_with_null(&self, row: Row) -> Row {
         let columns = self.columns.clone();
         Row::new(row.get_id(), columns.clone(), columns.iter().zip(row.get_fields().iter()).map(|(c, f)| {
             if f.value == Null || f.value == Undefined { Field::with_default(c) } else { f.clone() }
         }).collect())
+    }
+
+    pub(crate) fn transform_row(row: Row, field_names: Vec<String>, field_values: Vec<TypedValue>) -> std::io::Result<Row> {
+        if field_names.len() != field_values.len() {
+            return fail(format!("Data mismatch: columns ({}) vs values ({})", field_names.len(), field_values.len()));
+        }
+        let mapping = field_names.iter().zip(field_values.iter())
+            .fold(HashMap::new(), |mut m, (k, v)| {
+                m.insert(k.to_string(), v.clone());
+                m
+            });
+        let mut new_fields = vec![];
+        for (c, f) in row.get_columns().iter().zip(row.get_fields().iter()).collect::<Vec<(&TableColumn, &Field)>>() {
+            new_fields.push(match mapping.get(c.get_name()) {
+                Some(tv) => Field::new(tv.clone()),
+                None => f.clone()
+            });
+        }
+        let new_row = Row::new(row.get_id(), row.get_columns().clone(), new_fields);
+        Ok(new_row)
     }
 }
 
@@ -257,21 +355,23 @@ mod tests {
 
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::dataframes::DataFrame;
+    use crate::expression::Expression::{Equal, Literal, Variable};
+    use crate::machine::MachineState;
     use crate::namespaces::Namespace;
     use crate::row;
     use crate::table_columns::TableColumn;
     use crate::testdata::*;
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue, Undefined};
+    use crate::typed_values::TypedValue::{Float64Value, Int64Value, Null, StringValue, Undefined};
 
     #[test]
     fn test_add_assign() {
         let columns = make_table_columns();
         // create a dataframe with a single row
-        let mut df0 = make_dataframe("dataframes", "add_assign", "quotes0", make_columns()).unwrap();
+        let mut df0 = make_dataframe("dataframes", "add_assign", "stocks0", make_columns()).unwrap();
         df0.append(&make_quote(0, &columns, "RACE", "NASD", 123.45)).unwrap();
         // create a second dataframe with a single row
-        let mut df1 = make_dataframe("dataframes", "add_assign", "quotes1", make_columns()).unwrap();
+        let mut df1 = make_dataframe("dataframes", "add_assign", "stocks1", make_columns()).unwrap();
         df1.append(&make_quote(0, &columns, "BEER", "AMEX", 357.12)).unwrap();
         // concatenate the dataframes
         df0 += df1;
@@ -286,17 +386,17 @@ mod tests {
     #[test]
     fn test_create_dataframe() {
         let df = make_dataframe(
-            "dataframes", "create", "quotes", make_columns()).unwrap();
+            "dataframes", "create", "stocks", make_columns()).unwrap();
         assert_eq!(df.ns.database, "dataframes");
         assert_eq!(df.ns.schema, "create");
-        assert_eq!(df.ns.name, "quotes");
+        assert_eq!(df.ns.name, "stocks");
         assert_eq!(df.columns[0].get_name(), "symbol");
         assert_eq!(df.columns[0].data_type, StringType(8));
         assert_eq!(df.columns[0].default_value, Null);
         assert_eq!(df.columns[1].get_name(), "exchange");
         assert_eq!(df.columns[1].data_type, StringType(8));
         assert_eq!(df.columns[1].default_value, Null);
-        assert_eq!(df.columns[2].get_name(), "lastSale");
+        assert_eq!(df.columns[2].get_name(), "last_sale");
         assert_eq!(df.columns[2].data_type, Float64Type);
         assert_eq!(df.columns[2].default_value, Null);
     }
@@ -305,7 +405,7 @@ mod tests {
     fn test_insert_row() {
         let columns = make_table_columns();
         // create a dataframe with a single (encoded) row
-        let mut df = make_dataframe("dataframes", "append", "quotes", make_columns()).unwrap();
+        let mut df = make_dataframe("dataframes", "append", "stocks", make_columns()).unwrap();
         assert_eq!(1, df.append(&make_quote(0, &columns, "RICE", "PIPE", 42.11)).unwrap());
         // create a second row and append it to the dataframe
         assert_eq!(1, df.append(&make_quote(0, &columns, "BEEF", "CAKE", 100.0)).unwrap());
@@ -323,7 +423,7 @@ mod tests {
         // create a dataframe with 3 rows, 3 columns
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mut df = make_dataframe("dataframes", "delete_row", "quotes", columns).unwrap();
+        let mut df = make_dataframe("dataframes", "delete_row", "stocks", columns).unwrap();
         df.append(&make_quote(0, &phys_columns, "UNO", "AMEX", 11.77)).unwrap();
         df.append(&make_quote(1, &phys_columns, "DOS", "AMEX", 33.22)).unwrap();
         df.append(&make_quote(2, &phys_columns, "TRES", "AMEX", 55.44)).unwrap();
@@ -348,7 +448,7 @@ mod tests {
         // create a dataframe with 3 rows, 3 columns
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mut df = make_dataframe("dataframes", "fold_left", "quotes", columns).unwrap();
+        let mut df = make_dataframe("dataframes", "fold_left", "stocks", columns).unwrap();
         df.append(&make_quote(0, &phys_columns, "UNO", "AMEX", 11.77)).unwrap();
         df.append(&make_quote(1, &phys_columns, "DOS", "AMEX", 33.22)).unwrap();
         df.append(&make_quote(2, &phys_columns, "TRES", "AMEX", 55.44)).unwrap();
@@ -360,7 +460,7 @@ mod tests {
         // create a dataframe with 3 rows, 3 columns
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mut df = make_dataframe("dataframes", "fold_right", "quotes", columns).unwrap();
+        let mut df = make_dataframe("dataframes", "fold_right", "stocks", columns).unwrap();
         df.append(&make_quote(0, &phys_columns, "ONE", "AMEX", 11.77)).unwrap();
         df.append(&make_quote(1, &phys_columns, "TWO", "AMEX", 33.22)).unwrap();
         df.append(&make_quote(2, &phys_columns, "THRE", "AMEX", 55.44)).unwrap();
@@ -372,7 +472,7 @@ mod tests {
         // create a dataframe with 3 rows, 3 columns
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mut df = make_dataframe("dataframes", "for_all", "quotes", columns).unwrap();
+        let mut df = make_dataframe("dataframes", "for_all", "stocks", columns).unwrap();
         df.append(&make_quote(0, &phys_columns, "ALPH", "AMEX", 11.77)).unwrap();
         df.append(&make_quote(1, &phys_columns, "BETA", "NYSE", 33.22)).unwrap();
         df.append(&make_quote(2, &phys_columns, "GMMA", "NASD", 55.44)).unwrap();
@@ -382,7 +482,7 @@ mod tests {
     #[test]
     fn test_foreach_row() {
         let mut df = make_dataframe(
-            "dataframes", "foreach_row", "quotes", make_columns()).unwrap();
+            "dataframes", "foreach_row", "stocks", make_columns()).unwrap();
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "WE", "NYSE", 123.45)).unwrap(), 1);
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "CAN", "NYSE", 88.22)).unwrap(), 1);
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "FLY", "AMEX", 51.11)).unwrap(), 1);
@@ -393,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_load() {
-        let ns = Namespace::parse("dataframes.load.quotes").unwrap();
+        let ns = Namespace::parse("dataframes.load.stocks").unwrap();
         let mut df = make_dataframe(&ns.database, &ns.schema, &ns.name, make_columns()).unwrap();
         let columns = make_table_columns();
         df.append(&make_quote(0, &columns, "SPAM", "NYSE", 11.99)).unwrap();
@@ -407,13 +507,13 @@ mod tests {
     #[test]
     fn test_map() {
         let mut df = make_dataframe(
-            "dataframes", "transform", "quotes", make_columns()).unwrap();
+            "dataframes", "transform", "stocks", make_columns()).unwrap();
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "WE", "NYSE", 123.45)).unwrap(), 1);
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "CAN", "NYSE", 88.22)).unwrap(), 1);
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "FLY", "AMEX", 51.11)).unwrap(), 1);
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "FAR", "NYSE", 42.33)).unwrap(), 1);
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "AWAY", "AMEX", 9.73)).unwrap(), 1);
-        assert_eq!(df.map(|row| row.get("lastSale")).unwrap(), vec![
+        assert_eq!(df.map(|row| row.get("last_sale")).unwrap(), vec![
             Float64Value(123.45), Float64Value(88.22), Float64Value(51.11),
             Float64Value(42.33), Float64Value(9.73),
         ])
@@ -422,15 +522,50 @@ mod tests {
     #[test]
     fn test_overwrite_row() {
         let mut df = make_dataframe(
-            "dataframes", "overwrite_row", "quotes", make_columns()).unwrap();
+            "dataframes", "overwrite_row", "stocks", make_columns()).unwrap();
         let row = make_quote(2, &make_table_columns(), "AMD", "NYSE", 123.45);
         assert_eq!(df.overwrite(row).unwrap(), 1);
     }
 
     #[test]
+    fn test_overwrite_where() {
+        // create a table with sample data
+        let mut df = make_dataframe(
+            "dataframes", "overwrite_where", "stocks", make_columns()).unwrap();
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "WE", "NYSE", 123.45)).unwrap(), 1);
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "CAN", "NYSE", 88.22)).unwrap(), 1);
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "FLY", "AMEX", 51.11)).unwrap(), 1);
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "FAR", "NYSE", 42.33)).unwrap(), 1);
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "AWAY", "AMEX", 123.45)).unwrap(), 1);
+
+        // updates rows where ...
+        let ms = MachineState::build();
+        let fields = vec![
+            Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into()),
+        ];
+        let values = vec![
+            Literal(StringValue("XXX".into())), Literal(StringValue("YYY".into())), Literal(Float64Value(0.)),
+        ];
+        let condition = Some(Box::new(Equal(
+            Box::new(Variable("exchange".into())),
+            Box::new(Literal(StringValue("NYSE".into()))),
+        )));
+        assert_eq!(df.overwrite_where(&ms, &fields, &values, &condition, Int64Value(2)).unwrap(), 2);
+
+        // verify the rows
+        assert_eq!(df.read_fully().unwrap(), vec![
+            make_quote(0, &make_table_columns(), "XXX", "YYY", 0.),
+            make_quote(1, &make_table_columns(), "XXX", "YYY", 0.),
+            make_quote(2, &make_table_columns(), "FLY", "AMEX", 51.11),
+            make_quote(3, &make_table_columns(), "FAR", "NYSE", 42.33),
+            make_quote(4, &make_table_columns(), "AWAY", "AMEX", 123.45),
+        ])
+    }
+
+    #[test]
     fn test_read_one() {
         let mut df = make_dataframe(
-            "dataframes", "read_one", "quotes", make_columns()).unwrap();
+            "dataframes", "read_one", "stocks", make_columns()).unwrap();
         let row = make_quote(0, &make_table_columns(), "AMD", "NYSE", 123.45);
         assert_eq!(df.overwrite(row).unwrap(), 1);
         assert_eq!(df.read_one(0).unwrap(), Some(make_quote(0, &make_table_columns(), "AMD", "NYSE", 123.45)))
@@ -439,7 +574,7 @@ mod tests {
     #[test]
     fn test_read_range() {
         let mut df = make_dataframe(
-            "dataframes", "read_range", "quotes", make_columns()).unwrap();
+            "dataframes", "read_range", "stocks", make_columns()).unwrap();
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "WE", "NYSE", 123.45)).unwrap(), 1);
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "CAN", "NYSE", 88.22)).unwrap(), 1);
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "FLY", "AMEX", 51.11)).unwrap(), 1);
@@ -455,7 +590,7 @@ mod tests {
     #[test]
     fn test_read_row() {
         let mut df = make_dataframe(
-            "dataframes", "read_row", "quotes", make_columns()).unwrap();
+            "dataframes", "read_row", "stocks", make_columns()).unwrap();
         let row = make_quote(0, &make_table_columns(), "GE", "NASDAQ", 43.45);
         assert_eq!(df.overwrite(row).unwrap(), 1);
 
@@ -468,7 +603,7 @@ mod tests {
     #[test]
     fn test_read_field() {
         let mut df = make_dataframe(
-            "dataframes", "read_field", "quotes", make_columns()).unwrap();
+            "dataframes", "read_field", "stocks", make_columns()).unwrap();
         assert_eq!(1, df.append(&make_quote(0, &make_table_columns(), "DUCK", "QUACK", 78.35)).unwrap());
 
         let value: TypedValue = df.read_field(0, 0).unwrap();
@@ -478,7 +613,7 @@ mod tests {
     #[test]
     fn test_resize_table() {
         let mut df = make_dataframe(
-            "dataframes", "resize", "quotes", make_columns()).unwrap();
+            "dataframes", "resize", "stocks", make_columns()).unwrap();
         let _ = df.resize(0).unwrap();
         df.resize(5).unwrap();
         assert_eq!(df.len().unwrap(), 5);
@@ -489,7 +624,7 @@ mod tests {
         // create a dataframe with 3 rows, 3 columns
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mut df = make_dataframe("dataframes", "reverse", "quotes", columns).unwrap();
+        let mut df = make_dataframe("dataframes", "reverse", "stocks", columns).unwrap();
         let row_a = make_quote(0, &phys_columns, "A", "AMEX", 11.77);
         let row_b = make_quote(1, &phys_columns, "BB", "AMEX", 33.22);
         let row_c = make_quote(2, &phys_columns, "CCC", "AMEX", 55.44);
@@ -502,7 +637,7 @@ mod tests {
         // create a dataframe with 3 rows, 3 columns
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mut df = make_dataframe("dataframes", "undelete_row", "quotes", columns).unwrap();
+        let mut df = make_dataframe("dataframes", "undelete_row", "stocks", columns).unwrap();
         assert_eq!(1, df.append(&make_quote(0, &phys_columns, "UNO", "AMEX", 11.77)).unwrap());
         assert_eq!(1, df.append(&make_quote(1, &phys_columns, "DOS", "AMEX", 33.22)).unwrap());
         assert_eq!(1, df.append(&make_quote(2, &phys_columns, "TRES", "AMEX", 55.44)).unwrap());
@@ -538,7 +673,7 @@ mod tests {
         // create a dataframe with 3 rows, 3 columns
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mut df = make_dataframe("dataframes", "update_row", "quotes", columns).unwrap();
+        let mut df = make_dataframe("dataframes", "update_row", "stocks", columns).unwrap();
         assert_eq!(1, df.append(&make_quote(0, &phys_columns, "DIAS", "NYSE", 99.99)).unwrap());
         assert_eq!(1, df.append(&make_quote(1, &phys_columns, "DORA", "AMEX", 33.32)).unwrap());
         assert_eq!(1, df.append(&make_quote(2, &phys_columns, "INFO", "NASD", 22.00)).unwrap());
@@ -558,10 +693,41 @@ mod tests {
     }
 
     #[test]
-    fn performance_test() -> std::io::Result<()> {
+    fn test_update_where() {
+        // create a table with sample data
+        let mut df = make_dataframe(
+            "dataframes", "update_where", "stocks", make_columns()).unwrap();
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "WE", "NYSE", 123.45)).unwrap(), 1);
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "CAN", "NYSE", 88.22)).unwrap(), 1);
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "FLY", "AMEX", 51.11)).unwrap(), 1);
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "FAR", "NYSE", 42.33)).unwrap(), 1);
+        assert_eq!(df.append(&make_quote(0, &make_table_columns(), "AWAY", "AMEX", 123.45)).unwrap(), 1);
+
+        // updates rows where ...
+        let ms = MachineState::build();
+        let fields = vec![Variable("last_sale".into())];
+        let values = vec![Literal(Float64Value(11.1111))];
+        let condition = Some(Box::new(Equal(
+            Box::new(Variable("exchange".into())),
+            Box::new(Literal(StringValue("NYSE".into()))),
+        )));
+        assert_eq!(df.update_where(&ms, &fields, &values, &condition, Int64Value(2)).unwrap(), 2);
+
+        // verify the rows
+        assert_eq!(df.read_fully().unwrap(), vec![
+            make_quote(0, &make_table_columns(), "WE", "NYSE", 11.1111),
+            make_quote(1, &make_table_columns(), "CAN", "NYSE", 11.1111),
+            make_quote(2, &make_table_columns(), "FLY", "AMEX", 51.11),
+            make_quote(3, &make_table_columns(), "FAR", "NYSE", 42.33),
+            make_quote(4, &make_table_columns(), "AWAY", "AMEX", 123.45),
+        ])
+    }
+
+    #[test]
+    fn test_performance() -> std::io::Result<()> {
         let columns = make_columns();
         let phys_columns = TableColumn::from_columns(&columns)?;
-        let mut df = make_dataframe("dataframes", "performance_test", "quotes", columns)?;
+        let mut df = make_dataframe("dataframes", "performance_test", "stocks", columns)?;
         test_write_performance(&mut df, &phys_columns, 10_000)?;
         test_read_performance(&df)?;
         Ok(())

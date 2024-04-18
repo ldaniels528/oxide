@@ -15,6 +15,10 @@ use crate::typed_values::TypedValue;
 
 /// represents the underlying storage resource for the dataframe
 pub trait RowCollection: Debug {
+    /// returns the columns that represent device
+    fn get_columns(&self) -> &Vec<TableColumn>;
+
+    /// returns the record size of the device
     fn get_record_size(&self) -> usize;
 
     /// returns the number of active rows in the table
@@ -74,7 +78,7 @@ mod tests {
         let mut rc = <dyn RowCollection>::from_bytes(columns.clone(), vec![]);
 
         // create a new row
-        assert_eq!(rc.overwrite(row.id, &row).unwrap(), 1);
+        assert_eq!(rc.overwrite(row.get_id(), &row).unwrap(), 1);
 
         // read and verify the row
         let (row, rmd) = rc.read(0).unwrap();
@@ -106,10 +110,10 @@ mod tests {
         fn test_variant(mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a new row
             let row = make_quote(2, &columns, "AMD", "NYSE", 88.78);
-            assert_eq!(rc.overwrite(row.id, &row).unwrap(), 1);
+            assert_eq!(rc.overwrite(row.get_id(), &row).unwrap(), 1);
 
             // read and verify the row
-            let (new_row, meta) = rc.read(row.id).unwrap();
+            let (new_row, meta) = rc.read(row.get_id()).unwrap();
             assert!(meta.is_allocated);
             assert_eq!(new_row, row);
         }

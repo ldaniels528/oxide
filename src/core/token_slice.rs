@@ -2,6 +2,7 @@
 // token slice module - responsible for parsing language tokens
 ////////////////////////////////////////////////////////////////////
 
+use std::fmt::Display;
 use std::io;
 use std::ops::Index;
 
@@ -107,6 +108,12 @@ impl TokenSlice {
         self.has_next() || (self.get_position() < self.len() as isize)
     }
 
+    /// Indicates whether at least one more token remains before the end of the slice.
+    pub fn has_additional(&self) -> bool {
+        self.has_next() || (!self.is_empty() && self.get_position() == 0
+            && (self.get_position() < self.len() as isize))
+    }
+
     /// Indicates whether there is another token after the current token
     pub fn has_next(&self) -> bool { self.pos + 1 < self.tokens.len() as isize }
 
@@ -171,6 +178,8 @@ impl TokenSlice {
 
     pub fn skip(&self) -> Self { self.next().1 }
 
+    pub fn tail(&self) -> Self { Self::new(self.tokens[(self.pos + 1) as usize..self.len()].to_vec()) }
+
     pub fn while_do<A>(&self,
                        cond: fn(&TokenSlice) -> bool,
                        f: fn(TokenSlice) -> io::Result<TokenSlice>) -> io::Result<TokenSlice> {
@@ -179,6 +188,12 @@ impl TokenSlice {
             a_ts = f(a_ts)?
         }
         Ok(a_ts)
+    }
+}
+
+impl Display for TokenSlice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.get().map(|t| t.get_raw_value()).unwrap_or("".into()))
     }
 }
 
@@ -193,6 +208,8 @@ impl Index<usize> for TokenSlice {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::tokens::Token::*;
+
     use super::*;
 
     #[test]
@@ -297,5 +314,15 @@ mod tests {
             Token::single_quoted("fast!".into(), 17, 22, 1, 19)
         ]);
         assert_eq!(ts.get_position(), 4);
+    }
+
+    #[test]
+    fn test_tail() {
+        let ts = TokenSlice::from_string("abc 123 def 456");
+        assert_eq!(ts.tail(), TokenSlice::new(vec![
+            Numeric { text: "123".into(), start: 4, end: 7, line_number: 1, column_number: 6 },
+            Atom { text: "def".into(), start: 8, end: 11, line_number: 1, column_number: 10 },
+            Numeric { text: "456".into(), start: 12, end: 15, line_number: 1, column_number: 14 },
+        ]))
     }
 }

@@ -2,6 +2,7 @@
 // fields module
 ////////////////////////////////////////////////////////////////////
 
+use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::data_types::DataType;
@@ -47,6 +48,12 @@ impl Field {
 
     pub fn with_value(value: TypedValue) -> Self {
         Self::new(value)
+    }
+}
+
+impl Display for Field {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Field({})", self.value.unwrap_value())
     }
 }
 

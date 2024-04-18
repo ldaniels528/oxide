@@ -39,6 +39,8 @@ impl Namespace {
         env::var("OXIDE_HOME").unwrap_or("./oxide_db".to_string())
     }
 
+    pub fn temp() -> Self { Self::new("temp", "temp", "temp") }
+
     pub fn id(&self) -> String {
         format!("{}.{}.{}", self.database, self.schema, self.name)
     }

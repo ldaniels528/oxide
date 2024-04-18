@@ -2,6 +2,7 @@
 // tokens module
 ////////////////////////////////////////////////////////////////////
 
+use std::fmt::Display;
 use std::io;
 use std::str::FromStr;
 
@@ -169,7 +170,7 @@ impl Token {
 
     /// Returns the numeric value of the [Token]
     pub fn to_numeric<A: FromStr>(&self) -> io::Result<A> {
-        match &self {
+        match self {
             Atom { text, .. } | Numeric { text, .. } => {
                 let s: String = text.chars().filter(|c| *c != '_').collect();
                 match s.parse::<A>() {
@@ -179,6 +180,12 @@ impl Token {
             }
             t => fail(format!("Cannot convert {} to numeric", t.get_raw_value()))
         }
+    }
+}
+
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.get_raw_value())
     }
 }
 

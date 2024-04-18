@@ -66,8 +66,8 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let column: TableColumn = TableColumn::new("lastSale", Float64Type, Float64Value(0.142857), 0);
-        assert_eq!(column.name, "lastSale");
+        let column: TableColumn = TableColumn::new("last_sale", Float64Type, Float64Value(0.142857), 0);
+        assert_eq!(column.name, "last_sale");
         assert_eq!(column.data_type, Float64Type);
         assert_eq!(column.default_value, Float64Value(0.142857));
         assert_eq!(column.max_physical_size, 9);
@@ -91,7 +91,7 @@ mod tests {
         let natural: Vec<TableColumn> = vec![
             TableColumn::new("symbol", StringType(8), Null, 9),
             TableColumn::new("exchange", StringType(8), Null, 26),
-            TableColumn::new("lastSale", Float64Type, Null, 43),
+            TableColumn::new("last_sale", Float64Type, Null, 43),
         ];
         assert_eq!(generated, natural);
     }

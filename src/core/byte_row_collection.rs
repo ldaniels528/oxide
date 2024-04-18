@@ -21,6 +21,12 @@ pub struct ByteRowCollection {
 }
 
 impl ByteRowCollection {
+    pub fn from_rows(columns: Vec<TableColumn>, rows: Vec<Row>) -> ByteRowCollection {
+        let mut encoded_rows = vec![];
+        for row in rows { encoded_rows.push(row.encode()) }
+        Self::new(columns, encoded_rows)
+    }
+
     pub fn new(columns: Vec<TableColumn>, rows: Vec<Vec<u8>>) -> ByteRowCollection {
         ByteRowCollection {
             record_size: Row::compute_record_size(&columns),
@@ -32,6 +38,8 @@ impl ByteRowCollection {
 }
 
 impl RowCollection for ByteRowCollection {
+    fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
+
     fn get_record_size(&self) -> usize { self.record_size }
 
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }

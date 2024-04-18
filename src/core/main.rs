@@ -6,12 +6,11 @@ use std::env;
 use std::error::Error;
 
 use actix::{Actor, Addr};
-use actix_session::{Session, SessionInsertError};
+use actix_session::Session;
 use actix_session::storage::CookieSessionStore;
-use actix_web::{cookie, FromRequest, HttpRequest, HttpResponse, Responder, web};
+use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use actix_web::cookie::Key;
 use actix_web_actors::ws;
-use futures_util::{TryFutureExt, TryStreamExt};
 use log::{error, info, LevelFilter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,7 +26,6 @@ use crate::namespaces::Namespace;
 use crate::rows::Row;
 use crate::server::{RowJs, SystemInfoJs, to_row, to_row_json};
 use crate::table_columns::TableColumn;
-use crate::typed_values::TypedValue;
 use crate::websockets::OxideWebSocket;
 
 mod byte_row_collection;
@@ -41,6 +39,7 @@ mod expression;
 mod field_metadata;
 mod fields;
 mod file_row_collection;
+mod interpreter;
 mod machine;
 mod namespaces;
 mod opcode;
@@ -69,7 +68,7 @@ impl IndividualState {
     pub fn new() -> Self {
         Self {
             counter: 0,
-            machine: MachineState::new(),
+            machine: MachineState::build(),
         }
     }
 }
@@ -412,7 +411,7 @@ mod tests {
             .set_json(&json!({"columns":[
                 {"name":"symbol","column_type":"String(4)","default_value":null},
                 {"name":"exchange","column_type":"String(4)","default_value":null},
-                {"name":"lastSale","column_type":"Double","default_value":null}],
+                {"name":"last_sale","column_type":"Double","default_value":null}],
                 "indices":[],"partitions":[]}))
             .to_request();
         let resp = test::call_service(&mut app, req).await;
@@ -423,7 +422,7 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"columns":[{"name":"symbol","column_type":"String(4)","default_value":null},{"name":"exchange","column_type":"String(4)","default_value":null},{"name":"lastSale","column_type":"Double","default_value":null}],"indices":[],"partitions":[]}"#);
+        assert_eq!(body, r#"{"columns":[{"name":"symbol","column_type":"String(4)","default_value":null},{"name":"exchange","column_type":"String(4)","default_value":null},{"name":"last_sale","column_type":"Double","default_value":null}],"indices":[],"partitions":[]}"#);
 
         // DELETE the config
         let req = test::TestRequest::delete().uri(&ns_uri(database, schema, name)).to_request();
@@ -460,7 +459,7 @@ mod tests {
             .set_json(&json!({"columns":[
                 {"name":"symbol","column_type":"String(8)","default_value":null},
                 {"name":"exchange","column_type":"String(8)","default_value":null},
-                {"name":"lastSale","column_type":"Double","default_value":null}],
+                {"name":"last_sale","column_type":"Double","default_value":null}],
                 "indices":[],"partitions":[]})).to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
@@ -470,7 +469,7 @@ mod tests {
             .set_json(&json!({"fields": [
                 {"name": "symbol", "value": "ATOM"},
                 {"name": "exchange","value": "NYSE"},
-                {"name": "lastSale","value": 24.17}]
+                {"name": "last_sale","value": 24.17}]
             })).to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
@@ -480,7 +479,7 @@ mod tests {
             .set_json(&json!({"fields": [
                 {"name": "symbol", "value": "BABY"},
                 {"name": "exchange","value": "NYSE"},
-                {"name": "lastSale","value": 13.66}]
+                {"name": "last_sale","value": 13.66}]
             })).to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
@@ -490,11 +489,11 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"id":0,"fields":[{"name":"symbol","value":"ATOM"},{"name":"exchange","value":"NYSE"},{"name":"lastSale","value":24.17}]}"#);
+        assert_eq!(body, r#"{"id":0,"fields":[{"name":"symbol","value":"ATOM"},{"name":"exchange","value":"NYSE"},{"name":"last_sale","value":24.17}]}"#);
 
         // PATCH one of the previously POSTed stock quotes with a new price
         let req = test::TestRequest::patch().uri(&row_uri(database, schema, name, 1))
-            .set_json(&json!({"id": 1, "fields": [{"name": "lastSale","value": 13.33}]})).to_request();
+            .set_json(&json!({"id": 1, "fields": [{"name": "last_sale","value": 13.33}]})).to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
 
@@ -503,14 +502,14 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"[{"id":0,"fields":[{"name":"symbol","value":"ATOM"},{"name":"exchange","value":"NYSE"},{"name":"lastSale","value":24.17}]},{"id":1,"fields":[{"name":"symbol","value":"BABY"},{"name":"exchange","value":"NYSE"},{"name":"lastSale","value":13.33}]}]"#);
+        assert_eq!(body, r#"[{"id":0,"fields":[{"name":"symbol","value":"ATOM"},{"name":"exchange","value":"NYSE"},{"name":"last_sale","value":24.17}]},{"id":1,"fields":[{"name":"symbol","value":"BABY"},{"name":"exchange","value":"NYSE"},{"name":"last_sale","value":13.33}]}]"#);
 
         // PUT to overwrite the row
         let req = test::TestRequest::put().uri(&row_uri(database, schema, name, 0))
             .set_json(&json!({"fields": [
                 {"name": "symbol", "value": "CRY"},
                 {"name": "exchange","value": "NYSE"},
-                {"name": "lastSale","value": 88.11}]
+                {"name": "last_sale","value": 88.11}]
             })).to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
@@ -520,7 +519,7 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"id":0,"fields":[{"name":"symbol","value":"CRY"},{"name":"exchange","value":"NYSE"},{"name":"lastSale","value":88.11}]}"#);
+        assert_eq!(body, r#"{"id":0,"fields":[{"name":"symbol","value":"CRY"},{"name":"exchange","value":"NYSE"},{"name":"last_sale","value":88.11}]}"#);
 
         // DELETE the first row
         let req = test::TestRequest::delete().uri(&row_uri(database, schema, name, 0)).to_request();

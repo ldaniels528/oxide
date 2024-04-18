@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn test_dec() {
-        let ms = MachineState::new().push(Int64Value(6));
+        let ms = MachineState::build().push(Int64Value(6));
         let ms = dec(&ms).unwrap();
         let (_, result) = ms.pop();
         assert_eq!(result, Some(Int64Value(5)));
@@ -81,7 +81,7 @@ mod tests {
 
     #[test]
     fn test_inc() {
-        let ms = MachineState::new().push(Int64Value(6));
+        let ms = MachineState::build().push(Int64Value(6));
         let ms = inc(&ms).unwrap();
         let (_, result) = ms.pop();
         assert_eq!(result, Some(Int64Value(7)));
@@ -89,7 +89,7 @@ mod tests {
 
     #[test]
     fn test_fact_i32() {
-        let ms = MachineState::new().push(Int32Value(5));
+        let ms = MachineState::build().push(Int32Value(5));
         let ms = fact(&ms).unwrap();
         let (_, result) = ms.pop();
         assert_eq!(result, Some(Int64Value(120)));
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_fact_f64() {
-        let ms = MachineState::new().push(Float64Value(6.));
+        let ms = MachineState::build().push(Float64Value(6.));
         let ms = fact(&ms).unwrap();
         let (_, result) = ms.pop();
         assert_eq!(result, Some(Float64Value(720.)));
@@ -106,7 +106,7 @@ mod tests {
     #[test]
     fn test_multiple_opcodes() {
         // execute the program
-        let (ms, value) = MachineState::new()
+        let (ms, value) = MachineState::build()
             .push_all(vec![
                 2., 3., // add
                 4., // mul

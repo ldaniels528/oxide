@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::mem::size_of;
 use std::ops::Index;
 
@@ -20,13 +21,18 @@ use crate::typed_values::TypedValue::{Null, RecordNumber, Undefined};
 /// Represents a row of a table structure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Row {
-    pub(crate) id: usize,
-    pub(crate) columns: Vec<TableColumn>,
-    pub(crate) fields: Vec<Field>,
+    id: usize,
+    columns: Vec<TableColumn>,
+    fields: Vec<Field>,
 }
 
 impl Row {
-    // Primary Constructor
+
+    ////////////////////////////////////////////////////////////////////
+    //      Constructors
+    ////////////////////////////////////////////////////////////////////
+
+    /// Primary Constructor
     pub fn new(id: usize, columns: Vec<TableColumn>, fields: Vec<Field>) -> Self {
         Self { id, columns, fields }
     }
@@ -60,7 +66,11 @@ impl Row {
         Self::new(0, columns.clone(), columns.iter().map(|_| Field::new(Null)).collect())
     }
 
-    /// computes the total record size (in bytes)
+    ////////////////////////////////////////////////////////////////////
+    //      Utilities
+    ////////////////////////////////////////////////////////////////////
+
+    /// Computes the total record size (in bytes)
     pub fn compute_record_size(columns: &Vec<TableColumn>) -> usize {
         Row::overhead() + columns.iter().map(|c| c.max_physical_size).sum::<usize>()
     }
@@ -138,6 +148,15 @@ impl Row {
     }
 }
 
+impl Display for Row {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let data = self.columns.iter().zip(self.fields.iter())
+            .map(|(c, f)| format!("{}: {}", c.get_name(), f.value.to_json().to_string()))
+            .collect::<Vec<String>>().join(", ");
+        write!(f, "Row {{ {} }}", data)
+    }
+}
+
 impl Index<usize> for Row {
     type Output = Field;
 
@@ -171,7 +190,7 @@ mod tests {
             columns: vec![
                 TableColumn::new("symbol", StringType(8), Null, 9),
                 TableColumn::new("exchange", StringType(8), Null, 26),
-                TableColumn::new("lastSale", Float64Type, Null, 43),
+                TableColumn::new("last_sale", Float64Type, Null, 43),
             ],
             fields: vec![
                 Field::new(StringValue("KING".into())),
@@ -250,7 +269,7 @@ mod tests {
         ]);
         assert_eq!(row.find_field_by_name("symbol"), Some(StringValue("GE".into())));
         assert_eq!(row.find_field_by_name("exchange"), Some(StringValue("NYSE".into())));
-        assert_eq!(row.find_field_by_name("lastSale"), Some(Float64Value(48.88)));
+        assert_eq!(row.find_field_by_name("last_sale"), Some(Float64Value(48.88)));
         assert_eq!(row.find_field_by_name("rating"), None);
     }
 
@@ -261,7 +280,7 @@ mod tests {
         ]);
         assert_eq!(row.get("symbol"), StringValue("GE".into()));
         assert_eq!(row.get("exchange"), StringValue("NYSE".into()));
-        assert_eq!(row.get("lastSale"), Float64Value(48.88));
+        assert_eq!(row.get("last_sale"), Float64Value(48.88));
         assert_eq!(row.get("rating"), Undefined);
     }
 
@@ -273,7 +292,7 @@ mod tests {
             "_id".into() => RecordNumber(111),
             "symbol".into() => StringValue("AAA".into()),
             "exchange".into() => StringValue("TCE".into()),
-            "lastSale".into() => Float64Value(1230.78),
+            "last_sale".into() => Float64Value(1230.78),
         ));
     }
 

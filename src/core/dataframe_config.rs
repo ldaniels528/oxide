@@ -12,9 +12,9 @@ use crate::server::ColumnJs;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DataFrameConfig {
-    pub(crate) columns: Vec<ColumnJs>,
-    pub(crate) indices: Vec<HashIndexConfig>,
-    pub(crate) partitions: Vec<String>,
+    columns: Vec<ColumnJs>,
+    indices: Vec<HashIndexConfig>,
+    partitions: Vec<String>,
 }
 
 impl DataFrameConfig {
@@ -34,6 +34,8 @@ impl DataFrameConfig {
     pub fn delete(ns: &Namespace) -> std::io::Result<()> {
         fs::remove_file(ns.get_config_file_path())
     }
+
+    pub fn get_columns(&self) -> &Vec<ColumnJs> { &self.columns }
 
     /// loads a dataframe configuration from disk.
     pub fn load(ns: &Namespace) -> std::io::Result<Self> {
@@ -69,7 +71,7 @@ mod tests {
         let columns: Vec<ColumnJs> = vec![
             ColumnJs::new("symbol", "String(10)", None),
             ColumnJs::new("exchange", "String(10)", None),
-            ColumnJs::new("lastSale", "Double", Some("0.00".into())),
+            ColumnJs::new("last_sale", "Double", Some("0.00".into())),
         ];
         let indices = Vec::with_capacity(0);
         let partitions = Vec::with_capacity(0);
@@ -81,21 +83,9 @@ mod tests {
         let cfg = DataFrameConfig::load(&ns)?;
         assert_eq!(cfg, DataFrameConfig {
             columns: vec![
-                ColumnJs {
-                    name: "symbol".into(),
-                    column_type: "String(10)".into(),
-                    default_value: None,
-                },
-                ColumnJs {
-                    name: "exchange".into(),
-                    column_type: "String(10)".into(),
-                    default_value: None,
-                },
-                ColumnJs {
-                    name: "lastSale".into(),
-                    column_type: "Double".into(),
-                    default_value: Some("0.00".into()),
-                },
+                ColumnJs::new("symbol", "String(10)", None),
+                ColumnJs::new("exchange", "String(10)", None),
+                ColumnJs::new("last_sale", "Double", Some("0.00".into())),
             ],
             indices: vec![],
             partitions: vec![],

@@ -16,9 +16,9 @@ pub const VERSION: &str = "0.1.0";
 // JSON representation of a column
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ColumnJs {
-    pub(crate) name: String,
-    pub(crate) column_type: String,
-    pub(crate) default_value: Option<String>,
+    name: String,
+    column_type: String,
+    default_value: Option<String>,
 }
 
 impl ColumnJs {
@@ -114,7 +114,7 @@ pub fn to_row(columns: &Vec<TableColumn>, form: RowJs, id: usize) -> Row {
 }
 
 pub fn to_row_json(row: &Row) -> RowJs {
-    RowJs::new(Some(row.id), row.fields.iter().zip(row.get_columns())
+    RowJs::new(Some(row.get_id()), row.get_fields().iter().zip(row.get_columns())
         .map(|(f, c)| FieldJs::new(c.get_name(), f.value.to_json())).collect())
 }
 
@@ -148,7 +148,7 @@ mod tests {
         let columns = vec![
             ColumnJs::new("symbol", "String(8)", None),
             ColumnJs::new("exchange", "String(10)", None),
-            ColumnJs::new("lastSale", "Double", Some("0.0".into())),
+            ColumnJs::new("last_sale", "Double", Some("0.0".into())),
         ];
         assert_eq!(columns, vec![
             ColumnJs {
@@ -162,7 +162,7 @@ mod tests {
                 default_value: None,
             },
             ColumnJs {
-                name: "lastSale".into(),
+                name: "last_sale".into(),
                 column_type: "Double".into(),
                 default_value: Some("0.0".into()),
             },
@@ -175,7 +175,7 @@ mod tests {
         let columns = vec![
             TableColumn::new("symbol", StringType(4), Null, 9),
             TableColumn::new("exchange", StringType(4), Null, 22),
-            TableColumn::new("lastSale", Float64Type, Null, 35),
+            TableColumn::new("last_sale", Float64Type, Null, 35),
         ];
         let row = row!(123, columns, vec![
             StringValue("FOX".into()), StringValue("NYSE".into()), Float64Value(37.65),
@@ -184,7 +184,7 @@ mod tests {
         let fields_js = vec![
             FieldJs::new("symbol", serde_json::json!("FOX")),
             FieldJs::new("exchange", serde_json::json!("NYSE")),
-            FieldJs::new("lastSale", serde_json::json!(37.65)),
+            FieldJs::new("last_sale", serde_json::json!(37.65)),
         ];
         let row_js = RowJs::new(Some(123), fields_js.clone());
         // verify the accessors
@@ -199,14 +199,14 @@ mod tests {
                 value: serde_json::json!("NYSE"),
             },
             FieldJs {
-                name: "lastSale".to_string(),
+                name: "last_sale".to_string(),
                 value: serde_json::json!(37.65),
             }]);
         assert_eq!(row_js, RowJs { id: Some(123), fields: fields_js });
         // verify the value extraction
         assert_eq!(determine_column_value(&row_js, "symbol"), StringValue("FOX".into()));
         assert_eq!(determine_column_value(&row_js, "exchange"), StringValue("NYSE".into()));
-        assert_eq!(determine_column_value(&row_js, "lastSale"), Float64Value(37.65));
+        assert_eq!(determine_column_value(&row_js, "last_sale"), Float64Value(37.65));
         // cross-convert and verify
         assert_eq!(to_row_json(&row), row_js.clone());
         assert_eq!(to_row(&columns, row_js, 123), row);

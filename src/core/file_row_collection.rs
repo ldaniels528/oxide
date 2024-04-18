@@ -38,7 +38,7 @@ impl FileRowCollection {
 
     pub fn open(ns: &Namespace) -> std::io::Result<Self> {
         let cfg = DataFrameConfig::load(&ns)?;
-        let columns = TableColumn::from_columns(&cfg.columns)?;
+        let columns = TableColumn::from_columns(cfg.get_columns())?;
         let file = Arc::new(Self::open_rw(&ns)?);
         Ok(Self::new(columns, file))
     }
@@ -62,6 +62,8 @@ impl Debug for FileRowCollection {
 }
 
 impl RowCollection for FileRowCollection {
+    fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
+
     fn get_record_size(&self) -> usize { self.record_size }
 
     fn len(&self) -> std::io::Result<usize> {

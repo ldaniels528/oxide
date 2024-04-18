@@ -81,7 +81,7 @@ impl DataType {
                 DataType::resolve(name, DataType::transfer_to_string_array(arg_tokens).as_slice())
             }
             // unrecognized - syntax error?
-            _ => fail("malformed type definition")
+            tok => fail(format!("malformed type definition near {}", tok[0]))
         }
     }
 
