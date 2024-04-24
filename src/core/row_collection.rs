@@ -63,6 +63,7 @@ mod tests {
 
     use shared_lib::cnv_error;
 
+    use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::row;
     use crate::testdata::{make_columns, make_quote, make_table_columns, make_table_file};
@@ -91,7 +92,7 @@ mod tests {
     #[test]
     fn test_from_file() {
         let (file, columns, _) =
-            make_table_file("rows", "append_row", "quotes", make_columns());
+            make_table_file("rows", "append_row", "stocks", make_columns());
         let mut rc = <dyn RowCollection>::from_file(columns.clone(), file);
         rc.overwrite(0, &make_quote(0, &columns, "BEAM", "NYSE", 78.35)).unwrap();
 
@@ -107,7 +108,7 @@ mod tests {
     fn test_write_then_read_row() {
         let columns = make_table_columns();
 
-        fn test_variant(mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a new row
             let row = make_quote(2, &columns, "AMD", "NYSE", 88.78);
             assert_eq!(rc.overwrite(row.get_id(), &row).unwrap(), 1);
@@ -126,7 +127,7 @@ mod tests {
     fn test_write_then_read_field() {
         let columns = make_table_columns();
 
-        fn test_variant(mut frc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+        fn test_variant(label: &str, mut frc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write two rows
             assert_eq!(1, frc.overwrite(0, &make_quote(0, &columns, "INTC", "NYSE", 66.77)).unwrap());
             assert_eq!(1, frc.overwrite(1, &make_quote(1, &columns, "AMD", "NASDAQ", 77.66)).unwrap());
@@ -146,7 +147,7 @@ mod tests {
     fn test_write_delete_then_read_range() {
         let columns = make_table_columns();
 
-        fn test_variant(mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
             assert_eq!(1, rc.overwrite(0, &make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
             assert_eq!(1, rc.overwrite(1, &make_quote(1, &columns, "ATT", "NYSE", 98.44)).unwrap());
@@ -158,7 +159,6 @@ mod tests {
 
             // retrieve the entire range of rows
             let rows = rc.read_range(0..rc.len().unwrap()).unwrap();
-            assert_eq!(rows.len(), 3);
             assert_eq!(rows, vec![
                 make_quote(0, &columns, "GE", "NYSE", 21.22),
                 make_quote(1, &columns, "ATT", "NYSE", 98.44),
@@ -174,7 +174,7 @@ mod tests {
     fn test_resize_shrink() {
         let columns = make_table_columns();
 
-        fn test_variant(mut frc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+        fn test_variant(label: &str, mut frc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // insert some rows and verify the size
             assert_eq!(1, frc.overwrite(5, &make_quote(0, &columns, "DUMMY", "OTC_BB", 0.0001)).unwrap());
             assert_eq!(6, frc.len().unwrap());
@@ -192,7 +192,7 @@ mod tests {
     fn test_resize_grow() {
         let columns = make_table_columns();
 
-        fn test_variant(mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             println!("{:?}", rc);
             rc.resize(0).unwrap();
 
@@ -213,16 +213,16 @@ mod tests {
     fn test_performance() {
         let columns = make_table_columns();
 
-        fn test_variant(mut frc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
-            test_write_performance(&mut frc, &columns, 10_000).unwrap();
-            test_read_performance(&frc).unwrap();
+        fn test_variant(label: &str, mut frc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            test_write_performance(label, &mut frc, &columns, 10_000).unwrap();
+            test_read_performance(label, &frc).unwrap();
         }
 
         // test the variants
         verify_variants("performance", columns.clone(), test_variant);
     }
 
-    fn test_write_performance(rc: &mut Box<dyn RowCollection>, columns: &Vec<TableColumn>, total: usize) -> std::io::Result<()> {
+    fn test_write_performance(label: &str, rc: &mut Box<dyn RowCollection>, columns: &Vec<TableColumn>, total: usize) -> std::io::Result<()> {
         use rand::distributions::Uniform;
         use rand::prelude::ThreadRng;
         let exchanges = ["AMEX", "NASDAQ", "NYSE", "OTCBB", "OTHEROTC"];
@@ -243,12 +243,12 @@ mod tests {
         let elapsed_time = end_time - start_time;
         let elapsed_time_sec = elapsed_time as f64 / 1000.;
         let rpm = total as f64 / elapsed_time as f64;
-        println!("wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
-                 total, elapsed_time, elapsed_time_sec, rpm);
+        println!("{} wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+                 label, total, elapsed_time, elapsed_time_sec, rpm);
         Ok(())
     }
 
-    fn test_read_performance(rc: &Box<dyn RowCollection>) -> std::io::Result<()> {
+    fn test_read_performance(label: &str, rc: &Box<dyn RowCollection>) -> std::io::Result<()> {
         let limit = rc.len()?;
         let mut total = 0;
         let start_time = SystemTime::now().duration_since(UNIX_EPOCH)
@@ -262,24 +262,30 @@ mod tests {
         let elapsed_time = end_time - start_time;
         let elapsed_time_sec = elapsed_time as f64 / 1000.;
         let rpm = total as f64 / elapsed_time as f64;
-        println!("read {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
-                 total, elapsed_time, elapsed_time_sec, rpm);
+        println!("{} read {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+                 label, total, elapsed_time, elapsed_time_sec, rpm);
         Ok(())
     }
 
-    fn verify_variants(name: &str, columns: Vec<TableColumn>, test_variant: fn(Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
+    fn verify_variants(name: &str, columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
         verify_file_variant(name, columns.clone(), test_variant);
-        verify_memory_variant(columns, test_variant);
+        verify_memory_variant(columns.clone(), test_variant);
+        verify_model_variant(columns, test_variant);
     }
 
-    fn verify_file_variant(name: &str, columns: Vec<TableColumn>, test_variant: fn(Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
-        let ns = Namespace::new("file_row_collection", name, "quotes");
+    fn verify_file_variant(name: &str, columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
+        let ns = Namespace::new("file_row_collection", name, "stocks");
         let frc = FileRowCollection::create(ns, columns.clone()).unwrap();
-        test_variant(Box::new(frc), columns.clone());
+        test_variant("Disk", Box::new(frc), columns.clone());
     }
 
-    fn verify_memory_variant(columns: Vec<TableColumn>, test_variant: fn(Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
-        let mrc = ByteRowCollection::new(columns.clone(), vec![]);
-        test_variant(Box::new(mrc), columns);
+    fn verify_memory_variant(columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
+        let brc = ByteRowCollection::new(columns.clone(), vec![]);
+        test_variant("Bytes", Box::new(brc), columns);
+    }
+
+    fn verify_model_variant(columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
+        let mrc = ModelRowCollection::new(columns.clone(), vec![]);
+        test_variant("Model", Box::new(mrc), columns);
     }
 }

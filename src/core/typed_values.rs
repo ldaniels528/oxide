@@ -14,11 +14,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::byte_row_collection::ByteRowCollection;
+use shared_lib::RowJs;
+
 use crate::cnv_error;
 use crate::codec;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
+use crate::model_row_collection::ModelRowCollection;
 use crate::rows::Row;
 use crate::typed_values::TypedValue::*;
 
@@ -43,11 +45,11 @@ pub enum TypedValue {
     Int16Value(i16),
     Int32Value(i32),
     Int64Value(i64),
-    MemoryTable(ByteRowCollection),
+    MemoryTable(ModelRowCollection),
     Null,
     RecordNumber(usize),
     StringValue(String),
-    StructValue(Row),
+    StructureValue(Row),
     TableRef(String),
     Undefined,
     UUIDValue([u8; 16]),
@@ -73,7 +75,7 @@ impl TypedValue {
             Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
             RecordNumberType => RecordNumber(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
-            StructType(_columns) => todo!(),
+            StructureType(_columns) => todo!(),
             TableType(_columns) => todo!(),
             UUIDType => codec::decode_u8x16(buffer, offset, |b| UUIDValue(b))
         }
@@ -91,7 +93,6 @@ impl TypedValue {
                 for item in items { bytes.extend(item.encode()); }
                 bytes
             }
-            MemoryTable(_rows) => todo!(),
             BLOB(bytes) => codec::encode_u8x_n(bytes.to_vec()),
             Boolean(v) => [if *v { 1 } else { 0 }].to_vec(),
             CLOB(chars) => codec::encode_chars(chars.to_vec()),
@@ -102,10 +103,11 @@ impl TypedValue {
             Int16Value(number) => number.to_be_bytes().to_vec(),
             Int32Value(number) => number.to_be_bytes().to_vec(),
             Int64Value(number) => number.to_be_bytes().to_vec(),
+            MemoryTable(rc) => rc.encode(),
             Null | Undefined => [0u8; 0].to_vec(),
             RecordNumber(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
-            StructValue(_row) => todo!(),
+            StructureValue(_row) => todo!(),
             TableRef(path) => codec::encode_string(path),
             UUIDValue(guid) => guid.to_vec(),
         }
@@ -157,7 +159,6 @@ impl TypedValue {
         match self {
             Array(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<Value>>()),
-            MemoryTable(rows) => serde_json::json!(rows),
             BLOB(bytes) => serde_json::json!(bytes),
             Boolean(b) => serde_json::json!(b),
             CLOB(chars) => serde_json::json!(chars),
@@ -168,10 +169,16 @@ impl TypedValue {
             Int16Value(number) => serde_json::json!(number),
             Int32Value(number) => serde_json::json!(number),
             Int64Value(number) => serde_json::json!(number),
+            MemoryTable(mrc) => {
+                let rows = mrc.get_rows().iter()
+                    .map(|r| r.to_row_js())
+                    .collect::<Vec<RowJs>>();
+                serde_json::json!(rows)
+            }
             Null => serde_json::Value::Null,
             RecordNumber(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
-            StructValue(row) => serde_json::json!(row),
+            StructureValue(row) => serde_json::json!(row),
             TableRef(path) => serde_json::json!(path),
             Undefined => serde_json::Value::Null,
             UUIDValue(guid) => serde_json::json!(Uuid::from_bytes(*guid).to_string()),
@@ -184,7 +191,6 @@ impl TypedValue {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("[ {} ]", values.join(", "))
             }
-            MemoryTable(rows) => serde_json::json!(rows).to_string(),
             BLOB(bytes) => hex::encode(bytes),
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
             CLOB(chars) => chars.into_iter().collect(),
@@ -195,10 +201,11 @@ impl TypedValue {
             Int16Value(number) => number.to_string(),
             Int32Value(number) => number.to_string(),
             Int64Value(number) => number.to_string(),
+            MemoryTable(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
             Null => "null".into(),
             RecordNumber(number) => number.to_string(),
             StringValue(string) => string.into(),
-            StructValue(row) => serde_json::json!(row).to_string(),
+            StructureValue(row) => serde_json::json!(row).to_string(),
             TableRef(path) => path.into(),
             Undefined => "undefined".into(),
             UUIDValue(guid) => Uuid::from_bytes(*guid).to_string(),

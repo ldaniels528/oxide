@@ -29,7 +29,7 @@ pub enum DataType {
     Float64Type,
     RecordNumberType,
     StringType(usize),
-    StructType(Vec<ColumnJs>),
+    StructureType(Vec<ColumnJs>),
     TableType(Vec<ColumnJs>),
     UUIDType,
 }
@@ -52,7 +52,7 @@ impl DataType {
             Float64Type => 8,
             RecordNumberType => 8,
             StringType(size) => *size + size.to_be_bytes().len(),
-            StructType(..) => 8,
+            StructureType(..) => 8,
             TableType(..) => 8,
             UUIDType => 16
         };
@@ -133,7 +133,7 @@ impl DataType {
             Float64Type => "Double".into(),
             RecordNumberType => "RecordNumber".into(),
             StringType(size) => format!("String({})", size),
-            StructType(columns) => format!("Struct({:?})", columns),
+            StructureType(columns) => format!("Struct({:?})", columns),
             TableType(columns) => format!("Table({:?})", columns),
             UUIDType => "UUID".into()
         }

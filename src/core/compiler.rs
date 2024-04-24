@@ -140,7 +140,6 @@ impl Compiler {
                                  ts: TokenSlice,
                                  symbol: String,
                                  _precedence: usize) -> std::io::Result<(Expression, TokenSlice)> {
-
         fn pow(compiler: &mut Compiler, ts: TokenSlice, n: i64) -> std::io::Result<(Expression, TokenSlice)> {
             compiler.compile_expr_2b(ts, Literal(Int64Value(n)), Pow)
         }
@@ -190,24 +189,54 @@ impl Compiler {
     pub fn compile_keyword(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(t), ts) = ts.next() {
             match t.get_raw_value().as_str() {
-                "delete" => self.compile_sql_delete(ts),
+                "delete" => self.compile_keyword_delete(ts),
                 "false" => Ok((FALSE, ts)),
-                "into" => self.compile_sql_into(ts),
-                "ns" => self.compile_sql_ns(ts),
+                "from" => {
+                    let (from, ts) = self.compile_keyword_from(ts)?;
+                    self.compile_keyword_queryables(from, ts)
+                }
+                "into" => self.compile_keyword_into(ts),
+                "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", ts),
+                "ns" => self.compile_keyword_ns(ts),
                 "null" => Ok((NULL, ts)),
-                "overwrite" => self.compile_sql_overwrite(ts),
-                "select" => self.compile_sql_select(ts),
-                "update" => self.compile_sql_update(ts),
+                "overwrite" => self.compile_keyword_overwrite(ts),
+                "select" => self.compile_keyword_select(ts),
+                "update" => self.compile_keyword_update(ts),
                 "true" => Ok((TRUE, ts)),
                 "undefined" => Ok((UNDEFINED, ts)),
+                "where" => fail_near("`from` is expected before `where`: from stocks where last_sale < 1.0", ts),
                 name => Ok((Variable(name.to_string()), ts))
             }
         } else { fail("Unexpected end of input") }
     }
 
+    /// SQL Delete statement. ex: delete from stocks where last_sale > 1.00
+    fn compile_keyword_delete(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (from, ts) = self.next_keyword_expr("from", ts)?;
+        let from = from.expect("Expected keyword 'from'");
+        let (condition, ts) = self.next_keyword_expr("where", ts)?;
+        let (limit, ts) = self.next_keyword_expr("limit", ts)?;
+        Ok((Delete { table: Box::new(from), condition: condition.map(Box::new), limit: limit.map(Box::new) }, ts))
+    }
+
+    /// SQL From clause. ex: from stocks
+    fn compile_keyword_from(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (table, ts) = self.next_expression(ts)?;
+        Ok((From(Box::new(table)), ts))
+    }
+
     /// Appends a new row to a table
     /// ex: into stocks (symbol, exchange, last_sale) \[("ABC", "NYSE", 0.1008)\]
-    fn compile_sql_into(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+    fn compile_keyword_into(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.next_expression(ts)?;
         println!("table {:?}", table);
         let (fields, ts) = self.expect_argument_list(ts)?;
@@ -218,15 +247,17 @@ impl Compiler {
         Ok((InsertInto { table: Box::new(table), fields, values }, ts))
     }
 
-    fn compile_sql_delete(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (from, ts) = self.next_keyword_expr("from", ts)?;
-        let from = from.expect("Expected keyword 'from'");
-        let (condition, ts) = self.next_keyword_expr("where", ts)?;
-        let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Delete { table: Box::new(from), condition: condition.map(Box::new), limit: limit.map(Box::new) }, ts))
+    /// SQL Limit clause. ex: from stocks where last_sale > 1.00 limit 5
+    fn compile_keyword_limit(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let table = self.pop().unwrap_or(fail("A queryable host was expected")?);
+        let (condition, ts) = self.next_expression(ts)?;
+        Ok((Where { from: Box::new(table), condition: Box::new(condition) }, ts))
     }
 
-    fn compile_sql_ns(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+    fn compile_keyword_ns(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (path, ts) = self.next_expression(ts)?;
         Ok((Ns(Box::new(path)), ts))
     }
@@ -234,7 +265,10 @@ impl Compiler {
     /// compiles an OVERWRITE statement:
     /// ex: overwrite stocks (symbol, exchange, last_sale) \[("ABC", "NYSE", 6.54)\]
     ///     where symbol == "ABC"
-    fn compile_sql_overwrite(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+    fn compile_keyword_overwrite(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.next_expression(ts)?;
         let (fields, ts) = self.expect_argument_list(ts)?;
         let (values, ts) = self.next_keyword_value_list("values", ts)?;
@@ -244,9 +278,27 @@ impl Compiler {
         Ok((Overwrite { table: Box::new(table), fields, values, condition: condition.map(Box::new), limit: limit.map(Box::new) }, ts))
     }
 
+    fn compile_keyword_queryables(
+        &mut self,
+        host: Expression,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        match ts.clone() {
+            t if t.is("limit") => {
+                let (expr, ts) = self.next_expression(ts.skip())?;
+                self.compile_keyword_queryables(Limit { from: Box::new(host), limit: Box::new(expr) }, ts)
+            }
+            t if t.is("where") => {
+                let (expr, ts) = self.next_expression(ts.skip())?;
+                self.compile_keyword_queryables(Where { from: Box::new(host), condition: Box::new(expr) }, ts)
+            }
+            _ => Ok((host, ts))
+        }
+    }
+
     /// compiles a SELECT statement:
     /// ex: select sum(last_sale) from stocks group by exchange
-    fn compile_sql_select(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+    fn compile_keyword_select(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (fields, ts) = self.next_expression_list(ts)?;
         let fields = fields.expect("At least one field is required");
         let (from, ts) = self.next_keyword_expr("from", ts)?;
@@ -268,7 +320,7 @@ impl Compiler {
 
     /// compiles an UPDATE statement:
     /// ex: update stocks set last_sale = 0.45 where symbol == "BANG"
-    fn compile_sql_update(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+    fn compile_keyword_update(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.next_expression(ts)?;
         let (fields, ts) = self.expect_argument_list(ts)?;
         let (values, ts) = self.next_keyword_value_list("values", ts)?;
@@ -276,6 +328,13 @@ impl Compiler {
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
         Ok((Update { table: Box::new(table), fields, values, condition: condition.map(Box::new), limit: limit.map(Box::new) }, ts))
+    }
+
+    /// SQL Where clause. ex: from stocks where last_sale > 1.00
+    fn compile_keyword_where(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        let table = self.pop().unwrap_or(fail("A queryable host was expected")?);
+        let (condition, ts) = self.next_expression(ts)?;
+        Ok((Where { from: Box::new(table), condition: Box::new(condition) }, ts))
     }
 
     fn error_expected_operator<A>(&self, symbol: &str) -> std::io::Result<(A, TokenSlice)> {
@@ -386,6 +445,10 @@ pub fn fail_near<A>(message: impl Into<String>, ts: TokenSlice) -> std::io::Resu
     Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} near {}", message.into(), ts)))
 }
 
+pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io::Result<A> {
+    Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} near {}", message.into(), value.unwrap_value())))
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
@@ -405,7 +468,10 @@ mod tests {
     #[test]
     fn test_literal_value() {
         assert_eq!(Compiler::compile("1_234_567_890").unwrap(),
-                   vec![Literal(Int64Value(1_234_567_890))])
+                   vec![Literal(Int64Value(1_234_567_890))]);
+
+        assert_eq!(Compiler::compile("1_234_567.890").unwrap(),
+                   vec![Literal(Float64Value(1_234_567.890))]);
     }
 
     #[test]
@@ -558,15 +624,22 @@ mod tests {
         }])
     }
 
-    #[ignore]
     #[test]
     fn test_sql_from() {
+        let opcodes = Compiler::compile("from stocks").unwrap();
+        assert_eq!(opcodes, vec![
+            From(Box::new(Variable("stocks".into())))
+        ]);
+    }
+
+    #[test]
+    fn test_sql_from_where_limit() {
         let opcodes = Compiler::compile(r#"
         from stocks where last_sale >= 1.0 limit 20
         "#).unwrap();
         assert_eq!(opcodes, vec![
-            Limit(
-                Box::new(
+            Limit {
+                from: Box::new(
                     Where {
                         from: Box::new(From(Box::new(Variable("stocks".into())))),
                         condition: Box::new(GreaterOrEqual(
@@ -574,7 +647,8 @@ mod tests {
                             Box::new(Literal(Float64Value(1.0))),
                         )),
                     }),
-                Box::new(Literal(Int64Value(20))))
+                limit: Box::new(Literal(Int64Value(20))),
+            }
         ]);
     }
 

@@ -2,9 +2,9 @@
 // row metadata module
 ////////////////////////////////////////////////////////////////////
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct RowMetadata {
     pub(crate) is_allocated: bool,
     pub(crate) is_blob: bool,

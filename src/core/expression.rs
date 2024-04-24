@@ -88,7 +88,7 @@ pub enum Expression {
         fields: Vec<Expression>,
         values: Vec<Expression>,
     },
-    Limit(Box<Expression>, Box<Expression>),
+    Limit { from: Box<Expression>, limit: Box<Expression> },
     Overwrite {
         table: Box<Expression>,
         fields: Vec<Expression>,
@@ -212,7 +212,7 @@ pub fn decompile(expr: &Expression) -> String {
         From(a) => format!("from {}", decompile(a)),
         InsertInto { table, fields, values } =>
             format!("insert into {} ({}) values {}", decompile(table), decompile_list(fields), decompile_list(values)),
-        Limit(a, b) =>
+        Limit { from: a, limit: b } =>
             format!("{} limit {}", decompile(a), decompile(b)),
         Overwrite { table, fields, values, condition, limit } =>
             format!("overwrite {} {}{}{}",
@@ -281,7 +281,7 @@ mod tests {
                 Box::new(Literal(Float64Value(1.25))),
             )),
         };
-        let from = Limit(Box::new(from), Box::new(Literal(Int64Value(5))));
+        let from = Limit { from: Box::new(from), limit: Box::new(Literal(Int64Value(5))) };
         assert_eq!(
             from.to_code(),
             "from ns(\"machine.overwrite.stocks\") where last_sale >= 1.25 limit 5"
@@ -290,7 +290,7 @@ mod tests {
 
     #[test]
     fn test_and() {
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let model = And(Box::new(TRUE), Box::new(FALSE));
         let (_, result) = ms.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(false));
@@ -299,7 +299,7 @@ mod tests {
 
     #[test]
     fn test_between() {
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let model = Between(
             Box::new(Literal(Int32Value(5))),
             Box::new(Literal(Int32Value(1))),
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn test_eq() {
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let model = Equal(
             Box::new(Literal(Int32Value(5))),
             Box::new(Literal(Int32Value(5))));
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn test_gt() {
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let model = GreaterThan(
             Box::new(Literal(Int32Value(5))),
             Box::new(Literal(Int32Value(1))));
@@ -333,7 +333,7 @@ mod tests {
 
     #[test]
     fn test_gte() {
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let model = GreaterOrEqual(
             Box::new(Literal(Int32Value(5))),
             Box::new(Literal(Int32Value(1))));
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_lt() {
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let model = LessThan(
             Box::new(Literal(Int32Value(4))),
             Box::new(Literal(Int32Value(5))));
@@ -355,7 +355,7 @@ mod tests {
 
     #[test]
     fn test_lte() {
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let model = LessOrEqual(
             Box::new(Literal(Int32Value(1))),
             Box::new(Literal(Int32Value(5))));
@@ -366,7 +366,7 @@ mod tests {
 
     #[test]
     fn test_ne() {
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let model = NotEqual(
             Box::new(Literal(Int32Value(-5))),
             Box::new(Literal(Int32Value(5))));
@@ -377,7 +377,7 @@ mod tests {
 
     #[test]
     fn test_or() {
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let model = Or(Box::new(TRUE), Box::new(FALSE));
         let (_, result) = ms.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));

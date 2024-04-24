@@ -3,9 +3,9 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::fields::Field;
+use shared_lib::RowJs;
+
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
@@ -46,42 +46,6 @@ impl ColumnJs {
     pub fn get_default_value(&self) -> &Option<String> { &self.default_value }
 }
 
-// JSON representation of a field
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct FieldJs {
-    name: String,
-    value: Value,
-}
-
-impl FieldJs {
-    pub fn new(name: &str, value: Value) -> Self {
-        Self { name: name.into(), value }
-    }
-
-    pub fn get_name(&self) -> &String {
-        &self.name
-    }
-
-    pub fn get_value(&self) -> Value {
-        self.value.clone()
-    }
-}
-
-// JSON representation of a row
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RowJs {
-    id: Option<usize>,
-    fields: Vec<FieldJs>,
-}
-
-impl RowJs {
-    pub fn new(id: Option<usize>, fields: Vec<FieldJs>) -> Self { Self { id, fields } }
-
-    pub fn get_id(&self) -> Option<usize> { self.id }
-
-    pub fn get_fields(&self) -> &Vec<FieldJs> { &self.fields }
-}
-
 // JSON representation of Oxide system information
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SystemInfoJs {
@@ -105,22 +69,11 @@ pub fn determine_column_value(form: &RowJs, name: &str) -> TypedValue {
     Undefined
 }
 
-pub fn to_row(columns: &Vec<TableColumn>, form: RowJs, id: usize) -> Row {
-    let mut fields = vec![];
-    for tc in columns {
-        fields.push(Field::with_value(determine_column_value(&form, tc.get_name())));
-    }
-    Row::new(id, columns.clone(), fields)
-}
-
-pub fn to_row_json(row: &Row) -> RowJs {
-    RowJs::new(Some(row.get_id()), row.get_fields().iter().zip(row.get_columns())
-        .map(|(f, c)| FieldJs::new(c.get_name(), f.value.to_json())).collect())
-}
-
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use shared_lib::FieldJs;
+
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::row;
     use crate::server::SystemInfoJs;
@@ -208,7 +161,7 @@ mod tests {
         assert_eq!(determine_column_value(&row_js, "exchange"), StringValue("NYSE".into()));
         assert_eq!(determine_column_value(&row_js, "last_sale"), Float64Value(37.65));
         // cross-convert and verify
-        assert_eq!(to_row_json(&row), row_js.clone());
-        assert_eq!(to_row(&columns, row_js, 123), row);
+        assert_eq!(row.to_row_js(), row_js.clone());
+        assert_eq!(Row::from_row_js(&columns, row_js, 123), row);
     }
 }

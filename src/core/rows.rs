@@ -9,11 +9,14 @@ use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
 
+use shared_lib::{FieldJs, RowJs};
+
 use crate::codec;
 use crate::expression::Expression;
 use crate::fields::Field;
 use crate::machine::MachineState;
 use crate::row_metadata::RowMetadata;
+use crate::server::determine_column_value;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Null, RecordNumber, Undefined};
@@ -64,6 +67,14 @@ impl Row {
     /// Returns an empty row.
     pub fn empty(columns: &Vec<TableColumn>) -> Self {
         Self::new(0, columns.clone(), columns.iter().map(|_| Field::new(Null)).collect())
+    }
+
+    pub fn from_row_js(columns: &Vec<TableColumn>, form: RowJs, id: usize) -> Self {
+        let mut fields = vec![];
+        for tc in columns {
+            fields.push(Field::with_value(determine_column_value(&form, tc.get_name())));
+        }
+        Row::new(id, columns.clone(), fields)
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -130,6 +141,11 @@ impl Row {
             mapping.insert(column.get_name().to_string(), field.value.clone());
         }
         mapping
+    }
+
+    pub fn to_row_js(&self) -> shared_lib::RowJs {
+        shared_lib::RowJs::new(Some(self.get_id()), self.get_fields().iter().zip(self.get_columns())
+            .map(|(f, c)| FieldJs::new(c.get_name(), f.value.to_json())).collect())
     }
 
     fn to_row_offset(&self, id: usize) -> u64 { (id as u64) * (Self::compute_record_size(&self.columns) as u64) }

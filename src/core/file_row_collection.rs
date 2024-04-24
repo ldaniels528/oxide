@@ -116,3 +116,22 @@ impl RowCollection for FileRowCollection {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::file_row_collection::FileRowCollection;
+    use crate::namespaces::Namespace;
+    use crate::row_collection::RowCollection;
+    use crate::table_columns::TableColumn;
+    use crate::testdata::make_columns;
+
+    #[test]
+    fn test_get_columns() {
+        let columns = make_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let ns = Namespace::new("file_row_collection", "get_columns", "stocks");
+        let frc = FileRowCollection::create(ns, phys_columns.clone()).unwrap();
+        assert_eq!(frc.get_columns().clone(), phys_columns)
+    }
+
+}

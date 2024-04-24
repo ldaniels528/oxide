@@ -16,12 +16,14 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, Ke
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use tokio::runtime::Builder;
 
-use shared_lib::{RemoteCallRequest, RemoteCallResponse};
+use shared_lib::{RemoteCallRequest, RemoteCallResponse, RowJs};
 use shared_lib::cnv_error;
 
 use crate::repl::REPLState;
+use crate::table_printer::TableWriter;
 
 mod repl;
+mod table_printer;
 
 fn main() -> io::Result<()> {
     let mut state: REPLState = REPLState::new();
@@ -142,10 +144,20 @@ fn rpc_uri(host: &str, port: &str) -> String {
 
 // prints messages to STDOUT
 fn say(message: &str) -> io::Result<()> {
+    let lines = match message {
+        // is it JSON array?
+        s if s.starts_with("[") => {
+            let rows = RowJs::vec_from_string(s)?;
+            TableWriter::from_rows(&rows).join("\n")
+        }
+        // is it JSON object?
+        s if s.starts_with("{") => RowJs::from_string(s)?.to_json_string(),
+        s => s.to_string()
+    };
     execute!(
         stdout(),
         Clear(ClearType::CurrentLine),
-        Print(format!("{}\n", message)),
+        Print(format!("{}\n", lines)),
         ResetColor
     )?;
     Ok(())

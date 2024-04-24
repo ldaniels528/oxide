@@ -12,25 +12,24 @@ use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use actix_web::cookie::Key;
 use actix_web_actors::ws;
 use log::{error, info, LevelFilter};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use shared_lib::{cnv_error, fail, get_host_and_port};
+use shared_lib::{cnv_error, fail, get_host_and_port, RowJs};
 use shared_lib::{RemoteCallRequest, RemoteCallResponse};
 
-use crate::compiler::Compiler;
 use crate::dataframe_actor::DataframeActor;
 use crate::dataframe_config::DataFrameConfig;
-use crate::machine::MachineState;
+use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::rows::Row;
-use crate::server::{RowJs, SystemInfoJs, to_row, to_row_json};
+use crate::server::SystemInfoJs;
 use crate::table_columns::TableColumn;
 use crate::websockets::OxideWebSocket;
 
 mod byte_row_collection;
 mod codec;
 mod compiler;
+mod cursor;
 mod dataframe_actor;
 mod dataframe_config;
 mod dataframes;
@@ -41,6 +40,7 @@ mod fields;
 mod file_row_collection;
 mod interpreter;
 mod machine;
+mod model_row_collection;
 mod namespaces;
 mod opcode;
 mod row_collection;
@@ -49,6 +49,7 @@ mod rows;
 mod server;
 mod table_columns;
 mod table_view;
+mod table_renderer;
 mod template;
 mod testdata;
 mod token_slice;
@@ -57,21 +58,7 @@ mod tokens;
 mod typed_values;
 mod websockets;
 
-/// represents the state associated with a single user session
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct IndividualState {
-    counter: usize,
-    machine: MachineState,
-}
-
-impl IndividualState {
-    pub fn new() -> Self {
-        Self {
-            counter: 0,
-            machine: MachineState::build(),
-        }
-    }
-}
+const SECS_IN_WEEK: i64 = 60 * 60 * 24 * 7;
 
 /// represents all the shared state of the application
 #[derive(Debug)]
@@ -107,7 +94,8 @@ macro_rules! web_routes {
             .wrap(actix_session::SessionMiddleware::builder(
                 actix_session::storage::CookieSessionStore::default(),
                 actix_web::cookie::Key::from(&[0; 64])
-             ).session_lifecycle(actix_session::config::BrowserSession::default()).build())
+             ).session_lifecycle(actix_session::config::PersistentSession::default()
+                .session_ttl(actix_web::cookie::time::Duration::seconds(SECS_IN_WEEK))).build())
             .service(web::resource("/ws").to(handle_websockets))
     }
 }
@@ -132,14 +120,12 @@ async fn main() -> std::io::Result<()> {
     Ok(())
 }
 
-fn get_session(session: &Session) -> Result<IndividualState, Box<dyn Error>> {
-    if let Some(mut state) = session.get::<IndividualState>("state")? {
-        state.counter += 1;
+fn get_session(session: &Session) -> Result<Interpreter, Box<dyn Error>> {
+    if let Some(mut state) = session.get::<Interpreter>("state")? {
         info!("read session: {:?}", state);
         Ok(state)
     } else {
-        let mut state = IndividualState::new();
-        state.counter = 1;
+        let mut state = Interpreter::new();
         info!("create session: {:?}", state);
         session.insert("state", state.clone())?;
         Ok(state)
@@ -235,7 +221,7 @@ async fn handle_row_delete(req: HttpRequest,
 async fn handle_row_get(req: HttpRequest,
                         path: web::Path<(String, String, String, usize)>) -> impl Responder {
     match get_row_by_id(req, path).await {
-        Ok(Some(row)) => HttpResponse::Ok().json(to_row_json(&row)),
+        Ok(Some(row)) => HttpResponse::Ok().json(row.to_row_js()),
         Ok(None) => HttpResponse::Ok().json(serde_json::json!({})),
         Err(err) => {
             error!("error {}", err.to_string());
@@ -291,7 +277,8 @@ async fn handle_row_patch(req: HttpRequest,
 async fn handle_row_range_get(req: HttpRequest,
                               path: web::Path<(String, String, String, usize, usize)>) -> impl Responder {
     match get_range_by_id(req, path).await {
-        Ok(rows) => HttpResponse::Ok().json(rows.iter().map(|row| to_row_json(row)).collect::<Vec<RowJs>>()),
+        Ok(rows) => HttpResponse::Ok().json(rows.iter()
+            .map(|row| row.to_row_js()).collect::<Vec<RowJs>>()),
         Err(err) => {
             error!("error {}", err.to_string());
             HttpResponse::InternalServerError().finish()
@@ -303,12 +290,8 @@ async fn handle_row_range_get(req: HttpRequest,
 async fn handle_rpc_post(session: Session, data: web::Json<RemoteCallRequest>) -> impl Responder {
     fn intern(session: Session, data: web::Json<RemoteCallRequest>) -> std::io::Result<Value> {
         let mut state = get_session(&session).unwrap();
-        state.counter += 1;
         info!("state0 {:?}", state);
-        let opcodes = Compiler::compile(data.0.get_code())?;
-        let (new_state, result) = state.machine.evaluate_all(&opcodes)?;
-        state.machine = new_state;
-        state.counter += 1;
+        let result = state.evaluate(data.0.get_code())?;
         info!("state1 {:?}", state);
         Ok(result.to_json())
     }
@@ -335,7 +318,7 @@ async fn append_row(req: HttpRequest,
     let ns = Namespace::new(&path.0, &path.1, &path.2);
     let actor = get_shared_state(&req)?.actor.clone();
     let columns = get_columns!(actor, ns)?;
-    append_row!(actor, ns, to_row(&columns, data.0, 0))
+    append_row!(actor, ns, Row::from_row_js(&columns, data.0, 0))
 }
 
 async fn delete_row_by_id(req: HttpRequest,
@@ -373,7 +356,7 @@ async fn overwrite_row_by_id(req: HttpRequest,
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.clone();
     let columns = get_columns!(actor, ns)?;
-    overwrite_row!(actor, ns, to_row(&columns, data.0, id))
+    overwrite_row!(actor, ns, Row::from_row_js(&columns, data.0, id))
 }
 
 async fn update_row_by_id(req: HttpRequest,
@@ -382,7 +365,7 @@ async fn update_row_by_id(req: HttpRequest,
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.clone();
     let columns = get_columns!(actor, ns)?;
-    update_row!(actor, ns, to_row(&columns, data.0, id))
+    update_row!(actor, ns, Row::from_row_js(&columns, data.0, id))
 }
 
 // Unit tests

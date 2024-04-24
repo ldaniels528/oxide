@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "AWAY", "AMEX", 123.45)).unwrap(), 1);
 
         // updates rows where ...
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let fields = vec![
             Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into()),
         ];
@@ -704,7 +704,7 @@ mod tests {
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "AWAY", "AMEX", 123.45)).unwrap(), 1);
 
         // updates rows where ...
-        let ms = MachineState::build();
+        let ms = MachineState::new();
         let fields = vec![Variable("last_sale".into())];
         let values = vec![Literal(Float64Value(11.1111))];
         let condition = Some(Box::new(Equal(
