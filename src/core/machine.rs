@@ -181,7 +181,12 @@ impl MachineState {
         let (ms, result) = self.evaluate(src)?;
         let limit = match limit {
             Null | Undefined => None,
-            value => value.assume_usize()
+            value =>
+                match value.assume_usize() {
+                    None => None,
+                    Some(n) if n < 1 => Some(1),
+                    Some(n) => Some(n)
+                }
         }.unwrap_or(usize::MAX);
         match result {
             MemoryTable(brc) => {
