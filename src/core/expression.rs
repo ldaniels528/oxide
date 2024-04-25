@@ -2,6 +2,7 @@
 // expression module
 ////////////////////////////////////////////////////////////////////
 
+use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::expression::Expression::*;
@@ -135,6 +136,12 @@ impl Expression {
 
     pub fn to_code(&self) -> String {
         decompile(self)
+    }
+}
+
+impl Display for Expression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_code())
     }
 }
 
