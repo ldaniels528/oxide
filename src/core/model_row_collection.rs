@@ -74,6 +74,15 @@ impl RowCollection for ModelRowCollection {
 
     fn get_record_size(&self) -> usize { self.record_size }
 
+    fn index_of(&self, item: &Row) -> Option<usize> {
+        let mut id = 0;
+        for (rmd, row) in &self.row_data {
+            if rmd.is_allocated && item == row { return Some(id); }
+            id += 1
+        }
+        None
+    }
+
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
 
     fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<usize> {
@@ -83,7 +92,9 @@ impl RowCollection for ModelRowCollection {
         }
 
         // set the block, update the watermark
+        println!("B[{}] {:?}", id, row.to_row_js());
         self.row_data[id] = (RowMetadata::new(true), row.clone());
+        println!("A[{}] {:?}", id, self.row_data[id].clone().1.to_row_js());
         if self.watermark <= id {
             self.watermark = id + 1;
         }
@@ -97,7 +108,12 @@ impl RowCollection for ModelRowCollection {
     }
 
     fn read(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
-        let (metadata, row) = self.row_data[id].clone();
+        let (metadata, row) =
+            if id < self.watermark {
+                self.row_data[id].clone()
+            } else {
+                (RowMetadata::new(false), Row::empty(&self.columns))
+            };
         Ok((row, metadata))
     }
 
@@ -124,35 +140,27 @@ impl RowCollection for ModelRowCollection {
 #[cfg(test)]
 mod tests {
     use crate::model_row_collection::ModelRowCollection;
+    use crate::row_collection::RowCollection;
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_columns, make_quote};
+    use crate::testdata::{make_quote_columns, make_quote};
+
+    #[test]
+    fn test_contains() {
+        let (mrc, phys_columns) = create_data_set();
+        let row = make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442);
+        assert!(mrc.contains(&row));
+    }
 
     #[test]
     fn test_encode_decode() {
-        let columns = make_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mrc = ModelRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
-            make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
-        ]);
+        let (mrc, phys_columns) = create_data_set();
         let encoded = mrc.encode();
         assert_eq!(ModelRowCollection::decode(phys_columns, encoded), mrc)
     }
 
     #[test]
     fn test_get_rows() {
-        let columns = make_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mrc = ModelRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
-            make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
-        ]);
+        let (mrc, phys_columns) = create_data_set();
         assert_eq!(mrc.get_rows(), vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -160,5 +168,25 @@ mod tests {
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
             make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
         ])
+    }
+
+    #[test]
+    fn test_index_of() {
+        let (mrc, phys_columns) = create_data_set();
+        let row = make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442);
+        assert_eq!(mrc.index_of(&row), Some(3));
+    }
+
+    fn create_data_set() -> (ModelRowCollection, Vec<TableColumn>) {
+        let columns = make_quote_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let mrc = ModelRowCollection::from_rows(vec![
+            make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
+            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
+            make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
+        ]);
+        (mrc, phys_columns)
     }
 }

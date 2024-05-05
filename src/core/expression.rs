@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::Display;
+
 use serde::{Deserialize, Serialize};
 
 use crate::expression::Expression::*;
@@ -31,6 +32,8 @@ pub enum Expression {
     NotEqual(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
     // bitwise operations
+    BitwiseAnd(Box<Expression>, Box<Expression>),
+    BitwiseOr(Box<Expression>, Box<Expression>),
     ShiftLeft(Box<Expression>, Box<Expression>),
     ShiftRight(Box<Expression>, Box<Expression>),
     Xor(Box<Expression>, Box<Expression>),
@@ -44,11 +47,14 @@ pub enum Expression {
     Multiply(Box<Expression>, Box<Expression>),
     Neg(Box<Expression>),
     // direct/reference values
-    Collection(Vec<Expression>),
+    ArrayLiteral(Vec<Expression>),
+    AsValue(String, Box<Expression>),
+    ColumnSet(Vec<ColumnJs>),
+    JSONLiteral(Vec<(String, Expression)>),
     Literal(TypedValue),
     Ns(Box<Expression>),
     Range(Box<Expression>, Box<Expression>),
-    Tuple(Vec<Expression>),
+    TupleExpr(Vec<Expression>),
     Variable(String),
     // assignment
     SetVariable(String, Box<Expression>),
@@ -86,14 +92,12 @@ pub enum Expression {
     From(Box<Expression>),
     InsertInto {
         table: Box<Expression>,
-        fields: Vec<Expression>,
-        values: Vec<Expression>,
+        source: Box<Expression>,
     },
     Limit { from: Box<Expression>, limit: Box<Expression> },
     Overwrite {
         table: Box<Expression>,
-        fields: Vec<Expression>,
-        values: Vec<Expression>,
+        source: Box<Expression>,
         condition: Option<Box<Expression>>,
         limit: Option<Box<Expression>>,
     },
@@ -108,15 +112,15 @@ pub enum Expression {
     },
     Truncate {
         table: Box<Expression>,
-        limit: Option<Box<Expression>>,
+        new_size: Option<Box<Expression>>,
     },
     Update {
         table: Box<Expression>,
-        fields: Vec<Expression>,
-        values: Vec<Expression>,
+        source: Box<Expression>,
         condition: Option<Box<Expression>>,
         limit: Option<Box<Expression>>,
     },
+    Via(Box<Expression>),
     Where { from: Box<Expression>, condition: Box<Expression> },
 }
 
@@ -149,12 +153,29 @@ pub fn decompile(expr: &Expression) -> String {
     match expr {
         And(a, b) =>
             format!("{} && {}", decompile(a), decompile(b)),
+        ArrayLiteral(items) =>
+            format!("[{}]", items.iter().map(|i| decompile(i)).collect::<Vec<String>>().join(", ")),
+        AsValue(name, expr) =>
+            format!("{}: {}", name, decompile(expr)),
         Between(a, b, c) =>
             format!("{} between {} and {}", decompile(a), decompile(b), decompile(c)),
-        Collection(items) =>
-            format!("[{}]", items.iter().map(|i| decompile(i)).collect::<Vec<String>>().join(", ")),
+        BitwiseAnd(a, b) =>
+            format!("{} & {}", decompile(a), decompile(b)),
+        BitwiseOr(a, b) =>
+            format!("{} | {}", decompile(a), decompile(b)),
         Contains(a, b) =>
             format!("{} contains {}", decompile(a), decompile(b)),
+        ColumnSet(columns) =>
+            format!("({})", columns.iter().map(|c|
+                format!("{}: {}", c.get_name(), c.get_column_type()))
+                .collect::<Vec<String>>().join(", ")),
+        JSONLiteral(items) => {
+            let dict = items.iter()
+                .map(|(k, v)| format!("{}: {}", k, v))
+                .collect::<Vec<String>>()
+                .join(", ");
+            format!("{{{}}}", dict)
+        }
         Equal(a, b) =>
             format!("{} == {}", decompile(a), decompile(b)),
         GreaterThan(a, b) =>
@@ -191,14 +212,15 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{} % {}", decompile(a), decompile(b)),
         Multiply(a, b) =>
             format!("{} * {}", decompile(a), decompile(b)),
-        Neg(a) => format!("-{}", decompile(a)),
+        Neg(a) => format!("-({})", decompile(a)),
         Literal(v) => v.to_json().to_string(),
         Ns(a) => format!("ns({})", decompile(a)),
         Range(a, b) =>
             format!("{}..{}", decompile(a), decompile(b)),
-        Tuple(items) =>
+        TupleExpr(items) =>
             format!("({})", decompile_list(items)),
         Variable(name) => name.to_string(),
+        Via(expr) => format!("via {}", decompile(expr)),
         SetVariable(name, value) =>
             format!("{} := {}", name, decompile(value)),
         CodeBlock(items) =>
@@ -217,29 +239,28 @@ pub fn decompile(expr: &Expression) -> String {
             format!("delete from {} where {}{}", decompile(table), decompile_opt(condition), decompile_opt(limit)),
         Drop { table } => format!("drop {}", decompile(table)),
         From(a) => format!("from {}", decompile(a)),
-        InsertInto { table, fields, values } =>
-            format!("insert into {} ({}) values {}", decompile(table), decompile_list(fields), decompile_list(values)),
+        InsertInto { table, source } =>
+            format!("into {} {}", decompile(table), decompile(source)),
         Limit { from: a, limit: b } =>
             format!("{} limit {}", decompile(a), decompile(b)),
-        Overwrite { table, fields, values, condition, limit } =>
-            format!("overwrite {} {}{}{}",
-                    decompile(table),
-                    decompile_insert_list(fields, values),
+        Overwrite { table, source, condition, limit } =>
+            format!("overwrite {} {}{}{}", decompile(table), decompile(source),
                     condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
                     limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
             ),
         Select { fields, from, condition, group_by, having, order_by, limit } =>
-            format!("select {}{}{}{}{}{}", decompile_list(fields),
+            format!("select {}{}{}{}{}{}{}", decompile_list(fields),
                     from.clone().map(|e| format!(" from {}", decompile(&e))).unwrap_or("".into()),
                     condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
                     limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
                     group_by.clone().map(|items| format!(" group by {}", items.iter().map(|e| decompile(e)).collect::<Vec<String>>().join(", "))).unwrap_or("".into()),
                     having.clone().map(|e| format!(" having {}", decompile(&e))).unwrap_or("".into()),
+                    order_by.clone().map(|e| format!(" order by {}", decompile_list(&e))).unwrap_or("".into()),
             ),
-        Truncate { table, limit } =>
+        Truncate { table, new_size: limit } =>
             format!("truncate {}{}", decompile(table), decompile_limit(limit)),
-        Update { table, fields, values, condition, limit } =>
-            format!("update {} set {} where {}{}", decompile(table), decompile_update_list(fields, values), decompile_opt(condition), decompile_opt(limit)),
+        Update { table, source, condition, limit } =>
+            format!("update {} {} where {}{}", decompile(table), decompile(source), decompile_opt(condition), decompile_opt(limit)),
         Where { from, condition } =>
             format!("{} where {}", decompile(from), decompile(condition)),
     }
@@ -428,16 +449,11 @@ mod tests {
     fn test_overwrite() {
         let model = Overwrite {
             table: Box::new(Variable("stocks".into())),
-            fields: vec![
-                Variable("symbol".into()),
-                Variable("exchange".into()),
-                Variable("last_sale".into()),
-            ],
-            values: vec![
-                Literal(StringValue("BOX".into())),
-                Literal(StringValue("NYSE".into())),
-                Literal(Float64Value(21.77)),
-            ],
+            source: Box::new(Via(Box::new(JSONLiteral(vec![
+                ("symbol".into(), Literal(StringValue("BOX".into()))),
+                ("exchange".into(), Literal(StringValue("NYSE".into()))),
+                ("last_sale".into(), Literal(Float64Value(21.77))),
+            ])))),
             condition: Some(Box::new(Equal(
                 Box::new(Variable("symbol".into())),
                 Box::new(Literal(StringValue("BOX".into()))),
@@ -446,7 +462,7 @@ mod tests {
         };
         assert_eq!(
             model.to_code(),
-            r#"overwrite stocks (symbol, exchange, last_sale) values ("BOX", "NYSE", 21.77) where symbol == "BOX" limit 1"#)
+            r#"overwrite stocks via {symbol: "BOX", exchange: "NYSE", last_sale: 21.77} where symbol == "BOX" limit 1"#)
     }
 
     #[test]

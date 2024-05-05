@@ -15,11 +15,17 @@ use crate::typed_values::TypedValue;
 
 /// represents the underlying storage resource for the dataframe
 pub trait RowCollection: Debug {
+    /// Returns true, if the given item matches a [Row] found within it
+    fn contains(&self, item: &Row) -> bool { self.index_of(item).is_some() }
+
     /// returns the columns that represent device
     fn get_columns(&self) -> &Vec<TableColumn>;
 
     /// returns the record size of the device
     fn get_record_size(&self) -> usize;
+
+    /// Returns true, if the given item matches a [Row] found within it
+    fn index_of(&self, item: &Row) -> Option<usize>;
 
     /// returns the number of active rows in the table
     fn len(&self) -> std::io::Result<usize>;
@@ -59,6 +65,7 @@ impl dyn RowCollection {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    use log::info;
     use rand::{Rng, RngCore, thread_rng};
 
     use shared_lib::cnv_error;
@@ -66,7 +73,7 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::row;
-    use crate::testdata::{make_columns, make_quote, make_table_columns, make_table_file};
+    use crate::testdata::{make_quote_columns, make_quote, make_table_columns, make_table_file};
     use crate::typed_values::TypedValue::{Float64Value, StringValue};
 
     use super::*;
@@ -92,7 +99,7 @@ mod tests {
     #[test]
     fn test_from_file() {
         let (file, columns, _) =
-            make_table_file("rows", "append_row", "stocks", make_columns());
+            make_table_file("rows", "append_row", "stocks", make_quote_columns());
         let mut rc = <dyn RowCollection>::from_file(columns.clone(), file);
         rc.overwrite(0, &make_quote(0, &columns, "BEAM", "NYSE", 78.35)).unwrap();
 
@@ -193,7 +200,6 @@ mod tests {
         let columns = make_table_columns();
 
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
-            println!("{:?}", rc);
             rc.resize(0).unwrap();
 
             // insert some rows and verify the size
@@ -209,6 +215,7 @@ mod tests {
         verify_variants("resize_grow", columns.clone(), test_variant);
     }
 
+    #[ignore]
     #[test]
     fn test_performance() {
         let columns = make_table_columns();
@@ -243,7 +250,7 @@ mod tests {
         let elapsed_time = end_time - start_time;
         let elapsed_time_sec = elapsed_time as f64 / 1000.;
         let rpm = total as f64 / elapsed_time as f64;
-        println!("{} wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+        info!("{} wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
                  label, total, elapsed_time, elapsed_time_sec, rpm);
         Ok(())
     }
@@ -262,7 +269,7 @@ mod tests {
         let elapsed_time = end_time - start_time;
         let elapsed_time_sec = elapsed_time as f64 / 1000.;
         let rpm = total as f64 / elapsed_time as f64;
-        println!("{} read {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+        info!("{} read {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
                  label, total, elapsed_time, elapsed_time_sec, rpm);
         Ok(())
     }

@@ -59,7 +59,7 @@ impl TableColumn {
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::{Float64Type, StringType};
-    use crate::testdata::make_columns;
+    use crate::testdata::make_quote_columns;
     use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
     use super::*;
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_differences() {
-        let generated: Vec<TableColumn> = TableColumn::from_columns(&make_columns()).unwrap();
+        let generated: Vec<TableColumn> = TableColumn::from_columns(&make_quote_columns()).unwrap();
         let natural: Vec<TableColumn> = vec![
             TableColumn::new("symbol", StringType(8), Null, 9),
             TableColumn::new("exchange", StringType(8), Null, 26),

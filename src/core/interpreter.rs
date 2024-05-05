@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::compiler::Compiler;
+use crate::compiler::CompilerState;
 use crate::machine::MachineState;
 use crate::token_slice::TokenSlice;
 use crate::typed_values::TypedValue;
@@ -12,15 +12,15 @@ use crate::typed_values::TypedValue;
 /// Represents the language interpreter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Interpreter {
-    compiler: Compiler,
+    compiler: CompilerState,
     machine: MachineState,
 }
 
 impl Interpreter {
     /// Constructs a new Interpreter
-    pub fn new() -> Interpreter {
+    pub fn new() -> Self {
         Interpreter {
-            compiler: Compiler::new(),
+            compiler: CompilerState::new(),
             machine: MachineState::new(),
         }
     }
@@ -29,7 +29,7 @@ impl Interpreter {
     pub fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
         let ts = TokenSlice::from_string(source_code);
         let (opcodes, _) = self.compiler.compile_all(ts)?;
-        let (ms, result) = self.machine.evaluate_all(&opcodes)?;
+        let (ms, result) = self.machine.evaluate_scope(&opcodes)?;
         self.machine = ms;
         Ok(result)
     }
@@ -46,8 +46,8 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_columns, make_dataframe_ns, make_quote};
-    use crate::typed_values::TypedValue::{Boolean, Float64Value, Int64Value, MemoryTable, Undefined};
+    use crate::testdata::{make_quote_columns, make_dataframe_ns, make_quote};
+    use crate::typed_values::TypedValue::{Boolean, Float64Value, Int64Value, RecordNumber, TableValue, Undefined};
 
     #[test]
     fn test_evaluate_n_pow_2() {
@@ -75,40 +75,10 @@ mod tests {
         assert_eq!(result, Float64Value(120.))
     }
 
-    #[ignore]
     #[test]
-    fn test_sql_into_namespace() {
+    fn test_ql_delete_from_namespace() {
         // create a table with test data
-        let columns = make_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let ns = Namespace::parse("interpreter.append.stocks").unwrap();
-        let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
-        assert_eq!(1, df.append(&make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
-        assert_eq!(1, df.append(&make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
-        assert_eq!(1, df.append(&make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
-        assert_eq!(1, df.append(&make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
-
-        // insert some rows
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate(r#"
-            into ns("interpreter.append.stocks") (symbol, exchange, last_sale) [("BOOM", "NYSE", 56.99)]
-            "#).unwrap();
-        assert_eq!(result, Int64Value(3));
-
-        // verify the remaining rows
-        assert_eq!(df.read_fully().unwrap(), vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
-            make_quote(4, &phys_columns, "BOOM", "NYSE", 56.99),
-        ]);
-    }
-
-    #[test]
-    fn test_sql_delete_from_namespace() {
-        // create a table with test data
-        let columns = make_columns();
+        let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let ns = Namespace::parse("interpreter.delete.stocks").unwrap();
         let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
@@ -124,7 +94,7 @@ mod tests {
             delete from ns("interpreter.delete.stocks")
             where last_sale >= 1.0
             "#).unwrap();
-        assert_eq!(result, Int64Value(3));
+        assert_eq!(result, RecordNumber(3));
 
         // verify the remaining rows
         assert_eq!(df.read_fully().unwrap(), vec![
@@ -133,11 +103,40 @@ mod tests {
         ]);
     }
 
-    #[ignore]
     #[test]
-    fn test_sql_overwrite_rows_in_namespace() {
+    fn test_ql_into_namespace() {
         // create a table with test data
-        let columns = make_columns();
+        let columns = make_quote_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let ns = Namespace::parse("interpreter.into.stocks").unwrap();
+        let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
+        assert_eq!(1, df.append(&make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
+        assert_eq!(1, df.append(&make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
+        assert_eq!(1, df.append(&make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
+        assert_eq!(1, df.append(&make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
+
+        // insert some rows
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            into ns("interpreter.into.stocks")
+            from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.99 }
+            "#).unwrap();
+        assert_eq!(result, RecordNumber(1));
+
+        // verify the remaining rows
+        assert_eq!(df.read_fully().unwrap(), vec![
+            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+            make_quote(4, &phys_columns, "BOOM", "NYSE", 56.99),
+        ]);
+    }
+
+    #[test]
+    fn test_ql_overwrite_rows_in_namespace() {
+        // create a table with test data
+        let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let ns = Namespace::parse("interpreter.overwrite.stocks").unwrap();
         let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
@@ -150,27 +149,26 @@ mod tests {
         // overwrite a row
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            overwrite ns("interpreter.overwrite.stocks") (symbol, exchange, last_sale)
-            values ("BOOM", "NYSE", 56.99)
+            overwrite ns("interpreter.overwrite.stocks")
+            via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99}
             where symbol == "BOOM"
             "#).unwrap();
-        assert_eq!(result, Int64Value(3));
+        assert_eq!(result, RecordNumber(1));
 
         // verify the remaining rows
-        assert_eq!(interpreter.evaluate("stocks").unwrap(), MemoryTable(
-            ModelRowCollection::from_rows(vec![
+        assert_eq!(df.read_fully().unwrap(), vec![
                 make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
                 make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
                 make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
                 make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
                 make_quote(4, &phys_columns, "BOOM", "NYSE", 56.99),
-            ])));
+            ]);
     }
 
     #[test]
-    fn test_sql_select_from_namespace() {
+    fn test_ql_select_from_namespace() {
         // create a table with test data
-        let columns = make_columns();
+        let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let ns = Namespace::parse("interpreter.select.stocks").unwrap();
         let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
@@ -189,7 +187,7 @@ mod tests {
             order by symbol
             limit 5
             "#).unwrap();
-        assert_eq!(result, MemoryTable(ModelRowCollection::from_rows(vec![
+        assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
             make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
@@ -197,11 +195,11 @@ mod tests {
     }
 
     #[test]
-    fn test_sql_select_from_variable() {
+    fn test_ql_select_from_variable() {
         // stage the data
-        let phys_columns = TableColumn::from_columns(&make_columns()).unwrap();
+        let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
         let mut interpreter = Interpreter::new();
-        interpreter.with_variable("stocks", MemoryTable(
+        interpreter.with_variable("stocks", TableValue(
             ModelRowCollection::from_rows(vec![
                 make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
                 make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -218,7 +216,7 @@ mod tests {
             order by symbol
             limit 5
             "#).unwrap();
-        assert_eq!(result, MemoryTable(ModelRowCollection::from_rows(vec![
+        assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
         ])));

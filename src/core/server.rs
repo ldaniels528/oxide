@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::RowJs;
 
+use crate::codec;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
@@ -22,10 +23,23 @@ pub struct ColumnJs {
 }
 
 impl ColumnJs {
-    pub fn new(name: impl Into<String>,
-               column_type: impl Into<String>,
-               default_value: Option<String>) -> Self {
-        ColumnJs { name: name.into(), column_type: column_type.into(), default_value }
+    pub fn decode(buf: Vec<u8>) -> Self {
+        let name = codec::decode_string(&buf, 0, 64);
+        let column_type = codec::decode_string(&buf, 64, 64);
+        let default_value = Some(codec::decode_string(&buf, 128, 64));
+        Self::new(name, column_type, default_value)
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let default_value = self.default_value.clone().unwrap_or("".to_string());
+        let mut buf: Vec<u8> = vec![];
+        buf.push(self.name.len() as u8);
+        buf.extend(self.name.bytes());
+        buf.push(self.column_type.len() as u8);
+        buf.extend(self.column_type.bytes());
+        buf.push(default_value.len() as u8);
+        buf.extend(default_value.bytes());
+        buf
     }
 
     pub fn from_physical_column(column: &TableColumn) -> Self {
@@ -44,6 +58,12 @@ impl ColumnJs {
     pub fn get_column_type(&self) -> &String { &self.column_type }
 
     pub fn get_default_value(&self) -> &Option<String> { &self.default_value }
+
+    pub fn new(name: impl Into<String>,
+               column_type: impl Into<String>,
+               default_value: Option<String>) -> Self {
+        ColumnJs { name: name.into(), column_type: column_type.into(), default_value }
+    }
 }
 
 // JSON representation of Oxide system information
@@ -77,7 +97,7 @@ mod tests {
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::row;
     use crate::server::SystemInfoJs;
-    use crate::testdata::{make_columns, make_table_columns};
+    use crate::testdata::{make_quote_columns, make_table_columns};
     use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
     use super::*;
@@ -93,7 +113,7 @@ mod tests {
     #[test]
     fn test_column_conversion() {
         let columns = ColumnJs::from_physical_columns(&make_table_columns());
-        assert_eq!(columns, make_columns());
+        assert_eq!(columns, make_quote_columns());
     }
 
     #[test]
@@ -162,6 +182,6 @@ mod tests {
         assert_eq!(determine_column_value(&row_js, "last_sale"), Float64Value(37.65));
         // cross-convert and verify
         assert_eq!(row.to_row_js(), row_js.clone());
-        assert_eq!(Row::from_row_js(&columns, row_js, 123), row);
+        assert_eq!(Row::from_row_js(&columns, &row_js), row);
     }
 }

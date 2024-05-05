@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use shared_lib::tabulate_cells;
+
 use crate::cursor::Cursor;
 use crate::row_collection::RowCollection;
 use crate::table_columns::TableColumn;
@@ -58,7 +59,7 @@ mod tests {
     use crate::cursor::Cursor;
     use crate::table_columns::TableColumn;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_columns, make_quote};
+    use crate::testdata::{make_quote_columns, make_quote};
 
     #[test]
     fn test_from_collection() {
@@ -97,7 +98,7 @@ mod tests {
     }
 
     fn create_collection() -> (ByteRowCollection, Vec<TableColumn>) {
-        let phys_columns = TableColumn::from_columns(&make_columns()).unwrap();
+        let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
         let brc = ByteRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456),

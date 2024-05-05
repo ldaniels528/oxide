@@ -21,6 +21,9 @@ pub struct ByteRowCollection {
 }
 
 impl ByteRowCollection {
+    /// Returns true, if the given item matches a [Row] found within it
+    pub fn contains(&self, item: &Row) -> bool { self.index_of(item).is_some() }
+
     /// Decodes a byte vector into a [ByteRowCollection]
     pub fn decode(columns: Vec<TableColumn>, bytes: Vec<u8>) -> Self {
         let record_size = Row::compute_record_size(&columns);
@@ -50,7 +53,7 @@ impl ByteRowCollection {
     pub fn get_rows(&self) -> Vec<Row> {
         let mut rows = vec![];
         for buf in &self.row_data {
-            let (row, rmd) = Row::decode(&buf, &self.columns);
+            let (row, rmd) = Row::decode(buf, &self.columns);
             if rmd.is_allocated { rows.push(row) }
         }
         rows
@@ -68,16 +71,22 @@ impl ByteRowCollection {
 }
 
 impl RowCollection for ByteRowCollection {
-    /// Returns the collection's columns
     fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
 
-    /// Returns the width of the record
     fn get_record_size(&self) -> usize { self.record_size }
 
-    /// Returns the number of rows in the collection
+    fn index_of(&self, item: &Row) -> Option<usize> {
+        let mut id = 0;
+        for buf in &self.row_data {
+            let (row, metadata) = Row::decode(buf, &self.columns);
+            if metadata.is_allocated && item == &row { return Some(id); }
+            id += 1
+        }
+        None
+    }
+
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
 
-    /// Overwrites a row by ID
     fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<usize> {
         // resize the rows to prevent overflow
         if self.row_data.len() <= id {
@@ -92,18 +101,15 @@ impl RowCollection for ByteRowCollection {
         Ok(1)
     }
 
-    /// Overwrites the row metadata by ID
     fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<usize> {
         self.row_data[id][0] = metadata.encode();
         Ok(1)
     }
 
-    /// Reads a row by ID
     fn read(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
         Ok(Row::decode(&self.row_data[id], &self.columns))
     }
 
-    /// Reads a field by row ID and column ID
     fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         let column = &self.columns[column_id];
         let buffer = self.row_data[id][column.offset..(column.offset + column.max_physical_size)].to_vec();
@@ -111,7 +117,6 @@ impl RowCollection for ByteRowCollection {
         Ok(field.value)
     }
 
-    /// Reads a range of rows
     fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>> {
         let rows = self.row_data[index].iter().flat_map(|b| {
             let (row, meta) = Row::decode(b, &self.columns);
@@ -120,7 +125,6 @@ impl RowCollection for ByteRowCollection {
         Ok(rows)
     }
 
-    /// Resize a range of rows
     fn resize(&mut self, new_size: usize) -> std::io::Result<()> {
         self.row_data.resize(new_size, vec![]);
         self.watermark = new_size;
@@ -132,41 +136,53 @@ impl RowCollection for ByteRowCollection {
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
+    use crate::row_collection::RowCollection;
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_columns, make_quote};
+    use crate::testdata::{make_quote_columns, make_quote};
+
+    #[test]
+    fn test_contains() {
+        let (brc, phys_columns) = create_data_set();
+        let row = make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289);
+        assert!(brc.contains(&row));
+    }
 
     #[test]
     fn test_encode_decode() {
-        let columns = make_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mrc = ByteRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
-            make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
-        ]);
-        let encoded = mrc.encode();
-        assert_eq!(ByteRowCollection::decode(phys_columns, encoded), mrc)
+        let (brc, phys_columns) = create_data_set();
+        let encoded = brc.encode();
+        assert_eq!(ByteRowCollection::decode(phys_columns, encoded), brc)
     }
 
     #[test]
     fn test_get_rows() {
-        let columns = make_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mrc = ByteRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
-            make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
-        ]);
-        assert_eq!(mrc.get_rows(), vec![
+        let (brc, phys_columns) = create_data_set();
+        assert_eq!(brc.get_rows(), vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
             make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
         ])
+    }
+
+    #[test]
+    fn test_index_of() {
+        let (brc, phys_columns) = create_data_set();
+        let row = make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289);
+        assert_eq!(brc.index_of(&row), Some(4));
+    }
+
+    fn create_data_set() -> (ByteRowCollection, Vec<TableColumn>) {
+        let columns = make_quote_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let brc = ByteRowCollection::from_rows(vec![
+            make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
+            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
+            make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
+        ]);
+        (brc, phys_columns)
     }
 }

@@ -2,7 +2,7 @@
 // table writer module
 ////////////////////////////////////////////////////////////////////
 
-use shared_lib::{tabulate_body_cells_from_rows, tabulate_cells, tabulate_header_cells, RowJs};
+use shared_lib::{RowJs, tabulate_body_cells_from_rows, tabulate_cells, tabulate_header_cells};
 
 /// Table Writer
 pub struct TableWriter;

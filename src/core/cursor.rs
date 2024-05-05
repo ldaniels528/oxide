@@ -172,7 +172,7 @@ mod tests {
     use crate::cursor::Cursor;
     use crate::expression::Expression::{Equal, Literal, Variable};
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_columns, make_quote};
+    use crate::testdata::{make_quote_columns, make_quote};
     use crate::typed_values::TypedValue::StringValue;
 
     #[test]
@@ -294,7 +294,7 @@ mod tests {
     }
 
     fn create_sample_data_1() -> (ByteRowCollection, Vec<TableColumn>) {
-        let phys_columns = TableColumn::from_columns(&make_columns()).unwrap();
+        let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
         let brc = ByteRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456),
@@ -306,7 +306,7 @@ mod tests {
     }
 
     fn create_sample_data_2() -> (ByteRowCollection, Vec<TableColumn>) {
-        let phys_columns = TableColumn::from_columns(&make_columns()).unwrap();
+        let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
         let brc = ByteRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "NYSE", 11.77),
             make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456),

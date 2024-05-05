@@ -15,7 +15,7 @@ use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::{Float64Value, StringValue};
 
-pub fn make_columns() -> Vec<ColumnJs> {
+pub fn make_quote_columns() -> Vec<ColumnJs> {
     vec![
         ColumnJs::new("symbol", "String(8)", None),
         ColumnJs::new("exchange", "String(8)", None),
@@ -46,7 +46,7 @@ pub fn make_quote(id: usize,
 }
 
 pub fn make_table_columns() -> Vec<TableColumn> {
-    TableColumn::from_columns(&make_columns()).unwrap()
+    TableColumn::from_columns(&make_quote_columns()).unwrap()
 }
 
 pub fn make_table_file(

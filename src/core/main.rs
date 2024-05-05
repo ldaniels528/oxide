@@ -42,7 +42,6 @@ mod interpreter;
 mod machine;
 mod model_row_collection;
 mod namespaces;
-mod opcode;
 mod row_collection;
 mod row_metadata;
 mod rows;
@@ -56,6 +55,7 @@ mod token_slice;
 mod tokenizer;
 mod tokens;
 mod typed_values;
+mod virtualization;
 mod websockets;
 
 const SECS_IN_WEEK: i64 = 60 * 60 * 24 * 7;
@@ -318,7 +318,7 @@ async fn append_row(req: HttpRequest,
     let ns = Namespace::new(&path.0, &path.1, &path.2);
     let actor = get_shared_state(&req)?.actor.clone();
     let columns = get_columns!(actor, ns)?;
-    append_row!(actor, ns, Row::from_row_js(&columns, data.0, 0))
+    append_row!(actor, ns, Row::from_row_js(&columns, &data.0))
 }
 
 async fn delete_row_by_id(req: HttpRequest,
@@ -356,7 +356,7 @@ async fn overwrite_row_by_id(req: HttpRequest,
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.clone();
     let columns = get_columns!(actor, ns)?;
-    overwrite_row!(actor, ns, Row::from_row_js(&columns, data.0, id))
+    overwrite_row!(actor, ns, Row::from_row_js(&columns, &data.0).with_row_id(id))
 }
 
 async fn update_row_by_id(req: HttpRequest,
@@ -365,7 +365,7 @@ async fn update_row_by_id(req: HttpRequest,
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.clone();
     let columns = get_columns!(actor, ns)?;
-    update_row!(actor, ns, Row::from_row_js(&columns, data.0, id))
+    update_row!(actor, ns, Row::from_row_js(&columns, &data.0).with_row_id(id))
 }
 
 // Unit tests

@@ -274,7 +274,7 @@ mod tests {
 
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::row;
-    use crate::testdata::{make_columns, make_table_columns};
+    use crate::testdata::{make_quote_columns, make_table_columns};
     use crate::typed_values::TypedValue::{Float64Value, Null, StringValue, Undefined};
 
     use super::*;
@@ -283,7 +283,7 @@ mod tests {
     async fn test_get_columns() {
         let actor = DataframeActor::new().start();
         let ns = Namespace::parse("dataframe.columns.stocks").unwrap();
-        assert_eq!(1, create_table!(actor, ns, make_columns()).unwrap());
+        assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
             TableColumn::new("symbol", StringType(8), Null, 9),
             TableColumn::new("exchange", StringType(8), Null, 26),
@@ -298,7 +298,7 @@ mod tests {
         let table_columns = make_table_columns();
 
         // create the new empty table
-        assert_eq!(1, create_table!(actor, ns, make_columns()).unwrap());
+        assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
 
         // append a new row to the table
         assert_eq!(1, append_row!(actor, ns, row!(0, table_columns, vec![
@@ -318,7 +318,7 @@ mod tests {
         let table_columns = make_table_columns();
 
         // create the new empty table
-        assert_eq!(1, create_table!(actor, ns, make_columns()).unwrap());
+        assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
 
         // append a new row to the table
         assert_eq!(1, append_row!(actor, ns, row!(111, table_columns, vec![
@@ -379,8 +379,8 @@ mod tests {
         let ns1 = Namespace::parse("dataframe.namespaces2.stocks").unwrap();
 
         // create the new empty tables
-        assert_eq!(1, create_table!(actor, ns0, make_columns()).unwrap());
-        assert_eq!(1, create_table!(actor, ns1, make_columns()).unwrap());
+        assert_eq!(1, create_table!(actor, ns0, make_quote_columns()).unwrap());
+        assert_eq!(1, create_table!(actor, ns1, make_quote_columns()).unwrap());
 
         // append a new row to the table
         assert_eq!(1, append_row!(actor, ns0, row!(111, make_table_columns(), vec![

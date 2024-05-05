@@ -66,6 +66,14 @@ impl RowCollection for FileRowCollection {
 
     fn get_record_size(&self) -> usize { self.record_size }
 
+    fn index_of(&self, item: &Row) -> Option<usize> {
+        for id in 0..self.len().unwrap() {
+            let (row, metadata) = self.read(id).unwrap();
+            if metadata.is_allocated && &row == item { return Some(id); }
+        }
+        None
+    }
+
     fn len(&self) -> std::io::Result<usize> {
         Ok((self.file.metadata()?.len() as usize) / self.record_size)
     }
@@ -123,15 +131,14 @@ mod tests {
     use crate::namespaces::Namespace;
     use crate::row_collection::RowCollection;
     use crate::table_columns::TableColumn;
-    use crate::testdata::make_columns;
+    use crate::testdata::make_quote_columns;
 
     #[test]
     fn test_get_columns() {
-        let columns = make_columns();
+        let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let ns = Namespace::new("file_row_collection", "get_columns", "stocks");
         let frc = FileRowCollection::create(ns, phys_columns.clone()).unwrap();
         assert_eq!(frc.get_columns().clone(), phys_columns)
     }
-
 }

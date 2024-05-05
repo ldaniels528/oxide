@@ -3,7 +3,6 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::Display;
-use std::io;
 use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
@@ -12,7 +11,6 @@ use shared_lib::fail;
 
 use crate::tokenizer;
 use crate::tokens::Token;
-use crate::tokens::Token::Operator;
 
 /// TokenSlice is an immutable navigable sequence of tokens.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -72,9 +70,8 @@ impl TokenSlice {
 
     pub fn expect(&self, term: &str) -> std::io::Result<Self> {
         if let (Some(tok), ts) = self.next() {
-            match tok {
-                Operator { text: s, .. } if s == term => Ok(ts),
-                _ => fail(format!("Expected '{}'", term))
+            if tok.contains(term) { Ok(ts) } else {
+                fail(format!("Expected '{}' but got '{}'", term, tok))
             }
         } else {
             fail(format!("Expected '{}'", term))
@@ -139,7 +136,6 @@ impl TokenSlice {
     pub fn next(&self) -> (Option<Token>, Self) {
         let n = self.pos;
         if n < self.tokens.len() as isize {
-            let n = self.pos;
             return (Some(self[n as usize].clone()), self.copy(n + 1));
         }
         (None, self.clone())
@@ -180,9 +176,11 @@ impl TokenSlice {
 
     pub fn tail(&self) -> Self { Self::new(self.tokens[(self.pos + 1) as usize..self.len()].to_vec()) }
 
-    pub fn while_do<A>(&self,
-                       cond: fn(&TokenSlice) -> bool,
-                       f: fn(TokenSlice) -> io::Result<TokenSlice>) -> io::Result<TokenSlice> {
+    pub fn while_do<A>(
+        &self,
+        cond: fn(&TokenSlice) -> bool,
+        f: fn(TokenSlice
+        ) -> std::io::Result<TokenSlice>) -> std::io::Result<TokenSlice> {
         let mut a_ts = self.clone();
         while cond(&a_ts) {
             a_ts = f(a_ts)?

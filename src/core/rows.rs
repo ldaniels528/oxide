@@ -69,10 +69,32 @@ impl Row {
         Self::new(0, columns.clone(), columns.iter().map(|_| Field::new(Null)).collect())
     }
 
-    pub fn from_row_js(columns: &Vec<TableColumn>, form: RowJs, id: usize) -> Self {
+    pub fn from_row_js(columns: &Vec<TableColumn>, form: &RowJs) -> Self {
         let mut fields = vec![];
         for tc in columns {
-            fields.push(Field::with_value(determine_column_value(&form, tc.get_name())));
+            fields.push(Field::with_value(determine_column_value(form, tc.get_name())));
+        }
+        Row::new(form.id.unwrap_or(0), columns.clone(), fields)
+    }
+
+    pub fn from_tuples(
+        id: usize,
+        columns: &Vec<TableColumn>,
+        tuples: &Vec<(String, TypedValue)>,
+    ) -> Self {
+        // build a cache of the tuples as a hashmap
+        let mut cache = HashMap::new();
+        for (name, value) in tuples {
+            cache.insert(name.to_string(), value.clone());
+        }
+        // construct the fields
+        let mut fields = vec![];
+        for c in columns {
+            if let Some(value) = cache.get(c.get_name()) {
+                fields.push(Field::with_value(value.clone()));
+            } else {
+                fields.push(Field::with_value(Undefined))
+            }
         }
         Row::new(id, columns.clone(), fields)
     }

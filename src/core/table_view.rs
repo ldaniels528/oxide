@@ -78,12 +78,12 @@ mod tests {
     use crate::rows::Row;
     use crate::table_columns::TableColumn;
     use crate::table_view::{TableIterator, TableView};
-    use crate::testdata::{make_columns, make_dataframe, make_quote};
+    use crate::testdata::{make_quote_columns, make_dataframe, make_quote};
 
     #[test]
     fn test_forward_iterator() {
         // create a dataframe with 3 rows, 3 columns
-        let columns = make_columns();
+        let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let mut df = make_dataframe("dataframes", "forward_iterator", "quotes", columns).unwrap();
         df.resize(0).unwrap();
@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn test_reverse_iterator() {
         // create a dataframe with 3 rows, 3 columns
-        let columns = make_columns();
+        let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let mut df = make_dataframe("dataframes", "reverse_iterator", "quotes", columns).unwrap();
         df.append(&make_quote(0, &phys_columns, "AAPL", "NYSE", 118.77)).unwrap();
