@@ -73,7 +73,7 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::row;
-    use crate::testdata::{make_quote_columns, make_quote, make_table_columns, make_table_file};
+    use crate::testdata::{make_quote, make_quote_columns, make_table_columns, make_table_file};
     use crate::typed_values::TypedValue::{Float64Value, StringValue};
 
     use super::*;

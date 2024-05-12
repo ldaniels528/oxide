@@ -138,7 +138,7 @@ mod tests {
     use crate::byte_row_collection::ByteRowCollection;
     use crate::row_collection::RowCollection;
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote_columns, make_quote};
+    use crate::testdata::{make_quote, make_quote_columns};
 
     #[test]
     fn test_contains() {

@@ -76,3 +76,8 @@ pub fn make_table_file_from_bytes(
     file.write_all(row_data).unwrap();
     (file, table_columns, record_size)
 }
+
+#[cfg(test)]
+mod tests {
+
+}

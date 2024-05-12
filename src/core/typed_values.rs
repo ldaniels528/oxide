@@ -11,7 +11,6 @@ use std::ops::*;
 use chrono::DateTime;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
 
 use shared_lib::RowJs;
@@ -31,6 +30,27 @@ const DECIMAL_FORMAT: &str = r"^-?(?:\d+(?:_\d)*|\d+)(?:\.\d+)?$";
 const INTEGER_FORMAT: &str = r"^-?(?:\d+(?:_\d)*)?$";
 const UUID_FORMAT: &str =
     "^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$";
+
+pub const V_UNDEFINED: u8 = 0;
+pub const V_NULL: u8 = 1;
+pub const V_BLOB: u8 = 2;
+pub const V_BOOLEAN: u8 = 3;
+pub const V_CLOB: u8 = 4;
+pub const V_DATE: u8 = 5;
+pub const V_FLOAT32: u8 = 6;
+pub const V_FLOAT64: u8 = 7;
+pub const V_INT8: u8 = 8;
+pub const V_INT16: u8 = 9;
+pub const V_INT32: u8 = 10;
+pub const V_INT64: u8 = 11;
+pub const V_RECORD_NUMBER: u8 = 12;
+pub const V_STRING: u8 = 13;
+pub const V_UUID: u8 = 14;
+pub const V_ARRAY: u8 = 15;
+pub const V_JSON_VALUE: u8 = 16;
+pub const V_TABLE_REF: u8 = 18;
+pub const V_TABLE: u8 = 19;
+pub const V_TUPLE: u8 = 20;
 
 /// Basic value unit
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -53,7 +73,6 @@ pub enum TypedValue {
     // complex types
     Array(Vec<TypedValue>),
     JSONValue(Vec<(String, TypedValue)>),
-    StructureValue(RowJs),
     TableRef(String),
     TableValue(ModelRowCollection),
     TupleValue(Vec<TypedValue>),
@@ -136,7 +155,6 @@ impl TypedValue {
             Null | Undefined => [0u8; 0].to_vec(),
             RecordNumber(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
-            StructureValue(_row) => todo!(),
             TableRef(path) => codec::encode_string(path),
             TupleValue(items) => {
                 let mut bytes = vec![];
@@ -166,14 +184,14 @@ impl TypedValue {
         Some(iso_date)
     }
 
-    pub fn from_json(j_value: Value) -> Self {
+    pub fn from_json(j_value: serde_json::Value) -> Self {
         match j_value {
-            Value::Null => Null,
-            Value::Bool(b) => Boolean(b),
-            Value::Number(n) => n.as_f64().map(Float64Value).unwrap_or(Null),
-            Value::String(s) => StringValue(s),
-            Value::Array(a) => Array(a.iter().map(|v| Self::from_json(v.clone())).collect()),
-            Value::Object(_) => todo!()
+            serde_json::Value::Null => Null,
+            serde_json::Value::Bool(b) => Boolean(b),
+            serde_json::Value::Number(n) => n.as_f64().map(Float64Value).unwrap_or(Null),
+            serde_json::Value::String(s) => StringValue(s),
+            serde_json::Value::Array(a) => Array(a.iter().map(|v| Self::from_json(v.clone())).collect()),
+            serde_json::Value::Object(_) => todo!()
         }
     }
 
@@ -192,34 +210,33 @@ impl TypedValue {
 
     pub fn ordinal(&self) -> u8 {
         match *self {
-            Undefined => 0,
-            Null => 1,
-            Array(_) => 2,
-            BLOB(_) => 3,
-            Boolean(_) => 4,
-            CLOB(_) => 5,
-            DateValue(_) => 6,
-            JSONValue(_) => 7,
-            Float32Value(_) => 8,
-            Float64Value(_) => 9,
-            Int8Value(_) => 10,
-            Int16Value(_) => 11,
-            Int32Value(_) => 12,
-            Int64Value(_) => 13,
-            TableValue(_) => 14,
-            RecordNumber(_) => 15,
-            StringValue(_) => 16,
-            StructureValue(_) => 17,
-            TableRef(_) => 18,
-            TupleValue(_) => 19,
-            UUIDValue(_) => 20,
+            Undefined => V_UNDEFINED,
+            Null => V_NULL,
+            Array(_) => V_ARRAY,
+            BLOB(_) => V_BLOB,
+            Boolean(_) => V_BOOLEAN,
+            CLOB(_) => V_CLOB,
+            DateValue(_) => V_DATE,
+            JSONValue(_) => V_JSON_VALUE,
+            Float32Value(_) => V_FLOAT32,
+            Float64Value(_) => V_FLOAT64,
+            Int8Value(_) => V_INT8,
+            Int16Value(_) => V_INT16,
+            Int32Value(_) => V_INT32,
+            Int64Value(_) => V_INT64,
+            TableValue(_) => V_TABLE,
+            RecordNumber(_) => V_RECORD_NUMBER,
+            StringValue(_) => V_STRING,
+            TableRef(_) => V_TABLE_REF,
+            TupleValue(_) => V_TUPLE,
+            UUIDValue(_) => V_UUID,
         }
     }
 
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             Array(items) =>
-                serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<Value>>()),
+                serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
             BLOB(bytes) => serde_json::json!(bytes),
             Boolean(b) => serde_json::json!(b),
             CLOB(chars) => serde_json::json!(chars),
@@ -240,10 +257,9 @@ impl TypedValue {
             Null => serde_json::Value::Null,
             RecordNumber(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
-            StructureValue(row) => serde_json::json!(row),
             TableRef(path) => serde_json::json!(path),
             TupleValue(items) =>
-                serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<Value>>()),
+                serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
             Undefined => serde_json::Value::Null,
             UUIDValue(guid) => serde_json::json!(Uuid::from_bytes(*guid).to_string()),
         }
@@ -275,7 +291,6 @@ impl TypedValue {
             Null => "null".into(),
             RecordNumber(number) => number.to_string(),
             StringValue(string) => string.into(),
-            StructureValue(row) => serde_json::json!(row).to_string(),
             TableRef(path) => path.into(),
             TupleValue(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();

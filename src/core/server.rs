@@ -163,19 +163,11 @@ mod tests {
         // verify the accessors
         assert_eq!(row_js.get_id(), Some(123));
         assert_eq!(row_js.get_fields(), &vec![
-            FieldJs {
-                name: "symbol".to_string(),
-                value: serde_json::json!("FOX"),
-            },
-            FieldJs {
-                name: "exchange".to_string(),
-                value: serde_json::json!("NYSE"),
-            },
-            FieldJs {
-                name: "last_sale".to_string(),
-                value: serde_json::json!(37.65),
-            }]);
-        assert_eq!(row_js, RowJs { id: Some(123), fields: fields_js });
+            FieldJs::new("symbol", serde_json::json!("FOX")),
+            FieldJs::new("exchange", serde_json::json!("NYSE")),
+            FieldJs::new("last_sale", serde_json::json!(37.65)),
+        ]);
+        assert_eq!(row_js, RowJs::new(Some(123), fields_js));
         // verify the value extraction
         assert_eq!(determine_column_value(&row_js, "symbol"), StringValue("FOX".into()));
         assert_eq!(determine_column_value(&row_js, "exchange"), StringValue("NYSE".into()));

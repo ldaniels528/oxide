@@ -14,6 +14,23 @@ use crate::server::ColumnJs;
 use crate::tokenizer::parse_fully;
 use crate::tokens::Token;
 
+pub const T_BLOB: u8 = 0;
+pub const T_BOOLEAN: u8 = 1;
+pub const T_CLOB: u8 = 2;
+pub const T_DATE: u8 = 3;
+pub const T_ENUM: u8 = 4;
+pub const T_INT8: u8 = 5;
+pub const T_INT16: u8 = 6;
+pub const T_INT32: u8 = 7;
+pub const T_INT64: u8 = 8;
+pub const T_FLOAT32: u8 = 9;
+pub const T_FLOAT64: u8 = 10;
+pub const T_RECORD_NUMBER: u8 = 11;
+pub const T_STRING: u8 = 12;
+pub const T_STRUCTURE: u8 = 13;
+pub const T_TABLE: u8 = 15;
+pub const T_UUID: u8 = 16;
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
     BLOBType(usize),
@@ -57,6 +74,27 @@ impl DataType {
             UUIDType => 16
         };
         width + 1 // +1 for field metadata
+    }
+
+    pub fn ordinal(&self) -> u8 {
+        match self {
+            BLOBType(..) => T_BLOB,
+            BooleanType => T_BOOLEAN,
+            CLOBType(..) => T_CLOB,
+            DateType => T_DATE,
+            EnumType(..) => T_ENUM,
+            Int8Type => T_INT8,
+            Int16Type => T_INT16,
+            Int32Type => T_INT32,
+            Int64Type => T_INT64,
+            Float32Type => T_FLOAT32,
+            Float64Type => T_FLOAT64,
+            RecordNumberType => T_RECORD_NUMBER,
+            StringType(..) => T_STRING,
+            StructureType(..) => T_STRUCTURE,
+            TableType(..) => T_TABLE,
+            UUIDType => T_UUID
+        }
     }
 
     /// parses a datatype expression (e.g. "String(20)")

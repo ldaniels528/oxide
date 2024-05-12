@@ -17,8 +17,8 @@ macro_rules! cnv_error {
 // JSON representation of a field
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct FieldJs {
-    pub name: String,
-    pub value: Value,
+    name: String,
+    value: Value,
 }
 
 impl FieldJs {

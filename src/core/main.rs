@@ -26,6 +26,7 @@ use crate::server::SystemInfoJs;
 use crate::table_columns::TableColumn;
 use crate::websockets::OxideWebSocket;
 
+mod byte_buffer;
 mod byte_row_collection;
 mod codec;
 mod compiler;

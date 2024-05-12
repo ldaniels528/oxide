@@ -15,7 +15,8 @@ use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Int64Value, StringValue, StructureValue};
+use crate::typed_values::TypedValue::{Int64Value, StringValue};
+use crate::virtualization::assemble_fully;
 
 /// Represents the compiler state
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,6 +36,14 @@ impl CompilerState {
         let mut compiler = CompilerState::new();
         let (code, _) = compiler.compile_all(TokenSlice::from_string(source_code))?;
         Ok(code)
+    }
+
+    /// compiles the source code into byte code
+    pub fn compile_to_byte_code(source_code: &str) -> std::io::Result<Vec<u8>> {
+        let mut compiler = CompilerState::new();
+        let (code, _) = compiler.compile_all(TokenSlice::from_string(source_code))?;
+        let byte_code = assemble_fully(&code);
+        Ok(byte_code)
     }
 
     /// creates a new [CompilerState] instance
@@ -529,6 +538,8 @@ pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io:
 #[cfg(test)]
 mod tests {
     use crate::typed_values::TypedValue::{Float64Value, Int64Value};
+    use crate::typed_values::{V_FLOAT64, V_INT64, V_STRING};
+    use crate::virtualization::{A_ARRAY_LIT, A_JSON_LITERAL, A_LITERAL};
 
     use super::*;
 
@@ -664,6 +675,27 @@ mod tests {
         let opcodes = CompilerState::compile_source("_ - 7").unwrap();
         assert_eq!(opcodes, vec![
             Minus(Box::new(Variable("_".into())), Box::new(Literal(Int64Value(7))))
+        ]);
+    }
+
+    #[test]
+    fn test_compile_to_byte_code() {
+        let byte_code = CompilerState::compile_to_byte_code(
+            r#"{w:'abc', x:1.0, y:2, z:[1, 2, 3]}"#
+        ).unwrap();
+        assert_eq!(byte_code, vec![
+            A_JSON_LITERAL, 0, 0, 0, 0, 0, 0, 0, 8,
+            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'w',
+            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c',
+            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'x',
+            A_LITERAL, V_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0,
+            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'y',
+            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
+            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'z',
+            A_ARRAY_LIT, 0, 0, 0, 0, 0, 0, 0, 3,
+            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 1,
+            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
+            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 3
         ]);
     }
 

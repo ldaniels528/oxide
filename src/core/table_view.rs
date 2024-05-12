@@ -78,7 +78,7 @@ mod tests {
     use crate::rows::Row;
     use crate::table_columns::TableColumn;
     use crate::table_view::{TableIterator, TableView};
-    use crate::testdata::{make_quote_columns, make_dataframe, make_quote};
+    use crate::testdata::{make_dataframe, make_quote, make_quote_columns};
 
     #[test]
     fn test_forward_iterator() {

@@ -59,7 +59,7 @@ mod tests {
     use crate::cursor::Cursor;
     use crate::table_columns::TableColumn;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_quote_columns, make_quote};
+    use crate::testdata::{make_quote, make_quote_columns};
 
     #[test]
     fn test_from_collection() {

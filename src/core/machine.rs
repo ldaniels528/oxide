@@ -899,6 +899,7 @@ mod tests {
             }),
             limit: Box::new(Literal(Int64Value(2))),
         };
+        assert_eq!(model.to_code(), "from stocks where last_sale >= 1.0 limit 2");
 
         let (_, result) = ms.evaluate(&model).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![

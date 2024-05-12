@@ -46,7 +46,7 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote_columns, make_dataframe_ns, make_quote};
+    use crate::testdata::{make_dataframe_ns, make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::{Boolean, Float64Value, Int64Value, RecordNumber, TableValue, Undefined};
 
     #[test]
@@ -66,7 +66,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session() {
+    fn test_state_retention() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate("x := 5").unwrap();
         assert_eq!(result, Undefined);

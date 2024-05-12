@@ -172,7 +172,7 @@ mod tests {
     use crate::cursor::Cursor;
     use crate::expression::Expression::{Equal, Literal, Variable};
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote_columns, make_quote};
+    use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::StringValue;
 
     #[test]
