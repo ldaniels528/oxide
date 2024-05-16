@@ -2,8 +2,6 @@
 // compiler module
 ////////////////////////////////////////////////////////////////////
 
-use actix::fut::result;
-use actix_web::web::to;
 use log::info;
 use serde::{Deserialize, Serialize};
 
@@ -16,9 +14,9 @@ use crate::tokens::Token;
 use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Int64Value, StringValue};
-use crate::virtualization::assemble_fully;
+use crate::serialization::assemble_fully;
 
-/// Represents the compiler state
+/// Represents the Oxide compiler state
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CompilerState {
     stack: Vec<Expression>,
@@ -539,7 +537,7 @@ pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io:
 mod tests {
     use crate::typed_values::TypedValue::{Float64Value, Int64Value};
     use crate::typed_values::{V_FLOAT64, V_INT64, V_STRING};
-    use crate::virtualization::{A_ARRAY_LIT, A_JSON_LITERAL, A_LITERAL};
+    use crate::serialization::{A_ARRAY_LIT, A_JSON_LITERAL, A_LITERAL};
 
     use super::*;
 

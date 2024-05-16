@@ -46,6 +46,7 @@ mod namespaces;
 mod row_collection;
 mod row_metadata;
 mod rows;
+mod serialization;
 mod server;
 mod table_columns;
 mod table_view;
@@ -56,7 +57,6 @@ mod token_slice;
 mod tokenizer;
 mod tokens;
 mod typed_values;
-mod virtualization;
 mod websockets;
 
 const SECS_IN_WEEK: i64 = 60 * 60 * 24 * 7;

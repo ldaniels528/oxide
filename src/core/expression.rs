@@ -125,19 +125,29 @@ pub enum Expression {
 }
 
 impl Expression {
+
+    ////////////////////////////////////////////////////////////////
+    // instance methods
+    ////////////////////////////////////////////////////////////////
+
+    /// Indicates whether the expression is a conditional expression
     pub fn is_conditional(&self) -> bool {
-        matches!(self, And(..) | Between(..) | Contains(..) | Equal(..) | NotEqual(..) |
-        GreaterThan(..) | GreaterOrEqual(..) | LessThan(..) | LessOrEqual(..) | Or(..))
+        matches!(self, And(..) | Between(..) | Contains(..) | Equal(..) |
+            GreaterThan(..) | GreaterOrEqual(..) | LessThan(..) | LessOrEqual(..) |
+            Not(..) | NotEqual(..) | Or(..))
     }
 
+    /// Indicates whether the expression is a control flow expression
     pub fn is_control_flow(&self) -> bool {
         matches!(self, CodeBlock(..) | If { .. } | Return(..) | While { .. })
     }
 
+    /// Indicates whether the expression is a referential expression
     pub fn is_referential(&self) -> bool {
         matches!(self, Variable(..))
     }
 
+    /// Returns a string representation of this object
     pub fn to_code(&self) -> String {
         decompile(self)
     }

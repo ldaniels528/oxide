@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
 
-use crate::{row, virtualization};
+use crate::{row, serialization};
 use crate::compiler::{fail_expr, fail_unexpected, fail_unhandled_expr, fail_value};
 use crate::cursor::Cursor;
 use crate::dataframes::DataFrame;
@@ -28,7 +28,9 @@ use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use crate::virtualization::OpCode;
+
+/// represents an Oxide executable instruction (opcode)
+pub type OpCode = fn(MachineState) -> std::io::Result<MachineState>;
 
 /// Represents the state of the machine.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -38,15 +40,79 @@ pub struct MachineState {
 }
 
 impl MachineState {
-    /// creates a new empty state machine
-    pub fn new() -> Self {
-        Self::construct(Vec::new(), HashMap::new())
-    }
+
+    ////////////////////////////////////////////////////////////////
+    // static methods
+    ////////////////////////////////////////////////////////////////
 
     /// creates a new state machine
     pub fn construct(stack: Vec<TypedValue>, variables: HashMap<String, TypedValue>) -> Self {
         Self { stack, variables }
     }
+
+    fn expand(ms: Self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
+        match expr {
+            Some(item) => ms.evaluate(item),
+            None => Ok((ms, Undefined))
+        }
+    }
+
+    fn expand_vec(ms: Self, expr: &Option<Vec<Expression>>) -> std::io::Result<(Self, TypedValue)> {
+        match expr {
+            Some(items) => ms.evaluate_array(items),
+            None => Ok((ms, Undefined))
+        }
+    }
+
+    fn load_row_collection(path: String) -> std::io::Result<Box<dyn RowCollection>> {
+        let ns = Namespace::parse(path.as_str())?;
+        let frc = FileRowCollection::open(&ns)?;
+        Ok(Box::new(frc))
+    }
+
+    /// creates a new empty state machine
+    pub fn new() -> Self {
+        Self::construct(Vec::new(), HashMap::new())
+    }
+
+    fn orchestrate_io(
+        ms: Self,
+        table: TypedValue,
+        fields: &Vec<Expression>,
+        values: &Vec<Expression>,
+        condition: &Option<Box<Expression>>,
+        limit: TypedValue,
+        f: fn(Self, &mut DataFrame, &Vec<Expression>, &Vec<Expression>, &Option<Box<Expression>>, TypedValue) -> std::io::Result<(Self, TypedValue)>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match table {
+            Null | Undefined => Ok((ms, table)),
+            TableValue(mrc) => {
+                let mut df = DataFrame::from_row_collection(Namespace::temp(), Box::new(mrc));
+                let (ms, result) = f(ms, &mut df, fields, values, condition, limit)?;
+                Ok((ms, result))
+            }
+            TableRef(path) => {
+                let ns = Namespace::parse(path.as_str())?;
+                let mut df = DataFrame::load(ns)?;
+                f(ms, &mut df, fields, values, condition, limit)
+            }
+            x => fail(format!("Type mismatch: expected an iterable near {}", x))
+        }
+    }
+
+    fn split(row: &Row) -> (Vec<Expression>, Vec<Expression>) {
+        let my_fields = row.get_columns().iter()
+            .map(|tc| Variable(tc.get_name().to_string()))
+            .collect::<Vec<Expression>>();
+        let my_values = row.get_fields().iter()
+            .map(|f| Literal(f.value.clone()))
+            .collect::<Vec<Expression>>();
+        (my_fields, my_values)
+    }
+
+    ////////////////////////////////////////////////////////////////
+    // instance methods
+    ////////////////////////////////////////////////////////////////
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
     pub fn evaluate(&self, expression: &Expression) -> std::io::Result<(Self, TypedValue)> {
@@ -465,21 +531,10 @@ impl MachineState {
 
     /// executes the specified instructions on this state machine.
     pub fn execute(&self, ops: &Vec<OpCode>) -> std::io::Result<(Self, TypedValue)> {
-        virtualization::evaluate(self.clone(), ops)
-    }
-
-    fn expand(ms: Self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
-        match expr {
-            Some(item) => ms.evaluate(item),
-            None => Ok((ms, Undefined))
-        }
-    }
-
-    fn expand_vec(ms: Self, expr: &Option<Vec<Expression>>) -> std::io::Result<(Self, TypedValue)> {
-        match expr {
-            Some(items) => ms.evaluate_array(items),
-            None => Ok((ms, Undefined))
-        }
+        let mut ms = self.clone();
+        for op in ops { ms = op(ms)? }
+        let (ms, result) = ms.pop_or(Undefined);
+        Ok((ms, result))
     }
 
     /// evaluates the boxed expression and applies the supplied function
@@ -609,37 +664,6 @@ impl MachineState {
             })
     }
 
-    fn load_row_collection(path: String) -> std::io::Result<Box<dyn RowCollection>> {
-        let ns = Namespace::parse(path.as_str())?;
-        let frc = FileRowCollection::open(&ns)?;
-        Ok(Box::new(frc))
-    }
-
-    fn orchestrate_io(
-        ms: Self,
-        table: TypedValue,
-        fields: &Vec<Expression>,
-        values: &Vec<Expression>,
-        condition: &Option<Box<Expression>>,
-        limit: TypedValue,
-        f: fn(Self, &mut DataFrame, &Vec<Expression>, &Vec<Expression>, &Option<Box<Expression>>, TypedValue) -> std::io::Result<(Self, TypedValue)>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        match table {
-            Null | Undefined => Ok((ms, table)),
-            TableValue(mrc) => {
-                let mut df = DataFrame::from_row_collection(Namespace::temp(), Box::new(mrc));
-                let (ms, result) = f(ms, &mut df, fields, values, condition, limit)?;
-                Ok((ms, result))
-            }
-            TableRef(path) => {
-                let ns = Namespace::parse(path.as_str())?;
-                let mut df = DataFrame::load(ns)?;
-                f(ms, &mut df, fields, values, condition, limit)
-            }
-            x => fail(format!("Type mismatch: expected an iterable near {}", x))
-        }
-    }
-
     /// returns the option of a value from the stack
     pub fn pop(&self) -> (Self, Option<TypedValue>) {
         let mut stack = self.stack.clone();
@@ -670,16 +694,6 @@ impl MachineState {
         let mut variables = self.variables.clone();
         variables.insert(name.to_string(), value);
         Self::construct(self.stack.clone(), variables)
-    }
-
-    fn split(row: &Row) -> (Vec<Expression>, Vec<Expression>) {
-        let my_fields = row.get_columns().iter()
-            .map(|tc| Variable(tc.get_name().to_string()))
-            .collect::<Vec<Expression>>();
-        let my_values = row.get_fields().iter()
-            .map(|f| Literal(f.value.clone()))
-            .collect::<Vec<Expression>>();
-        (my_fields, my_values)
     }
 
     pub fn stack_len(&self) -> usize {

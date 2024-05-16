@@ -9,7 +9,7 @@ use crate::machine::MachineState;
 use crate::token_slice::TokenSlice;
 use crate::typed_values::TypedValue;
 
-/// Represents the language interpreter.
+/// Represents the Oxide language interpreter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Interpreter {
     compiler: CompilerState,
@@ -17,6 +17,11 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
+
+    ////////////////////////////////////////////////////////////////
+    // static methods
+    ////////////////////////////////////////////////////////////////
+
     /// Constructs a new Interpreter
     pub fn new() -> Self {
         Interpreter {
@@ -24,6 +29,10 @@ impl Interpreter {
             machine: MachineState::new(),
         }
     }
+
+    ////////////////////////////////////////////////////////////////
+    // instance methods
+    ////////////////////////////////////////////////////////////////
 
     /// Executes the supplied source code returning the result of the evaluation
     pub fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
