@@ -4,8 +4,6 @@
 
 use std::ops::Deref;
 
-use bytes::BufMut;
-
 use shared_lib::fail;
 
 use crate::byte_buffer::ByteBuffer;
@@ -70,12 +68,16 @@ pub const A_VIA: u8 = 46;
 pub const A_XOR: u8 = 47;
 pub const A_WHERE: u8 = 48;
 pub const A_WHILE: u8 = 49;
+pub const A_ANON_FX: u8 = 50;
+pub const A_NAMED_FX: u8 = 51;
 
 /// compiles the expression into binary code
 pub fn assemble(expression: &Expression) -> Vec<u8> {
     use crate::expression::Expression::*;
     match expression {
         And(a, b) => encode(A_AND, vec![a, b]),
+        AnonymousFx { params, code } =>
+            encode(A_ANON_FX, vec![&ColumnSet(params.clone()), code]),
         ArrayLiteral(items) => encode_vec(A_ARRAY_LIT, items),
         AsValue(name, expr) =>
             encode(A_AS_VALUE, vec![&Literal(StringValue(name.to_string())), expr]),
@@ -88,8 +90,8 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         CodeBlock(ops) => encode_vec(A_CODE_BLOCK, ops),
         ColumnSet(columns) => encode_columns(columns),
         Contains(a, b) => encode(A_CONTAINS, vec![a, b]),
-        CreateIndex { index, columns, table } =>
-            encode(A_CREATE_INDEX, vec![index, table, &ColumnSet(columns.clone())]),
+        CreateIndex { index, columns } =>
+            encode(A_CREATE_INDEX, vec![index, columns]),
         CreateTable { table, columns, from } =>
             encode(A_CREATE_TABLE, vec![table, &ColumnSet(columns.clone()), &get_or_undef(from)]),
         Delete { table, condition, limit } =>
@@ -112,6 +114,8 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         Minus(a, b) => encode(A_MINUS, vec![a, b]),
         Modulo(a, b) => encode(A_MODULO, vec![a, b]),
         Multiply(a, b) => encode(A_MULTIPLY, vec![a, b]),
+        NamedFx { name, params, code } =>
+            encode(A_NAMED_FX, vec![&Literal(StringValue(name.into())), &ColumnSet(params.clone()), code]),
         Neg(a) => encode(A_NEG, vec![a]),
         Not(a) => encode(A_NOT, vec![a]),
         NotEqual(a, b) => encode(A_NOT_EQUAL, vec![a, b]),
@@ -259,8 +263,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         A_CREATE_INDEX =>
             Ok(CreateIndex {
                 index: decode_box(buf)?,
-                columns: buf.next_columns(),
-                table: decode_box(buf)?,
+                columns: decode_box(buf)?,
             }),
         A_CREATE_TABLE =>
             Ok(CreateTable {

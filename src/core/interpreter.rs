@@ -12,7 +12,6 @@ use crate::typed_values::TypedValue;
 /// Represents the Oxide language interpreter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Interpreter {
-    compiler: CompilerState,
     machine: MachineState,
 }
 
@@ -25,7 +24,6 @@ impl Interpreter {
     /// Constructs a new Interpreter
     pub fn new() -> Self {
         Interpreter {
-            compiler: CompilerState::new(),
             machine: MachineState::new(),
         }
     }
@@ -37,7 +35,7 @@ impl Interpreter {
     /// Executes the supplied source code returning the result of the evaluation
     pub fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
         let ts = TokenSlice::from_string(source_code);
-        let (opcodes, _) = self.compiler.compile_all(ts)?;
+        let (opcodes, _) = CompilerState::new().compile_all(ts)?;
         let (ms, result) = self.machine.evaluate_scope(&opcodes)?;
         self.machine = ms;
         Ok(result)
@@ -55,7 +53,7 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_dataframe_ns, make_quote, make_quote_columns};
+    use crate::testdata::{make_dataframe_ns, make_quote, make_quote_columns, make_table_columns};
     use crate::typed_values::TypedValue::{Boolean, Float64Value, Int64Value, RecordNumber, TableValue, Undefined};
 
     #[test]
@@ -82,6 +80,18 @@ mod tests {
 
         let result = interpreter.evaluate("x¡").unwrap();
         assert_eq!(result, Float64Value(120.))
+    }
+
+    #[test]
+    fn test_ql_create_table_in_namespace() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+        create table ns("interpreter.create.stocks") (
+            symbol: String(8),
+            exchange: String(8),
+            last_sale: Double)
+        "#).unwrap();
+        assert_eq!(result, Boolean(true))
     }
 
     #[test]
@@ -128,7 +138,7 @@ mod tests {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             into ns("interpreter.into.stocks")
-            from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.99 }
+            from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
             "#).unwrap();
         assert_eq!(result, RecordNumber(1));
 
@@ -138,7 +148,7 @@ mod tests {
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
-            make_quote(4, &phys_columns, "BOOM", "NYSE", 56.99),
+            make_quote(4, &phys_columns, "BOOM", "NYSE", 56.88),
         ]);
     }
 
@@ -166,12 +176,12 @@ mod tests {
 
         // verify the remaining rows
         assert_eq!(df.read_fully().unwrap(), vec![
-                make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
-                make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-                make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
-                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
-                make_quote(4, &phys_columns, "BOOM", "NYSE", 56.99),
-            ]);
+            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+            make_quote(4, &phys_columns, "BOOM", "NYSE", 56.99),
+        ]);
     }
 
     #[test]
@@ -185,7 +195,7 @@ mod tests {
         assert_eq!(1, df.append(&make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
         assert_eq!(1, df.append(&make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
         assert_eq!(1, df.append(&make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
-        assert_eq!(1, df.append(&make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)).unwrap());
+        assert_eq!(1, df.append(&make_quote(4, &phys_columns, "BOOM", "NASDAQ", 0.0872)).unwrap());
 
         // compile and execute the code
         let mut interpreter = Interpreter::new();
@@ -199,7 +209,6 @@ mod tests {
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
-            make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
         ])));
     }
 
@@ -210,7 +219,7 @@ mod tests {
         let mut interpreter = Interpreter::new();
         interpreter.with_variable("stocks", TableValue(
             ModelRowCollection::from_rows(vec![
-                make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
+                make_quote(0, &phys_columns, "ABC", "AMEX", 11.88),
                 make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
                 make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
                 make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
@@ -228,6 +237,41 @@ mod tests {
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+        ])));
+    }
+
+
+    #[test]
+    fn test_ql_table_lifecycle_in_namespace() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            create table ns("interpreter.create.stocks") (
+                symbol: String(8),
+                exchange: String(8),
+                last_sale: Double
+            )
+        "#).unwrap();
+        assert_eq!(result, Boolean(true));
+
+        let result = interpreter.evaluate(r#"
+            into ns("interpreter.create.stocks")
+                from { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
+        "#).unwrap();
+        assert_eq!(result, RecordNumber(1));
+
+        let result = interpreter.evaluate(r#"
+            into ns("interpreter.create.stocks")
+                from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
+        "#).unwrap();
+        assert_eq!(result, RecordNumber(1));
+
+        let result = interpreter.evaluate(r#"
+            from ns("interpreter.create.stocks")
+        "#).unwrap();
+        let phys_columns = make_table_columns();
+        assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
+            make_quote(0, &phys_columns, "ABC", "AMEX", 12.49),
+            make_quote(1, &phys_columns, "BOOM", "NYSE", 56.88),
         ])));
     }
 

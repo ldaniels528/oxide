@@ -7,6 +7,7 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::expression::Expression::*;
+use crate::serialization::assemble;
 use crate::server::ColumnJs;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, Null, Undefined};
@@ -70,11 +71,20 @@ pub enum Expression {
         condition: Box<Expression>,
         code: Box<Expression>,
     },
+    // functions
+    AnonymousFx {
+        params: Vec<ColumnJs>,
+        code: Box<Expression>,
+    },
+    NamedFx {
+        name: String,
+        params: Vec<ColumnJs>,
+        code: Box<Expression>,
+    },
     // SQL
     CreateIndex {
         index: Box<Expression>,
-        columns: Vec<ColumnJs>,
-        table: Box<Expression>,
+        columns: Box<Expression>,
     },
     CreateTable {
         table: Box<Expression>,
@@ -130,6 +140,10 @@ impl Expression {
     // instance methods
     ////////////////////////////////////////////////////////////////
 
+    pub fn encode(&self) -> Vec<u8> {
+        assemble(&self)
+    }
+
     /// Indicates whether the expression is a conditional expression
     pub fn is_conditional(&self) -> bool {
         matches!(self, And(..) | Between(..) | Contains(..) | Equal(..) |
@@ -163,6 +177,8 @@ pub fn decompile(expr: &Expression) -> String {
     match expr {
         And(a, b) =>
             format!("{} && {}", decompile(a), decompile(b)),
+        AnonymousFx { params, code } =>
+            format!("({}) => {}", decompile_columns(params), decompile(code)),
         ArrayLiteral(items) =>
             format!("[{}]", items.iter().map(|i| decompile(i)).collect::<Vec<String>>().join(", ")),
         AsValue(name, expr) =>
@@ -222,6 +238,8 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{} % {}", decompile(a), decompile(b)),
         Multiply(a, b) =>
             format!("{} * {}", decompile(a), decompile(b)),
+        NamedFx { name, params, code } =>
+            format!("fn {}({}) {}", name, decompile_columns(params), decompile(code)),
         Neg(a) => format!("-({})", decompile(a)),
         Literal(v) => v.to_json().to_string(),
         Ns(a) => format!("ns({})", decompile(a)),
@@ -243,8 +261,10 @@ pub fn decompile(expr: &Expression) -> String {
             format!("return {}", decompile_list(items)),
         While { condition, code } =>
             format!("while {} do {}", decompile(condition), decompile(code)),
-        CreateIndex { .. } => todo!(),
-        CreateTable { .. } => todo!(),
+        CreateIndex { index, columns } =>
+            format!("create index {} {}", decompile(index), decompile(columns)),
+        CreateTable { table, columns, from } =>
+            format!("create table {} ({})", decompile(table), decompile_columns(columns)),
         Delete { table, condition, limit } =>
             format!("delete from {} where {}{}", decompile(table), decompile_opt(condition), decompile_opt(limit)),
         Drop { table } => format!("drop {}", decompile(table)),
@@ -274,6 +294,12 @@ pub fn decompile(expr: &Expression) -> String {
         Where { from, condition } =>
             format!("{} where {}", decompile(from), decompile(condition)),
     }
+}
+
+fn decompile_columns(columns: &Vec<ColumnJs>) -> String {
+    columns.iter()
+        .map(|c| format!("{}: {}", c.get_name(), c.get_column_type()))
+        .collect::<Vec<String>>().join(", ")
 }
 
 fn decompile_insert_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> String {

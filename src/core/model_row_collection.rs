@@ -92,9 +92,7 @@ impl RowCollection for ModelRowCollection {
         }
 
         // set the block, update the watermark
-        println!("B[{}] {:?}", id, row.to_row_js());
         self.row_data[id] = (RowMetadata::new(true), row.clone());
-        println!("A[{}] {:?}", id, self.row_data[id].clone().1.to_row_js());
         if self.watermark <= id {
             self.watermark = id + 1;
         }

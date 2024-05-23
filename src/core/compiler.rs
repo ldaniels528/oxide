@@ -9,12 +9,13 @@ use shared_lib::{cnv_error, fail, FieldJs, RowJs};
 
 use crate::expression::{Expression, FALSE, NULL, TRUE, UNDEFINED};
 use crate::expression::Expression::*;
+use crate::serialization::assemble_fully;
+use crate::server::ColumnJs;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Int64Value, StringValue};
-use crate::serialization::assemble_fully;
 
 /// Represents the Oxide compiler state
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -154,6 +155,7 @@ impl CompilerState {
             compiler.compile_expr_2b(ts, Literal(Int64Value(n)), Pow)
         }
         match symbol.as_str() {
+            ";" => Ok((self.pop().unwrap_or(NULL), ts.skip())),
             "⁰" => pow(self, ts, 0),
             "¹" => pow(self, ts, 1),
             "²" => pow(self, ts, 2),
@@ -203,8 +205,10 @@ impl CompilerState {
     pub fn compile_keyword(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(t), ts) = ts.next() {
             match t.get_raw_value().as_str() {
+                "create" => self.compile_keyword_create(ts),
                 "delete" => self.compile_keyword_delete(ts),
                 "false" => Ok((FALSE, ts)),
+                "fn" => self.compile_keyword_fn(ts),
                 "from" => {
                     let (from, ts) = self.compile_keyword_from(ts)?;
                     self.compile_keyword_queryables(from, ts)
@@ -225,6 +229,46 @@ impl CompilerState {
         } else { fail("Unexpected end of input") }
     }
 
+    fn compile_keyword_create(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        if let (Some(t), ts) = ts.next() {
+            match t.get_raw_value().as_str() {
+                "index" => self.compile_keyword_create_index(ts),
+                "table" => self.compile_keyword_create_table(ts),
+                name => fail_near(format!("Syntax error: expect type identifier, got '{}'", name), &ts)
+            }
+        } else { fail("Unexpected end of input") }
+    }
+
+    fn compile_keyword_create_index(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        todo!()
+    }
+
+    fn compile_keyword_create_table(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        // create table ns("..") (name: String, ..)
+        let (table, ts) = self.compile(ts)?;
+        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.clone())? {
+            // from { symbol: "ABC", exchange: "NYSE", last_sale: 67.89 }
+            if ts.is("from") {
+                let ts = ts.expect("from")?;
+                let (from, ts) = self.compile(ts)?;
+                Ok((CreateTable { table: Box::new(table), columns, from: Some(Box::new(from)) }, ts))
+            } else {
+                Ok((CreateTable { table: Box::new(table), columns, from: None }, ts))
+            }
+        } else {
+            fail_near("Expected column definitions", &ts)
+        }
+    }
+
     /// SQL Delete statement. ex: delete from stocks where last_sale > 1.00
     fn compile_keyword_delete(
         &mut self,
@@ -235,6 +279,26 @@ impl CompilerState {
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
         Ok((Delete { table: Box::new(from), condition: condition.map(Box::new), limit: limit.map(Box::new) }, ts))
+    }
+
+    fn compile_keyword_fn(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        // first, extract the function name
+        if let (Some(Atom { text: name, .. }), ts) = ts.next() {
+            // next, extract the function parameters
+            if let (ColumnSet(params), ts) = self.expect_parameters(ts.clone())? {
+                // finally, extract the function code
+                let ts = ts.expect("=>")?;
+                let (code, ts) = self.compile(ts)?;
+                Ok((NamedFx { name, params, code: Box::new(code) }, ts))
+            } else {
+                fail_near("Function parameters expected", &ts)
+            }
+        } else {
+            fail_near("Function name expected", &ts)
+        }
     }
 
     /// SQL From clause. ex: from stocks
@@ -253,9 +317,7 @@ impl CompilerState {
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.compile(ts)?;
-        println!("compile_keyword_into table {:?}", table);
         let (source, ts) = self.compile(ts)?;
-        println!("compile_keyword_into source {:?}", source);
         Ok((InsertInto { table: Box::new(table), source: Box::new(source) }, ts))
     }
 
@@ -353,22 +415,20 @@ impl CompilerState {
         fail(format!(r#"operator '{}' was expected; e.g.: ns("securities", "etf", "stocks")"#, symbol))
     }
 
-    /// parse an argument list from tge [TokenSlice] (e.g. "(symbol, exchange, last_sale)")
-    fn expect_argument_list(&mut self, ts: TokenSlice) -> std::io::Result<(Vec<Expression>, TokenSlice)> {
+    /// parse an argument list from the [TokenSlice] (e.g. "(symbol, exchange, last_sale)")
+    fn expect_argument_list(
+        &mut self,
+        ts: TokenSlice
+    ) -> std::io::Result<(Vec<Expression>, TokenSlice)> {
         // parse: ("abc", "123", ..)
+        let mut args = vec![];
         let mut ts = ts.expect("(")?;
-        let (tokens, ts) = ts.scan_until(|t| t.contains(")"));
-        let mut items = vec![];
-        let mut innards = TokenSlice::new(tokens[0..(tokens.len() - 1)].to_vec());
-        while innards.has_more() {
-            let (expr, its) = self.compile(innards)?;
-            items.push(expr);
-            innards = if its.has_more() { its.expect(",")? } else { its };
+        while ts.isnt(")") {
+            let (expr, ats) = self.compile(ts)?;
+            args.push(expr);
+            ts = if ats.is(")") { ats } else { ats.expect(",")? }
         }
-        println!("2 expect_argument_list: ts = {:?}", ts.next().0);
-
-        //self.pop();
-        Ok((items, ts.skip()))
+        Ok((args, ts.expect(")")?))
     }
 
     fn expect_curly_brackets(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
@@ -386,6 +446,56 @@ impl CompilerState {
             if ts.isnt("}") { ts = ts.expect(",")? }
         }
         Ok((JSONLiteral(kvps), ts.expect("}")?))
+    }
+
+    fn expect_parameters(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let mut columns = vec![];
+        let mut ts = ts.expect("(")?;
+        let mut is_done = ts.is(")");
+        while !is_done {
+            // get the next parameter
+            let (param, ats) = self.expect_parameter(ts.clone())?;
+            columns.push(param);
+
+            // are we done yet?
+            is_done = ats.is(")");
+            ts = if !is_done { ats.expect(",")? } else { ats };
+        }
+        Ok((ColumnSet(columns), ts.expect(")")?))
+    }
+
+    fn expect_parameter(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(ColumnJs, TokenSlice)> {
+        // attempt to match the parameter name
+        // name: String(8) | cost: Float = 0.0
+        match ts.next() {
+            (Some(Atom { text: name, .. }), ts) => {
+
+                // next, check for type constraint
+                let (type_name, ts) = if ts.is(":") {
+                    let ts = ts.skip();
+                    if let (Some(Atom { text: type_name, .. }), ts) = ts.next() {
+                        // e.g. String(8)
+                        if ts.is("(") {
+                            let (args, ts) = self.expect_argument_list(ts)?;
+                            (Some(format!("{}({})", type_name,
+                                          args.iter().map(|e| e.to_code()).collect::<Vec<String>>().join(", "))), ts)
+                        } else { (Some(type_name), ts) }
+                    } else { (None, ts) }
+                } else { (None, ts) };
+
+                // finally, check for a default value
+                let default_value = None;
+
+                Ok((ColumnJs::new(name, type_name.unwrap_or("".to_string()), default_value), ts))
+            }
+            (_, ats) => fail_near("Function name expected", &ats)
+        }
     }
 
     fn expect_parentheses(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
@@ -521,7 +631,7 @@ pub fn fail_token<A>(message: impl Into<String>, t: &Token) -> std::io::Result<A
 }
 
 pub fn fail_unexpected<A>(expected_type: impl Into<String>, value: &TypedValue) -> std::io::Result<A> {
-    fail(format!("Expected a(n) {}, but got {}", expected_type.into(), value.unwrap_value()))
+    fail(format!("Expected a(n) {}, but got {:?}", expected_type.into(), value))
 }
 
 pub fn fail_unhandled_expr<A>(expr: &Expression) -> std::io::Result<A> {
@@ -535,9 +645,10 @@ pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io:
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::typed_values::TypedValue::{Float64Value, Int64Value};
-    use crate::typed_values::{V_FLOAT64, V_INT64, V_STRING};
     use crate::serialization::{A_ARRAY_LIT, A_JSON_LITERAL, A_LITERAL};
+    use crate::server::ColumnJs;
+    use crate::typed_values::{V_FLOAT64, V_INT64, V_STRING};
+    use crate::typed_values::TypedValue::{Float64Value, Int64Value};
 
     use super::*;
 
@@ -548,6 +659,14 @@ mod tests {
                        Literal(Int64Value(1)), Literal(Int64Value(4)), Literal(Int64Value(2)),
                        Literal(Int64Value(8)), Literal(Int64Value(5)), Literal(Int64Value(7)),
                    ])])
+    }
+
+    #[test]
+    fn test_compile_as_expression() {
+        let code = CompilerState::compile_source(r#"symbol: "ABC""#).unwrap();
+        assert_eq!(code, vec![
+            AsValue("symbol".to_string(), Box::new(Literal(StringValue("ABC".into()))))
+        ]);
     }
 
     #[test]
@@ -571,10 +690,48 @@ mod tests {
     }
 
     #[test]
-    fn test_compile_as_expression() {
-        let code = CompilerState::compile_source(r#"symbol: "ABC""#).unwrap();
+    fn test_define_function() {
+        // fn add(a: u64, b: u64) : u64 => a + b
+        // (a: u64, b: u64) : u64 => a + b
+        // (a, b) => a + b
+        let code = CompilerState::compile_source(r#"
+        fn add(a, b) => a + b
+        "#).unwrap();
         assert_eq!(code, vec![
-            AsValue("symbol".to_string(), Box::new(Literal(StringValue("ABC".into()))))
+            NamedFx {
+                name: "add".to_string(),
+                params: vec![
+                    ColumnJs::new("a", "", None),
+                    ColumnJs::new("b", "", None),
+                ],
+                code: Box::new(Plus(Box::new(
+                    Variable("a".into())
+                ), Box::new(
+                    Variable("b".into())
+                ))),
+            }
+        ])
+    }
+
+    #[test]
+    fn test_compile_create_table() {
+        let ns_path = "compiler.create.stocks";
+        let code = CompilerState::compile_source(r#"
+        create table ns("compiler.create.stocks") (
+            symbol: String(8),
+            exchange: String(8),
+            last_sale: Double)
+        "#).unwrap();
+        assert_eq!(code, vec![
+            CreateTable {
+                table: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
+                columns: vec![
+                    ColumnJs::new("symbol", "String(8)", None),
+                    ColumnJs::new("exchange", "String(8)", None),
+                    ColumnJs::new("last_sale", "Double", None),
+                ],
+                from: None,
+            }
         ]);
     }
 
@@ -693,7 +850,7 @@ mod tests {
             A_ARRAY_LIT, 0, 0, 0, 0, 0, 0, 0, 3,
             A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 1,
             A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
-            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 3
+            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
         ]);
     }
 

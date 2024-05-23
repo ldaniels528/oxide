@@ -15,6 +15,7 @@ use shared_lib::fail;
 use crate::{row, serialization};
 use crate::compiler::{fail_expr, fail_unexpected, fail_unhandled_expr, fail_value};
 use crate::cursor::Cursor;
+use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::expression::{Expression, UNDEFINED};
 use crate::expression::Expression::{From, Literal, Ns, Variable, Via};
@@ -120,6 +121,7 @@ impl MachineState {
         match expression {
             And(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
+            AnonymousFx { params, code } => todo!(),
             Between(a, b, c) =>
                 self.expand3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa <= cc))),
             BitwiseAnd(a, b) =>
@@ -141,8 +143,8 @@ impl MachineState {
                 Ok((ms.with_variable(name, tv.clone()), tv))
             }
             Contains(a, b) => self.evaluate_contains(a, b),
-            CreateIndex { index, columns, table } =>
-                self.evaluate_ql_create_index(index, columns, table),
+            CreateIndex { index, columns } =>
+                self.evaluate_ql_create_index(index, columns),
             CreateTable { table, columns, from } =>
                 self.evaluate_ql_create_table(table, columns, from),
             Delete { table, condition, limit } =>
@@ -178,6 +180,8 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) =>
                 self.expand2(a, b, |aa, bb| aa * bb),
+            NamedFx { name, params, code } =>
+                Self::evaluate_named_function(name, params, code),
             Neg(a) => self.evaluate_neg(a),
             Not(a) => self.expand1(a, |aa| !aa),
             NotEqual(a, b) =>
@@ -293,6 +297,14 @@ impl MachineState {
         Ok((self.clone(), JSONValue(elems)))
     }
 
+    fn evaluate_named_function(
+        name: &String,
+        params: &Vec<ColumnJs>,
+        code: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        todo!()
+    }
+
     fn evaluate_neg(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (ms, result) = self.evaluate(expr)?;
         let neg_result = match result {
@@ -312,8 +324,7 @@ impl MachineState {
     fn evaluate_ql_create_index(
         &self,
         index: &Expression,
-        columns: &Vec<ColumnJs>,
-        table: &Expression,
+        columns: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         todo!()
     }
@@ -324,7 +335,18 @@ impl MachineState {
         columns: &Vec<ColumnJs>,
         from: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        todo!()
+        let (ms, result) = self.evaluate(table)?;
+        match result.clone() {
+            Null | Undefined => Ok((ms, result)),
+            TableValue(mrc) => todo!(),
+            TableRef(path) => {
+                let ns = Namespace::parse(path.as_str())?;
+                let config = DataFrameConfig::new(columns.clone(), vec![], vec![]);
+                DataFrame::create(ns, config)?;
+                Ok((ms, Boolean(true)))
+            }
+            x => fail(format!("Type mismatch: expected an iterable near {}", x))
+        }
     }
 
     fn evaluate_ql_delete(
@@ -753,7 +775,7 @@ mod tests {
     fn test_evaluate_array() {
         let models = vec![Literal(Float64Value(3.25)), TRUE, FALSE, NULL];
         assert_eq!(models.iter().map(|e| e.to_code()).collect::<Vec<String>>(), vec![
-            "3.25", "true", "false", "null"
+            "3.25", "true", "false", "null",
         ]);
 
         let (_, array) = MachineState::new().evaluate_array(&models).unwrap();
@@ -874,6 +896,50 @@ mod tests {
         ])
     }
 
+    #[ignore]
+    #[test]
+    fn test_evaluate_create_index() {
+        let ns_path = "machine.index.stocks";
+        let model = CreateIndex {
+            index: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
+            columns: Box::new(ArrayLiteral(vec![
+                Literal(StringValue("symbol".into()))
+            ])),
+        };
+
+        // create the table
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&model).unwrap();
+        assert_eq!(result, Boolean(true));
+
+        // decompile back to source code
+        assert_eq!(
+            model.to_code(),
+            format!("create index ns(\"{}\") [symbol, exchange]", ns_path)
+        );
+    }
+
+    #[test]
+    fn test_evaluate_create_table() {
+        let ns_path = "machine.create.stocks";
+        let model = CreateTable {
+            table: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
+            columns: make_quote_columns(),
+            from: None,
+        };
+
+        // create the table
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&model).unwrap();
+        assert_eq!(result, Boolean(true));
+
+        // decompile back to source code
+        assert_eq!(
+            model.to_code(),
+            "create table ns(\"machine.create.stocks\") (symbol: String(8), exchange: String(8), last_sale: Double)"
+        );
+    }
+
     #[test]
     fn test_evaluate_drop_table() {
         // create a table with test data
@@ -886,6 +952,29 @@ mod tests {
 
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&model).unwrap();
+        assert_eq!(result, Boolean(true))
+    }
+
+    #[ignore]
+    #[test]
+    fn test_evaluate_function() {
+        let model = vec![
+            NamedFx {
+                name: "add".to_string(),
+                params: vec![
+                    ColumnJs::new("a", "", None),
+                    ColumnJs::new("b", "", None),
+                ],
+                code: Box::new(Plus(Box::new(
+                    Variable("a".into())
+                ), Box::new(
+                    Variable("b".into())
+                ))),
+            }
+        ];
+
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate_scope(&model).unwrap();
         assert_eq!(result, Boolean(true))
     }
 
@@ -931,10 +1020,11 @@ mod tests {
 
         // delete some rows
         let ms = MachineState::new();
-        let (_, result) = ms.evaluate_scope(&CompilerState::compile_source(r#"
+        let code = CompilerState::compile_source(r#"
             delete from ns("machine.delete.stocks")
             where last_sale > 1.0
-            "#).unwrap()).unwrap();
+            "#).unwrap();
+        let (_, result) = ms.evaluate_scope(&code).unwrap();
         assert_eq!(result, RecordNumber(3));
 
         // verify the remaining rows

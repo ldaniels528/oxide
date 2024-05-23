@@ -141,6 +141,12 @@ impl TokenSlice {
         (None, self.clone())
     }
 
+    pub fn peek(&self) -> Option<&Token> {
+        if self.pos >= 0 && self.pos < self.tokens.len() as isize {
+            Some(&self.tokens[self.pos as usize])
+        } else { None }
+    }
+
     /// Returns the option of a Token at the previous position within the slice.
     pub fn previous(&self) -> (Option<Token>, Self) {
         let n = self.pos - 1;

@@ -4,9 +4,9 @@
 
 use crate::tokens::Token;
 
-const COMPOUND_OPERATORS: [&str; 21] = [
+const COMPOUND_OPERATORS: [&str; 22] = [
     "&&", "**", "||", "::", "..", "==", ">>", "<<",
-    "->", "<-", ">=", "<=",
+    "->", "<-", ">=", "<=", "=>",
     "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
 ];
 const SIMPLE_OPERATORS: [char; 39] = [
