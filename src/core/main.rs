@@ -395,7 +395,7 @@ mod tests {
             .set_json(&json!({"columns":[
                 {"name":"symbol","column_type":"String(4)","default_value":null},
                 {"name":"exchange","column_type":"String(4)","default_value":null},
-                {"name":"last_sale","column_type":"Double","default_value":null}],
+                {"name":"last_sale","column_type":"f64","default_value":null}],
                 "indices":[],"partitions":[]}))
             .to_request();
         let resp = test::call_service(&mut app, req).await;
@@ -406,7 +406,7 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"columns":[{"name":"symbol","column_type":"String(4)","default_value":null},{"name":"exchange","column_type":"String(4)","default_value":null},{"name":"last_sale","column_type":"Double","default_value":null}],"indices":[],"partitions":[]}"#);
+        assert_eq!(body, r#"{"columns":[{"name":"symbol","column_type":"String(4)","default_value":null},{"name":"exchange","column_type":"String(4)","default_value":null},{"name":"last_sale","column_type":"f64","default_value":null}],"indices":[],"partitions":[]}"#);
 
         // DELETE the config
         let req = test::TestRequest::delete().uri(&ns_uri(database, schema, name)).to_request();
@@ -443,7 +443,7 @@ mod tests {
             .set_json(&json!({"columns":[
                 {"name":"symbol","column_type":"String(8)","default_value":null},
                 {"name":"exchange","column_type":"String(8)","default_value":null},
-                {"name":"last_sale","column_type":"Double","default_value":null}],
+                {"name":"last_sale","column_type":"f64","default_value":null}],
                 "indices":[],"partitions":[]})).to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());

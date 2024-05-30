@@ -884,7 +884,7 @@ mod tests {
     #[test]
     fn test_column_set() {
         let model = ColumnSet(make_quote_columns());
-        assert_eq!(model.to_code(), "(symbol: String(8), exchange: String(8), last_sale: Double)");
+        assert_eq!(model.to_code(), "(symbol: String(8), exchange: String(8), last_sale: f64)");
 
         let ms = MachineState::new()
             .with_variable("symbol", StringValue("ABC".into()))
@@ -977,7 +977,7 @@ mod tests {
         // decompile back to source code
         assert_eq!(
             model.to_code(),
-            "create table ns(\"machine.create.stocks\") (symbol: String(8), exchange: String(8), last_sale: Double)"
+            "create table ns(\"machine.create.stocks\") (symbol: String(8), exchange: String(8), last_sale: f64)"
         );
     }
 
@@ -1040,7 +1040,7 @@ mod tests {
             fx: Box::new(
                 Literal(Function {
                     params: vec![
-                        ColumnJs::new("n", "Int64", None)
+                        ColumnJs::new("n", "i64", None)
                     ],
                     code: Box::new(Plus(
                         Box::new(Variable("n".into())),
@@ -1057,7 +1057,7 @@ mod tests {
             .evaluate(&model)
             .unwrap();
         assert_eq!(result, Int64Value(8));
-        assert_eq!(model.to_code(), "((n: Int64) => n + 5)(3)")
+        assert_eq!(model.to_code(), "((n: i64) => n + 5)(3)")
     }
 
     #[test]
@@ -1065,8 +1065,8 @@ mod tests {
         // define a function: (a, b) => a + b
         let fx = Function {
             params: vec![
-                ColumnJs::new("a", "Int64", None),
-                ColumnJs::new("b", "Int64", None),
+                ColumnJs::new("a", "i64", None),
+                ColumnJs::new("b", "i64", None),
             ],
             code: Box::new(Plus(Box::new(
                 Variable("a".into())
@@ -1095,7 +1095,7 @@ mod tests {
             .evaluate(&model)
             .unwrap();
         assert_eq!(result, Int64Value(5));
-        assert_eq!(model.to_code(), "((a: Int64, b: Int64) => a + b)(2, 3)")
+        assert_eq!(model.to_code(), "((a: i64, b: i64) => a + b)(2, 3)")
     }
 
     #[test]

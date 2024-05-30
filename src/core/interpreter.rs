@@ -89,7 +89,7 @@ mod tests {
         create table ns("interpreter.create.stocks") (
             symbol: String(8),
             exchange: String(8),
-            last_sale: Double)
+            last_sale: f64)
         "#).unwrap();
         assert_eq!(result, Boolean(true))
     }
@@ -253,7 +253,7 @@ mod tests {
             create table ns("interpreter.create.stocks") (
                 symbol: String(8),
                 exchange: String(8),
-                last_sale: Double
+                last_sale: f64
             )
         "#).unwrap();
         assert_eq!(result, Boolean(true));

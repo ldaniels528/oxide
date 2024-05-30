@@ -86,7 +86,7 @@ mod tests {
         let columns: Vec<ColumnJs> = vec![
             ColumnJs::new("symbol", "String(10)", None),
             ColumnJs::new("exchange", "String(10)", None),
-            ColumnJs::new("last_sale", "Double", Some("0.00".into())),
+            ColumnJs::new("last_sale", "f64", Some("0.00".into())),
         ];
         let indices = Vec::with_capacity(0);
         let partitions = Vec::with_capacity(0);
@@ -100,7 +100,7 @@ mod tests {
             columns: vec![
                 ColumnJs::new("symbol", "String(10)", None),
                 ColumnJs::new("exchange", "String(10)", None),
-                ColumnJs::new("last_sale", "Double", Some("0.00".into())),
+                ColumnJs::new("last_sale", "f64", Some("0.00".into())),
             ],
             indices: vec![],
             partitions: vec![],

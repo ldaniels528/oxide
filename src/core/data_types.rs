@@ -111,7 +111,7 @@ impl DataType {
             Token::Numeric { text: arg, .. },
             Token::Operator { text: op1, .. }] if op0 == "(" && op1 == ")" =>
                 DataType::resolve(name, &[arg]),
-            // ex: Struct(symbol String(10), exchange String(10), last Double)
+            // ex: Struct(symbol String(10), exchange String(10), last f64)
             [Token::Atom { text: name, .. },
             Token::Operator { text: op0, .. }, ..,
             Token::Operator { text: op1, .. }] if op0 == "(" && op1 == ")" => {
@@ -141,7 +141,7 @@ impl DataType {
             "Byte" => parameterless(Int8Type, args),
             "CLOB" => size_parameter(|size| CLOBType(size), args),
             "Date" => parameterless(DateType, args),
-            "Double" => parameterless(Float64Type, args),
+            "f64" => parameterless(Float64Type, args),
             "Enum" => Ok(EnumType(args.iter().map(|s| s.to_string()).collect())),
             "Float" => parameterless(Float32Type, args),
             "Int" => parameterless(Int32Type, args),
@@ -163,12 +163,12 @@ impl DataType {
             CLOBType(size) => format!("CLOB({})", size),
             DateType => "Date".into(),
             EnumType(values) => format!("Enum({:?})", values),
-            Int8Type => "Int8".into(),
-            Int16Type => "Int16".into(),
-            Int32Type => "Int32".into(),
-            Int64Type => "Int64".into(),
-            Float32Type => "Float32".into(),
-            Float64Type => "Double".into(),
+            Int8Type => "u8".into(),
+            Int16Type => "i16".into(),
+            Int32Type => "i32".into(),
+            Int64Type => "i64".into(),
+            Float32Type => "f32".into(),
+            Float64Type => "f64".into(),
             RecordNumberType => "RecordNumber".into(),
             StringType(size) => format!("String({})", size),
             StructureType(columns) => format!("Struct({})", ColumnJs::render_columns(columns)),
@@ -215,7 +215,7 @@ mod tests {
         verify("Byte", Int8Type);
         verify("CLOB(3377)", CLOBType(3377));
         verify("Date", DateType);
-        verify("Double", Float64Type);
+        verify("f64", Float64Type);
         verify("Enum(A,B,C)", EnumType(vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]));
         verify("Float", Float32Type);
         verify("Short", Int16Type);

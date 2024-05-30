@@ -137,7 +137,7 @@ mod tests {
         let columns = vec![
             ColumnJs::new("symbol", "String(8)", None),
             ColumnJs::new("exchange", "String(10)", None),
-            ColumnJs::new("last_sale", "Double", Some("0.0".into())),
+            ColumnJs::new("last_sale", "f64", Some("0.0".into())),
         ];
         assert_eq!(columns, vec![
             ColumnJs {
@@ -152,7 +152,7 @@ mod tests {
             },
             ColumnJs {
                 name: "last_sale".into(),
-                column_type: "Double".into(),
+                column_type: "f64".into(),
                 default_value: Some("0.0".into()),
             },
         ])

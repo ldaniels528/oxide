@@ -768,7 +768,7 @@ mod tests {
         create table ns("compiler.create.stocks") (
             symbol: String(8),
             exchange: String(8),
-            last_sale: Double)
+            last_sale: f64)
         "#).unwrap();
         assert_eq!(code, vec![
             Create(TableEntity {
@@ -776,7 +776,7 @@ mod tests {
                 columns: vec![
                     ColumnJs::new("symbol", "String(8)", None),
                     ColumnJs::new("exchange", "String(8)", None),
-                    ColumnJs::new("last_sale", "Double", None),
+                    ColumnJs::new("last_sale", "f64", None),
                 ],
                 from: None,
             })

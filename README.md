@@ -107,7 +107,7 @@ curl -X POST \
           "default_value": null
         }, {
           "name": "lastSale",
-          "column_type": "Double",
+          "column_type": "f64",
           "default_value": null
         }],
       "indices": [],

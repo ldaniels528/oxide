@@ -19,7 +19,7 @@ pub fn make_quote_columns() -> Vec<ColumnJs> {
     vec![
         ColumnJs::new("symbol", "String(8)", None),
         ColumnJs::new("exchange", "String(8)", None),
-        ColumnJs::new("last_sale", "Double", None),
+        ColumnJs::new("last_sale", "f64", None),
     ]
 }
 
