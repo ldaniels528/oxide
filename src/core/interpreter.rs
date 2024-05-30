@@ -112,7 +112,7 @@ mod tests {
         let result = interpreter.evaluate(r#"
             delete from ns("interpreter.delete.stocks")
             where last_sale >= 1.0
-            "#).unwrap();
+        "#).unwrap();
         assert_eq!(result, RecordNumber(3));
 
         // verify the remaining rows
@@ -139,7 +139,7 @@ mod tests {
         let result = interpreter.evaluate(r#"
             into ns("interpreter.into.stocks")
             from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
-            "#).unwrap();
+        "#).unwrap();
         assert_eq!(result, RecordNumber(1));
 
         // verify the remaining rows
@@ -171,7 +171,7 @@ mod tests {
             overwrite ns("interpreter.overwrite.stocks")
             via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99}
             where symbol == "BOOM"
-            "#).unwrap();
+        "#).unwrap();
         assert_eq!(result, RecordNumber(1));
 
         // verify the remaining rows
@@ -205,7 +205,7 @@ mod tests {
             where last_sale > 1.0
             order by symbol
             limit 5
-            "#).unwrap();
+        "#).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
@@ -233,7 +233,7 @@ mod tests {
             where last_sale < 1.0
             order by symbol
             limit 5
-            "#).unwrap();
+        "#).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
@@ -244,6 +244,11 @@ mod tests {
     #[test]
     fn test_ql_table_lifecycle_in_namespace() {
         let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            drop table ns("interpreter.create.stocks")
+        "#).unwrap();
+        assert_eq!(result, Boolean(true));
+
         let result = interpreter.evaluate(r#"
             create table ns("interpreter.create.stocks") (
                 symbol: String(8),

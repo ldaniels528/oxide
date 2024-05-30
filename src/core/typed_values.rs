@@ -47,7 +47,7 @@ pub const V_INT8: u8 = 8;
 pub const V_INT16: u8 = 9;
 pub const V_INT32: u8 = 10;
 pub const V_INT64: u8 = 11;
-pub const V_NAMED_FX: u8 = 22;
+//pub const V_NAMED_FX: u8 = 22;
 pub const V_RECORD_NUMBER: u8 = 12;
 pub const V_STRING: u8 = 13;
 pub const V_UUID: u8 = 14;
@@ -75,18 +75,12 @@ pub enum TypedValue {
     RecordNumber(usize),
     StringValue(String),
     UUIDValue([u8; 16]),
-    // functions
-    AnonymousFunction {
-        params: Vec<ColumnJs>,
-        code: Box<Expression>,
-    },
-    NamedFunction {
-        name: String,
-        params: Vec<ColumnJs>,
-        code: Box<Expression>,
-    },
     // complex types
     Array(Vec<TypedValue>),
+    Function {
+        params: Vec<ColumnJs>,
+        code: Box<Expression>,
+    },
     JSONValue(Vec<(String, TypedValue)>),
     TableRef(String),
     TableValue(ModelRowCollection),
@@ -178,11 +172,8 @@ impl TypedValue {
                 bytes
             }
             UUIDValue(guid) => guid.to_vec(),
-            AnonymousFunction { params, code } => {
+            Function { params, code } => {
                 Self::encode_anonymous_function(params, code)
-            }
-            NamedFunction { name, params, code } => {
-                Self::encode_named_function(name, params, code)
             }
         }
     }
@@ -249,7 +240,7 @@ impl TypedValue {
         match *self {
             Undefined => V_UNDEFINED,
             Null => V_NULL,
-            AnonymousFunction { .. } => A_ANON_FX,
+            Function { .. } => A_ANON_FX,
             Array(_) => V_ARRAY,
             BLOB(_) => V_BLOB,
             Boolean(_) => V_BOOLEAN,
@@ -262,7 +253,6 @@ impl TypedValue {
             Int16Value(_) => V_INT16,
             Int32Value(_) => V_INT32,
             Int64Value(_) => V_INT64,
-            NamedFunction { .. } => V_NAMED_FX,
             RecordNumber(_) => V_RECORD_NUMBER,
             StringValue(_) => V_STRING,
             TableRef(_) => V_TABLE_REF,
@@ -272,9 +262,17 @@ impl TypedValue {
         }
     }
 
+    pub fn to_code(&self) -> String {
+        match self {
+            Undefined => "undefined".to_string(),
+            StringValue(s) => format!("\"{}\"", s),
+            v => v.unwrap_value()
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         match self {
-            AnonymousFunction { params, code } => {
+            Function { params, code } => {
                 let my_params = serde_json::Value::Array(params.iter().map(|c| c.to_json()).collect());
                 let my_code = code.to_code(); //serde_json::Value::Object();
                 serde_json::json!({ "params": my_params, "code": my_code })
@@ -292,11 +290,6 @@ impl TypedValue {
             Int16Value(number) => serde_json::json!(number),
             Int32Value(number) => serde_json::json!(number),
             Int64Value(number) => serde_json::json!(number),
-            NamedFunction { name, params, code } => {
-                let my_params = serde_json::Value::Array(params.iter().map(|c| c.to_json()).collect());
-                let my_code = code.to_code(); //serde_json::Value::Object();
-                serde_json::json!({ "name": name, "params": my_params, "code": my_code })
-            }
             Null => serde_json::Value::Null,
             RecordNumber(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
@@ -316,7 +309,10 @@ impl TypedValue {
 
     pub fn unwrap_value(&self) -> String {
         match self {
-            AnonymousFunction { .. } => self.to_string(),
+            Function { params, code } =>
+                format!("(({}) => {})",
+                        params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
+                        code.to_code()),
             Array(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("[{}]", values.join(", "))
@@ -338,7 +334,6 @@ impl TypedValue {
             Int32Value(number) => number.to_string(),
             Int64Value(number) => number.to_string(),
             TableValue(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
-            NamedFunction { .. } => self.to_string(),
             Null => "null".into(),
             RecordNumber(number) => number.to_string(),
             StringValue(string) => string.into(),

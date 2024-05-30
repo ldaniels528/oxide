@@ -50,7 +50,7 @@ impl Token {
     /// creates a new operator token
     pub fn operator(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
         let barrier_symbols: Vec<String> = vec![
-            ",", ";", "]", "(", ")", "}", "=>",
+            ",", ";", "[", "]", "(", ")", "{", "}", "=>",
         ].iter().map(|s| s.to_string()).collect();
         let precedence = Self::determine_precedence(text.as_str());
         let is_postfix = text == "¡" || text == "²" || text == "³";

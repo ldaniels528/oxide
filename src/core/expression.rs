@@ -6,6 +6,8 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
+use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+use crate::expression::DropTarget::{IndexTarget, TableTarget};
 use crate::expression::Expression::*;
 use crate::serialization::assemble;
 use crate::server::ColumnJs;
@@ -16,6 +18,33 @@ pub const FALSE: Expression = Literal(Boolean(false));
 pub const TRUE: Expression = Literal(Boolean(true));
 pub const NULL: Expression = Literal(Null);
 pub const UNDEFINED: Expression = Literal(Undefined);
+
+/// Represents a Creation Entity
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CreationEntity {
+    IndexEntity {
+        path: Box<Expression>,
+        columns: Vec<Expression>,
+    },
+    TableEntity {
+        path: Box<Expression>,
+        columns: Vec<ColumnJs>,
+        from: Option<Box<Expression>>,
+    },
+}
+
+/// Represents a Drop Target
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum DropTarget {
+    IndexTarget {
+        path: Box<Expression>,
+        if_exists: bool,
+    },
+    TableTarget {
+        path: Box<Expression>,
+        if_exists: bool,
+    },
+}
 
 /// Represents an Expression
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,9 +64,9 @@ pub enum Expression {
     // bitwise operations
     BitwiseAnd(Box<Expression>, Box<Expression>),
     BitwiseOr(Box<Expression>, Box<Expression>),
+    BitwiseXor(Box<Expression>, Box<Expression>),
     ShiftLeft(Box<Expression>, Box<Expression>),
     ShiftRight(Box<Expression>, Box<Expression>),
-    Xor(Box<Expression>, Box<Expression>),
     // mathematics
     Divide(Box<Expression>, Box<Expression>),
     Factorial(Box<Expression>),
@@ -51,6 +80,7 @@ pub enum Expression {
     ArrayLiteral(Vec<Expression>),
     AsValue(String, Box<Expression>),
     ColumnSet(Vec<ColumnJs>),
+    FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     JSONLiteral(Vec<(String, Expression)>),
     Literal(TypedValue),
     Ns(Box<Expression>),
@@ -71,42 +101,22 @@ pub enum Expression {
         condition: Box<Expression>,
         code: Box<Expression>,
     },
-    // functions
-    AnonymousFx {
-        params: Vec<ColumnJs>,
-        code: Box<Expression>,
-    },
-    NamedFx {
-        name: String,
-        params: Vec<ColumnJs>,
-        code: Box<Expression>,
-    },
     // SQL
-    CreateIndex {
-        index: Box<Expression>,
-        columns: Box<Expression>,
-    },
-    CreateTable {
-        table: Box<Expression>,
-        columns: Vec<ColumnJs>,
-        from: Option<Box<Expression>>,
-    },
+    Create(CreationEntity),
     Delete {
-        table: Box<Expression>,
+        path: Box<Expression>,
         condition: Option<Box<Expression>>,
         limit: Option<Box<Expression>>,
     },
-    Drop {
-        table: Box<Expression>,
-    },
+    Drop(DropTarget),
     From(Box<Expression>),
     InsertInto {
-        table: Box<Expression>,
+        path: Box<Expression>,
         source: Box<Expression>,
     },
     Limit { from: Box<Expression>, limit: Box<Expression> },
     Overwrite {
-        table: Box<Expression>,
+        path: Box<Expression>,
         source: Box<Expression>,
         condition: Option<Box<Expression>>,
         limit: Option<Box<Expression>>,
@@ -121,11 +131,11 @@ pub enum Expression {
         limit: Option<Box<Expression>>,
     },
     Truncate {
-        table: Box<Expression>,
-        new_size: Option<Box<Expression>>,
+        path: Box<Expression>,
+        limit: Option<Box<Expression>>,
     },
     Update {
-        table: Box<Expression>,
+        path: Box<Expression>,
         source: Box<Expression>,
         condition: Option<Box<Expression>>,
         limit: Option<Box<Expression>>,
@@ -177,8 +187,6 @@ pub fn decompile(expr: &Expression) -> String {
     match expr {
         And(a, b) =>
             format!("{} && {}", decompile(a), decompile(b)),
-        AnonymousFx { params, code } =>
-            format!("({}) => {}", decompile_columns(params), decompile(code)),
         ArrayLiteral(items) =>
             format!("[{}]", items.iter().map(|i| decompile(i)).collect::<Vec<String>>().join(", ")),
         AsValue(name, expr) =>
@@ -195,6 +203,26 @@ pub fn decompile(expr: &Expression) -> String {
             format!("({})", columns.iter().map(|c|
                 format!("{}: {}", c.get_name(), c.get_column_type()))
                 .collect::<Vec<String>>().join(", ")),
+        Create(entity) => {
+            match entity {
+                IndexEntity { path, columns } =>
+                    format!("create index {} [{}]", decompile(path), decompile_list(columns)),
+                TableEntity { path, columns, from } =>
+                    format!("create table {} ({})", decompile(path), decompile_columns(columns)),
+            }
+        }
+        Delete { path, condition, limit } =>
+            format!("delete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
+        Drop(target) => {
+            let (kind, path, if_exists) = match target {
+                IndexTarget { path, if_exists } => ("index", path, if_exists),
+                TableTarget { path, if_exists } => ("table", path, if_exists),
+            };
+            format!("drop {} {}{}", kind, decompile_if_exists(*if_exists), decompile(path))
+        }
+        From(a) => format!("from {}", decompile(a)),
+        FunctionCall { fx, args } =>
+            format!("{}({})", decompile(fx), decompile_list(args)),
         JSONLiteral(items) => {
             let dict = items.iter()
                 .map(|(k, v)| format!("{}: {}", k, v))
@@ -222,7 +250,7 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{} << {}", decompile(a), decompile(b)),
         ShiftRight(a, b) =>
             format!("{} >> {}", decompile(a), decompile(b)),
-        Xor(a, b) =>
+        BitwiseXor(a, b) =>
             format!("{} ^ {}", decompile(a), decompile(b)),
         Divide(a, b) =>
             format!("{} / {}", decompile(a), decompile(b)),
@@ -238,10 +266,8 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{} % {}", decompile(a), decompile(b)),
         Multiply(a, b) =>
             format!("{} * {}", decompile(a), decompile(b)),
-        NamedFx { name, params, code } =>
-            format!("fn {}({}) {}", name, decompile_columns(params), decompile(code)),
         Neg(a) => format!("-({})", decompile(a)),
-        Literal(v) => v.to_json().to_string(),
+        Literal(value) => value.to_code(),
         Ns(a) => format!("ns({})", decompile(a)),
         Range(a, b) =>
             format!("{}..{}", decompile(a), decompile(b)),
@@ -261,20 +287,13 @@ pub fn decompile(expr: &Expression) -> String {
             format!("return {}", decompile_list(items)),
         While { condition, code } =>
             format!("while {} do {}", decompile(condition), decompile(code)),
-        CreateIndex { index, columns } =>
-            format!("create index {} {}", decompile(index), decompile(columns)),
-        CreateTable { table, columns, from } =>
-            format!("create table {} ({})", decompile(table), decompile_columns(columns)),
-        Delete { table, condition, limit } =>
-            format!("delete from {} where {}{}", decompile(table), decompile_opt(condition), decompile_opt(limit)),
-        Drop { table } => format!("drop {}", decompile(table)),
-        From(a) => format!("from {}", decompile(a)),
-        InsertInto { table, source } =>
-            format!("into {} {}", decompile(table), decompile(source)),
+
+        InsertInto { path, source } =>
+            format!("into {} {}", decompile(path), decompile(source)),
         Limit { from: a, limit: b } =>
             format!("{} limit {}", decompile(a), decompile(b)),
-        Overwrite { table, source, condition, limit } =>
-            format!("overwrite {} {}{}{}", decompile(table), decompile(source),
+        Overwrite { path, source, condition, limit } =>
+            format!("overwrite {} {}{}{}", decompile(path), decompile(source),
                     condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
                     limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
             ),
@@ -287,10 +306,10 @@ pub fn decompile(expr: &Expression) -> String {
                     having.clone().map(|e| format!(" having {}", decompile(&e))).unwrap_or("".into()),
                     order_by.clone().map(|e| format!(" order by {}", decompile_list(&e))).unwrap_or("".into()),
             ),
-        Truncate { table, new_size: limit } =>
-            format!("truncate {}{}", decompile(table), decompile_limit(limit)),
-        Update { table, source, condition, limit } =>
-            format!("update {} {} where {}{}", decompile(table), decompile(source), decompile_opt(condition), decompile_opt(limit)),
+        Truncate { path, limit } =>
+            format!("truncate {}{}", decompile(path), decompile_limit(limit)),
+        Update { path, source, condition, limit } =>
+            format!("update {} {} where {}{}", decompile(path), decompile(source), decompile_opt(condition), decompile_opt(limit)),
         Where { from, condition } =>
             format!("{} where {}", decompile(from), decompile(condition)),
     }
@@ -300,6 +319,10 @@ fn decompile_columns(columns: &Vec<ColumnJs>) -> String {
     columns.iter()
         .map(|c| format!("{}: {}", c.get_name(), c.get_column_type()))
         .collect::<Vec<String>>().join(", ")
+}
+
+fn decompile_if_exists(if_exists: bool) -> String {
+    (if if_exists { "if exists " } else { "" }).to_string()
 }
 
 fn decompile_insert_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> String {
@@ -484,7 +507,7 @@ mod tests {
     #[test]
     fn test_overwrite() {
         let model = Overwrite {
-            table: Box::new(Variable("stocks".into())),
+            path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("BOX".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),

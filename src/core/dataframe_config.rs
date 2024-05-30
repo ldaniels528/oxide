@@ -37,6 +37,10 @@ impl DataFrameConfig {
 
     pub fn get_columns(&self) -> &Vec<ColumnJs> { &self.columns }
 
+    pub fn get_indices(&self) -> &Vec<HashIndexConfig> { &self.indices }
+
+    pub fn get_partitions(&self) -> &Vec<String> { &self.partitions }
+
     /// loads a dataframe configuration from disk.
     pub fn load(ns: &Namespace) -> std::io::Result<Self> {
         let config_string = fs::read_to_string(ns.get_config_file_path())?;
@@ -53,8 +57,19 @@ impl DataFrameConfig {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HashIndexConfig {
-    pub(crate) indexed_column_name: String,
-    pub(crate) is_unique: bool,
+    indexed_column_names: Vec<String>,
+    is_unique: bool,
+}
+
+impl HashIndexConfig {
+    /// Creates a new Hash-Index configuration
+    pub fn new(indexed_column_names: Vec<String>, is_unique: bool,) -> Self {
+        HashIndexConfig { indexed_column_names, is_unique }
+    }
+
+    pub fn get_indexed_column_name(&self) -> Vec<String> { self.indexed_column_names.clone() }
+
+    pub fn is_unique(&self) -> bool { self.is_unique }
 }
 
 // Unit tests

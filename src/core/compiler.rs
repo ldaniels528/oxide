@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use shared_lib::{cnv_error, fail, FieldJs, RowJs};
 
 use crate::expression::{Expression, FALSE, NULL, TRUE, UNDEFINED};
+use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+use crate::expression::DropTarget::TableTarget;
 use crate::expression::Expression::*;
 use crate::serialization::assemble_fully;
 use crate::server::ColumnJs;
@@ -15,7 +17,7 @@ use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Int64Value, StringValue};
+use crate::typed_values::TypedValue::{Function, Int64Value, StringValue};
 
 /// Represents the Oxide compiler state
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -31,7 +33,7 @@ impl CompilerState {
 
     /// compiles the source code into a [Vec<Expression>]; a graph representing
     /// the program's executable code
-    pub fn compile_source(source_code: &str) -> std::io::Result<Vec<Expression>> {
+    pub fn compile_script(source_code: &str) -> std::io::Result<Vec<Expression>> {
         let mut compiler = CompilerState::new();
         let (code, _) = compiler.compile_all(TokenSlice::from_string(source_code))?;
         Ok(code)
@@ -195,7 +197,7 @@ impl CompilerState {
                         ":=" => self.compile_expr_2nv(ts, op0, SetVariable),
                         "<<" => self.compile_expr_2a(ts, op0, ShiftLeft),
                         ">>" => self.compile_expr_2a(ts, op0, ShiftRight),
-                        "^" => self.compile_expr_2a(ts, op0, Xor),
+                        "^" => self.compile_expr_2a(ts, op0, BitwiseXor),
                         unknown => fail(format!("Invalid operator '{}'", unknown))
                     }
                 } else { fail(format!("Illegal start of expression '{}'", symbol)) }
@@ -207,6 +209,7 @@ impl CompilerState {
             match t.get_raw_value().as_str() {
                 "create" => self.compile_keyword_create(ts),
                 "delete" => self.compile_keyword_delete(ts),
+                "drop" => self.compile_keyword_drop(ts),
                 "false" => Ok((FALSE, ts)),
                 "fn" => self.compile_keyword_fn(ts),
                 "from" => {
@@ -246,7 +249,12 @@ impl CompilerState {
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        todo!()
+        let (index, ts) = self.compile(ts)?;
+        if let (ArrayLiteral(columns), ts) = self.compile(ts.clone())? {
+            Ok((Create(IndexEntity { path: Box::new(index), columns }), ts))
+        } else {
+            fail_near("Columns expected", &ts)
+        }
     }
 
     fn compile_keyword_create_table(
@@ -260,9 +268,9 @@ impl CompilerState {
             if ts.is("from") {
                 let ts = ts.expect("from")?;
                 let (from, ts) = self.compile(ts)?;
-                Ok((CreateTable { table: Box::new(table), columns, from: Some(Box::new(from)) }, ts))
+                Ok((Create(TableEntity { path: Box::new(table), columns, from: Some(Box::new(from)) }), ts))
             } else {
-                Ok((CreateTable { table: Box::new(table), columns, from: None }, ts))
+                Ok((Create(TableEntity { path: Box::new(table), columns, from: None }), ts))
             }
         } else {
             fail_near("Expected column definitions", &ts)
@@ -278,7 +286,26 @@ impl CompilerState {
         let from = from.expect("Expected keyword 'from'");
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Delete { table: Box::new(from), condition: condition.map(Box::new), limit: limit.map(Box::new) }, ts))
+        Ok((Delete { path: Box::new(from), condition: condition.map(Box::new), limit: limit.map(Box::new) }, ts))
+    }
+
+    /// SQL Drop statement. ex: drop table ns('finance.securities.stocks')
+    fn compile_keyword_drop(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        match ts.next() {
+            (Some(Atom { text: keyword, .. }), ts) => {
+                match keyword.as_str() {
+                    "table" => {
+                        let (expr, ts) = self.compile(ts)?;
+                        Ok((Drop(TableTarget { path: Box::new(expr), if_exists: false }), ts))
+                    }
+                    x => fail_near(format!("Invalid type `{}`, try `table` instead", x), &ts)
+                }
+            }
+            (_, ts) => fail_near("Syntax error".to_string(), &ts)
+        }
     }
 
     fn compile_keyword_fn(
@@ -292,7 +319,7 @@ impl CompilerState {
                 // finally, extract the function code
                 let ts = ts.expect("=>")?;
                 let (code, ts) = self.compile(ts)?;
-                Ok((NamedFx { name, params, code: Box::new(code) }, ts))
+                Ok((SetVariable(name, Box::new(Literal(Function { params, code: Box::new(code) }))), ts))
             } else {
                 fail_near("Function parameters expected", &ts)
             }
@@ -318,7 +345,7 @@ impl CompilerState {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.compile(ts)?;
         let (source, ts) = self.compile(ts)?;
-        Ok((InsertInto { table: Box::new(table), source: Box::new(source) }, ts))
+        Ok((InsertInto { path: Box::new(table), source: Box::new(source) }, ts))
     }
 
     fn compile_keyword_ns(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
@@ -340,7 +367,7 @@ impl CompilerState {
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
         Ok((Overwrite {
-            table: Box::new(table),
+            path: Box::new(table),
             source: Box::new(source),
             condition: condition.map(Box::new),
             limit: limit.map(Box::new),
@@ -395,7 +422,7 @@ impl CompilerState {
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
         Ok((Update {
-            table: Box::new(table),
+            path: Box::new(table),
             source: Box::new(source),
             condition: condition.map(Box::new),
             limit: limit.map(Box::new),
@@ -418,7 +445,7 @@ impl CompilerState {
     /// parse an argument list from the [TokenSlice] (e.g. "(symbol, exchange, last_sale)")
     fn expect_argument_list(
         &mut self,
-        ts: TokenSlice
+        ts: TokenSlice,
     ) -> std::io::Result<(Vec<Expression>, TokenSlice)> {
         // parse: ("abc", "123", ..)
         let mut args = vec![];
@@ -541,7 +568,7 @@ impl CompilerState {
         }
     }
 
-    fn maybe_parentheses_brackets(
+    fn maybe_parentheses(
         &mut self,
         ts: TokenSlice,
     ) -> Option<(std::io::Result<Expression>, TokenSlice)> {
@@ -654,7 +681,7 @@ mod tests {
 
     #[test]
     fn test_compile_array() {
-        assert_eq!(CompilerState::compile_source("[1, 4, 2, 8, 5, 7]").unwrap(),
+        assert_eq!(CompilerState::compile_script("[1, 4, 2, 8, 5, 7]").unwrap(),
                    vec![ArrayLiteral(vec![
                        Literal(Int64Value(1)), Literal(Int64Value(4)), Literal(Int64Value(2)),
                        Literal(Int64Value(8)), Literal(Int64Value(5)), Literal(Int64Value(7)),
@@ -663,7 +690,7 @@ mod tests {
 
     #[test]
     fn test_compile_as_expression() {
-        let code = CompilerState::compile_source(r#"symbol: "ABC""#).unwrap();
+        let code = CompilerState::compile_script(r#"symbol: "ABC""#).unwrap();
         assert_eq!(code, vec![
             AsValue("symbol".to_string(), Box::new(Literal(StringValue("ABC".into()))))
         ]);
@@ -671,7 +698,7 @@ mod tests {
 
     #[test]
     fn test_compile_bitwise_and() {
-        assert_eq!(CompilerState::compile_source("20 & 3").unwrap(),
+        assert_eq!(CompilerState::compile_script("20 & 3").unwrap(),
                    vec![
                        BitwiseAnd(
                            Box::new(Literal(Int64Value(20))),
@@ -681,7 +708,7 @@ mod tests {
 
     #[test]
     fn test_compile_bitwise_or() {
-        assert_eq!(CompilerState::compile_source("20 | 3").unwrap(),
+        assert_eq!(CompilerState::compile_script("20 | 3").unwrap(),
                    vec![
                        BitwiseOr(
                            Box::new(Literal(Int64Value(20))),
@@ -691,53 +718,87 @@ mod tests {
 
     #[test]
     fn test_define_function() {
+        // examples:
+        // fn add(a: u64, b: u64) => a + b
         // fn add(a: u64, b: u64) : u64 => a + b
+        // add := (a, b) => a + b
+        // add := (a: u64, b: u64) => a + b
         // (a: u64, b: u64) : u64 => a + b
         // (a, b) => a + b
-        let code = CompilerState::compile_source(r#"
+        let code = CompilerState::compile_script(r#"
         fn add(a, b) => a + b
         "#).unwrap();
         assert_eq!(code, vec![
-            NamedFx {
-                name: "add".to_string(),
-                params: vec![
-                    ColumnJs::new("a", "", None),
-                    ColumnJs::new("b", "", None),
-                ],
-                code: Box::new(Plus(Box::new(
-                    Variable("a".into())
-                ), Box::new(
-                    Variable("b".into())
-                ))),
-            }
+            SetVariable("add".to_string(), Box::new(
+                Literal(Function {
+                    params: vec![
+                        ColumnJs::new("a", "", None),
+                        ColumnJs::new("b", "", None),
+                    ],
+                    code: Box::new(Plus(Box::new(
+                        Variable("a".into())
+                    ), Box::new(
+                        Variable("b".into())
+                    ))),
+                })
+            ))
         ])
+    }
+
+    #[test]
+    fn test_compile_create_index() {
+        let code = CompilerState::compile_script(r#"
+        create index ns("compiler.create.stocks") [symbol, exchange]
+        "#).unwrap();
+        assert_eq!(code, vec![
+            Create(IndexEntity {
+                path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
+                columns: vec![
+                    Variable("symbol".into()),
+                    Variable("exchange".into()),
+                ],
+            })
+        ]);
     }
 
     #[test]
     fn test_compile_create_table() {
         let ns_path = "compiler.create.stocks";
-        let code = CompilerState::compile_source(r#"
+        let code = CompilerState::compile_script(r#"
         create table ns("compiler.create.stocks") (
             symbol: String(8),
             exchange: String(8),
             last_sale: Double)
         "#).unwrap();
         assert_eq!(code, vec![
-            CreateTable {
-                table: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
+            Create(TableEntity {
+                path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
                 columns: vec![
                     ColumnJs::new("symbol", "String(8)", None),
                     ColumnJs::new("exchange", "String(8)", None),
                     ColumnJs::new("last_sale", "Double", None),
                 ],
                 from: None,
-            }
+            })
+        ]);
+    }
+
+    #[test]
+    fn test_compile_drop_table() {
+        let code = CompilerState::compile_script(r#"
+        drop table ns('finance.securities.stocks')
+        "#).unwrap();
+        assert_eq!(code, vec![
+            Drop(TableTarget {
+                path: Box::new(Ns(Box::new(Literal(StringValue("finance.securities.stocks".into()))))),
+                if_exists: false,
+            })
         ]);
     }
 
     #[test]
     fn test_compile_json_literal_value() {
-        let code = CompilerState::compile_source(
+        let code = CompilerState::compile_script(
             r#"{symbol: "ABC", exchange: "NYSE", last_sale: 16.79}"#
         ).unwrap();
         assert_eq!(code, vec![
@@ -751,22 +812,22 @@ mod tests {
 
     #[test]
     fn test_compile_numeric_literal_value() {
-        assert_eq!(CompilerState::compile_source("1_234_567_890").unwrap(),
+        assert_eq!(CompilerState::compile_script("1_234_567_890").unwrap(),
                    vec![Literal(Int64Value(1_234_567_890))]);
 
-        assert_eq!(CompilerState::compile_source("1_234_567.890").unwrap(),
+        assert_eq!(CompilerState::compile_script("1_234_567.890").unwrap(),
                    vec![Literal(Float64Value(1_234_567.890))]);
     }
 
     #[test]
     fn test_compile_not_expression() {
-        assert_eq!(CompilerState::compile_source("!false").unwrap(), vec![Not(Box::new(FALSE))]);
-        assert_eq!(CompilerState::compile_source("!true").unwrap(), vec![Not(Box::new(TRUE))]);
+        assert_eq!(CompilerState::compile_script("!false").unwrap(), vec![Not(Box::new(FALSE))]);
+        assert_eq!(CompilerState::compile_script("!true").unwrap(), vec![Not(Box::new(TRUE))]);
     }
 
     #[test]
     fn test_compile_mathematical_addition() {
-        let opcodes = CompilerState::compile_source("n + 3").unwrap();
+        let opcodes = CompilerState::compile_script("n + 3").unwrap();
         assert_eq!(opcodes, vec![
             Plus(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(3))))
         ]);
@@ -774,7 +835,7 @@ mod tests {
 
     #[test]
     fn test_compile_mathematical_division() {
-        let opcodes = CompilerState::compile_source("n / 3").unwrap();
+        let opcodes = CompilerState::compile_script("n / 3").unwrap();
         assert_eq!(opcodes, vec![
             Divide(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(3))))
         ]);
@@ -782,7 +843,7 @@ mod tests {
 
     #[test]
     fn test_compile_mathematical_exponent() {
-        let opcodes = CompilerState::compile_source("5 ** 2").unwrap();
+        let opcodes = CompilerState::compile_script("5 ** 2").unwrap();
         assert_eq!(opcodes, vec![
             Pow(Box::new(Literal(Int64Value(5))), Box::new(Literal(Int64Value(2))))
         ]);
@@ -793,7 +854,7 @@ mod tests {
         let symbols = vec!["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
         let mut num = 0;
         for symbol in symbols {
-            let opcodes = CompilerState::compile_source(format!("5{}", symbol).as_str()).unwrap();
+            let opcodes = CompilerState::compile_script(format!("5{}", symbol).as_str()).unwrap();
             assert_eq!(opcodes, vec![
                 Pow(Box::new(Literal(Int64Value(5))), Box::new(Literal(Int64Value(num))))
             ]);
@@ -803,7 +864,7 @@ mod tests {
 
     #[test]
     fn test_compile_mathematical_factorial() {
-        let opcodes = CompilerState::compile_source("5¡").unwrap();
+        let opcodes = CompilerState::compile_script("5¡").unwrap();
         assert_eq!(opcodes, vec![
             Factorial(Box::new(Literal(Int64Value(5))))
         ]);
@@ -811,7 +872,7 @@ mod tests {
 
     #[test]
     fn test_compile_mathematical_modulus() {
-        let opcodes = CompilerState::compile_source("n % 4").unwrap();
+        let opcodes = CompilerState::compile_script("n % 4").unwrap();
         assert_eq!(opcodes, vec![
             Modulo(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(4))))
         ]);
@@ -819,7 +880,7 @@ mod tests {
 
     #[test]
     fn test_compile_mathematical_multiplication() {
-        let opcodes = CompilerState::compile_source("n * 10").unwrap();
+        let opcodes = CompilerState::compile_script("n * 10").unwrap();
         assert_eq!(opcodes, vec![
             Multiply(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(10))))
         ]);
@@ -827,7 +888,7 @@ mod tests {
 
     #[test]
     fn test_compile_mathematical_subtraction() {
-        let opcodes = CompilerState::compile_source("_ - 7").unwrap();
+        let opcodes = CompilerState::compile_script("_ - 7").unwrap();
         assert_eq!(opcodes, vec![
             Minus(Box::new(Variable("_".into())), Box::new(Literal(Int64Value(7))))
         ]);
@@ -898,7 +959,7 @@ mod tests {
 
     #[test]
     fn test_order_of_operations_1() {
-        let opcodes = CompilerState::compile_source("2 + (4 * 3)").unwrap();
+        let opcodes = CompilerState::compile_script("2 + (4 * 3)").unwrap();
         assert_eq!(opcodes, vec![
             Plus(Box::new(Literal(Int64Value(2))),
                  Box::new(Multiply(Box::new(Literal(Int64Value(4))),
@@ -908,7 +969,7 @@ mod tests {
 
     #[test]
     fn test_order_of_operations_2() {
-        let opcodes = CompilerState::compile_source("(4.0 / 3.0) + (4 * 3)").unwrap();
+        let opcodes = CompilerState::compile_script("(4.0 / 3.0) + (4 * 3)").unwrap();
         assert_eq!(opcodes, vec![
             Plus(
                 Box::new(Divide(Box::new(Literal(Float64Value(4.0))), Box::new(Literal(Float64Value(3.0))))),
@@ -920,7 +981,7 @@ mod tests {
     #[ignore]
     #[test]
     fn test_order_of_operations_3() {
-        let opcodes = CompilerState::compile_source("2 - 4 * 3").unwrap();
+        let opcodes = CompilerState::compile_script("2 - 4 * 3").unwrap();
         assert_eq!(opcodes, vec![
             Minus(Box::new(Literal(Float64Value(2.))),
                   Box::new(Multiply(Box::new(Literal(Float64Value(4.))),
@@ -930,11 +991,11 @@ mod tests {
 
     #[test]
     fn test_ql_delete() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         delete from stocks
         "#).unwrap();
         assert_eq!(opcodes, vec![Delete {
-            table: Box::new(Variable("stocks".into())),
+            path: Box::new(Variable("stocks".into())),
             condition: None,
             limit: None,
         }])
@@ -942,13 +1003,13 @@ mod tests {
 
     #[test]
     fn test_ql_delete_where_limit() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         delete from stocks
         where last_sale >= 1.0
         limit 100
         "#).unwrap();
         assert_eq!(opcodes, vec![Delete {
-            table: Box::new(Variable("stocks".into())),
+            path: Box::new(Variable("stocks".into())),
             condition: Some(
                 Box::new(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
@@ -962,7 +1023,7 @@ mod tests {
 
     #[test]
     fn test_ql_from() {
-        let opcodes = CompilerState::compile_source("from stocks").unwrap();
+        let opcodes = CompilerState::compile_script("from stocks").unwrap();
         assert_eq!(opcodes, vec![
             From(Box::new(Variable("stocks".into())))
         ]);
@@ -970,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_ql_from_where_limit() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         from stocks where last_sale >= 1.0 limit 20
         "#).unwrap();
         assert_eq!(opcodes, vec![
@@ -990,23 +1051,23 @@ mod tests {
 
     #[test]
     fn test_ql_into_from_variable() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         into ns("compiler.into.stocks") from stocks
         "#).unwrap();
         assert_eq!(opcodes, vec![InsertInto {
-            table: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
+            path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
             source: Box::new(From(Box::new(Variable("stocks".into())))),
         }])
     }
 
     #[test]
     fn test_ql_into_from_json_literal() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         into ns("compiler.into.stocks")
         from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
         "#).unwrap();
         assert_eq!(opcodes, vec![InsertInto {
-            table: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
+            path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
             source: Box::new(From(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("ABC".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
@@ -1017,7 +1078,7 @@ mod tests {
 
     #[test]
     fn test_ql_into_from_json_array() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         into ns("compiler.into.stocks")
         from [
             { symbol: "ABC", exchange: "NYSE", last_sale: 11.1234 },
@@ -1026,7 +1087,7 @@ mod tests {
         ]
         "#).unwrap();
         assert_eq!(opcodes, vec![InsertInto {
-            table: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
+            path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
             source: Box::new(From(Box::new(
                 ArrayLiteral(vec![
                     JSONLiteral(vec![
@@ -1051,7 +1112,7 @@ mod tests {
 
     #[test]
     fn test_ql_ns() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         ns("securities.etf.stocks")
         "#).unwrap();
         assert_eq!(opcodes, vec![
@@ -1061,14 +1122,14 @@ mod tests {
 
     #[test]
     fn test_ql_overwrite() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         overwrite stocks
         via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
         where symbol == "ABCQ"
         limit 5
         "#).unwrap();
         assert_eq!(opcodes, vec![Overwrite {
-            table: Box::new(Variable("stocks".into())),
+            path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("ABC".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
@@ -1085,7 +1146,7 @@ mod tests {
 
     #[test]
     fn test_ql_select_from() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         "#).unwrap();
         assert_eq!(opcodes, vec![Select {
@@ -1101,7 +1162,7 @@ mod tests {
 
     #[test]
     fn test_ql_select_from_where() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale >= 1.0
         "#).unwrap();
@@ -1123,7 +1184,7 @@ mod tests {
 
     #[test]
     fn test_ql_select_from_where_limit() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale <= 1.0
         limit 5
@@ -1146,7 +1207,7 @@ mod tests {
 
     #[test]
     fn test_ql_select_from_where_order_by_limit() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale < 1.0
         order by symbol
@@ -1170,14 +1231,14 @@ mod tests {
 
     #[test]
     fn test_ql_update() {
-        let opcodes = CompilerState::compile_source(r#"
+        let opcodes = CompilerState::compile_script(r#"
         update stocks
         via { last_sale: 0.1111 }
         where symbol == "ABC"
         limit 10
         "#).unwrap();
         assert_eq!(opcodes, vec![Update {
-            table: Box::new(Variable("stocks".into())),
+            path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("last_sale".into(), Literal(Float64Value(0.1111))),
             ])))),

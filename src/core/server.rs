@@ -65,12 +65,20 @@ impl ColumnJs {
         ColumnJs { name: name.into(), column_type: column_type.into(), default_value }
     }
 
+    pub fn render_columns(columns: &Vec<ColumnJs>) -> String {
+        columns.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", ")
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!({
             "name": self.get_name(),
             "column_type": self.get_column_type(),
             "default_value": self.get_default_value()
         })
+    }
+
+    pub fn to_code(&self) -> String {
+        format!("{}: {}", self.name, self.column_type)
     }
 }
 

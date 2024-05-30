@@ -171,8 +171,8 @@ impl DataType {
             Float64Type => "Double".into(),
             RecordNumberType => "RecordNumber".into(),
             StringType(size) => format!("String({})", size),
-            StructureType(columns) => format!("Struct({:?})", columns),
-            TableType(columns) => format!("Table({:?})", columns),
+            StructureType(columns) => format!("Struct({})", ColumnJs::render_columns(columns)),
+            TableType(columns) => format!("Table({})", ColumnJs::render_columns(columns)),
             UUIDType => "UUID".into()
         }
     }
