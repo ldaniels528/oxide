@@ -1,4 +1,25 @@
+////////////////////////////////////////////////////////////////////
+// Oxide README.md Generation
+////////////////////////////////////////////////////////////////////
 
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+
+fn generate_readme() -> std::io::Result<File> {
+    let file = OpenOptions::new()
+        .truncate(true).create(true).read(true).write(true)
+        .open("../../README.md")?;
+    let file = generate_title(file)?;
+    let file = generate_project_status(file)?;
+    let file = generate_development(file)?;
+    let file = generate_run_tests(file)?;
+    let file = generate_getting_started(file)?;
+    let file = generate_rpc(file)?;
+    Ok(file)
+}
+
+fn generate_title(mut file: File) -> std::io::Result<File> {
+    file.write(r#"
 Oxide
 =====
 
@@ -14,7 +35,12 @@ and proof of concept software projects. The system will offer:
 Oxide is the spiritual successor to [Lollypop](https://github.com/ldaniels528/lollypop), a multi-paradigm language also
 featuring integrated dataframes with SQL-like grammar for queries, but built for the JVM and
 developed in the Scala programming language.
+"#.as_bytes())?;
+    Ok(file)
+}
 
+fn generate_project_status(mut file: File) -> std::io::Result<File> {
+    file.write(r#"
 ## Project Status
 
 - The <a href='#REPL'>REPL</a> is now available, and allows you to issue commands directly to the server.
@@ -25,7 +51,12 @@ developed in the Scala programming language.
   - <a href='#read_row'>retrieve a row by offset</a>
   - <a href='#delete_row'>delete a row by offset</a>
   - <a href='#rpc'>remote procedure calls</a>
+"#.as_bytes())?;
+    Ok(file)
+}
 
+fn generate_development(mut file: File) -> std::io::Result<File> {
+    file.write(r#"
 ## Development
 
 #### Build the Oxide REPL and Server
@@ -37,15 +68,12 @@ cargo build --release
 You'll find the executables in `./target/release/`:
 * `oxide_repl` is the Oxide REST client / REPL
 * `oxide_server` is the Oxide REST Server
+"#.as_bytes())?;
+    Ok(file)
+}
 
-#### Run the tests
-
-To run the tests (~ 130 tests at the time of writing):
-
-```bash
-cargo test
-```
-    
+fn generate_getting_started(mut file: File) -> std::io::Result<File> {
+    file.write(r#"
 ## Getting Started
 
 <a name="REPL"></a>
@@ -204,7 +232,25 @@ server response:
 ```json
 1
 ```
-    
+    "#.as_bytes())?;
+    Ok(file)
+}
+
+fn generate_run_tests(mut file: File) -> std::io::Result<File> {
+    file.write(r#"
+#### Run the tests
+
+To run the tests (~ 130 tests at the time of writing):
+
+```bash
+cargo test
+```
+    "#.as_bytes())?;
+    Ok(file)
+}
+
+fn generate_rpc(mut file: File) -> std::io::Result<File> {
+    file.write(r#"
 <a name="rpc"></a>
 #### Remote Procedure Calls
 
@@ -225,4 +271,23 @@ server response:
 ```json
 10.0
 ```
-    
+    "#.as_bytes())?;
+    Ok(file)
+}
+
+fn generate_xxx(mut file: File) -> std::io::Result<File> {
+    file.write(r#"
+    "#.as_bytes())?;
+    Ok(file)
+}
+
+// Unit tests
+#[cfg(test)]
+mod tests {
+    use crate::readme::generate_readme;
+
+    #[test]
+    fn test_generate_readme() {
+        generate_readme().unwrap();
+    }
+}

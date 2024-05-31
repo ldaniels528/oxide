@@ -43,6 +43,7 @@ mod interpreter;
 mod machine;
 mod model_row_collection;
 mod namespaces;
+mod readme;
 mod row_collection;
 mod row_metadata;
 mod rows;
