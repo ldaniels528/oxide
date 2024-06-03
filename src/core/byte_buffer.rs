@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::codec;
+use crate::data_types::*;
 use crate::model_row_collection::ModelRowCollection;
 use crate::server::ColumnJs;
 use crate::typed_values::*;
@@ -253,26 +254,36 @@ impl ByteBuffer {
         use crate::typed_values::*;
         use TypedValue::*;
         match self.next_u8() {
-            V_UNDEFINED => Undefined,
-            V_NULL => Null,
-            V_BLOB => BLOB(self.next_blob()),
-            V_BOOLEAN => Boolean(self.next_bool()),
-            V_CLOB => CLOB(self.next_clob()),
-            V_DATE => DateValue(self.next_i64()),
-            V_FLOAT32 => Float32Value(self.next_f32()),
-            V_FLOAT64 => Float64Value(self.next_f64()),
-            V_INT8 => Int8Value(self.next_u8()),
-            V_INT16 => Int16Value(self.next_i16()),
-            V_INT32 => Int32Value(self.next_i32()),
-            V_INT64 => Int64Value(self.next_i64()),
-            V_RECORD_NUMBER => RecordNumber(self.next_u32() as usize),
-            V_STRING => StringValue(self.next_string()),
-            V_UUID => UUIDValue(self.next_uuid()),
-            V_ARRAY => Array(self.next_array()),
-            V_JSON_VALUE => JSONValue(self.next_json()),
-            V_TABLE_REF => TableRef(self.next_string()),
-            V_TABLE => TableValue(self.next_table()),
-            V_TUPLE => TupleValue(self.next_array()),
+            T_UNDEFINED => Undefined,
+            T_NULL => Null,
+            T_ARRAY => Array(self.next_array()),
+            T_BLOB => BLOB(self.next_blob()),
+            T_BOOLEAN => Boolean(self.next_bool()),
+            T_CLOB => CLOB(self.next_clob()),
+            T_DATE => DateValue(self.next_i64()),
+            T_FLOAT32 => Float32Value(self.next_f32()),
+            T_FLOAT64 => Float64Value(self.next_f64()),
+            T_FUNC => Function {
+                params: self.next_columns(),
+                code: Box::new(todo!()),
+            },
+            T_INT8 => Int8Value(self.next_i8()),
+            T_INT16 => Int16Value(self.next_i16()),
+            T_INT32 => Int32Value(self.next_i32()),
+            T_INT64 => Int64Value(self.next_i64()),
+            T_INT128 => Int128Value(self.next_i128()),
+            T_JSON_OBJECT => JSONObjectValue(self.next_json()),
+            T_RECORD_NUMBER => RecordNumber(self.next_u32() as usize),
+            T_STRING => StringValue(self.next_string()),
+            T_TABLE_REF => TableRef(self.next_string()),
+            T_TABLE => TableValue(self.next_table()),
+            T_TUPLE => TupleValue(self.next_array()),
+            T_UINT8 => UInt8Value(self.next_u8()),
+            T_UINT16 => UInt16Value(self.next_u16()),
+            T_UINT32 => UInt32Value(self.next_u32()),
+            T_UINT64 => UInt64Value(self.next_u64()),
+            T_UINT128 => UInt128Value(self.next_u128()),
+            T_UUID => UUIDValue(self.next_uuid()),
             z => panic!("Unhandled value code {}", z)
         }
     }

@@ -9,6 +9,7 @@ use std::fmt::Display;
 use std::ops::*;
 
 use chrono::DateTime;
+use num_traits::ToPrimitive;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -17,7 +18,7 @@ use shared_lib::RowJs;
 
 use crate::cnv_error;
 use crate::codec;
-use crate::data_types::DataType;
+use crate::data_types::*;
 use crate::data_types::DataType::*;
 use crate::expression::Expression;
 use crate::model_row_collection::ModelRowCollection;
@@ -34,57 +35,40 @@ const INTEGER_FORMAT: &str = r"^-?(?:\d+(?:_\d)*)?$";
 const UUID_FORMAT: &str =
     "^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$";
 
-pub const V_UNDEFINED: u8 = 0;
-pub const V_ANON_FX: u8 = 21;
-pub const V_NULL: u8 = 1;
-pub const V_BLOB: u8 = 2;
-pub const V_BOOLEAN: u8 = 3;
-pub const V_CLOB: u8 = 4;
-pub const V_DATE: u8 = 5;
-pub const V_FLOAT32: u8 = 6;
-pub const V_FLOAT64: u8 = 7;
-pub const V_INT8: u8 = 8;
-pub const V_INT16: u8 = 9;
-pub const V_INT32: u8 = 10;
-pub const V_INT64: u8 = 11;
-//pub const V_NAMED_FX: u8 = 22;
-pub const V_RECORD_NUMBER: u8 = 12;
-pub const V_STRING: u8 = 13;
-pub const V_UUID: u8 = 14;
-pub const V_ARRAY: u8 = 15;
-pub const V_JSON_VALUE: u8 = 16;
-pub const V_TABLE_REF: u8 = 18;
-pub const V_TABLE: u8 = 19;
-pub const V_TUPLE: u8 = 20;
-
 /// Basic value unit
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     Undefined,
     Null,
+    Array(Vec<TypedValue>),
     BLOB(Vec<u8>),
     Boolean(bool),
     CLOB(Vec<char>),
     DateValue(i64),
     Float32Value(f32),
     Float64Value(f64),
-    Int8Value(u8),
-    Int16Value(i16),
-    Int32Value(i32),
-    Int64Value(i64),
-    RecordNumber(usize),
-    StringValue(String),
-    UUIDValue([u8; 16]),
-    // complex types
-    Array(Vec<TypedValue>),
     Function {
         params: Vec<ColumnJs>,
         code: Box<Expression>,
     },
-    JSONValue(Vec<(String, TypedValue)>),
+    Int8Value(i8),
+    Int16Value(i16),
+    Int32Value(i32),
+    Int64Value(i64),
+    Int128Value(i128),
+    JSONObjectValue(Vec<(String, TypedValue)>),
+    RecordNumber(usize),
+    StringValue(String),
+    StructValue(RowJs),
     TableRef(String),
     TableValue(ModelRowCollection),
     TupleValue(Vec<TypedValue>),
+    UInt8Value(u8),
+    UInt16Value(u16),
+    UInt32Value(u32),
+    UInt64Value(u64),
+    UInt128Value(u128),
+    UUIDValue([u8; 16]),
 }
 
 impl TypedValue {
@@ -94,10 +78,10 @@ impl TypedValue {
     pub fn contains(&self, value: &TypedValue) -> bool {
         match &self {
             Array(items) => items.contains(value),
-            JSONValue(_items) => todo!(),
+            JSONObjectValue(_items) => todo!(),
             TableValue(mrc) =>
                 match value {
-                    JSONValue(tuples) =>
+                    JSONObjectValue(tuples) =>
                         mrc.contains(&Row::from_tuples(0, mrc.get_columns(), tuples)),
                     _ => false
                 }
@@ -116,16 +100,27 @@ impl TypedValue {
                 let index = codec::decode_u8x4(buffer, offset, |b| i32::from_be_bytes(b));
                 StringValue(labels[index as usize].to_string())
             }
-            Int8Type => codec::decode_u8(buffer, offset, |b| Int8Value(b)),
+            Float32Type => codec::decode_u8x4(buffer, offset, |b| Float32Value(f32::from_be_bytes(b))),
+            Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
+            FuncType(columns) => Function {
+                params: vec![],
+                code: Box::new(todo!()),
+            },
+            Int8Type => codec::decode_u8(buffer, offset, |b| Int8Value(b.to_i8().unwrap())),
             Int16Type => codec::decode_u8x2(buffer, offset, |b| Int16Value(i16::from_be_bytes(b))),
             Int32Type => codec::decode_u8x4(buffer, offset, |b| Int32Value(i32::from_be_bytes(b))),
             Int64Type => codec::decode_u8x8(buffer, offset, |b| Int64Value(i64::from_be_bytes(b))),
-            Float32Type => codec::decode_u8x4(buffer, offset, |b| Float32Value(f32::from_be_bytes(b))),
-            Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
+            Int128Type => codec::decode_u8x16(buffer, offset, |b| Int128Value(i128::from_be_bytes(b))),
+            JSONObjectType => JSONObjectValue(todo!()),
             RecordNumberType => RecordNumber(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
-            StructureType(_columns) => todo!(),
-            TableType(_columns) => todo!(),
+            StructureType(columns) => StructValue(todo!()),
+            TableType(columns) => todo!(),
+            UInt8Type => codec::decode_u8(buffer, offset, |b| UInt8Value(b)),
+            UInt16Type => codec::decode_u8x2(buffer, offset, |b| UInt16Value(u16::from_be_bytes(b))),
+            UInt32Type => codec::decode_u8x4(buffer, offset, |b| UInt32Value(u32::from_be_bytes(b))),
+            UInt64Type => codec::decode_u8x8(buffer, offset, |b| UInt64Value(u64::from_be_bytes(b))),
+            UInt128Type => codec::decode_u8x16(buffer, offset, |b| UInt128Value(u128::from_be_bytes(b))),
             UUIDType => codec::decode_u8x16(buffer, offset, |b| UUIDValue(b))
         }
     }
@@ -136,6 +131,7 @@ impl TypedValue {
 
     pub fn encode_value(value: &TypedValue) -> Vec<u8> {
         match value {
+            Null | Undefined => [0u8; 0].to_vec(),
             Array(items) => {
                 let mut bytes = vec![];
                 bytes.extend(items.len().to_be_bytes());
@@ -143,10 +139,19 @@ impl TypedValue {
                 bytes
             }
             BLOB(bytes) => codec::encode_u8x_n(bytes.to_vec()),
-            Boolean(v) => [if *v { 1 } else { 0 }].to_vec(),
+            Boolean(ok) => [if *ok { 1 } else { 0 }].to_vec(),
             CLOB(chars) => codec::encode_chars(chars.to_vec()),
             DateValue(number) => number.to_be_bytes().to_vec(),
-            JSONValue(pairs) => {
+            Float32Value(number) => number.to_be_bytes().to_vec(),
+            Float64Value(number) => number.to_be_bytes().to_vec(),
+            Function { params, code } =>
+                Self::encode_function(params, code),
+            Int8Value(number) => number.to_be_bytes().to_vec(),
+            Int16Value(number) => number.to_be_bytes().to_vec(),
+            Int32Value(number) => number.to_be_bytes().to_vec(),
+            Int64Value(number) => number.to_be_bytes().to_vec(),
+            Int128Value(number) => number.to_be_bytes().to_vec(),
+            JSONObjectValue(pairs) => {
                 let mut bytes = vec![];
                 for (name, value) in pairs {
                     bytes.extend(name.bytes().collect::<Vec<u8>>());
@@ -154,16 +159,10 @@ impl TypedValue {
                 }
                 bytes
             }
-            Float32Value(number) => number.to_be_bytes().to_vec(),
-            Float64Value(number) => number.to_be_bytes().to_vec(),
-            Int8Value(number) => number.to_be_bytes().to_vec(),
-            Int16Value(number) => number.to_be_bytes().to_vec(),
-            Int32Value(number) => number.to_be_bytes().to_vec(),
-            Int64Value(number) => number.to_be_bytes().to_vec(),
             TableValue(rc) => rc.encode(),
-            Null | Undefined => [0u8; 0].to_vec(),
             RecordNumber(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
+            StructValue(item) => codec::encode_string(item.to_json_string().as_str()),
             TableRef(path) => codec::encode_string(path),
             TupleValue(items) => {
                 let mut bytes = vec![];
@@ -171,26 +170,20 @@ impl TypedValue {
                 for item in items { bytes.extend(item.encode()); }
                 bytes
             }
+            UInt8Value(number) => number.to_be_bytes().to_vec(),
+            UInt16Value(number) => number.to_be_bytes().to_vec(),
+            UInt32Value(number) => number.to_be_bytes().to_vec(),
+            UInt64Value(number) => number.to_be_bytes().to_vec(),
+            UInt128Value(number) => number.to_be_bytes().to_vec(),
             UUIDValue(guid) => guid.to_vec(),
-            Function { params, code } => {
-                Self::encode_anonymous_function(params, code)
-            }
         }
     }
 
-    fn encode_anonymous_function(params: &Vec<ColumnJs>, code: &Expression) -> Vec<u8> {
+    fn encode_function(params: &Vec<ColumnJs>, code: &Expression) -> Vec<u8> {
         let mut bytes = vec![];
         bytes.extend(params.len().to_be_bytes());
         for param in params { bytes.extend(param.encode()); }
         bytes.extend(code.encode());
-        bytes
-    }
-
-    fn encode_named_function(name: &String, params: &Vec<ColumnJs>, code: &Expression) -> Vec<u8> {
-        let mut bytes = vec![];
-        bytes.extend(name.len().to_be_bytes());
-        bytes.extend(name.bytes());
-        bytes.extend(Self::encode_anonymous_function(params, code));
         bytes
     }
 
@@ -238,27 +231,34 @@ impl TypedValue {
 
     pub fn ordinal(&self) -> u8 {
         match *self {
-            Undefined => V_UNDEFINED,
-            Null => V_NULL,
+            Undefined => T_UNDEFINED,
+            Null => T_NULL,
             Function { .. } => A_ANON_FX,
-            Array(_) => V_ARRAY,
-            BLOB(_) => V_BLOB,
-            Boolean(_) => V_BOOLEAN,
-            CLOB(_) => V_CLOB,
-            DateValue(_) => V_DATE,
-            JSONValue(_) => V_JSON_VALUE,
-            Float32Value(_) => V_FLOAT32,
-            Float64Value(_) => V_FLOAT64,
-            Int8Value(_) => V_INT8,
-            Int16Value(_) => V_INT16,
-            Int32Value(_) => V_INT32,
-            Int64Value(_) => V_INT64,
-            RecordNumber(_) => V_RECORD_NUMBER,
-            StringValue(_) => V_STRING,
-            TableRef(_) => V_TABLE_REF,
-            TableValue(_) => V_TABLE,
-            TupleValue(_) => V_TUPLE,
-            UUIDValue(_) => V_UUID,
+            Array(_) => T_ARRAY,
+            BLOB(_) => T_BLOB,
+            Boolean(_) => T_BOOLEAN,
+            CLOB(_) => T_CLOB,
+            DateValue(_) => T_DATE,
+            JSONObjectValue(_) => T_JSON_OBJECT,
+            Float32Value(_) => T_FLOAT32,
+            Float64Value(_) => T_FLOAT64,
+            Int8Value(_) => T_INT8,
+            Int16Value(_) => T_INT16,
+            Int32Value(_) => T_INT32,
+            Int64Value(_) => T_INT64,
+            Int128Value(_) => T_INT128,
+            RecordNumber(_) => T_RECORD_NUMBER,
+            StringValue(_) => T_STRING,
+            StructValue(_) => T_STRUCT,
+            TableRef(_) => T_TABLE_REF,
+            TableValue(_) => T_TABLE,
+            TupleValue(_) => T_TUPLE,
+            UInt8Value(_) => T_UINT8,
+            UInt16Value(_) => T_UINT16,
+            UInt32Value(_) => T_UINT32,
+            UInt64Value(_) => T_UINT64,
+            UInt128Value(_) => T_UINT128,
+            UUIDValue(_) => T_UUID,
         }
     }
 
@@ -283,16 +283,18 @@ impl TypedValue {
             Boolean(b) => serde_json::json!(b),
             CLOB(chars) => serde_json::json!(chars),
             DateValue(millis) => serde_json::json!(Self::millis_to_iso_date(*millis)),
-            JSONValue(pairs) => serde_json::json!(pairs),
+            JSONObjectValue(pairs) => serde_json::json!(pairs),
             Float32Value(number) => serde_json::json!(number),
             Float64Value(number) => serde_json::json!(number),
             Int8Value(number) => serde_json::json!(number),
             Int16Value(number) => serde_json::json!(number),
             Int32Value(number) => serde_json::json!(number),
             Int64Value(number) => serde_json::json!(number),
+            Int128Value(number) => serde_json::json!(number),
             Null => serde_json::Value::Null,
             RecordNumber(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
+            StructValue(item) => serde_json::json!(item.to_json_string()),
             TableRef(path) => serde_json::json!(path),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
@@ -303,16 +305,17 @@ impl TypedValue {
             TupleValue(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
             Undefined => serde_json::Value::Null,
+            UInt8Value(number) => serde_json::json!(number),
+            UInt16Value(number) => serde_json::json!(number),
+            UInt32Value(number) => serde_json::json!(number),
+            UInt64Value(number) => serde_json::json!(number),
+            UInt128Value(number) => serde_json::json!(number),
             UUIDValue(guid) => serde_json::json!(Uuid::from_bytes(*guid).to_string()),
         }
     }
 
     pub fn unwrap_value(&self) -> String {
         match self {
-            Function { params, code } =>
-                format!("(({}) => {})",
-                        params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
-                        code.to_code()),
             Array(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("[{}]", values.join(", "))
@@ -321,7 +324,11 @@ impl TypedValue {
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
             CLOB(chars) => chars.into_iter().collect(),
             DateValue(millis) => Self::millis_to_iso_date(*millis).unwrap_or("".into()),
-            JSONValue(pairs) => {
+            Function { params, code } =>
+                format!("(({}) => {})",
+                        params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
+                        code.to_code()),
+            JSONObjectValue(pairs) => {
                 let values: Vec<String> = pairs.iter()
                     .map(|(k, v)| format!("{}:{}", k, v.unwrap_value()))
                     .collect();
@@ -333,10 +340,12 @@ impl TypedValue {
             Int16Value(number) => number.to_string(),
             Int32Value(number) => number.to_string(),
             Int64Value(number) => number.to_string(),
+            Int128Value(number) => number.to_string(),
             TableValue(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
             Null => "null".into(),
             RecordNumber(number) => number.to_string(),
             StringValue(string) => string.into(),
+            StructValue(item) => item.to_json_string(),
             TableRef(path) => path.into(),
             TupleValue(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
@@ -344,6 +353,11 @@ impl TypedValue {
             }
             Undefined => "undefined".into(),
             UUIDValue(guid) => Uuid::from_bytes(*guid).to_string(),
+            UInt8Value(number) => number.to_string(),
+            UInt16Value(number) => number.to_string(),
+            UInt32Value(number) => number.to_string(),
+            UInt64Value(number) => number.to_string(),
+            UInt128Value(number) => number.to_string(),
         }
     }
 
@@ -433,7 +447,7 @@ impl TypedValue {
         match &self {
             Float32Value(n) => Some(*n as f64),
             Float64Value(n) => Some(*n),
-            Int8Value(n) => Some(*n as f64),
+            UInt8Value(n) => Some(*n as f64),
             Int16Value(n) => Some(*n as f64),
             Int32Value(n) => Some(*n as f64),
             Int64Value(n) => Some(*n as f64),
@@ -446,7 +460,7 @@ impl TypedValue {
         match &self {
             Float32Value(n) => Some(*n as i64),
             Float64Value(n) => Some(*n as i64),
-            Int8Value(n) => Some(*n as i64),
+            UInt8Value(n) => Some(*n as i64),
             Int16Value(n) => Some(*n as i64),
             Int32Value(n) => Some(*n as i64),
             Int64Value(n) => Some(*n),
@@ -459,7 +473,7 @@ impl TypedValue {
         match &self {
             Float32Value(n) => Some(*n as usize),
             Float64Value(n) => Some(*n as usize),
-            Int8Value(n) => Some(*n as usize),
+            UInt8Value(n) => Some(*n as usize),
             Int16Value(n) => Some(*n as usize),
             Int32Value(n) => Some(*n as usize),
             Int64Value(n) => Some(*n as usize),
@@ -475,7 +489,7 @@ impl TypedValue {
             Int64Value(a) => Some(Int64Value(ff(*a as f64) as i64)),
             Int32Value(a) => Some(Int32Value(ff(*a as f64) as i32)),
             Int16Value(a) => Some(Int16Value(ff(*a as f64) as i16)),
-            Int8Value(a) => Some(Int8Value(ff(*a as f64) as u8)),
+            UInt8Value(a) => Some(UInt8Value(ff(*a as f64) as u8)),
             RecordNumber(a) => Some(RecordNumber(ff(*a as f64) as usize)),
             _ => Some(Float64Value(lhs.assume_f64()?))
         }
@@ -491,7 +505,7 @@ impl TypedValue {
                     (Int64Value(a), Int64Value(b)) => Some(Int64Value(ff(*a as f64, *b as f64) as i64)),
                     (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as f64, *b as f64) as i32)),
                     (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as f64, *b as f64) as i16)),
-                    (Int8Value(a), Int8Value(b)) => Some(Int8Value(ff(*a as f64, *b as f64) as u8)),
+                    (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as f64, *b as f64) as u8)),
                     (RecordNumber(a), RecordNumber(b)) => Some(RecordNumber(ff(*a as f64, *b as f64) as usize)),
                     _ => Some(Float64Value(ff(lhs.assume_f64()?, rhs.assume_f64()?)))
                 }
@@ -509,7 +523,7 @@ impl TypedValue {
                     (Int64Value(a), Int64Value(b)) => Some(Int64Value(ff(*a as i64, *b as i64) as i64)),
                     (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as i64, *b as i64) as i32)),
                     (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as i64, *b as i64) as i16)),
-                    (Int8Value(a), Int8Value(b)) => Some(Int8Value(ff(*a as i64, *b as i64) as u8)),
+                    (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as i64, *b as i64) as u8)),
                     (RecordNumber(a), RecordNumber(b)) => Some(RecordNumber(ff(*a as i64, *b as i64) as usize)),
                     _ => Some(Int64Value(ff(lhs.assume_i64()?, rhs.assume_i64()?)))
                 }
@@ -637,7 +651,7 @@ impl PartialOrd for TypedValue {
             (DateValue(a), DateValue(b)) => a.partial_cmp(b),
             (Float32Value(a), Float32Value(b)) => a.partial_cmp(b),
             (Float64Value(a), Float64Value(b)) => a.partial_cmp(b),
-            (Int8Value(a), Int8Value(b)) => a.partial_cmp(b),
+            (UInt8Value(a), UInt8Value(b)) => a.partial_cmp(b),
             (Int16Value(a), Int16Value(b)) => a.partial_cmp(b),
             (Int32Value(a), Int32Value(b)) => a.partial_cmp(b),
             (Int64Value(a), Int64Value(b)) => a.partial_cmp(b),
@@ -692,14 +706,14 @@ mod tests {
         assert_eq!(Int64Value(45) + Int64Value(32), Int64Value(77));
         assert_eq!(Int32Value(45) + Int32Value(32), Int32Value(77));
         assert_eq!(Int16Value(45) + Int16Value(32), Int16Value(77));
-        assert_eq!(Int8Value(45) + Int8Value(32), Int8Value(77));
+        assert_eq!(UInt8Value(45) + UInt8Value(32), UInt8Value(77));
         assert_eq!(Boolean(true) + Boolean(true), Boolean(true));
         assert_eq!(StringValue("Hello".into()) + StringValue(" World".into()), StringValue("Hello World".into()));
     }
 
     #[test]
     fn test_eq() {
-        assert_eq!(Int8Value(0xCE), Int8Value(0xCE));
+        assert_eq!(UInt8Value(0xCE), UInt8Value(0xCE));
         assert_eq!(Int16Value(0x7ACE), Int16Value(0x7ACE));
         assert_eq!(Int32Value(0x1111_BEEF), Int32Value(0x1111_BEEF));
         assert_eq!(Int64Value(0x5555_FACE_CAFE_BABE), Int64Value(0x5555_FACE_CAFE_BABE));
@@ -709,7 +723,7 @@ mod tests {
 
     #[test]
     fn test_ne() {
-        assert_ne!(Int8Value(0xCE), Int8Value(0x00));
+        assert_ne!(UInt8Value(0xCE), UInt8Value(0x00));
         assert_ne!(Int16Value(0x7ACE), Int16Value(0xACE));
         assert_ne!(Int32Value(0x1111_BEEF), Int32Value(0xBEEF));
         assert_ne!(Int64Value(0x5555_FACE_CAFE_BABE), Int64Value(0xFACE_CAFE_BABE));
@@ -719,8 +733,8 @@ mod tests {
 
     #[test]
     fn test_gt() {
-        assert!(Array(vec![Int8Value(0xCE), Int8Value(0xCE)]) > Array(vec![Int8Value(0x23), Int8Value(0xBE)]));
-        assert!(Int8Value(0xCE) > Int8Value(0xAA));
+        assert!(Array(vec![UInt8Value(0xCE), UInt8Value(0xCE)]) > Array(vec![UInt8Value(0x23), UInt8Value(0xBE)]));
+        assert!(UInt8Value(0xCE) > UInt8Value(0xAA));
         assert!(Int16Value(0x7ACE) > Int16Value(0x1111));
         assert!(Int32Value(0x1111_BEEF) > Int32Value(0x0ABC_BEEF));
         assert!(Int64Value(0x5555_FACE_CAFE_BABE) > Int64Value(0x0000_FACE_CAFE_BABE));
@@ -757,7 +771,7 @@ mod tests {
         assert_eq!(Int64Value(45) - Int64Value(32), Int64Value(13));
         assert_eq!(Int32Value(45) - Int32Value(32), Int32Value(13));
         assert_eq!(Int16Value(45) - Int16Value(32), Int16Value(13));
-        assert_eq!(Int8Value(45) - Int8Value(32), Int8Value(13));
+        assert_eq!(UInt8Value(45) - UInt8Value(32), UInt8Value(13));
     }
 
     #[test]

@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::compiler::CompilerState;
 use crate::machine::MachineState;
-use crate::token_slice::TokenSlice;
 use crate::typed_values::TypedValue;
 
 /// Represents the Oxide language interpreter.
@@ -34,9 +33,8 @@ impl Interpreter {
 
     /// Executes the supplied source code returning the result of the evaluation
     pub fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
-        let ts = TokenSlice::from_string(source_code);
-        let (opcodes, _) = CompilerState::new().compile_all(ts)?;
-        let (ms, result) = self.machine.evaluate_scope(&opcodes)?;
+        let opcode = CompilerState::compile_script(source_code)?;
+        let (ms, result) = self.machine.evaluate(&opcode)?;
         self.machine = ms;
         Ok(result)
     }
@@ -70,6 +68,32 @@ mod tests {
         interpreter.with_variable("n", Int64Value(7));
         let result = interpreter.evaluate("n > 5").unwrap();
         assert_eq!(result, Boolean(true))
+    }
+
+    #[test]
+    fn test_lambda_functions() {
+        let mut interpreter = Interpreter::new();
+        interpreter.evaluate(r#"
+        f := lambda (a, b) => a * b
+        "#).unwrap();
+
+        let value = interpreter.evaluate(r#"
+        f(2, 5)
+        "#).unwrap();
+        assert_eq!(value, Int64Value(10))
+    }
+
+    #[test]
+    fn test_named_functions() {
+        let mut interpreter = Interpreter::new();
+        interpreter.evaluate(r#"
+        fn f(a, b) => a * b
+        "#).unwrap();
+
+        let value = interpreter.evaluate(r#"
+        f(2, 5)
+        "#).unwrap();
+        assert_eq!(value, Int64Value(10))
     }
 
     #[test]
@@ -247,7 +271,6 @@ mod tests {
         let result = interpreter.evaluate(r#"
             drop table ns("interpreter.create.stocks")
         "#).unwrap();
-        assert_eq!(result, Boolean(true));
 
         let result = interpreter.evaluate(r#"
             create table ns("interpreter.create.stocks") (

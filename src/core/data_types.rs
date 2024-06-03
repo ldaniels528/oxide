@@ -7,29 +7,45 @@ use std::io;
 
 use serde::{Deserialize, Serialize};
 
-use shared_lib::{cnv_error, fail};
+use shared_lib::fail;
 
+use crate::compiler::{CompilerState, fail_near};
 use crate::data_types::DataType::*;
+use crate::expression::Expression::{ColumnSet, Literal};
 use crate::server::ColumnJs;
-use crate::tokenizer::parse_fully;
+use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
+use crate::tokens::Token::Atom;
 
-pub const T_BLOB: u8 = 0;
-pub const T_BOOLEAN: u8 = 1;
-pub const T_CLOB: u8 = 2;
-pub const T_DATE: u8 = 3;
-pub const T_ENUM: u8 = 4;
-pub const T_INT8: u8 = 5;
-pub const T_INT16: u8 = 6;
-pub const T_INT32: u8 = 7;
-pub const T_INT64: u8 = 8;
-pub const T_FLOAT32: u8 = 9;
-pub const T_FLOAT64: u8 = 10;
-pub const T_RECORD_NUMBER: u8 = 11;
-pub const T_STRING: u8 = 12;
-pub const T_STRUCTURE: u8 = 13;
-pub const T_TABLE: u8 = 15;
-pub const T_UUID: u8 = 16;
+pub const T_UNDEFINED: u8 = 0;
+pub const T_NULL: u8 = 1;
+pub const T_ARRAY: u8 = 2;
+pub const T_BLOB: u8 = 3;
+pub const T_BOOLEAN: u8 = 4;
+pub const T_CLOB: u8 = 5;
+pub const T_DATE: u8 = 6;
+pub const T_ENUM: u8 = 7;
+pub const T_FLOAT32: u8 = 8;
+pub const T_FLOAT64: u8 = 9;
+pub const T_FUNC: u8 = 10;
+pub const T_INT8: u8 = 11;
+pub const T_INT16: u8 = 12;
+pub const T_INT32: u8 = 13;
+pub const T_INT64: u8 = 14;
+pub const T_INT128: u8 = 15;
+pub const T_JSON_OBJECT: u8 = 16;
+pub const T_RECORD_NUMBER: u8 = 17;
+pub const T_STRING: u8 = 18;
+pub const T_STRUCT: u8 = 19;
+pub const T_TABLE_REF: u8 = 20;
+pub const T_TABLE: u8 = 21;
+pub const T_TUPLE: u8 = 22;
+pub const T_UINT8: u8 = 23;
+pub const T_UINT16: u8 = 24;
+pub const T_UINT32: u8 = 25;
+pub const T_UINT64: u8 = 26;
+pub const T_UINT128: u8 = 27;
+pub const T_UUID: u8 = 28;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
@@ -38,20 +54,95 @@ pub enum DataType {
     CLOBType(usize),
     DateType,
     EnumType(Vec<String>),
+    Float32Type,
+    Float64Type,
+    FuncType(Vec<ColumnJs>),
     Int8Type,
     Int16Type,
     Int32Type,
     Int64Type,
-    Float32Type,
-    Float64Type,
+    Int128Type,
+    JSONObjectType,
     RecordNumberType,
     StringType(usize),
     StructureType(Vec<ColumnJs>),
     TableType(Vec<ColumnJs>),
+    UInt8Type,
+    UInt16Type,
+    UInt32Type,
+    UInt64Type,
+    UInt128Type,
     UUIDType,
 }
 
 impl DataType {
+    /// parses a datatype expression (e.g. "String(20)")
+    pub fn compile(column_type: &str) -> io::Result<DataType> {
+        let ts = TokenSlice::from_string(column_type);
+
+        fn column_parameters(ts: TokenSlice, f: fn(Vec<ColumnJs>) -> DataType) -> io::Result<DataType> {
+            let mut compiler = CompilerState::new();
+            if let (ColumnSet(params), ts) = compiler.expect_parameters(ts)? {
+                //assert!(ts.is_empty());
+                Ok(f(params))
+            } else { fail("parameters are expected for this type") }
+        }
+
+        fn size_parameter(ts: TokenSlice, f: fn(usize) -> DataType) -> io::Result<DataType> {
+            let mut compiler = CompilerState::new();
+            let (args, ts) = compiler.expect_arguments(ts)?;
+            if args.len() == 1 {
+                match args[0].clone() {
+                    Literal(value) => {
+                        match value.assume_usize() {
+                            Some(size) => Ok(f(size)),
+                            _ => fail_near("a numeric value was expected", &ts)
+                        }
+                    }
+                    _ => fail_near("a numeric value was expected", &ts)
+                }
+            } else { fail("a single parameter was expected for this type") }
+        }
+
+        fn string_parameters(ts: TokenSlice, f: fn(Vec<String>) -> DataType) -> io::Result<DataType> {
+            let mut compiler = CompilerState::new();
+            let (args, ts) = compiler.expect_atom_arguments(ts)?;
+            Ok(f(args))
+        }
+
+        if let (Some(Atom { text: name, .. }), ts) = ts.next() {
+            match name.as_str() {
+                "BLOB" => size_parameter(ts, |size| BLOBType(size)),
+                "Boolean" => Ok(BooleanType),
+                "CLOB" => size_parameter(ts, |size| CLOBType(size)),
+                "Date" => Ok(DateType),
+                "Enum" => string_parameters(ts, |params| EnumType(params)),
+                "f32" => Ok(Float32Type),
+                "f64" => Ok(Float64Type),
+                "fn" => column_parameters(ts, |columns| FuncType(columns)),
+                "i8" => Ok(Int8Type),
+                "i16" => Ok(Int16Type),
+                "i32" => Ok(Int32Type),
+                "i64" => Ok(Int64Type),
+                "i128" => Ok(Int128Type),
+                "JSON" => Ok(JSONObjectType),
+                "RecordNumber" => Ok(RecordNumberType),
+                "String" => size_parameter(ts, |size| StringType(size)),
+                "struct" => column_parameters(ts, |columns| StructureType(columns)),
+                "Table" => column_parameters(ts, |columns| TableType(columns)),
+                "u8" => Ok(UInt8Type),
+                "u16" => Ok(UInt16Type),
+                "u32" => Ok(UInt32Type),
+                "u64" => Ok(UInt64Type),
+                "u128" => Ok(UInt128Type),
+                "UUID" => Ok(UUIDType),
+                type_name => Err(io::Error::new(io::ErrorKind::Other, format!("unrecognized type {}", type_name)))
+            }
+        } else {
+            fail_near("identifier expected", &ts)
+        }
+    }
+
     /// computes and returns the maximum physical size of a value of this datatype
     pub fn compute_max_physical_size(&self) -> usize {
         use crate::data_types::DataType::*;
@@ -61,16 +152,24 @@ impl DataType {
             CLOBType(size) => *size,
             DateType => 8,
             EnumType(..) => 2,
+            Float32Type => 4,
+            Float64Type => 8,
+            FuncType(columns) => columns.len() * 8,
             Int8Type => 1,
             Int16Type => 2,
             Int32Type => 4,
             Int64Type => 8,
-            Float32Type => 4,
-            Float64Type => 8,
+            Int128Type => 16,
+            JSONObjectType => 512,
             RecordNumberType => 8,
             StringType(size) => *size + size.to_be_bytes().len(),
-            StructureType(..) => 8,
-            TableType(..) => 8,
+            StructureType(columns) => columns.len() * 8,
+            TableType(columns) => columns.len() * 8,
+            UInt8Type => 1,
+            UInt16Type => 2,
+            UInt32Type => 4,
+            UInt64Type => 8,
+            UInt128Type => 16,
             UUIDType => 16
         };
         width + 1 // +1 for field metadata
@@ -83,76 +182,25 @@ impl DataType {
             CLOBType(..) => T_CLOB,
             DateType => T_DATE,
             EnumType(..) => T_ENUM,
+            Float32Type => T_FLOAT32,
+            Float64Type => T_FLOAT64,
+            FuncType(..) => T_FUNC,
             Int8Type => T_INT8,
             Int16Type => T_INT16,
             Int32Type => T_INT32,
             Int64Type => T_INT64,
-            Float32Type => T_FLOAT32,
-            Float64Type => T_FLOAT64,
+            Int128Type => T_INT128,
+            JSONObjectType => T_JSON_OBJECT,
             RecordNumberType => T_RECORD_NUMBER,
             StringType(..) => T_STRING,
-            StructureType(..) => T_STRUCTURE,
+            StructureType(..) => T_STRUCT,
             TableType(..) => T_TABLE,
+            UInt8Type => T_UINT8,
+            UInt16Type => T_UINT16,
+            UInt32Type => T_UINT32,
+            UInt64Type => T_UINT64,
+            UInt128Type => T_UINT128,
             UUIDType => T_UUID
-        }
-    }
-
-    /// parses a datatype expression (e.g. "String(20)")
-    pub fn parse(column_type: &str) -> io::Result<DataType> {
-        let tokens: Vec<Token> = parse_fully(column_type);
-        let token_slice: &[Token] = tokens.as_slice();
-        match token_slice {
-            // ex: Int
-            [Token::Atom { text: name, .. }] =>
-                DataType::resolve(name, &[]),
-            // ex: String(60)
-            [Token::Atom { text: name, .. },
-            Token::Operator { text: op0, .. },
-            Token::Numeric { text: arg, .. },
-            Token::Operator { text: op1, .. }] if op0 == "(" && op1 == ")" =>
-                DataType::resolve(name, &[arg]),
-            // ex: Struct(symbol String(10), exchange String(10), last f64)
-            [Token::Atom { text: name, .. },
-            Token::Operator { text: op0, .. }, ..,
-            Token::Operator { text: op1, .. }] if op0 == "(" && op1 == ")" => {
-                let arg_tokens: &[Token] = &token_slice[1..(token_slice.len() - 1)];
-                DataType::resolve(name, DataType::transfer_to_string_array(arg_tokens).as_slice())
-            }
-            // unrecognized - syntax error?
-            tok => fail(format!("malformed type definition near {}", tok[0]))
-        }
-    }
-
-    /// resolves a datatype by name
-    pub fn resolve(name: &str, args: &[&str]) -> io::Result<DataType> {
-        fn parameterless(data_type: DataType, args: &[&str]) -> io::Result<DataType> {
-            if args.is_empty() { Ok(data_type) } else { Err(io::Error::new(io::ErrorKind::Other, "Parameters are not supported for this type")) }
-        }
-
-        fn size_parameter(f: fn(usize) -> DataType, args: &[&str]) -> io::Result<DataType> {
-            if args.len() == 1 {
-                Ok(f(args[0].parse::<usize>().map_err(|e| cnv_error!(e))?))
-            } else { fail("a single parameter was expected for this type") }
-        }
-
-        match name {
-            "BLOB" => size_parameter(|size| BLOBType(size), args),
-            "Boolean" => parameterless(BooleanType, args),
-            "Byte" => parameterless(Int8Type, args),
-            "CLOB" => size_parameter(|size| CLOBType(size), args),
-            "Date" => parameterless(DateType, args),
-            "f64" => parameterless(Float64Type, args),
-            "Enum" => Ok(EnumType(args.iter().map(|s| s.to_string()).collect())),
-            "Float" => parameterless(Float32Type, args),
-            "Int" => parameterless(Int32Type, args),
-            "Long" => parameterless(Int64Type, args),
-            "RecordNumber" => parameterless(RecordNumberType, args),
-            "Short" => parameterless(Int16Type, args),
-            "String" => size_parameter(|size| StringType(size), args),
-            "Struct" => Err(io::Error::new(io::ErrorKind::Other, "Struct is not yet implemented")),
-            "Table" => Err(io::Error::new(io::ErrorKind::Other, "Table is not yet implemented")),
-            "UUID" => parameterless(UUIDType, args),
-            type_name => Err(io::Error::new(io::ErrorKind::Other, format!("unrecognized type {}", type_name)))
         }
     }
 
@@ -162,17 +210,25 @@ impl DataType {
             BooleanType => "Boolean".into(),
             CLOBType(size) => format!("CLOB({})", size),
             DateType => "Date".into(),
-            EnumType(values) => format!("Enum({:?})", values),
-            Int8Type => "u8".into(),
+            EnumType(labels) => format!("Enum({:?})", labels),
+            Float32Type => "f32".into(),
+            Float64Type => "f64".into(),
+            FuncType(columns) => format!("fn({})", ColumnJs::render_columns(columns)),
+            Int8Type => "i8".into(),
             Int16Type => "i16".into(),
             Int32Type => "i32".into(),
             Int64Type => "i64".into(),
-            Float32Type => "f32".into(),
-            Float64Type => "f64".into(),
+            Int128Type => "i128".into(),
+            JSONObjectType => "struct".into(),
             RecordNumberType => "RecordNumber".into(),
             StringType(size) => format!("String({})", size),
-            StructureType(columns) => format!("Struct({})", ColumnJs::render_columns(columns)),
+            StructureType(columns) => format!("struct({})", ColumnJs::render_columns(columns)),
             TableType(columns) => format!("Table({})", ColumnJs::render_columns(columns)),
+            UInt8Type => "u8".into(),
+            UInt16Type => "u16".into(),
+            UInt32Type => "u32".into(),
+            UInt64Type => "u64".into(),
+            UInt128Type => "u128".into(),
             UUIDType => "UUID".into()
         }
     }
@@ -201,28 +257,139 @@ impl DataType {
 mod tests {
     use crate::data_types::DataType;
     use crate::data_types::DataType::*;
+    use crate::testdata::make_quote_columns;
 
     #[test]
-    fn test_parse() {
-        fn verify(type_decl: &str, data_type: DataType) {
-            let dt: DataType = DataType::parse(type_decl)
-                .expect("Failed to parse column type");
-            assert_eq!(dt, data_type)
-        }
-
+    fn test_blob() {
         verify("BLOB(5566)", BLOBType(5566));
+    }
+
+    #[test]
+    fn test_boolean() {
         verify("Boolean", BooleanType);
-        verify("Byte", Int8Type);
+    }
+
+    #[test]
+    fn test_clob() {
         verify("CLOB(3377)", CLOBType(3377));
+    }
+
+    #[test]
+    fn test_date() {
         verify("Date", DateType);
+    }
+
+    #[test]
+    fn test_enum() {
+        verify(
+            "Enum(A,B,C)",
+            EnumType(vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]));
+    }
+
+    #[test]
+    fn test_f32() {
+        verify("f32", Float32Type);
+    }
+
+    #[test]
+    fn test_f64() {
         verify("f64", Float64Type);
-        verify("Enum(A,B,C)", EnumType(vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]));
-        verify("Float", Float32Type);
-        verify("Short", Int16Type);
-        verify("Int", Int32Type);
-        verify("Long", Int64Type);
+    }
+
+    #[test]
+    fn test_fn() {
+        verify(
+            "fn(symbol: String(8), exchange: String(8), last_sale: f64)",
+            FuncType(make_quote_columns()));
+    }
+
+    #[test]
+    fn test_i8() {
+        verify("i8", Int8Type);
+    }
+
+    #[test]
+    fn test_i16() {
+        verify("i16", Int16Type);
+    }
+
+    #[test]
+    fn test_i32() {
+        verify("i32", Int32Type);
+    }
+
+    #[test]
+    fn test_i64() {
+        verify("i64", Int64Type);
+    }
+
+    #[test]
+    fn test_i128() {
+        verify("i128", Int128Type);
+    }
+
+    #[test]
+    fn test_json_object() {
+        verify("JSON", JSONObjectType);
+    }
+
+    #[test]
+    fn test_row_id() {
         verify("RecordNumber", RecordNumberType);
+    }
+
+    #[test]
+    fn test_string() {
         verify("String(10)", StringType(10));
+    }
+
+    #[test]
+    fn test_struct() {
+        verify(
+            "struct(symbol: String(8), exchange: String(8), last_sale: f64)",
+            StructureType(make_quote_columns()));
+    }
+
+    #[test]
+    fn test_table() {
+        verify(
+            "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
+            TableType(make_quote_columns()));
+    }
+
+    #[test]
+    fn test_u8() {
+        verify("u8", UInt8Type);
+    }
+
+    #[test]
+    fn test_u16() {
+        verify("u16", UInt16Type);
+    }
+
+    #[test]
+    fn test_u32() {
+        verify("u32", UInt32Type);
+    }
+
+    #[test]
+    fn test_u64() {
+        verify("u64", UInt64Type);
+    }
+
+    #[test]
+    fn test_u128() {
+        verify("u128", UInt128Type);
+    }
+
+    #[test]
+    fn test_uuid() {
         verify("UUID", UUIDType);
+    }
+
+    fn verify(type_decl: &str, data_type: DataType) {
+        let dt: DataType = DataType::compile(type_decl)
+            .expect("Failed to parse column type");
+        assert_eq!(dt, data_type)
     }
 }

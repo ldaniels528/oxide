@@ -350,7 +350,7 @@ impl MachineState {
             let (_, value) = self.evaluate(expr)?;
             elems.push((name.to_string(), value))
         }
-        Ok((self.clone(), JSONValue(elems)))
+        Ok((self.clone(), JSONObjectValue(elems)))
     }
 
     fn evaluate_named_function(
@@ -368,7 +368,7 @@ impl MachineState {
         let (ms, result) = self.evaluate(expr)?;
         let neg_result = match result {
             Boolean(n) => Boolean(!n),
-            Int8Value(n) => Int16Value(-(n as i16)),
+            UInt8Value(n) => Int16Value(-(n as i16)),
             Int16Value(n) => Int16Value(-n),
             Int32Value(n) => Int32Value(-n),
             Int64Value(n) => Int64Value(-n),
@@ -700,13 +700,13 @@ impl MachineState {
             Array(items) => {
                 let mut rows = vec![];
                 for tuples in items {
-                    if let JSONValue(tuples) = tuples {
+                    if let JSONObjectValue(tuples) = tuples {
                         rows.push(Row::from_tuples(0, columns, &tuples))
                     }
                 }
                 Ok(rows)
             }
-            JSONValue(tuples) => Ok(vec![Row::from_tuples(0, columns, &tuples)]),
+            JSONObjectValue(tuples) => Ok(vec![Row::from_tuples(0, columns, &tuples)]),
             TableRef(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
@@ -733,7 +733,7 @@ impl MachineState {
         let mut writable = self.expect_row_collection(table)?;
         let (fields, values) = {
             if let Via(my_source) = source {
-                if let (_, JSONValue(tuples)) = self.evaluate(&my_source)? {
+                if let (_, JSONObjectValue(tuples)) = self.evaluate(&my_source)? {
                     let row = Row::from_tuples(0, writable.get_columns(), &tuples);
                     Self::split(&row)
                 } else {
@@ -813,7 +813,7 @@ impl MachineState {
         match number {
             Float32Value(n) => Ok(self.push(ff(n as f64))),
             Float64Value(n) => Ok(self.push(ff(n))),
-            Int8Value(n) => Ok(self.push(fi(n as i64))),
+            UInt8Value(n) => Ok(self.push(fi(n as i64))),
             Int16Value(n) => Ok(self.push(fi(n as i64))),
             Int32Value(n) => Ok(self.push(fi(n as i64))),
             Int64Value(n) => Ok(self.push(fi(n))),
@@ -1144,7 +1144,7 @@ mod tests {
             delete from ns("machine.delete.stocks")
             where last_sale > 1.0
             "#).unwrap();
-        let (_, result) = ms.evaluate_scope(&code).unwrap();
+        let (_, result) = ms.evaluate(&code).unwrap();
         assert_eq!(result, RecordNumber(3));
 
         // verify the remaining rows

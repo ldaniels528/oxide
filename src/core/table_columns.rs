@@ -37,7 +37,7 @@ impl TableColumn {
 
     pub fn from_column(column: &ColumnJs, offset: usize) -> io::Result<TableColumn> {
         Ok(Self::new(column.get_name(),
-                     DataType::parse(column.get_column_type())?,
+                     DataType::compile(column.get_column_type())?,
                      TypedValue::wrap_value_opt(column.get_default_value())?, offset))
     }
 

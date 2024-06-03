@@ -214,14 +214,22 @@ pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
         EnumType(labels) => assemble_strings(T_ENUM, &labels),
         Float32Type => assemble_bytes(T_FLOAT32, &vec![]),
         Float64Type => assemble_bytes(T_FLOAT64, &vec![]),
+        FuncType(columns) => assemble_bytes(T_FUNC, &encode_columns(columns)),
         Int8Type => assemble_bytes(T_INT8, &vec![]),
         Int16Type => assemble_bytes(T_INT16, &vec![]),
         Int32Type => assemble_bytes(T_INT32, &vec![]),
         Int64Type => assemble_bytes(T_INT64, &vec![]),
+        Int128Type => assemble_bytes(T_INT128, &vec![]),
+        JSONObjectType => assemble_bytes(T_JSON_OBJECT, &vec![]),
         RecordNumberType => assemble_bytes(T_RECORD_NUMBER, &vec![]),
         StringType(size) => assemble_bytes(T_STRING, &assemble_usize(*size)),
-        StructureType(columns) => assemble_bytes(T_STRUCTURE, &encode_columns(columns)),
+        StructureType(columns) => assemble_bytes(T_STRUCT, &encode_columns(columns)),
         TableType(columns) => assemble_bytes(T_TABLE, &encode_columns(columns)),
+        UInt8Type => assemble_bytes(T_UINT8, &vec![]),
+        UInt16Type => assemble_bytes(T_UINT16, &vec![]),
+        UInt32Type => assemble_bytes(T_UINT32, &vec![]),
+        UInt64Type => assemble_bytes(T_UINT64, &vec![]),
+        UInt128Type => assemble_bytes(T_UINT128, &vec![]),
         UUIDType => assemble_bytes(T_UUID, &vec![]),
     }
 }
@@ -342,13 +350,14 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
     }
 }
 
-pub fn disassemble_fully(byte_code: &Vec<u8>) -> std::io::Result<Vec<Expression>> {
+pub fn disassemble_fully(byte_code: &Vec<u8>) -> std::io::Result<Expression> {
     let mut models = vec![];
     let mut buf = ByteBuffer::wrap(byte_code.clone());
     while buf.has_next() {
         models.push(disassemble(&mut buf)?);
     }
-    Ok(models)
+    let opcode = if models.len() == 1 { models[0].clone() } else { CodeBlock(models) };
+    Ok(opcode)
 }
 
 fn disassemble_select(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
@@ -416,19 +425,19 @@ fn decode_json_object(buf: &mut ByteBuffer) -> std::io::Result<Vec<(String, Expr
 fn decode_value(buf: &mut ByteBuffer) -> std::io::Result<TypedValue> {
     if buf.has_more(8) {
         match buf.next_u8() {
-            V_UNDEFINED => Ok(Undefined),
-            V_NULL => Ok(Null),
-            V_BLOB => Ok(BLOB(buf.next_blob())),
-            V_CLOB => Ok(CLOB(buf.next_clob())),
-            V_DATE => Ok(DateValue(buf.next_i64())),
-            V_FLOAT32 => Ok(Float32Value(buf.next_f32())),
-            V_FLOAT64 => Ok(Float64Value(buf.next_f64())),
-            V_INT8 => Ok(Int8Value(buf.next_u8())),
-            V_INT16 => Ok(Int16Value(buf.next_i16())),
-            V_INT32 => Ok(Int32Value(buf.next_i32())),
-            V_INT64 => Ok(Int64Value(buf.next_i64())),
-            V_STRING => Ok(StringValue(buf.next_string())),
-            V_UUID => Ok(UUIDValue(buf.next_uuid())),
+            T_UNDEFINED => Ok(Undefined),
+            T_NULL => Ok(Null),
+            T_BLOB => Ok(BLOB(buf.next_blob())),
+            T_CLOB => Ok(CLOB(buf.next_clob())),
+            T_DATE => Ok(DateValue(buf.next_i64())),
+            T_FLOAT32 => Ok(Float32Value(buf.next_f32())),
+            T_FLOAT64 => Ok(Float64Value(buf.next_f64())),
+            T_INT8 => Ok(UInt8Value(buf.next_u8())),
+            T_INT16 => Ok(Int16Value(buf.next_i16())),
+            T_INT32 => Ok(Int32Value(buf.next_i32())),
+            T_INT64 => Ok(Int64Value(buf.next_i64())),
+            T_STRING => Ok(StringValue(buf.next_string())),
+            T_UUID => Ok(UUIDValue(buf.next_uuid())),
             x => fail(format!("Unhandled value code {}", x))
         }
     } else {
@@ -450,10 +459,16 @@ fn decode_data_type(buf: &mut ByteBuffer) -> std::io::Result<DataType> {
         T_INT16 => Ok(Int16Type),
         T_INT32 => Ok(Int32Type),
         T_INT64 => Ok(Int64Type),
+        T_INT128 => Ok(Int128Type),
+        T_JSON_OBJECT => Ok(JSONObjectType),
         T_RECORD_NUMBER => Ok(RecordNumberType),
         T_STRING => Ok(StringType(buf.next_u32() as usize)),
-        T_STRUCTURE => Ok(StructureType(buf.next_columns())),
         T_TABLE => Ok(TableType(buf.next_columns())),
+        T_UINT8 => Ok(UInt8Type),
+        T_UINT16 => Ok(UInt16Type),
+        T_UINT32 => Ok(UInt32Type),
+        T_UINT64 => Ok(UInt64Type),
+        T_UINT128 => Ok(UInt128Type),
         T_UUID => Ok(UUIDType),
         x => fail(format!("Unhandled type code {}", x))
     }
@@ -461,7 +476,7 @@ fn decode_data_type(buf: &mut ByteBuffer) -> std::io::Result<DataType> {
 
 fn decode_opt(buf: &mut ByteBuffer) -> std::io::Result<Option<Box<Expression>>> {
     match buf.next_u8() {
-        V_UNDEFINED => Ok(None),
+        T_UNDEFINED => Ok(None),
         _ => {
             buf.move_rel(-1);
             Ok(Some(decode_box(buf)?))
@@ -578,7 +593,6 @@ mod tests {
     use crate::machine::MachineState;
     use crate::typed_values::TypedValue::{Float64Value, Int32Value, Int64Value};
     use crate::typed_values::TypedValue::*;
-    use crate::typed_values::V_INT64;
 
     use super::*;
 
@@ -586,7 +600,7 @@ mod tests {
     fn test_literal() {
         let model = Literal(StringValue("hello".into()));
         let byte_code = vec![
-            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 5, b'h', b'e', b'l', b'l', b'o',
+            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 5, b'h', b'e', b'l', b'l', b'o',
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model);
@@ -596,7 +610,7 @@ mod tests {
     fn test_variable() {
         let model = Variable("name".into());
         let byte_code = vec![
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'n', b'a', b'm', b'e',
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'n', b'a', b'm', b'e',
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model);
@@ -609,10 +623,10 @@ mod tests {
                                            Box::new(Literal(Int64Value(3))))));
         let byte_code = vec![
             A_PLUS,
-            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
+            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
             A_MULTIPLY,
-            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 4,
-            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
+            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 4,
+            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
         ];
         let mut buf = ByteBuffer::wrap(byte_code.clone());
         assert_eq!(assemble(&model), byte_code);
@@ -633,13 +647,13 @@ mod tests {
         };
         let byte_code = vec![
             A_DELETE,
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 6,
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6,
             b's', b't', b'o', b'c', b'k', b's',
             A_LESS_OR_EQUAL,
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 9,
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9,
             b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
-            A_LITERAL, V_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0,
-            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 100,
+            A_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0,
+            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 100,
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model)
@@ -664,27 +678,27 @@ mod tests {
         let byte_code = vec![
             // select symbol, exchange, last_sale
             A_SELECT, 0, 0, 0, 0, 0, 0, 0, 3,
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
             // from stocks
             0, 0, 0, 0, 0, 0, 0, 1,
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b't', b'o', b'c', b'k', b's',
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b't', b'o', b'c', b'k', b's',
             // where last_sale <= 1.0
             0, 0, 0, 0, 0, 0, 0, 1,
             A_LESS_OR_EQUAL,
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
-            A_LITERAL, V_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0, // 1.0
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
+            A_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0, // 1.0
             // group by ...
             0, 0, 0, 0, 0, 0, 0, 0,
             // having ...
             0, 0, 0, 0, 0, 0, 0, 0,
             // order by symbol
             0, 0, 0, 0, 0, 0, 0, 1,
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
             // limit 5
             0, 0, 0, 0, 0, 0, 0, 1,
-            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 5,
+            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 5,
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model)
@@ -708,17 +722,17 @@ mod tests {
         let byte_code = vec![
             // update stocks
             A_UPDATE, 0, 0, 0, 0, 0, 0, 0, 4,
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b't', b'o', b'c', b'k', b's',
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b't', b'o', b'c', b'k', b's',
             // via { last_sale: 0.1111 }
-            A_VIA, V_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
-            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
-            A_LITERAL, V_FLOAT64, 63, 188, 113, 12, 178, 149, 233, 226, // 0.1111
+            A_VIA, T_INT8, 0, 0, 0, 0, 0, 0, 0, 2,
+            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
+            A_LITERAL, T_FLOAT64, 63, 188, 113, 12, 178, 149, 233, 226, // 0.1111
             // where symbol == 'ABC'
             A_EQUAL,
-            A_VAR_GET, A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
-            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
+            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
             // limit 10
-            A_LITERAL, V_INT64, 0, 0, 0, 0, 0, 0, 0, 10,
+            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 10,
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model)
@@ -765,12 +779,12 @@ mod tests {
         ]);
         let byte_code = vec![
             A_JSON_LITERAL, 0, 0, 0, 0, 0, 0, 0, 6,
-            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
-            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 3, b'T', b'R', b'X',
-            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
-            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
-            A_LITERAL, V_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
-            A_LITERAL, V_FLOAT64, 64, 38, 56, 226, 25, 101, 43, 212,
+            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
+            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 3, b'T', b'R', b'X',
+            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
+            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
+            A_LITERAL, T_FLOAT64, 64, 38, 56, 226, 25, 101, 43, 212,
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model);
