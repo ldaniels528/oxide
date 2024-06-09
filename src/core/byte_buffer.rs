@@ -2,10 +2,18 @@
 // byte buffer module - responsible for encoding/decoding bytes
 ////////////////////////////////////////////////////////////////////
 
+use std::ops::Index;
+
+use shared_lib::{fail, RowJs};
+
 use crate::codec;
 use crate::data_types::*;
 use crate::model_row_collection::ModelRowCollection;
+use crate::row_collection::RowCollection;
+use crate::rows::Row;
+use crate::serialization::disassemble;
 use crate::server::ColumnJs;
+use crate::table_columns::TableColumn;
 use crate::typed_values::*;
 use crate::typed_values::TypedValue::*;
 
@@ -43,13 +51,6 @@ impl ByteBuffer {
     //      Instance Methods
     ////////////////////////////////////////////////////////////////
 
-    pub fn move_rel(&mut self, delta: isize) {
-        match self.offset as isize + delta {
-            n if n >= 0 => self.offset = n as usize,
-            _ => self.offset = 0
-        }
-    }
-
     pub fn flip(&mut self) {
         self.limit = self.offset;
         self.offset = 0;
@@ -59,16 +60,25 @@ impl ByteBuffer {
 
     pub fn has_next(&self) -> bool { self.offset < self.limit }
 
+    pub fn len(&self) -> usize { self.buf.len() }
+
     pub fn limit(&self) -> usize { self.limit }
 
+    pub fn move_rel(&mut self, delta: isize) {
+        match self.offset as isize + delta {
+            n if n >= 0 => self.offset = n as usize,
+            _ => self.offset = 0
+        }
+    }
+
     /// returns a 64-bit typed-value array
-    pub fn next_array(&mut self) -> Vec<TypedValue> {
+    pub fn next_array(&mut self) -> std::io::Result<Vec<TypedValue>> {
         let length = self.next_u32();
         let mut array = vec![];
         for _ in 0..length {
-            array.push(self.next_value());
+            array.push(self.next_value()?);
         }
-        array
+        Ok(array)
     }
 
     /// returns a 64-bit byte array
@@ -164,15 +174,36 @@ impl ByteBuffer {
         result
     }
 
-    pub fn next_json(&mut self) -> Vec<(String, TypedValue)> {
+    pub fn next_json(&mut self) -> std::io::Result<Vec<(String, TypedValue)>> {
         let length = self.next_u64();
         let mut list = vec![];
         for _ in 0..length {
             let name = self.next_string();
-            let value = self.next_value();
+            let value = self.next_value()?;
             list.push((name, value));
         }
-        list
+        Ok(list)
+    }
+
+    pub fn next_row_id(&mut self) -> usize {
+        let size = self.validate(4);
+        let result = codec::decode_u8x4(&self.buf, self.offset, |buf| u32::from_be_bytes(buf));
+        self.offset += size;
+        result as usize
+    }
+
+    pub fn next_rows(&mut self) -> std::io::Result<Vec<Row>> {
+        let columns = self.next_columns();
+        let t_columns = TableColumn::from_columns(&columns)?;
+        let n_rows = self.next_u64();
+        let mut rows = vec![];
+        for _ in 0..n_rows {
+            let (row, rmd) = Row::from_buffer(&t_columns, self)?;
+            if rmd.is_allocated {
+                rows.push(row)
+            }
+        }
+        Ok(rows)
     }
 
     /// returns a 64-bit character string
@@ -193,7 +224,7 @@ impl ByteBuffer {
     }
 
     pub fn next_string_opt(&mut self) -> Option<String> {
-        match self.next_u32() as usize {
+        match self.next_u64() as usize {
             0 => None,
             n => {
                 let bytes = self.next_bytes(n);
@@ -202,8 +233,12 @@ impl ByteBuffer {
         }
     }
 
-    pub fn next_table(&mut self) -> ModelRowCollection {
+    pub fn next_struct(&mut self) -> std::io::Result<RowJs> {
         todo!()
+    }
+
+    pub fn next_table(&mut self) -> std::io::Result<ModelRowCollection> {
+        Ok(ModelRowCollection::from_rows(self.next_rows()?))
     }
 
     pub fn next_u8(&mut self) -> u8 {
@@ -250,41 +285,41 @@ impl ByteBuffer {
         uuid
     }
 
-    pub fn next_value(&mut self) -> TypedValue {
+    pub fn next_value(&mut self) -> std::io::Result<TypedValue> {
         use crate::typed_values::*;
         use TypedValue::*;
         match self.next_u8() {
-            T_UNDEFINED => Undefined,
-            T_NULL => Null,
-            T_ARRAY => Array(self.next_array()),
-            T_BLOB => BLOB(self.next_blob()),
-            T_BOOLEAN => Boolean(self.next_bool()),
-            T_CLOB => CLOB(self.next_clob()),
-            T_DATE => DateValue(self.next_i64()),
-            T_FLOAT32 => Float32Value(self.next_f32()),
-            T_FLOAT64 => Float64Value(self.next_f64()),
-            T_FUNC => Function {
+            T_UNDEFINED => Ok(Undefined),
+            T_NULL => Ok(Null),
+            T_ARRAY => Ok(Array(self.next_array()?)),
+            T_BLOB => Ok(BLOB(self.next_blob())),
+            T_BOOLEAN => Ok(Boolean(self.next_bool())),
+            T_CLOB => Ok(CLOB(self.next_clob())),
+            T_DATE => Ok(DateValue(self.next_i64())),
+            T_FLOAT32 => Ok(Float32Value(self.next_f32())),
+            T_FLOAT64 => Ok(Float64Value(self.next_f64())),
+            T_FUNC => Ok(Function {
                 params: self.next_columns(),
-                code: Box::new(todo!()),
-            },
-            T_INT8 => Int8Value(self.next_i8()),
-            T_INT16 => Int16Value(self.next_i16()),
-            T_INT32 => Int32Value(self.next_i32()),
-            T_INT64 => Int64Value(self.next_i64()),
-            T_INT128 => Int128Value(self.next_i128()),
-            T_JSON_OBJECT => JSONObjectValue(self.next_json()),
-            T_RECORD_NUMBER => RecordNumber(self.next_u32() as usize),
-            T_STRING => StringValue(self.next_string()),
-            T_TABLE_REF => TableRef(self.next_string()),
-            T_TABLE => TableValue(self.next_table()),
-            T_TUPLE => TupleValue(self.next_array()),
-            T_UINT8 => UInt8Value(self.next_u8()),
-            T_UINT16 => UInt16Value(self.next_u16()),
-            T_UINT32 => UInt32Value(self.next_u32()),
-            T_UINT64 => UInt64Value(self.next_u64()),
-            T_UINT128 => UInt128Value(self.next_u128()),
-            T_UUID => UUIDValue(self.next_uuid()),
-            z => panic!("Unhandled value code {}", z)
+                code: Box::new(disassemble(self)?),
+            }),
+            T_INT8 => Ok(Int8Value(self.next_i8())),
+            T_INT16 => Ok(Int16Value(self.next_i16())),
+            T_INT32 => Ok(Int32Value(self.next_i32())),
+            T_INT64 => Ok(Int64Value(self.next_i64())),
+            T_INT128 => Ok(Int128Value(self.next_i128())),
+            T_JSON_OBJECT => Ok(JSONObjectValue(self.next_json()?)),
+            T_ROW_ID => Ok(RowID(self.next_u32() as usize)),
+            T_STRING => Ok(StringValue(self.next_string())),
+            T_TABLE_REF => Ok(TableRef(self.next_string())),
+            T_TABLE => Ok(TableValue(self.next_table()?)),
+            T_TUPLE => Ok(TupleValue(self.next_array()?)),
+            T_UINT8 => Ok(UInt8Value(self.next_u8())),
+            T_UINT16 => Ok(UInt16Value(self.next_u16())),
+            T_UINT32 => Ok(UInt32Value(self.next_u32())),
+            T_UINT64 => Ok(UInt64Value(self.next_u64())),
+            T_UINT128 => Ok(UInt128Value(self.next_u128())),
+            T_UUID => Ok(UUIDValue(self.next_uuid())),
+            z => fail(format!("Unhandled value code {}", z))
         }
     }
 
@@ -305,6 +340,21 @@ impl ByteBuffer {
             pos += 1;
         }
         self.offset = pos;
+        self
+    }
+
+    pub fn put_column(&mut self, column: &ColumnJs) -> &Self {
+        self.put_string(column.get_name());
+        self.put_string(column.get_column_type());
+        self.put_string_opt(column.get_default_value());
+        self
+    }
+
+    pub fn put_columns(&mut self, columns: &Vec<ColumnJs>) -> &Self {
+        self.put_u16(columns.len() as u16);
+        for column in columns {
+            self.put_column(&column);
+        }
         self
     }
 
@@ -344,10 +394,41 @@ impl ByteBuffer {
         self.put_bytes(&bytes.to_vec())
     }
 
+    pub fn put_rows(&mut self, rows: Vec<Row>) -> &Self {
+        let t_columns: Vec<TableColumn> = if rows.len() == 0 { vec![] } else {
+            rows[0].get_columns().clone()
+        };
+        let columns = ColumnJs::from_physical_columns(&t_columns);
+        self.put_columns(&columns);
+        self.put_u64(rows.len() as u64);
+        for row in rows {
+            self.put_bytes(&row.encode());
+        }
+        self
+    }
+
     pub fn put_string(&mut self, string: &str) -> &Self {
         let bytes: Vec<u8> = string.bytes().collect();
-        self.put_u64(string.len() as u64);
+        self.put_u64(bytes.len() as u64);
         self.put_bytes(&bytes);
+        self
+    }
+
+    pub fn put_string_opt(&mut self, string: &Option<String>) -> &Self {
+        let bytes: Vec<u8> = string.clone().map(|s| s.bytes().collect()).unwrap_or(vec![]);
+        self.put_u64(bytes.len() as u64);
+        self.put_bytes(&bytes);
+        self
+    }
+
+    pub fn put_struct(&mut self, row: RowJs) -> &Self {
+        todo!()
+    }
+
+    pub fn put_table(&mut self, mrc: ModelRowCollection) -> &Self {
+        let columns = ColumnJs::from_physical_columns(mrc.get_columns());
+        self.put_columns(&columns);
+        self.put_bytes(&mrc.encode());
         self
     }
 
@@ -401,10 +482,42 @@ impl ByteBuffer {
     }
 }
 
+impl Index<usize> for ByteBuffer {
+    type Output = u8;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.buf[index]
+    }
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::testdata::make_quote_columns;
+
     use super::*;
+
+    #[test]
+    fn test_columns() {
+        let mut buffer = ByteBuffer::new(512);
+        buffer.put_columns(&make_quote_columns());
+        assert_eq!(buffer.position(), 118);
+
+        buffer.flip();
+        assert_eq!(buffer.next_columns(), vec![
+            ColumnJs::new("symbol", "String(8)", None),
+            ColumnJs::new("exchange", "String(8)", None),
+            ColumnJs::new("last_sale", "f64", None),
+        ])
+    }
+
+    #[test]
+    fn test_len() {
+        let mut buffer = ByteBuffer::wrap(vec![
+            0xBA, 0xBE, 0xFA, 0xCE, 0xD0, 0xCA, 0xFE, 0x00,
+        ]);
+        assert_eq!(buffer.len(), 8)
+    }
 
     #[test]
     fn test_next_f32() {
@@ -454,6 +567,12 @@ mod tests {
             0xCA, 0xFE, 0xDE, 0xAD, 0xBE, 0xEF, 0xBE, 0xAD,
         ]);
         assert_eq!(buffer.next_i128(), -92054336320587594627030856550656786771i128)
+    }
+
+    #[test]
+    fn test_next_row_id() {
+        let mut buffer = ByteBuffer::wrap(vec![0x00, 0x00, 0x00, 0x07]);
+        assert_eq!(buffer.next_row_id(), 7)
     }
 
     #[test]
@@ -602,12 +721,20 @@ mod tests {
     }
 
     #[test]
-    fn test_to_array() {
-        let mut buffer = ByteBuffer::new(8);
-        buffer.put_u64(0xBABE_FACE_CAFE_DEAD);
-        buffer.flip();
-        buffer.next_u32(); // skip 4 bytes
-        assert_eq!(buffer.to_array(), vec![0xCA, 0xFE, 0xDE, 0xAD])
+    fn test_next_string_opt() {
+        let mut buffer = ByteBuffer::wrap(vec![
+            0, 0, 0, 0, 0, 0, 0, 12,
+            b'H', b'e', b'l', b'l', b'o', b' ', b'W', b'o', b'r', b'l', b'd', b'!',
+        ]);
+        assert_eq!(buffer.next_string_opt(), Some("Hello World!".into()));
+    }
+
+    #[test]
+    fn test_next_string_opt_is_empty() {
+        let mut buffer = ByteBuffer::wrap(vec![
+            0, 0, 0, 0, 0, 0, 0, 0,
+        ]);
+        assert_eq!(buffer.next_string_opt(), None);
     }
 
     #[test]
@@ -622,6 +749,24 @@ mod tests {
         assert_eq!(buffer.position(), 6);
         assert_eq!(buffer.next_u16(), 0xDEAD);
         assert_eq!(buffer.position(), 8);
+    }
+
+    #[test]
+    fn test_resize() {
+        let mut buffer = ByteBuffer::wrap(vec![
+            0xBA, 0xBE, 0xFA, 0xCE, 0xD0, 0xCA, 0xFE, 0x00,
+        ]);
+        buffer.resize(13);
+        assert_eq!(buffer.len(), 13)
+    }
+
+    #[test]
+    fn test_to_array() {
+        let mut buffer = ByteBuffer::new(8);
+        buffer.put_u64(0xBABE_FACE_CAFE_DEAD);
+        buffer.flip();
+        buffer.next_u32(); // skip 4 bytes
+        assert_eq!(buffer.to_array(), vec![0xCA, 0xFE, 0xDE, 0xAD])
     }
 
     #[test]

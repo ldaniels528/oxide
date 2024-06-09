@@ -52,22 +52,41 @@ mod tests {
     use crate::namespaces::Namespace;
     use crate::table_columns::TableColumn;
     use crate::testdata::{make_dataframe_ns, make_quote, make_quote_columns, make_table_columns};
-    use crate::typed_values::TypedValue::{Boolean, Float64Value, Int64Value, RecordNumber, TableValue, Undefined};
+    use crate::typed_values::TypedValue;
+    use crate::typed_values::TypedValue::{ErrorValue, Int64Value};
 
     #[test]
     fn test_evaluate_n_pow_2() {
         let mut interpreter = Interpreter::new();
-        interpreter.with_variable("n", Int64Value(5));
+        interpreter.with_variable("n", TypedValue::Int64Value(5));
         let result = interpreter.evaluate("n ** 2").unwrap();
-        assert_eq!(result, Int64Value(25))
+        assert_eq!(result, TypedValue::Int64Value(25))
     }
 
     #[test]
     fn test_evaluate_n_gt_5() {
         let mut interpreter = Interpreter::new();
-        interpreter.with_variable("n", Int64Value(7));
+        interpreter.with_variable("n", TypedValue::Int64Value(7));
         let result = interpreter.evaluate("n > 5").unwrap();
-        assert_eq!(result, Boolean(true))
+        assert_eq!(result, TypedValue::Boolean(true))
+    }
+
+    #[test]
+    fn test_eval_pass() {
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.evaluate(r#"
+        eval "5 + 7"
+        "#).unwrap();
+        assert_eq!(value, Int64Value(12))
+    }
+
+    #[test]
+    fn test_eval_fail() {
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.evaluate(r#"
+        eval 123
+        "#).unwrap();
+        assert_eq!(value, ErrorValue("Type mismatch - expected String, got i64".into()))
     }
 
     #[test]
@@ -80,7 +99,7 @@ mod tests {
         let value = interpreter.evaluate(r#"
         f(2, 5)
         "#).unwrap();
-        assert_eq!(value, Int64Value(10))
+        assert_eq!(value, TypedValue::Int64Value(10))
     }
 
     #[test]
@@ -93,17 +112,17 @@ mod tests {
         let value = interpreter.evaluate(r#"
         f(2, 5)
         "#).unwrap();
-        assert_eq!(value, Int64Value(10))
+        assert_eq!(value, TypedValue::Int64Value(10))
     }
 
     #[test]
     fn test_state_retention() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate("x := 5").unwrap();
-        assert_eq!(result, Undefined);
+        assert_eq!(result, TypedValue::Undefined);
 
         let result = interpreter.evaluate("x¡").unwrap();
-        assert_eq!(result, Float64Value(120.))
+        assert_eq!(result, TypedValue::Float64Value(120.))
     }
 
     #[test]
@@ -115,7 +134,7 @@ mod tests {
             exchange: String(8),
             last_sale: f64)
         "#).unwrap();
-        assert_eq!(result, Boolean(true))
+        assert_eq!(result, TypedValue::Boolean(true))
     }
 
     #[test]
@@ -137,7 +156,7 @@ mod tests {
             delete from ns("interpreter.delete.stocks")
             where last_sale >= 1.0
         "#).unwrap();
-        assert_eq!(result, RecordNumber(3));
+        assert_eq!(result, TypedValue::RowID(3));
 
         // verify the remaining rows
         assert_eq!(df.read_fully().unwrap(), vec![
@@ -164,7 +183,7 @@ mod tests {
             into ns("interpreter.into.stocks")
             from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
         "#).unwrap();
-        assert_eq!(result, RecordNumber(1));
+        assert_eq!(result, TypedValue::RowID(1));
 
         // verify the remaining rows
         assert_eq!(df.read_fully().unwrap(), vec![
@@ -196,7 +215,7 @@ mod tests {
             via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99}
             where symbol == "BOOM"
         "#).unwrap();
-        assert_eq!(result, RecordNumber(1));
+        assert_eq!(result, TypedValue::RowID(1));
 
         // verify the remaining rows
         assert_eq!(df.read_fully().unwrap(), vec![
@@ -230,7 +249,7 @@ mod tests {
             order by symbol
             limit 5
         "#).unwrap();
-        assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
+        assert_eq!(result, TypedValue::TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
         ])));
@@ -241,7 +260,7 @@ mod tests {
         // stage the data
         let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
         let mut interpreter = Interpreter::new();
-        interpreter.with_variable("stocks", TableValue(
+        interpreter.with_variable("stocks", TypedValue::TableValue(
             ModelRowCollection::from_rows(vec![
                 make_quote(0, &phys_columns, "ABC", "AMEX", 11.88),
                 make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -258,7 +277,7 @@ mod tests {
             order by symbol
             limit 5
         "#).unwrap();
-        assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
+        assert_eq!(result, TypedValue::TableValue(ModelRowCollection::from_rows(vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
         ])));
@@ -271,6 +290,7 @@ mod tests {
         let result = interpreter.evaluate(r#"
             drop table ns("interpreter.create.stocks")
         "#).unwrap();
+        assert!(matches!(result, TypedValue::Boolean(_)));
 
         let result = interpreter.evaluate(r#"
             create table ns("interpreter.create.stocks") (
@@ -279,27 +299,34 @@ mod tests {
                 last_sale: f64
             )
         "#).unwrap();
-        assert_eq!(result, Boolean(true));
+        assert_eq!(result, TypedValue::Boolean(true));
 
         let result = interpreter.evaluate(r#"
             into ns("interpreter.create.stocks")
                 from { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
         "#).unwrap();
-        assert_eq!(result, RecordNumber(1));
+        assert_eq!(result, TypedValue::RowID(1));
 
         let result = interpreter.evaluate(r#"
             into ns("interpreter.create.stocks")
                 from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
         "#).unwrap();
-        assert_eq!(result, RecordNumber(1));
+        assert_eq!(result, TypedValue::RowID(1));
+
+        let result = interpreter.evaluate(r#"
+            into ns("interpreter.create.stocks")
+                from { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+        "#).unwrap();
+        assert_eq!(result, TypedValue::RowID(1));
 
         let result = interpreter.evaluate(r#"
             from ns("interpreter.create.stocks")
         "#).unwrap();
         let phys_columns = make_table_columns();
-        assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
+        assert_eq!(result, TypedValue::TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 12.49),
             make_quote(1, &phys_columns, "BOOM", "NYSE", 56.88),
+            make_quote(2, &phys_columns, "JET", "NASDAQ", 32.12),
         ])));
     }
 
@@ -311,6 +338,6 @@ mod tests {
             y := 7
             x * y
         "#).unwrap();
-        assert_eq!(result, Int64Value(35));
+        assert_eq!(result, TypedValue::Int64Value(35));
     }
 }

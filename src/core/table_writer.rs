@@ -21,7 +21,7 @@ impl TableWriter {
 mod tests {
     use shared_lib::RowJs;
 
-    use crate::table_printer::TableWriter;
+    use super::*;
 
     #[test]
     fn test_table_writer() {

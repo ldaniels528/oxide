@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use shared_lib::{cnv_error, fail};
 
 use crate::{row, serialization};
-use crate::compiler::{fail_expr, fail_near, fail_unexpected, fail_unhandled_expr, fail_value};
+use crate::compiler::{CompilerState, fail_expr, fail_near, fail_unexpected, fail_unhandled_expr, fail_value};
 use crate::cursor::Cursor;
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::dataframes::DataFrame;
@@ -58,14 +58,14 @@ impl MachineState {
     fn expand(ms: Self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
         match expr {
             Some(item) => ms.evaluate(item),
-            None => Ok((ms, Undefined))
+            None => Ok((ms, TypedValue::Undefined))
         }
     }
 
     fn expand_vec(ms: Self, expr: &Option<Vec<Expression>>) -> std::io::Result<(Self, TypedValue)> {
         match expr {
             Some(items) => ms.evaluate_array(items),
-            None => Ok((ms, Undefined))
+            None => Ok((ms, TypedValue::Undefined))
         }
     }
 
@@ -90,11 +90,11 @@ impl MachineState {
         f: fn(Self, &mut DataFrame, &Vec<Expression>, &Vec<Expression>, &Option<Box<Expression>>, TypedValue) -> std::io::Result<(Self, TypedValue)>,
     ) -> std::io::Result<(Self, TypedValue)> {
         match table {
-            TableValue(mrc) => {
+            TypedValue::TableValue(mrc) => {
                 let mut df = DataFrame::from_row_collection(Namespace::temp(), Box::new(mrc));
                 f(ms, &mut df, fields, values, condition, limit)
             }
-            TableRef(path) => {
+            TypedValue::TableRef(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let mut df = DataFrame::load(ns)?;
                 f(ms, &mut df, fields, values, condition, limit)
@@ -157,6 +157,7 @@ impl MachineState {
             Drop(TableTarget { path, if_exists }) => self.evaluate_ql_drop(path, *if_exists),
             Equal(a, b) =>
                 self.expand2(a, b, |aa, bb| Boolean(aa == bb)),
+            Eval(a) => self.evaluate_eval(&a),
             Factorial(a) => self.expand1(a, |aa| aa.factorial().unwrap_or(Undefined)),
             From(src) => self.evaluate_queryable(src, &UNDEFINED, Undefined),
             FunctionCall { fx, args } =>
@@ -241,7 +242,7 @@ impl MachineState {
         params: &Vec<ColumnJs>,
         code: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.clone(), Function {
+        Ok((self.clone(), TypedValue::Function {
             params: params.clone(),
             code: Box::new(code.clone()),
         }))
@@ -288,7 +289,29 @@ impl MachineState {
     ) -> std::io::Result<(Self, TypedValue)> {
         let (ms, a) = self.evaluate(a)?;
         let (ms, b) = ms.evaluate(b)?;
-        Ok((ms, Boolean(a.contains(&b))))
+        Ok((ms, TypedValue::Boolean(a.contains(&b))))
+    }
+
+    fn evaluate_eval(
+        &self,
+        string_expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, string_value) = self.evaluate(string_expr)?;
+        match string_value {
+            TypedValue::StringValue(ql) => {
+                match CompilerState::compile_script(ql.as_str()) {
+                    Ok(opcode) => {
+                        match ms.evaluate(&opcode) {
+                            Ok((ms, tv)) => Ok((ms, tv)),
+                            Err(err) => Ok((ms, TypedValue::ErrorValue(err.to_string())))
+                        }
+                    }
+                    Err(err) => Ok((ms, TypedValue::ErrorValue(err.to_string())))
+                }
+            }
+            x =>
+                Ok((ms, TypedValue::ErrorValue(format!("Type mismatch - expected String, got {}", x.get_type_name()))))
+        }
     }
 
     fn evaluate_function_call(
@@ -297,7 +320,7 @@ impl MachineState {
         args: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         // extract the arguments
-        if let (ms, Array(args)) = self.evaluate_array(args)? {
+        if let (ms, TypedValue::Array(args)) = self.evaluate_array(args)? {
             // evaluate the anonymous- or named-function
             match ms.evaluate(fx)? {
                 (ms, Function { params, code }) =>
@@ -330,8 +353,8 @@ impl MachineState {
         let ms0 = self.clone();
         let (ms, result) = ms0.evaluate(condition)?;
         match result {
-            Null | Undefined => Ok((ms, result)),
-            Boolean(is_true) =>
+            TypedValue::Null | TypedValue::Undefined => Ok((ms, result)),
+            TypedValue::Boolean(is_true) =>
                 if is_true {
                     Ok((ms0, ms.evaluate(a)?.1))
                 } else if let Some(expr) = b {
@@ -350,7 +373,7 @@ impl MachineState {
             let (_, value) = self.evaluate(expr)?;
             elems.push((name.to_string(), value))
         }
-        Ok((self.clone(), JSONObjectValue(elems)))
+        Ok((self.clone(), TypedValue::JSONObjectValue(elems)))
     }
 
     fn evaluate_named_function(
@@ -374,7 +397,7 @@ impl MachineState {
             Int64Value(n) => Int64Value(-n),
             Float32Value(n) => Float32Value(-n),
             Float64Value(n) => Float64Value(-n),
-            RecordNumber(n) => Int64Value(-(n as i64)),
+            RowID(n) => Int64Value(-(n as i64)),
             x => x
         };
         Ok((ms, neg_result))
@@ -437,7 +460,7 @@ impl MachineState {
         let (ms, result) = ms.evaluate(from)?;
         Self::orchestrate_io(ms, result, &vec![], &vec![], condition, limit, |ms, df, _fields, _values, condition, limit| {
             let deleted = df.delete_where(&ms, &condition, limit).unwrap();
-            Ok((ms, RecordNumber(deleted)))
+            Ok((ms, RowID(deleted)))
         })
     }
 
@@ -467,7 +490,7 @@ impl MachineState {
                 let row = Row::new(0, df.get_columns().clone(), empty_fields);
                 let new_row = DataFrame::transform_row(row, field_names, values)?;
                 let inserted = df.append(&new_row)?;
-                Ok((ms, RecordNumber(inserted)))
+                Ok((ms, RowID(inserted)))
             } else { fail("Array expression expected") }
         })
     }
@@ -487,7 +510,7 @@ impl MachineState {
 
             // write the rows to the target
             let inserted = self.write_rows(&mut writable, rows)?;
-            Ok((self.clone(), RecordNumber(inserted)))
+            Ok((self.clone(), RowID(inserted)))
         } else {
             fail_expr("A queryable was expected".to_string(), source)
         }
@@ -514,7 +537,7 @@ impl MachineState {
         let (fields, values) = self.expect_via(&table, &source)?;
         Self::orchestrate_io(ms, tv_table, &fields, &values, condition, limit, |ms, df, fields, values, condition, limit| {
             let overwritten = df.overwrite_where(&ms, fields, values, condition, limit).unwrap();
-            Ok((ms, RecordNumber(overwritten)))
+            Ok((ms, RowID(overwritten)))
         })
     }
 
@@ -553,7 +576,7 @@ impl MachineState {
         let (fields, values) = self.expect_via(&table, &source)?;
         Self::orchestrate_io(ms, tv_table, &fields, &values, condition, limit, |ms, df, fields, values, condition, limit| {
             let modified = df.update_where(&ms, fields, values, condition, limit).unwrap();
-            Ok((ms, RecordNumber(modified)))
+            Ok((ms, RowID(modified)))
         })
     }
 
@@ -566,7 +589,7 @@ impl MachineState {
         Self::orchestrate_io(ms, table, &vec![], &vec![], &None, limit, |ms, df, _fields, _values, condition, limit| {
             let limit = limit.assume_usize().unwrap_or(0);
             let new_size = df.resize(limit)?;
-            Ok((ms, RecordNumber(new_size)))
+            Ok((ms, RowID(new_size)))
         })
     }
 
@@ -817,7 +840,7 @@ impl MachineState {
             Int16Value(n) => Ok(self.push(fi(n as i64))),
             Int32Value(n) => Ok(self.push(fi(n as i64))),
             Int64Value(n) => Ok(self.push(fi(n))),
-            RecordNumber(n) => Ok(self.push(ff(n as f64))),
+            RowID(n) => Ok(self.push(ff(n as f64))),
             unknown => fail(format!("Unsupported type {:?}", unknown))
         }
     }
@@ -917,6 +940,16 @@ mod tests {
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&model).unwrap();
         assert_eq!(result, Float64Value(720.))
+    }
+
+    #[test]
+    fn test_eval() {
+        let model = Eval(Box::new(Literal(StringValue("5 + 7".to_string()))));
+        assert_eq!(model.to_code(), "eval \"5 + 7\"");
+
+        let ms = MachineState::new();
+        let (_, result) = ms.evaluate(&model).unwrap();
+        assert_eq!(result, Int64Value(12))
     }
 
     #[test]
@@ -1145,7 +1178,7 @@ mod tests {
             where last_sale > 1.0
             "#).unwrap();
         let (_, result) = ms.evaluate(&code).unwrap();
-        assert_eq!(result, RecordNumber(3));
+        assert_eq!(result, RowID(3));
 
         // verify the remaining rows
         let rows = df.read_fully().unwrap();
@@ -1172,7 +1205,7 @@ mod tests {
                 ("last_sale".into(), Literal(Float64Value(16.99))),
             ])))),
         }).unwrap();
-        assert_eq!(result, RecordNumber(1));
+        assert_eq!(result, RowID(1));
 
         // verify the remaining rows
         let rows = df.read_fully().unwrap();
@@ -1211,7 +1244,7 @@ mod tests {
         // overwrite some rows
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&model).unwrap();
-        assert_eq!(result, RecordNumber(1));
+        assert_eq!(result, RowID(1));
 
         // verify the remaining rows
         let rows = df.read_fully().unwrap();
@@ -1264,17 +1297,17 @@ mod tests {
             fields: vec![
                 Variable("symbol".into()),
                 Variable("exchange".into()),
-                Variable("last_sale".into())
+                Variable("last_sale".into()),
             ],
             from: Some(Box::new(Ns(Box::new(Literal(StringValue("machine.select.stocks".into())))))),
             condition: Some(Box::new(GreaterThan(
                 Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Float64Value(1.0)))
+                Box::new(Literal(Float64Value(1.0))),
             ))),
             group_by: None,
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
-            limit: Some(Box::new(Literal(Int64Value(5))))
+            limit: Some(Box::new(Literal(Int64Value(5)))),
         }).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
@@ -1294,17 +1327,17 @@ mod tests {
             fields: vec![
                 Variable("symbol".into()),
                 Variable("exchange".into()),
-                Variable("last_sale".into())
+                Variable("last_sale".into()),
             ],
             from: Some(Box::new(Variable("stocks".into()))),
             condition: Some(Box::new(LessThan(
                 Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Float64Value(1.0)))
+                Box::new(Literal(Float64Value(1.0))),
             ))),
             group_by: None,
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
-            limit: Some(Box::new(Literal(Int64Value(5))))
+            limit: Some(Box::new(Literal(Int64Value(5)))),
         }).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -1333,7 +1366,7 @@ mod tests {
         let (mrc, phys_columns) = create_memory_table();
         let ms = MachineState::new().with_variable("stocks", TableValue(mrc));
         let (_, result) = ms.evaluate(&model).unwrap();
-        assert_eq!(result, RecordNumber(2));
+        assert_eq!(result, RowID(2));
 
         // retrieve and verify all rows
         let model = From(Box::new(Variable("stocks".into())));
@@ -1371,7 +1404,7 @@ mod tests {
 
         // update some rows
         let (_, delta) = MachineState::new().evaluate(&model).unwrap();
-        assert_eq!(delta, RecordNumber(2));
+        assert_eq!(delta, RowID(2));
 
         // verify the rows
         let rows = df.read_fully().unwrap();
@@ -1394,7 +1427,7 @@ mod tests {
         let (mrc, phys_columns) = create_memory_table();
         let ms = MachineState::new().with_variable("stocks", TableValue(mrc));
         let (_, result) = ms.evaluate(&model).unwrap();
-        assert_eq!(result, RecordNumber(1))
+        assert_eq!(result, RowID(1))
     }
 
     #[test]

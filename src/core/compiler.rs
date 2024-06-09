@@ -2,16 +2,15 @@
 // compiler module
 ////////////////////////////////////////////////////////////////////
 
-use log::info;
 use serde::{Deserialize, Serialize};
 
-use shared_lib::{cnv_error, fail, FieldJs, RowJs};
+use shared_lib::fail;
 
 use crate::expression::{Expression, FALSE, NULL, TRUE, UNDEFINED};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::DropTarget::TableTarget;
 use crate::expression::Expression::*;
-use crate::serialization::{assemble, assemble_fully, disassemble_fully};
+use crate::serialization::{assemble, disassemble_fully};
 use crate::server::ColumnJs;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
@@ -216,6 +215,7 @@ impl CompilerState {
                 "create" => self.compile_keyword_create(ts),
                 "delete" => self.compile_keyword_delete(ts),
                 "drop" => self.compile_keyword_drop(ts),
+                "eval" => self.compile_keyword_eval(ts),
                 "false" => Ok((FALSE, ts)),
                 "fn" => self.compile_keyword_fn(ts),
                 "from" => {
@@ -313,6 +313,14 @@ impl CompilerState {
             }
             (_, ts) => fail_near("Syntax error".to_string(), &ts)
         }
+    }
+
+    fn compile_keyword_eval(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (expr, ts) = self.compile_next(ts)?;
+        Ok((Eval(Box::new(expr)), ts))
     }
 
     fn compile_keyword_fn(
@@ -493,7 +501,7 @@ impl CompilerState {
                 args.push(name);
                 ts = if ats.is(")") { ats } else { ats.expect(",")? }
             } else {
-                return fail_near("an atom was expected", &ts)
+                return fail_near("an atom was expected", &ts);
             }
         }
         Ok((args, ts.expect(")")?))
@@ -684,13 +692,13 @@ impl CompilerState {
     }
 
     pub fn push(&mut self, expression: Expression) {
-        info!("push -> {:?}", expression);
+        //info!("push -> {:?}", expression);
         self.stack.push(expression)
     }
 
     pub fn pop(&mut self) -> Option<Expression> {
         let result = self.stack.pop();
-        info!("pop <- {:?}", result);
+        //info!("pop <- {:?}", result);
         result
     }
 }
@@ -808,6 +816,14 @@ mod tests {
                        ))),
                    })
         )
+    }
+
+    #[test]
+    fn test_eval() {
+        let code = CompilerState::compile_script(r#"
+        eval "5 + 7"
+        "#).unwrap();
+        assert_eq!(code, Eval(Box::new(Literal(StringValue("5 + 7".to_string())))))
     }
 
     #[test]

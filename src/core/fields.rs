@@ -6,6 +6,7 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
+use crate::byte_buffer::ByteBuffer;
 use crate::data_types::DataType;
 use crate::field_metadata::FieldMetadata;
 use crate::table_columns::TableColumn;
@@ -25,6 +26,14 @@ impl Field {
             TypedValue::decode(&data_type, buffer, offset + 1)
         } else { Null };
         Self::new(value)
+    }
+
+    pub fn from_buffer(data_type: &DataType, buffer: &mut ByteBuffer, offset: usize) -> std::io::Result<Self> {
+        let metadata: FieldMetadata = FieldMetadata::decode(buffer[offset]);
+        let value: TypedValue = if metadata.is_active {
+            TypedValue::from_buffer(&data_type, buffer)?
+        } else { Null };
+        Ok(Self::new(value))
     }
 
     pub fn encode(&self, capacity: usize) -> Vec<u8> {

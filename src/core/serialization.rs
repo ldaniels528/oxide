@@ -34,6 +34,7 @@ pub const A_DELETE: u8 = 10;
 pub const A_DIVIDE: u8 = 12;
 pub const A_DROP: u8 = 13;
 pub const A_EQUAL: u8 = 14;
+pub const A_EVAL: u8 = 52;
 pub const A_FACTORIAL: u8 = 15;
 pub const A_FROM: u8 = 16;
 pub const A_GREATER_THAN: u8 = 17;
@@ -103,6 +104,7 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         Drop(IndexTarget { path, if_exists }) => encode(A_DROP, vec![path]),
         Drop(TableTarget { path, if_exists }) => encode(A_DROP, vec![path]),
         Equal(a, b) => encode(A_EQUAL, vec![a, b]),
+        Eval(a) => encode(A_EVAL, vec![a]),
         Factorial(a) => encode(A_FACTORIAL, vec![a]),
         From(src) => encode(A_FROM, vec![src]),
         FunctionCall { fx, args } => {
@@ -212,6 +214,7 @@ pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
         CLOBType(size) => assemble_bytes(T_CLOB, &assemble_usize(*size)),
         DateType => assemble_bytes(T_DATE, &vec![]),
         EnumType(labels) => assemble_strings(T_ENUM, &labels),
+        ErrorType => assemble_bytes(T_STRING, &assemble_usize(256)),
         Float32Type => assemble_bytes(T_FLOAT32, &vec![]),
         Float64Type => assemble_bytes(T_FLOAT64, &vec![]),
         FuncType(columns) => assemble_bytes(T_FUNC, &encode_columns(columns)),
@@ -221,7 +224,7 @@ pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
         Int64Type => assemble_bytes(T_INT64, &vec![]),
         Int128Type => assemble_bytes(T_INT128, &vec![]),
         JSONObjectType => assemble_bytes(T_JSON_OBJECT, &vec![]),
-        RecordNumberType => assemble_bytes(T_RECORD_NUMBER, &vec![]),
+        RowIDType => assemble_bytes(T_ROW_ID, &vec![]),
         StringType(size) => assemble_bytes(T_STRING, &assemble_usize(*size)),
         StructureType(columns) => assemble_bytes(T_STRUCT, &encode_columns(columns)),
         TableType(columns) => assemble_bytes(T_TABLE, &encode_columns(columns)),
@@ -308,7 +311,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         A_LESS_OR_EQUAL => Ok(LessOrEqual(decode_box(buf)?, decode_box(buf)?)),
         A_LESS_THAN => Ok(LessThan(decode_box(buf)?, decode_box(buf)?)),
         A_LIMIT => Ok(Limit { from: decode_box(buf)?, limit: decode_box(buf)? }),
-        A_LITERAL => Ok(Literal(buf.next_value())),
+        A_LITERAL => Ok(Literal(buf.next_value()?)),
         A_MINUS => Ok(Minus(decode_box(buf)?, decode_box(buf)?)),
         A_MODULO => Ok(Modulo(decode_box(buf)?, decode_box(buf)?)),
         A_MULTIPLY => Ok(Multiply(decode_box(buf)?, decode_box(buf)?)),
@@ -461,7 +464,7 @@ fn decode_data_type(buf: &mut ByteBuffer) -> std::io::Result<DataType> {
         T_INT64 => Ok(Int64Type),
         T_INT128 => Ok(Int128Type),
         T_JSON_OBJECT => Ok(JSONObjectType),
-        T_RECORD_NUMBER => Ok(RecordNumberType),
+        T_ROW_ID => Ok(RowIDType),
         T_STRING => Ok(StringType(buf.next_u32() as usize)),
         T_TABLE => Ok(TableType(buf.next_columns())),
         T_UINT8 => Ok(UInt8Type),

@@ -24,6 +24,7 @@ pub const T_BLOB: u8 = 3;
 pub const T_BOOLEAN: u8 = 4;
 pub const T_CLOB: u8 = 5;
 pub const T_DATE: u8 = 6;
+pub const T_ERROR: u8 = 29;
 pub const T_ENUM: u8 = 7;
 pub const T_FLOAT32: u8 = 8;
 pub const T_FLOAT64: u8 = 9;
@@ -34,7 +35,7 @@ pub const T_INT32: u8 = 13;
 pub const T_INT64: u8 = 14;
 pub const T_INT128: u8 = 15;
 pub const T_JSON_OBJECT: u8 = 16;
-pub const T_RECORD_NUMBER: u8 = 17;
+pub const T_ROW_ID: u8 = 17;
 pub const T_STRING: u8 = 18;
 pub const T_STRUCT: u8 = 19;
 pub const T_TABLE_REF: u8 = 20;
@@ -54,6 +55,7 @@ pub enum DataType {
     CLOBType(usize),
     DateType,
     EnumType(Vec<String>),
+    ErrorType,
     Float32Type,
     Float64Type,
     FuncType(Vec<ColumnJs>),
@@ -63,7 +65,7 @@ pub enum DataType {
     Int64Type,
     Int128Type,
     JSONObjectType,
-    RecordNumberType,
+    RowIDType,
     StringType(usize),
     StructureType(Vec<ColumnJs>),
     TableType(Vec<ColumnJs>),
@@ -117,6 +119,7 @@ impl DataType {
                 "CLOB" => size_parameter(ts, |size| CLOBType(size)),
                 "Date" => Ok(DateType),
                 "Enum" => string_parameters(ts, |params| EnumType(params)),
+                "Error" => Ok(ErrorType),
                 "f32" => Ok(Float32Type),
                 "f64" => Ok(Float64Type),
                 "fn" => column_parameters(ts, |columns| FuncType(columns)),
@@ -126,7 +129,7 @@ impl DataType {
                 "i64" => Ok(Int64Type),
                 "i128" => Ok(Int128Type),
                 "JSON" => Ok(JSONObjectType),
-                "RecordNumber" => Ok(RecordNumberType),
+                "RowID" => Ok(RowIDType),
                 "String" => size_parameter(ts, |size| StringType(size)),
                 "struct" => column_parameters(ts, |columns| StructureType(columns)),
                 "Table" => column_parameters(ts, |columns| TableType(columns)),
@@ -143,7 +146,7 @@ impl DataType {
         }
     }
 
-    /// computes and returns the maximum physical size of a value of this datatype
+    /// computes and returns the maximum physical size of the value of this datatype
     pub fn compute_max_physical_size(&self) -> usize {
         use crate::data_types::DataType::*;
         let width: usize = match self {
@@ -152,6 +155,7 @@ impl DataType {
             CLOBType(size) => *size,
             DateType => 8,
             EnumType(..) => 2,
+            ErrorType => 256,
             Float32Type => 4,
             Float64Type => 8,
             FuncType(columns) => columns.len() * 8,
@@ -161,7 +165,7 @@ impl DataType {
             Int64Type => 8,
             Int128Type => 16,
             JSONObjectType => 512,
-            RecordNumberType => 8,
+            RowIDType => 8,
             StringType(size) => *size + size.to_be_bytes().len(),
             StructureType(columns) => columns.len() * 8,
             TableType(columns) => columns.len() * 8,
@@ -182,6 +186,7 @@ impl DataType {
             CLOBType(..) => T_CLOB,
             DateType => T_DATE,
             EnumType(..) => T_ENUM,
+            ErrorType => T_ERROR,
             Float32Type => T_FLOAT32,
             Float64Type => T_FLOAT64,
             FuncType(..) => T_FUNC,
@@ -191,7 +196,7 @@ impl DataType {
             Int64Type => T_INT64,
             Int128Type => T_INT128,
             JSONObjectType => T_JSON_OBJECT,
-            RecordNumberType => T_RECORD_NUMBER,
+            RowIDType => T_ROW_ID,
             StringType(..) => T_STRING,
             StructureType(..) => T_STRUCT,
             TableType(..) => T_TABLE,
@@ -211,6 +216,7 @@ impl DataType {
             CLOBType(size) => format!("CLOB({})", size),
             DateType => "Date".into(),
             EnumType(labels) => format!("Enum({:?})", labels),
+            ErrorType => "Error".into(),
             Float32Type => "f32".into(),
             Float64Type => "f64".into(),
             FuncType(columns) => format!("fn({})", ColumnJs::render_columns(columns)),
@@ -220,7 +226,7 @@ impl DataType {
             Int64Type => "i64".into(),
             Int128Type => "i128".into(),
             JSONObjectType => "struct".into(),
-            RecordNumberType => "RecordNumber".into(),
+            RowIDType => "RecordNumber".into(),
             StringType(size) => format!("String({})", size),
             StructureType(columns) => format!("struct({})", ColumnJs::render_columns(columns)),
             TableType(columns) => format!("Table({})", ColumnJs::render_columns(columns)),
@@ -335,7 +341,7 @@ mod tests {
 
     #[test]
     fn test_row_id() {
-        verify("RecordNumber", RecordNumberType);
+        verify("RowID", RowIDType);
     }
 
     #[test]

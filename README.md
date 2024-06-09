@@ -55,36 +55,88 @@ The Oxide REPL is now available, and with it, you can issue commands directly to
 Oxide can evaluate basic expressions:
 
 ```bash
-$ oxide_repl
+$ oxide
 Welcome to Oxide REPL. Enter "q!" to quit.
 
-oxide.public[1]> 5 + 9
+oxide.public[0]> 5 + 9
+[0] i64 in 17.0 millis
 14
-oxide.public[2]> (2 * 7) + 12
+
+oxide.public[1]> (2 * 7) + 12
+[1] i64 in 12.9 millis
 26
 ```
 
 Use the range operator (..) to creates slices (array-like structures):
 
 ```bash
-oxide.public[3]> 1..7
+oxide.public[2]> 1..7
+[2] Array in 8.0 millis
 [1,2,3,4,5,6]
 ```
 
 Use the factorial operator (¡):
 
 ```bash
-oxide.public[4]> 5¡
+oxide.public[3]> 5¡
+[3] f64 in 5.3 millis
 120.0
 ```
 
-Use the exponent operators (², ³)
+Use the exponent operators (², ³, .., ⁹):
 
 ```bash
 oxide.public[4]> 5²
+[4] i64 in 5.5 millis
 25
-oxide.public[5]> 5³
-125
+
+oxide.public[5]> 7³
+[5] i64 in 6.1 millis
+343
+```
+
+Use SQL-like updates and queries to create and manage data collections:
+
+```bash
+Welcome to Oxide REPL. Enter "q!" to quit.
+
+oxide.public[0]> drop table ns("ldaniels.securities.stocks")
+[0] Boolean in 9.6 millis
+true
+
+oxide.public[1]> create table ns("ldaniels.securities.stocks") (
+    symbol: String(8),
+    exchange: String(8),
+    last_sale: f64
+)
+[1] Boolean in 9.5 millis
+true
+
+oxide.public[2]> into ns("ldaniels.securities.stocks")
+                from { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
+[2] RowID in 15.2 millis
+1
+
+oxide.public[3]> into ns("ldaniels.securities.stocks")
+                from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
+[3] RowID in 13.8 millis
+1
+
+oxide.public[4]> into ns("ldaniels.securities.stocks")
+                from { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+[4] RowID in 11.8 millis
+1
+
+oxide.public[5]> from ns("ldaniels.securities.stocks")
+[5] Table ~ 3 row(s) in 10.1 millis
+|-------------------------------|
+| symbol | exchange | last_sale |
+|-------------------------------|
+| ABC    | AMEX     | 12.49     |
+| BOOM   | NYSE     | 56.88     |
+| JET    | NASDAQ   | 32.12     |
+|-------------------------------|
+
 ```
 
 ### API/REST

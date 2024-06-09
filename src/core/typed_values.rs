@@ -16,16 +16,19 @@ use uuid::Uuid;
 
 use shared_lib::RowJs;
 
+use crate::byte_buffer::ByteBuffer;
 use crate::cnv_error;
 use crate::codec;
 use crate::data_types::*;
 use crate::data_types::DataType::*;
 use crate::expression::Expression;
+use crate::fields::Field;
 use crate::model_row_collection::ModelRowCollection;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
-use crate::serialization::A_ANON_FX;
+use crate::serialization::{A_ANON_FX, disassemble};
 use crate::server::ColumnJs;
+use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::*;
 
 const ISO_DATE_FORMAT: &str =
@@ -45,6 +48,7 @@ pub enum TypedValue {
     Boolean(bool),
     CLOB(Vec<char>),
     DateValue(i64),
+    ErrorValue(String),
     Float32Value(f32),
     Float64Value(f64),
     Function {
@@ -57,7 +61,7 @@ pub enum TypedValue {
     Int64Value(i64),
     Int128Value(i128),
     JSONObjectValue(Vec<(String, TypedValue)>),
-    RecordNumber(usize),
+    RowID(usize),
     StringValue(String),
     StructValue(RowJs),
     TableRef(String),
@@ -100,6 +104,7 @@ impl TypedValue {
                 let index = codec::decode_u8x4(buffer, offset, |b| i32::from_be_bytes(b));
                 StringValue(labels[index as usize].to_string())
             }
+            ErrorType => ErrorValue(codec::decode_string(buffer, offset, 255).to_string()),
             Float32Type => codec::decode_u8x4(buffer, offset, |b| Float32Value(f32::from_be_bytes(b))),
             Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
             FuncType(columns) => Function {
@@ -112,7 +117,7 @@ impl TypedValue {
             Int64Type => codec::decode_u8x8(buffer, offset, |b| Int64Value(i64::from_be_bytes(b))),
             Int128Type => codec::decode_u8x16(buffer, offset, |b| Int128Value(i128::from_be_bytes(b))),
             JSONObjectType => JSONObjectValue(todo!()),
-            RecordNumberType => RecordNumber(codec::decode_row_id(&buffer, 1)),
+            RowIDType => RowID(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
             StructureType(columns) => StructValue(todo!()),
             TableType(columns) => todo!(),
@@ -142,6 +147,7 @@ impl TypedValue {
             Boolean(ok) => [if *ok { 1 } else { 0 }].to_vec(),
             CLOB(chars) => codec::encode_chars(chars.to_vec()),
             DateValue(number) => number.to_be_bytes().to_vec(),
+            ErrorValue(message) => codec::encode_string(message),
             Float32Value(number) => number.to_be_bytes().to_vec(),
             Float64Value(number) => number.to_be_bytes().to_vec(),
             Function { params, code } =>
@@ -160,7 +166,7 @@ impl TypedValue {
                 bytes
             }
             TableValue(rc) => rc.encode(),
-            RecordNumber(id) => id.to_be_bytes().to_vec(),
+            RowID(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
             StructValue(item) => codec::encode_string(item.to_json_string().as_str()),
             TableRef(path) => codec::encode_string(path),
@@ -185,6 +191,47 @@ impl TypedValue {
         for param in params { bytes.extend(param.encode()); }
         bytes.extend(code.encode());
         bytes
+    }
+
+    /// decodes the typed value based on the supplied data type and buffer
+    pub fn from_buffer(
+        data_type: &DataType,
+        buffer: &mut ByteBuffer,
+    ) -> std::io::Result<TypedValue> {
+        let tv = match data_type {
+            BLOBType(_size) => BLOB(buffer.next_blob()),
+            BooleanType => Boolean(buffer.next_bool()),
+            CLOBType(_size) => CLOB(buffer.next_clob()),
+            DateType => DateValue(buffer.next_i64()),
+            EnumType(labels) => {
+                let index = buffer.next_u32();
+                StringValue(labels[index as usize].to_string())
+            }
+            ErrorType => ErrorValue(buffer.next_string()),
+            Float32Type => Float32Value(buffer.next_f32()),
+            Float64Type => Float64Value(buffer.next_f64()),
+            FuncType(columns) => Function {
+                params: columns.clone(),
+                code: Box::new(disassemble(buffer)?),
+            },
+            Int8Type => Int8Value(buffer.next_i8()),
+            Int16Type => Int16Value(buffer.next_i16()),
+            Int32Type => Int32Value(buffer.next_i32()),
+            Int64Type => Int64Value(buffer.next_i64()),
+            Int128Type => Int128Value(buffer.next_i128()),
+            JSONObjectType => JSONObjectValue(buffer.next_json()?),
+            RowIDType => RowID(buffer.next_row_id()),
+            StringType(size) => StringValue(buffer.next_string()),
+            StructureType(columns) => StructValue(buffer.next_struct()?),
+            TableType(columns) => TableValue(buffer.next_table()?),
+            UInt8Type => UInt8Value(buffer.next_u8()),
+            UInt16Type => UInt16Value(buffer.next_u16()),
+            UInt32Type => UInt32Value(buffer.next_u32()),
+            UInt64Type => UInt64Value(buffer.next_u64()),
+            UInt128Type => UInt128Value(buffer.next_u128()),
+            UUIDType => UUIDValue(buffer.next_uuid()),
+        };
+        Ok(tv)
     }
 
     fn intercept_unknowns(a: &TypedValue, b: &TypedValue) -> Option<TypedValue> {
@@ -229,6 +276,41 @@ impl TypedValue {
         }
     }
 
+    pub fn get_type_name(&self) -> String {
+        let result = match *self {
+            Undefined => "Undefined",
+            Null => "Null",
+            Function { .. } => "Function",
+            Array(_) => "Array",
+            BLOB(_) => "BLOB",
+            Boolean(_) => "Boolean",
+            CLOB(_) => "CLOB",
+            DateValue(_) => "Date",
+            ErrorValue(_) => "Error",
+            JSONObjectValue(_) => "JSON",
+            Float32Value(_) => "f32",
+            Float64Value(_) => "f64",
+            Int8Value(_) => "i8",
+            Int16Value(_) => "i16",
+            Int32Value(_) => "i32",
+            Int64Value(_) => "i64",
+            Int128Value(_) => "i128",
+            RowID(_) => "RowID",
+            StringValue(_) => "String",
+            StructValue(_) => "Struct",
+            TableRef(_) => "TablePtr",
+            TableValue(_) => "Table",
+            TupleValue(_) => "Tuple",
+            UInt8Value(_) => "u8",
+            UInt16Value(_) => "u16",
+            UInt32Value(_) => "u32",
+            UInt64Value(_) => "u64",
+            UInt128Value(_) => "u128",
+            UUIDValue(_) => "UUID",
+        };
+        result.to_string()
+    }
+
     pub fn ordinal(&self) -> u8 {
         match *self {
             Undefined => T_UNDEFINED,
@@ -239,6 +321,7 @@ impl TypedValue {
             Boolean(_) => T_BOOLEAN,
             CLOB(_) => T_CLOB,
             DateValue(_) => T_DATE,
+            ErrorValue(_) => T_ERROR,
             JSONObjectValue(_) => T_JSON_OBJECT,
             Float32Value(_) => T_FLOAT32,
             Float64Value(_) => T_FLOAT64,
@@ -247,7 +330,7 @@ impl TypedValue {
             Int32Value(_) => T_INT32,
             Int64Value(_) => T_INT64,
             Int128Value(_) => T_INT128,
-            RecordNumber(_) => T_RECORD_NUMBER,
+            RowID(_) => T_ROW_ID,
             StringValue(_) => T_STRING,
             StructValue(_) => T_STRUCT,
             TableRef(_) => T_TABLE_REF,
@@ -272,29 +355,30 @@ impl TypedValue {
 
     pub fn to_json(&self) -> serde_json::Value {
         match self {
-            Function { params, code } => {
-                let my_params = serde_json::Value::Array(params.iter().map(|c| c.to_json()).collect());
-                let my_code = code.to_code(); //serde_json::Value::Object();
-                serde_json::json!({ "params": my_params, "code": my_code })
-            }
             Array(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
             BLOB(bytes) => serde_json::json!(bytes),
             Boolean(b) => serde_json::json!(b),
             CLOB(chars) => serde_json::json!(chars),
             DateValue(millis) => serde_json::json!(Self::millis_to_iso_date(*millis)),
-            JSONObjectValue(pairs) => serde_json::json!(pairs),
+            ErrorValue(message) => serde_json::json!(message),
             Float32Value(number) => serde_json::json!(number),
             Float64Value(number) => serde_json::json!(number),
+            Function { params, code } => {
+                let my_params = serde_json::Value::Array(params.iter().map(|c| c.to_json()).collect());
+                let my_code = code.to_code(); //serde_json::Value::Object();
+                serde_json::json!({ "params": my_params, "code": my_code })
+            }
             Int8Value(number) => serde_json::json!(number),
             Int16Value(number) => serde_json::json!(number),
             Int32Value(number) => serde_json::json!(number),
             Int64Value(number) => serde_json::json!(number),
             Int128Value(number) => serde_json::json!(number),
+            JSONObjectValue(pairs) => serde_json::json!(pairs),
             Null => serde_json::Value::Null,
-            RecordNumber(number) => serde_json::json!(number),
+            RowID(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
-            StructValue(item) => serde_json::json!(item.to_json_string()),
+            StructValue(item) => serde_json::json!(item),
             TableRef(path) => serde_json::json!(path),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
@@ -324,6 +408,7 @@ impl TypedValue {
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
             CLOB(chars) => chars.into_iter().collect(),
             DateValue(millis) => Self::millis_to_iso_date(*millis).unwrap_or("".into()),
+            ErrorValue(message) => message.into(),
             Function { params, code } =>
                 format!("(({}) => {})",
                         params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
@@ -343,7 +428,7 @@ impl TypedValue {
             Int128Value(number) => number.to_string(),
             TableValue(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
             Null => "null".into(),
-            RecordNumber(number) => number.to_string(),
+            RowID(number) => number.to_string(),
             StringValue(string) => string.into(),
             StructValue(item) => item.to_json_string(),
             TableRef(path) => path.into(),
@@ -451,7 +536,7 @@ impl TypedValue {
             Int16Value(n) => Some(*n as f64),
             Int32Value(n) => Some(*n as f64),
             Int64Value(n) => Some(*n as f64),
-            RecordNumber(n) => Some(*n as f64),
+            RowID(n) => Some(*n as f64),
             _ => None
         }
     }
@@ -464,7 +549,7 @@ impl TypedValue {
             Int16Value(n) => Some(*n as i64),
             Int32Value(n) => Some(*n as i64),
             Int64Value(n) => Some(*n),
-            RecordNumber(n) => Some(*n as i64),
+            RowID(n) => Some(*n as i64),
             _ => None
         }
     }
@@ -477,7 +562,7 @@ impl TypedValue {
             Int16Value(n) => Some(*n as usize),
             Int32Value(n) => Some(*n as usize),
             Int64Value(n) => Some(*n as usize),
-            RecordNumber(n) => Some(*n),
+            RowID(n) => Some(*n),
             _ => None
         }
     }
@@ -490,7 +575,7 @@ impl TypedValue {
             Int32Value(a) => Some(Int32Value(ff(*a as f64) as i32)),
             Int16Value(a) => Some(Int16Value(ff(*a as f64) as i16)),
             UInt8Value(a) => Some(UInt8Value(ff(*a as f64) as u8)),
-            RecordNumber(a) => Some(RecordNumber(ff(*a as f64) as usize)),
+            RowID(a) => Some(RowID(ff(*a as f64) as usize)),
             _ => Some(Float64Value(lhs.assume_f64()?))
         }
     }
@@ -506,7 +591,7 @@ impl TypedValue {
                     (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as f64, *b as f64) as i32)),
                     (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as f64, *b as f64) as i16)),
                     (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as f64, *b as f64) as u8)),
-                    (RecordNumber(a), RecordNumber(b)) => Some(RecordNumber(ff(*a as f64, *b as f64) as usize)),
+                    (RowID(a), RowID(b)) => Some(RowID(ff(*a as f64, *b as f64) as usize)),
                     _ => Some(Float64Value(ff(lhs.assume_f64()?, rhs.assume_f64()?)))
                 }
             }
@@ -524,7 +609,7 @@ impl TypedValue {
                     (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as i64, *b as i64) as i32)),
                     (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as i64, *b as i64) as i16)),
                     (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as i64, *b as i64) as u8)),
-                    (RecordNumber(a), RecordNumber(b)) => Some(RecordNumber(ff(*a as i64, *b as i64) as usize)),
+                    (RowID(a), RowID(b)) => Some(RowID(ff(*a as i64, *b as i64) as usize)),
                     _ => Some(Int64Value(ff(lhs.assume_i64()?, rhs.assume_i64()?)))
                 }
             }
@@ -655,7 +740,7 @@ impl PartialOrd for TypedValue {
             (Int16Value(a), Int16Value(b)) => a.partial_cmp(b),
             (Int32Value(a), Int32Value(b)) => a.partial_cmp(b),
             (Int64Value(a), Int64Value(b)) => a.partial_cmp(b),
-            (RecordNumber(a), RecordNumber(b)) => a.partial_cmp(b),
+            (RowID(a), RowID(b)) => a.partial_cmp(b),
             (StringValue(a), StringValue(b)) => a.partial_cmp(b),
             (UUIDValue(a), UUIDValue(b)) => a.partial_cmp(b),
             (Null, Null) => Some(Ordering::Equal),

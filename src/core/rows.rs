@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::{FieldJs, RowJs};
 
+use crate::byte_buffer::ByteBuffer;
 use crate::codec;
 use crate::expression::Expression;
 use crate::fields::Field;
@@ -19,7 +20,6 @@ use crate::row_metadata::RowMetadata;
 use crate::server::determine_column_value;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Null, RecordNumber, Undefined};
 
 /// Represents a row of a table structure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -66,7 +66,26 @@ impl Row {
 
     /// Returns an empty row.
     pub fn empty(columns: &Vec<TableColumn>) -> Self {
-        Self::new(0, columns.clone(), columns.iter().map(|_| Field::new(Null)).collect())
+        Self::new(0, columns.clone(), columns.iter().map(|_| Field::new(TypedValue::Null)).collect())
+    }
+
+    pub fn from_buffer(
+        columns: &Vec<TableColumn>,
+        buffer: &mut ByteBuffer,
+    ) -> std::io::Result<(Self, RowMetadata)> {
+        // if the buffer is empty, just return an empty row
+        let size = buffer.next_u64();
+        if size == 0 {
+            return Ok((Self::empty(columns), RowMetadata::new(false)));
+        }
+        let metadata = RowMetadata::decode(buffer.next_u8());
+        let id = buffer.next_row_id();
+        let mut fields: Vec<Field> = vec![];
+        for col in columns {
+            let field = Field::from_buffer(&col.data_type, buffer, col.offset)?;
+            fields.push(field);
+        }
+        Ok((Self::new(id, columns.clone(), fields), metadata))
     }
 
     pub fn from_row_js(columns: &Vec<TableColumn>, form: &RowJs) -> Self {
@@ -93,7 +112,7 @@ impl Row {
             if let Some(value) = cache.get(c.get_name()) {
                 fields.push(Field::with_value(value.clone()));
             } else {
-                fields.push(Field::with_value(Undefined))
+                fields.push(Field::with_value(TypedValue::Undefined))
             }
         }
         Row::new(id, columns.clone(), fields)
@@ -132,7 +151,7 @@ impl Row {
     }
 
     pub fn get(&self, name: &str) -> TypedValue {
-        self.find_field_by_name(name).unwrap_or(Undefined)
+        self.find_field_by_name(name).unwrap_or(TypedValue::Undefined)
     }
 
     pub fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
@@ -158,7 +177,7 @@ impl Row {
     /// Returns a [HashMap] containing name-values pairs that represent the row's internal state.
     pub fn to_hash_map(&self) -> HashMap<String, TypedValue> {
         let mut mapping = HashMap::new();
-        mapping.insert("_id".into(), RecordNumber(self.id));
+        mapping.insert("_id".into(), TypedValue::RowID(self.id));
         for (field, column) in self.fields.iter().zip(&self.columns) {
             mapping.insert(column.get_name().to_string(), field.value.clone());
         }
@@ -327,10 +346,10 @@ mod tests {
         use maplit::hashmap;
         let row = make_quote(111, &make_table_columns(), "AAA", "TCE", 1230.78);
         assert_eq!(row.to_hash_map(), hashmap!(
-            "_id".into() => RecordNumber(111),
-            "symbol".into() => StringValue("AAA".into()),
-            "exchange".into() => StringValue("TCE".into()),
-            "last_sale".into() => Float64Value(1230.78),
+            "_id".into() => TypedValue::RowID(111),
+            "symbol".into() => TypedValue::StringValue("AAA".into()),
+            "exchange".into() => TypedValue::StringValue("TCE".into()),
+            "last_sale".into() => TypedValue::Float64Value(1230.78),
         ));
     }
 

@@ -91,6 +91,7 @@ pub enum Expression {
     SetVariable(String, Box<Expression>),
     // control/flow
     CodeBlock(Vec<Expression>),
+    Eval(Box<Expression>),
     If {
         condition: Box<Expression>,
         a: Box<Expression>,
@@ -232,6 +233,7 @@ pub fn decompile(expr: &Expression) -> String {
         }
         Equal(a, b) =>
             format!("{} == {}", decompile(a), decompile(b)),
+        Eval(a) => format!("eval {}", decompile(a)),
         GreaterThan(a, b) =>
             format!("{} > {}", decompile(a), decompile(b)),
         GreaterOrEqual(a, b) =>
