@@ -2,14 +2,10 @@
 //      Oxide Server v0.1.0
 ////////////////////////////////////////////////////////////////////
 
-use std::{env, thread};
-use std::convert::Into;
-use std::error::Error;
+use std::env;
 use std::fs::File;
-use std::io::{Read, stdout, Write};
+use std::io::Read;
 use std::string::ToString;
-use std::sync::mpsc;
-use std::time::Duration;
 
 use actix::{Actor, Addr};
 use actix_session::Session;
@@ -36,7 +32,6 @@ use crate::rows::Row;
 use crate::server::SystemInfoJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::websockets::OxideWebSocket;
 
 mod byte_buffer;
 mod byte_row_collection;
@@ -95,7 +90,7 @@ async fn main() -> std::io::Result<()> {
         [_, cmd, host, port] if cmd == "-p" || cmd == "-peer" => {
             let port = match port.parse::<u32>() {
                 Ok(value) => value,
-                Err(err) => panic!("{}", err.to_string())
+                Err(err) => panic!("port: {}", err.to_string())
             };
             repl::run(REPLState::connect(host.clone(), port)).await
         }

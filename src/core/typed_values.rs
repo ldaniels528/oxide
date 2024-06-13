@@ -26,7 +26,7 @@ use crate::fields::Field;
 use crate::model_row_collection::ModelRowCollection;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
-use crate::serialization::{A_ANON_FX, disassemble};
+use crate::serialization::{disassemble};
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::*;
@@ -61,7 +61,7 @@ pub enum TypedValue {
     Int64Value(i64),
     Int128Value(i128),
     JSONObjectValue(Vec<(String, TypedValue)>),
-    RowID(usize),
+    RowsAffected(usize),
     StringValue(String),
     StructValue(RowJs),
     TableRef(String),
@@ -117,7 +117,7 @@ impl TypedValue {
             Int64Type => codec::decode_u8x8(buffer, offset, |b| Int64Value(i64::from_be_bytes(b))),
             Int128Type => codec::decode_u8x16(buffer, offset, |b| Int128Value(i128::from_be_bytes(b))),
             JSONObjectType => JSONObjectValue(todo!()),
-            RowIDType => RowID(codec::decode_row_id(&buffer, 1)),
+            RowsAffectedType => RowsAffected(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
             StructureType(columns) => StructValue(todo!()),
             TableType(columns) => todo!(),
@@ -166,7 +166,7 @@ impl TypedValue {
                 bytes
             }
             TableValue(rc) => rc.encode(),
-            RowID(id) => id.to_be_bytes().to_vec(),
+            RowsAffected(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
             StructValue(item) => codec::encode_string(item.to_json_string().as_str()),
             TableRef(path) => codec::encode_string(path),
@@ -220,7 +220,7 @@ impl TypedValue {
             Int64Type => Int64Value(buffer.next_i64()),
             Int128Type => Int128Value(buffer.next_i128()),
             JSONObjectType => JSONObjectValue(buffer.next_json()?),
-            RowIDType => RowID(buffer.next_row_id()),
+            RowsAffectedType => RowsAffected(buffer.next_row_id()),
             StringType(size) => StringValue(buffer.next_string()),
             StructureType(columns) => StructValue(buffer.next_struct()?),
             TableType(columns) => TableValue(buffer.next_table()?),
@@ -295,7 +295,7 @@ impl TypedValue {
             Int32Value(_) => "i32",
             Int64Value(_) => "i64",
             Int128Value(_) => "i128",
-            RowID(_) => "RowID",
+            RowsAffected(_) => "RowsAffected",
             StringValue(_) => "String",
             StructValue(_) => "Struct",
             TableRef(_) => "TablePtr",
@@ -315,7 +315,7 @@ impl TypedValue {
         match *self {
             Undefined => T_UNDEFINED,
             Null => T_NULL,
-            Function { .. } => A_ANON_FX,
+            Function { .. } => T_FUNCTION,
             Array(_) => T_ARRAY,
             BLOB(_) => T_BLOB,
             Boolean(_) => T_BOOLEAN,
@@ -330,7 +330,7 @@ impl TypedValue {
             Int32Value(_) => T_INT32,
             Int64Value(_) => T_INT64,
             Int128Value(_) => T_INT128,
-            RowID(_) => T_ROW_ID,
+            RowsAffected(_) => T_ROWS_AFFECTED,
             StringValue(_) => T_STRING,
             StructValue(_) => T_STRUCT,
             TableRef(_) => T_TABLE_REF,
@@ -376,7 +376,7 @@ impl TypedValue {
             Int128Value(number) => serde_json::json!(number),
             JSONObjectValue(pairs) => serde_json::json!(pairs),
             Null => serde_json::Value::Null,
-            RowID(number) => serde_json::json!(number),
+            RowsAffected(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
             StructValue(item) => serde_json::json!(item),
             TableRef(path) => serde_json::json!(path),
@@ -428,7 +428,7 @@ impl TypedValue {
             Int128Value(number) => number.to_string(),
             TableValue(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
             Null => "null".into(),
-            RowID(number) => number.to_string(),
+            RowsAffected(number) => number.to_string(),
             StringValue(string) => string.into(),
             StructValue(item) => item.to_json_string(),
             TableRef(path) => path.into(),
@@ -524,6 +524,7 @@ impl TypedValue {
     fn assume_bool(&self) -> Option<bool> {
         match &self {
             Boolean(b) => Some(*b),
+            RowsAffected(n) if *n > 0 => Some(true),
             _ => None
         }
     }
@@ -532,11 +533,17 @@ impl TypedValue {
         match &self {
             Float32Value(n) => Some(*n as f64),
             Float64Value(n) => Some(*n),
-            UInt8Value(n) => Some(*n as f64),
+            Int8Value(n) => Some(*n as f64),
             Int16Value(n) => Some(*n as f64),
             Int32Value(n) => Some(*n as f64),
             Int64Value(n) => Some(*n as f64),
-            RowID(n) => Some(*n as f64),
+            Int128Value(n) => Some(*n as f64),
+            RowsAffected(n) => Some(*n as f64),
+            UInt8Value(n) => Some(*n as f64),
+            UInt16Value(n) => Some(*n as f64),
+            UInt32Value(n) => Some(*n as f64),
+            UInt64Value(n) => Some(*n as f64),
+            UInt128Value(n) => Some(*n as f64),
             _ => None
         }
     }
@@ -549,7 +556,7 @@ impl TypedValue {
             Int16Value(n) => Some(*n as i64),
             Int32Value(n) => Some(*n as i64),
             Int64Value(n) => Some(*n),
-            RowID(n) => Some(*n as i64),
+            RowsAffected(n) => Some(*n as i64),
             _ => None
         }
     }
@@ -562,7 +569,7 @@ impl TypedValue {
             Int16Value(n) => Some(*n as usize),
             Int32Value(n) => Some(*n as usize),
             Int64Value(n) => Some(*n as usize),
-            RowID(n) => Some(*n),
+            RowsAffected(n) => Some(*n),
             _ => None
         }
     }
@@ -575,7 +582,7 @@ impl TypedValue {
             Int32Value(a) => Some(Int32Value(ff(*a as f64) as i32)),
             Int16Value(a) => Some(Int16Value(ff(*a as f64) as i16)),
             UInt8Value(a) => Some(UInt8Value(ff(*a as f64) as u8)),
-            RowID(a) => Some(RowID(ff(*a as f64) as usize)),
+            RowsAffected(a) => Some(RowsAffected(ff(*a as f64) as usize)),
             _ => Some(Float64Value(lhs.assume_f64()?))
         }
     }
@@ -591,7 +598,7 @@ impl TypedValue {
                     (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as f64, *b as f64) as i32)),
                     (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as f64, *b as f64) as i16)),
                     (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as f64, *b as f64) as u8)),
-                    (RowID(a), RowID(b)) => Some(RowID(ff(*a as f64, *b as f64) as usize)),
+                    (RowsAffected(a), RowsAffected(b)) => Some(RowsAffected(ff(*a as f64, *b as f64) as usize)),
                     _ => Some(Float64Value(ff(lhs.assume_f64()?, rhs.assume_f64()?)))
                 }
             }
@@ -609,7 +616,7 @@ impl TypedValue {
                     (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as i64, *b as i64) as i32)),
                     (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as i64, *b as i64) as i16)),
                     (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as i64, *b as i64) as u8)),
-                    (RowID(a), RowID(b)) => Some(RowID(ff(*a as i64, *b as i64) as usize)),
+                    (RowsAffected(a), RowsAffected(b)) => Some(RowsAffected(ff(*a as i64, *b as i64) as usize)),
                     _ => Some(Int64Value(ff(lhs.assume_i64()?, rhs.assume_i64()?)))
                 }
             }
@@ -740,7 +747,7 @@ impl PartialOrd for TypedValue {
             (Int16Value(a), Int16Value(b)) => a.partial_cmp(b),
             (Int32Value(a), Int32Value(b)) => a.partial_cmp(b),
             (Int64Value(a), Int64Value(b)) => a.partial_cmp(b),
-            (RowID(a), RowID(b)) => a.partial_cmp(b),
+            (RowsAffected(a), RowsAffected(b)) => a.partial_cmp(b),
             (StringValue(a), StringValue(b)) => a.partial_cmp(b),
             (UUIDValue(a), UUIDValue(b)) => a.partial_cmp(b),
             (Null, Null) => Some(Ordering::Equal),

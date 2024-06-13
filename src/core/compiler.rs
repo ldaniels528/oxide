@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
 
-use crate::expression::{Expression, FALSE, NULL, TRUE, UNDEFINED};
+use crate::expression::{Expression, FALSE, MutateTarget, NULL, TRUE, UNDEFINED};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-use crate::expression::DropTarget::TableTarget;
 use crate::expression::Expression::*;
+use crate::expression::MutateTarget::TableTarget;
 use crate::serialization::{assemble, disassemble_fully};
 use crate::server::ColumnJs;
 use crate::token_slice::TokenSlice;
@@ -84,10 +84,10 @@ impl CompilerState {
     pub fn compile_next(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (expr, ts) = match ts.next() {
             (Some(Operator { text, precedence, .. }), ts) =>
-                self.compile_operator(ts, text, precedence),
+                self.parse_operator(ts, text, precedence),
             (Some(Backticks { text, .. }), ts) =>
                 Ok((Variable(text.into()), ts)),
-            (Some(Atom { .. }), _) => self.compile_keyword(ts),
+            (Some(Atom { .. }), _) => self.parse_keyword(ts),
             (Some(DoubleQuoted { text, .. } |
                   SingleQuoted { text, .. }), ts) =>
                 Ok((Literal(StringValue(text.into())), ts)),
@@ -107,16 +107,21 @@ impl CompilerState {
     }
 
     /// compiles the [TokenSlice] into a leading single-parameter [Expression] (e.g. !true)
-    fn compile_expr_1a(&mut self,
-                       ts: TokenSlice,
-                       f: fn(Box<Expression>) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
+    fn parse_expression_1a(
+        &mut self,
+        ts: TokenSlice,
+        f: fn(Box<Expression>,
+        ) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
         let (expr, ts) = self.compile_next(ts)?;
         Ok((f(Box::new(expr)), ts))
     }
 
     /// compiles the [TokenSlice] into a two-parameter [Expression]
-    fn compile_expr_1b(&mut self, ts: TokenSlice,
-                       f: fn(Box<Expression>) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
+    fn parse_expression_1b(
+        &mut self,
+        ts: TokenSlice,
+        f: fn(Box<Expression>) -> Expression,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
         match self.pop() {
             None => fail_near("expected an expression", &ts),
             Some(expr0) => Ok((f(Box::new(expr0)), ts))
@@ -124,18 +129,22 @@ impl CompilerState {
     }
 
     /// compiles the [TokenSlice] into a two-parameter [Expression]
-    fn compile_expr_2a(&mut self,
-                       ts: TokenSlice,
-                       expr0: Expression,
-                       f: fn(Box<Expression>, Box<Expression>) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
+    fn parse_expression_2a(
+        &mut self,
+        ts: TokenSlice,
+        expr0: Expression,
+        f: fn(Box<Expression>, Box<Expression>,
+        ) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
         let (expr1, ts) = self.compile_next(ts)?;
         Ok((f(Box::new(expr0), Box::new(expr1)), ts))
     }
 
     /// compiles the [TokenSlice] into a two-parameter [Expression]
-    fn compile_expr_2b(&mut self, ts: TokenSlice,
-                       expr1: Expression,
-                       f: fn(Box<Expression>, Box<Expression>) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
+    fn parse_expression_2b(
+        &mut self, ts: TokenSlice,
+        expr1: Expression,
+        f: fn(Box<Expression>, Box<Expression>,
+        ) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
         match self.pop() {
             None => fail_near("expected an expression", &ts),
             Some(expr0) => Ok((f(Box::new(expr0), Box::new(expr1)), ts))
@@ -143,149 +152,117 @@ impl CompilerState {
     }
 
     /// compiles the [TokenSlice] into a name-value parameter [Expression]
-    fn compile_expr_2nv(&mut self,
-                        ts: TokenSlice,
-                        expr0: Expression,
-                        f: fn(String, Box<Expression>) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
+    fn parse_expression_2nv(
+        &mut self,
+        ts: TokenSlice,
+        expr0: Expression,
+        f: fn(String, Box<Expression>) -> Expression,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
         if let Variable(name) = expr0 {
             let (expr1, ts) = self.compile_next(ts)?;
             Ok((f(name, Box::new(expr1)), ts))
         } else { fail_near("an identifier name was expected", &ts) }
     }
 
-    /// compiles the [TokenSlice] into an operator-based [Expression]
-    fn compile_operator(&mut self,
-                        ts: TokenSlice,
-                        symbol: String,
-                        _precedence: usize) -> std::io::Result<(Expression, TokenSlice)> {
-        fn pow(compiler: &mut CompilerState, ts: TokenSlice, n: i64) -> std::io::Result<(Expression, TokenSlice)> {
-            compiler.compile_expr_2b(ts, Literal(Int64Value(n)), Pow)
-        }
-        match symbol.as_str() {
-            ";" => Ok((self.pop().unwrap_or(NULL), ts.skip())),
-            "⁰" => pow(self, ts, 0),
-            "¹" => pow(self, ts, 1),
-            "²" => pow(self, ts, 2),
-            "³" => pow(self, ts, 3),
-            "⁴" => pow(self, ts, 4),
-            "⁵" => pow(self, ts, 5),
-            "⁶" => pow(self, ts, 6),
-            "⁷" => pow(self, ts, 7),
-            "⁸" => pow(self, ts, 8),
-            "⁹" => pow(self, ts, 9),
-            "!" => self.compile_expr_1a(ts, Not),
-            "¡" => self.compile_expr_1b(ts, Factorial),
-            "(" => self.expect_parentheses(ts),
-            "[" => self.expect_square_brackets(ts),
-            "{" => self.expect_curly_brackets(ts),
-            sym =>
-                if let Some(op0) = self.pop() {
-                    match sym {
-                        "&&" => self.compile_expr_2a(ts, op0, And),
-                        "&" => self.compile_expr_2a(ts, op0, BitwiseAnd),
-                        "|" => self.compile_expr_2a(ts, op0, BitwiseOr),
-                        "÷" | "/" => self.compile_expr_2a(ts, op0, Divide),
-                        "==" => self.compile_expr_2a(ts, op0, Equal),
-                        ">" => self.compile_expr_2a(ts, op0, GreaterThan),
-                        ">=" => self.compile_expr_2a(ts, op0, GreaterOrEqual),
-                        "<" => self.compile_expr_2a(ts, op0, LessThan),
-                        "<=" => self.compile_expr_2a(ts, op0, LessOrEqual),
-                        "-" => self.compile_expr_2a(ts, op0, Minus),
-                        "%" => self.compile_expr_2a(ts, op0, Modulo),
-                        "×" | "*" => self.compile_expr_2a(ts, op0, Multiply),
-                        "!=" => self.compile_expr_2a(ts, op0, NotEqual),
-                        "||" => self.compile_expr_2a(ts, op0, Or),
-                        "+" => self.compile_expr_2a(ts, op0, Plus),
-                        "**" => self.compile_expr_2a(ts, op0, Pow),
-                        ".." => self.compile_expr_2a(ts, op0, Range),
-                        ":" => self.compile_expr_2nv(ts, op0, AsValue),
-                        ":=" => self.compile_expr_2nv(ts, op0, SetVariable),
-                        "<<" => self.compile_expr_2a(ts, op0, ShiftLeft),
-                        ">>" => self.compile_expr_2a(ts, op0, ShiftRight),
-                        "^" => self.compile_expr_2a(ts, op0, BitwiseXor),
-                        unknown => fail(format!("Invalid operator '{}'", unknown))
-                    }
-                } else { fail(format!("Illegal start of expression '{}'", symbol)) }
-        }
-    }
-
-    fn compile_keyword(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+    fn parse_keyword(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(Atom { text, .. }), ts) = ts.next() {
             match text.as_str() {
-                "create" => self.compile_keyword_create(ts),
-                "delete" => self.compile_keyword_delete(ts),
-                "drop" => self.compile_keyword_drop(ts),
-                "eval" => self.compile_keyword_eval(ts),
+                "append" => self.parse_keyword_append(ts),
+                "create" => self.parse_keyword_create(ts),
+                "delete" => self.parse_keyword_delete(ts),
+                "drop" => self.parse_mutate_target(ts, Drop),
+                "eval" => self.parse_expression_1a(ts, Eval),
                 "false" => Ok((FALSE, ts)),
-                "fn" => self.compile_keyword_fn(ts),
+                "fn" => self.parse_keyword_fn(ts),
                 "from" => {
-                    let (from, ts) = self.compile_keyword_from(ts)?;
-                    self.compile_keyword_queryables(from, ts)
+                    let (from, ts) = self.parse_expression_1a(ts, From)?;
+                    self.parse_keyword_queryables(from, ts)
                 }
-                "into" => self.compile_keyword_into(ts),
-                "lambda" => self.compile_keyword_lambda(ts),
+                "include" => self.parse_expression_1a(ts, Include),
+                "into" => self.parse_keyword_into(ts),
                 "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &ts),
-                "ns" => self.compile_keyword_ns(ts),
+                "ns" => self.parse_expression_1a(ts, Ns),
                 "null" => Ok((NULL, ts)),
-                "overwrite" => self.compile_keyword_overwrite(ts),
-                "select" => self.compile_keyword_select(ts),
+                "overwrite" => self.parse_keyword_overwrite(ts),
+                "reverse" => self.parse_expression_1a(ts, Reverse),
+                "select" => self.parse_keyword_select(ts),
+                "shall" => self.parse_expression_1a(ts, Shall),
+                "table" => self.parse_keyword_table(ts),
                 "true" => Ok((TRUE, ts)),
                 "undefined" => Ok((UNDEFINED, ts)),
-                "update" => self.compile_keyword_update(ts),
-                "via" => self.compile_keyword_via(ts),
+                "update" => self.parse_keyword_update(ts),
+                "via" => self.parse_expression_1a(ts, Via),
                 "where" => fail_near("`from` is expected before `where`: from stocks where last_sale < 1.0", &ts),
                 name => self.expect_function_call_or_variable(name, ts)
             }
         } else { fail("Unexpected end of input") }
     }
 
-    fn compile_keyword_create(
+    /// Appends a new row to a table
+    /// ex: append stocks select symbol: "ABC", exchange: "NYSE", last_sale: 0.1008
+    fn parse_keyword_append(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (table, ts) = self.compile_next(ts)?;
+        let (source, ts) = self.compile_next(ts)?;
+        Ok((Append { path: Box::new(table), source: Box::new(source) }, ts))
+    }
+
+    fn parse_keyword_create(
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(t), ts) = ts.next() {
             match t.get_raw_value().as_str() {
-                "index" => self.compile_keyword_create_index(ts),
-                "table" => self.compile_keyword_create_table(ts),
+                "index" => self.parse_keyword_create_index(ts),
+                "table" => self.parse_keyword_create_table(ts),
                 name => fail_near(format!("Syntax error: expect type identifier, got '{}'", name), &ts)
             }
         } else { fail("Unexpected end of input") }
     }
 
-    fn compile_keyword_create_index(
+    fn parse_keyword_create_index(
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (index, ts) = self.compile_next(ts)?;
         if let (ArrayLiteral(columns), ts) = self.compile_next(ts.clone())? {
-            Ok((Create(IndexEntity { path: Box::new(index), columns }), ts))
+            Ok((Create {
+                path: Box::new(index),
+                entity: IndexEntity { columns },
+            }, ts))
         } else {
             fail_near("Columns expected", &ts)
         }
     }
 
-    fn compile_keyword_create_table(
+    fn parse_keyword_create_table(
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        // create table ns("..") (name: String, ..)
+        // create table `stocks` (name: String, ..)
         let (table, ts) = self.compile_next(ts)?;
         if let (ColumnSet(columns), ts) = self.expect_parameters(ts.clone())? {
             // from { symbol: "ABC", exchange: "NYSE", last_sale: 67.89 }
-            if ts.is("from") {
+            let (from, ts) = if ts.is("from") {
                 let ts = ts.expect("from")?;
                 let (from, ts) = self.compile_next(ts)?;
-                Ok((Create(TableEntity { path: Box::new(table), columns, from: Some(Box::new(from)) }), ts))
+                (Some(Box::new(from)), ts)
             } else {
-                Ok((Create(TableEntity { path: Box::new(table), columns, from: None }), ts))
-            }
+                (None, ts)
+            };
+            Ok((Create {
+                path: Box::new(table),
+                entity: TableEntity { columns, from },
+            }, ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }
     }
 
     /// SQL Delete statement. ex: delete from stocks where last_sale > 1.00
-    fn compile_keyword_delete(
+    fn parse_keyword_delete(
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
@@ -296,91 +273,33 @@ impl CompilerState {
         Ok((Delete { path: Box::new(from), condition: condition.map(Box::new), limit: limit.map(Box::new) }, ts))
     }
 
-    /// SQL Drop statement. ex: drop table ns('finance.securities.stocks')
-    fn compile_keyword_drop(
+    /// Produces a function variant
+    fn parse_keyword_fn(
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
+        // parse the function
         match ts.next() {
-            (Some(Atom { text: keyword, .. }), ts) => {
-                match keyword.as_str() {
-                    "table" => {
-                        let (expr, ts) = self.compile_next(ts)?;
-                        Ok((Drop(TableTarget { path: Box::new(expr), if_exists: false }), ts))
-                    }
-                    x => fail_near(format!("Invalid type `{}`, try `table` instead", x), &ts)
-                }
-            }
-            (_, ts) => fail_near("Syntax error".to_string(), &ts)
+            // anonymous function? e.g., fn (x, y) => x + y
+            (Some(Operator { text: symbol, .. }), _) if symbol == "(" =>
+                self.expect_function_parameters_and_body(None, ts),
+            // named function? e.g., fn add(x, y) => x + y
+            (Some(Atom { text: name, .. }), ts) =>
+                self.expect_function_parameters_and_body(Some(name), ts),
+            // unrecognized
+            _ => fail_near("Function name expected", &ts)
         }
     }
 
-    fn compile_keyword_eval(
+    /// Parses an 'into' (copy) expression
+    /// ex: into ns("compiler.staging.stocks") from stocks
+    fn parse_keyword_into(
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (expr, ts) = self.compile_next(ts)?;
-        Ok((Eval(Box::new(expr)), ts))
-    }
-
-    fn compile_keyword_fn(
-        &mut self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        // first, extract the function name
-        if let (Some(Atom { text: name, .. }), ts) = ts.next() {
-            // next, extract the function parameters
-            if let (ColumnSet(params), ts) = self.expect_parameters(ts.clone())? {
-                // finally, extract the function code
-                let ts = ts.expect("=>")?;
-                let (code, ts) = self.compile_next(ts)?;
-                Ok((SetVariable(name, Box::new(Literal(Function { params, code: Box::new(code) }))), ts))
-            } else {
-                fail_near("Function parameters expected", &ts)
-            }
-        } else {
-            fail_near("Function name expected", &ts)
-        }
-    }
-
-    fn compile_keyword_lambda(
-        &mut self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        // next, extract the function parameters
-        if let (ColumnSet(params), ts) = self.expect_parameters(ts.clone())? {
-            // finally, extract the function code
-            let ts = ts.expect("=>")?;
-            let (code, ts) = self.compile_next(ts)?;
-            Ok((Literal(Function { params, code: Box::new(code) }), ts))
-        } else {
-            fail_near("Function parameters expected", &ts)
-        }
-    }
-
-    /// SQL From clause. ex: from stocks
-    fn compile_keyword_from(
-        &mut self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (table, ts) = self.compile_next(ts)?;
-        Ok((From(Box::new(table)), ts))
-    }
-
-    /// Appends a new row to a table
-    /// ex: into stocks select symbol: "ABC", exchange: "NYSE", last_sale: 0.1008
-    fn compile_keyword_into(
-        &mut self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (table, ts) = self.compile_next(ts)?;
+        let (target, ts) = self.compile_next(ts)?;
         let (source, ts) = self.compile_next(ts)?;
-        Ok((InsertInto { path: Box::new(table), source: Box::new(source) }, ts))
-    }
-
-    fn compile_keyword_ns(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (path, ts) = self.compile_next(ts)?;
-        Ok((Ns(Box::new(path)), ts))
+        Ok((IntoTable { target: Box::new(target), source: Box::new(source) }, ts))
     }
 
     /// compiles an OVERWRITE statement:
@@ -388,7 +307,7 @@ impl CompilerState {
     ///         via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
     ///         where symbol == "ABC"
     ///         limit 5
-    fn compile_keyword_overwrite(
+    fn parse_keyword_overwrite(
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
@@ -404,7 +323,7 @@ impl CompilerState {
         }, ts))
     }
 
-    fn compile_keyword_queryables(
+    fn parse_keyword_queryables(
         &mut self,
         host: Expression,
         ts: TokenSlice,
@@ -412,11 +331,11 @@ impl CompilerState {
         match ts.clone() {
             t if t.is("limit") => {
                 let (expr, ts) = self.compile_next(ts.skip())?;
-                self.compile_keyword_queryables(Limit { from: Box::new(host), limit: Box::new(expr) }, ts)
+                self.parse_keyword_queryables(Limit { from: Box::new(host), limit: Box::new(expr) }, ts)
             }
             t if t.is("where") => {
                 let (expr, ts) = self.compile_next(ts.skip())?;
-                self.compile_keyword_queryables(Where { from: Box::new(host), condition: Box::new(expr) }, ts)
+                self.parse_keyword_queryables(Where { from: Box::new(host), condition: Box::new(expr) }, ts)
             }
             _ => Ok((host, ts))
         }
@@ -424,14 +343,14 @@ impl CompilerState {
 
     /// compiles a SELECT statement:
     /// ex: select sum(last_sale) from stocks group by exchange
-    fn compile_keyword_select(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+    fn parse_keyword_select(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (fields, ts) = self.next_expression_list(ts)?;
         let fields = fields.expect("At least one field is required");
         let (from, ts) = self.next_keyword_expr("from", ts)?;
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
-        let (group_by, ts) = self.next_keyword_expr_list("group", "by", ts)?;
+        let (group_by, ts) = self.next_keyword_expression_list("group", "by", ts)?;
         let (having, ts) = self.next_keyword_expr("having", ts)?;
-        let (order_by, ts) = self.next_keyword_expr_list("order", "by", ts)?;
+        let (order_by, ts) = self.next_keyword_expression_list("order", "by", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
         Ok((Select {
             fields,
@@ -444,9 +363,30 @@ impl CompilerState {
         }, ts))
     }
 
+    /// Parses a table expression.
+    /// ex: stocks := table (symbol: String(8), exchange: String(8), last_sale: f64)
+    fn parse_keyword_table(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.clone())? {
+            // from { symbol: "ABC", exchange: "NYSE", last_sale: 67.89 }
+            let (from, ts) = if ts.is("from") {
+                let ts = ts.expect("from")?;
+                let (from, ts) = self.compile_next(ts)?;
+                (Some(Box::new(from)), ts)
+            } else {
+                (None, ts)
+            };
+            Ok((Declare(TableEntity { columns, from }), ts))
+        } else {
+            fail_near("Expected column definitions", &ts)
+        }
+    }
+
     /// compiles an UPDATE statement:
     /// ex: update stocks set last_sale = 0.45 where symbol == "BANG"
-    fn compile_keyword_update(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+    fn parse_keyword_update(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.compile_next(ts)?;
         let (source, ts) = self.compile_next(ts)?;
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
@@ -459,13 +399,98 @@ impl CompilerState {
         }, ts))
     }
 
-    /// SQL From clause. ex: via stocks
-    fn compile_keyword_via(
+    fn parse_atom(
         &mut self,
         ts: TokenSlice,
+        f: fn(String) -> Expression,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (table, ts) = self.compile_next(ts)?;
-        Ok((Via(Box::new(table)), ts))
+        match ts.next() {
+            (Some(
+                Atom { text: name, .. } |
+                Backticks { text: name, .. }), ts) => Ok((f(name), ts)),
+            (_, ts) => fail_near("Invalid identifier".to_string(), &ts)
+        }
+    }
+
+    /// Parses a mutate-target expression.
+    /// ex: drop table ns('finance.securities.stocks')
+    /// ex: drop index ns('finance.securities.stocks')
+    fn parse_mutate_target(
+        &mut self,
+        ts: TokenSlice,
+        f: fn(MutateTarget) -> Expression,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        match ts.next() {
+            (Some(Atom { text: keyword, .. }), ts) => {
+                match keyword.as_str() {
+                    "table" => {
+                        let (expr, ts) = self.compile_next(ts)?;
+                        Ok((f(TableTarget { path: Box::new(expr), if_exists: false }), ts))
+                    }
+                    z => fail_near(format!("Invalid type `{}`, try `table` instead", z), &ts)
+                }
+            }
+            (_, ts) => fail_near("Syntax error".to_string(), &ts)
+        }
+    }
+
+    /// compiles the [TokenSlice] into an operator-based [Expression]
+    fn parse_operator(
+        &mut self,
+        ts: TokenSlice,
+        symbol: String,
+        _precedence: usize,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        fn pow(compiler: &mut CompilerState, ts: TokenSlice, n: i64) -> std::io::Result<(Expression, TokenSlice)> {
+            compiler.parse_expression_2b(ts, Literal(Int64Value(n)), Pow)
+        }
+        match symbol.as_str() {
+            ";" => Ok((self.pop().unwrap_or(NULL), ts.skip())),
+            "⁰" => pow(self, ts, 0),
+            "¹" => pow(self, ts, 1),
+            "²" => pow(self, ts, 2),
+            "³" => pow(self, ts, 3),
+            "⁴" => pow(self, ts, 4),
+            "⁵" => pow(self, ts, 5),
+            "⁶" => pow(self, ts, 6),
+            "⁷" => pow(self, ts, 7),
+            "⁸" => pow(self, ts, 8),
+            "⁹" => pow(self, ts, 9),
+            "!" => self.parse_expression_1a(ts, Not),
+            "¡" => self.parse_expression_1b(ts, Factorial),
+            "$" => self.parse_atom(ts, Variable),
+            "(" => self.expect_parentheses(ts),
+            "[" => self.expect_square_brackets(ts),
+            "{" => self.expect_curly_brackets(ts),
+            sym =>
+                if let Some(op0) = self.pop() {
+                    match sym {
+                        "&&" => self.parse_expression_2a(ts, op0, And),
+                        "&" => self.parse_expression_2a(ts, op0, BitwiseAnd),
+                        "|" => self.parse_expression_2a(ts, op0, BitwiseOr),
+                        "÷" | "/" => self.parse_expression_2a(ts, op0, Divide),
+                        "==" => self.parse_expression_2a(ts, op0, Equal),
+                        ">" => self.parse_expression_2a(ts, op0, GreaterThan),
+                        ">=" => self.parse_expression_2a(ts, op0, GreaterOrEqual),
+                        "<" => self.parse_expression_2a(ts, op0, LessThan),
+                        "<=" => self.parse_expression_2a(ts, op0, LessOrEqual),
+                        "-" => self.parse_expression_2a(ts, op0, Minus),
+                        "%" => self.parse_expression_2a(ts, op0, Modulo),
+                        "×" | "*" => self.parse_expression_2a(ts, op0, Multiply),
+                        "!=" => self.parse_expression_2a(ts, op0, NotEqual),
+                        "||" => self.parse_expression_2a(ts, op0, Or),
+                        "+" => self.parse_expression_2a(ts, op0, Plus),
+                        "**" => self.parse_expression_2a(ts, op0, Pow),
+                        ".." => self.parse_expression_2a(ts, op0, Range),
+                        ":" => self.parse_expression_2nv(ts, op0, AsValue),
+                        ":=" => self.parse_expression_2nv(ts, op0, SetVariable),
+                        "<<" => self.parse_expression_2a(ts, op0, ShiftLeft),
+                        ">>" => self.parse_expression_2a(ts, op0, ShiftRight),
+                        "^" => self.parse_expression_2a(ts, op0, BitwiseXor),
+                        unknown => fail(format!("Invalid operator '{}'", unknown))
+                    }
+                } else { fail(format!("Illegal start of expression '{}'", symbol)) }
+        }
     }
 
     fn error_expected_operator<A>(&self, symbol: &str) -> std::io::Result<(A, TokenSlice)> {
@@ -538,6 +563,27 @@ impl CompilerState {
         }
     }
 
+    fn expect_function_parameters_and_body(
+        &mut self,
+        name: Option<String>,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        // extract the function parameters
+        if let (ColumnSet(params), ts) = self.expect_parameters(ts.clone())? {
+            // extract the function body
+            let ts = ts.expect("=>")?;
+            let (body, ts) = self.compile_next(ts)?;
+            // build the model
+            let func = Literal(Function { params, code: Box::new(body) });
+            match name {
+                Some(name) => Ok((SetVariable(name, Box::new(func)), ts)),
+                None => Ok((func, ts))
+            }
+        } else {
+            fail_near("Function parameters expected", &ts)
+        }
+    }
+
     pub fn expect_parameters(
         &mut self,
         ts: TokenSlice,
@@ -565,7 +611,6 @@ impl CompilerState {
         // name: String(8) | cost: Float = 0.0
         match ts.next() {
             (Some(Atom { text: name, .. }), ts) => {
-
                 // next, check for type constraint
                 let (type_name, ts) = if ts.is(":") {
                     let ts = ts.skip();
@@ -678,7 +723,7 @@ impl CompilerState {
     }
 
     /// Returns the [Option] of a list of expressions based the next token matching the specified keywords
-    fn next_keyword_expr_list(&mut self, keyword0: &str, keyword1: &str, ts: TokenSlice) -> std::io::Result<(Option<Vec<Expression>>, TokenSlice)> {
+    fn next_keyword_expression_list(&mut self, keyword0: &str, keyword1: &str, ts: TokenSlice) -> std::io::Result<(Option<Vec<Expression>>, TokenSlice)> {
         if ts.isnt(keyword0) || ts.skip().isnt(keyword1) { Ok((None, ts)) } else {
             self.next_expression_list(ts.skip().skip())
         }
@@ -731,14 +776,14 @@ pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io:
 #[cfg(test)]
 mod tests {
     use crate::data_types::*;
-    use crate::serialization::{A_ARRAY_LIT, A_JSON_LITERAL, A_LITERAL};
+    use crate::expression::{E_ARRAY_LIT, E_JSON_LITERAL, E_LITERAL};
     use crate::server::ColumnJs;
     use crate::typed_values::TypedValue::{Float64Value, Int64Value};
 
     use super::*;
 
     #[test]
-    fn test_compile_array() {
+    fn test_array() {
         assert_eq!(CompilerState::compile_script("[1, 4, 2, 8, 5, 7]").unwrap(),
                    ArrayLiteral(vec![
                        Literal(Int64Value(1)), Literal(Int64Value(4)), Literal(Int64Value(2)),
@@ -747,13 +792,13 @@ mod tests {
     }
 
     #[test]
-    fn test_compile_as_expression() {
+    fn test_as_expression() {
         let code = CompilerState::compile_script(r#"symbol: "ABC""#).unwrap();
         assert_eq!(code, AsValue("symbol".to_string(), Box::new(Literal(StringValue("ABC".into())))));
     }
 
     #[test]
-    fn test_compile_bitwise_and() {
+    fn test_bitwise_and() {
         assert_eq!(CompilerState::compile_script("20 & 3").unwrap(),
                    BitwiseAnd(
                        Box::new(Literal(Int64Value(20))),
@@ -762,7 +807,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compile_bitwise_or() {
+    fn test_bitwise_or() {
         assert_eq!(CompilerState::compile_script("20 | 3").unwrap(),
                    BitwiseOr(
                        Box::new(Literal(Int64Value(20))),
@@ -798,10 +843,10 @@ mod tests {
     #[test]
     fn test_lambda_function() {
         // examples:
-        // lambda (a: u64, b: u64) : u64 => a + b
-        // lambda (a, b) => a + b
+        // fn (a: u64, b: u64) : u64 => a + b
+        // fn (a, b) => a + b
         let code = CompilerState::compile_script(r#"
-        lambda (a, b) => a * b
+        fn (a, b) => a * b
         "#).unwrap();
         assert_eq!(code,
                    Literal(Function {
@@ -841,23 +886,23 @@ mod tests {
     }
 
     #[test]
-    fn test_compile_create_index() {
+    fn test_create_index() {
         let code = CompilerState::compile_script(r#"
         create index ns("compiler.create.stocks") [symbol, exchange]
         "#).unwrap();
-        assert_eq!(code,
-                   Create(IndexEntity {
-                       path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
-                       columns: vec![
-                           Variable("symbol".into()),
-                           Variable("exchange".into()),
-                       ],
-                   })
-        );
+        assert_eq!(code, Create {
+            path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
+            entity: IndexEntity {
+                columns: vec![
+                    Variable("symbol".into()),
+                    Variable("exchange".into()),
+                ],
+            },
+        });
     }
 
     #[test]
-    fn test_compile_create_table() {
+    fn test_create_table() {
         let ns_path = "compiler.create.stocks";
         let code = CompilerState::compile_script(r#"
         create table ns("compiler.create.stocks") (
@@ -865,21 +910,39 @@ mod tests {
             exchange: String(8),
             last_sale: f64)
         "#).unwrap();
-        assert_eq!(code,
-                   Create(TableEntity {
-                       path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
-                       columns: vec![
-                           ColumnJs::new("symbol", "String(8)", None),
-                           ColumnJs::new("exchange", "String(8)", None),
-                           ColumnJs::new("last_sale", "f64", None),
-                       ],
-                       from: None,
-                   })
-        );
+        assert_eq!(code, Create {
+            path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
+            entity: TableEntity {
+                columns: vec![
+                    ColumnJs::new("symbol", "String(8)", None),
+                    ColumnJs::new("exchange", "String(8)", None),
+                    ColumnJs::new("last_sale", "f64", None),
+                ],
+                from: None,
+            },
+        });
     }
 
     #[test]
-    fn test_compile_drop_table() {
+    fn test_declare_table() {
+        let model = CompilerState::compile_script(r#"
+        table(
+            symbol: String(8),
+            exchange: String(8),
+            last_sale: f64
+        )"#).unwrap();
+        assert_eq!(model, Declare(TableEntity {
+            columns: vec![
+                ColumnJs::new("symbol", "String(8)", None),
+                ColumnJs::new("exchange", "String(8)", None),
+                ColumnJs::new("last_sale", "f64", None),
+            ],
+            from: None,
+        }));
+    }
+
+    #[test]
+    fn test_drop_table() {
         let code = CompilerState::compile_script(r#"
         drop table ns('finance.securities.stocks')
         "#).unwrap();
@@ -892,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compile_json_literal_value() {
+    fn test_json_literal_value() {
         let code = CompilerState::compile_script(r#"
         {symbol: "ABC", exchange: "NYSE", last_sale: 16.79}
         "#).unwrap();
@@ -906,7 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn test_compile_numeric_literal_value() {
+    fn test_numeric_literal_value() {
         assert_eq!(CompilerState::compile_script("1_234_567_890").unwrap(),
                    Literal(Int64Value(1_234_567_890)));
 
@@ -915,34 +978,34 @@ mod tests {
     }
 
     #[test]
-    fn test_compile_not_expression() {
+    fn test_not_expression() {
         assert_eq!(CompilerState::compile_script("!false").unwrap(), Not(Box::new(FALSE)));
         assert_eq!(CompilerState::compile_script("!true").unwrap(), Not(Box::new(TRUE)));
     }
 
     #[test]
-    fn test_compile_mathematical_addition() {
+    fn test_mathematical_addition() {
         let opcodes = CompilerState::compile_script("n + 3").unwrap();
         assert_eq!(opcodes,
                    Plus(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(3)))));
     }
 
     #[test]
-    fn test_compile_mathematical_division() {
+    fn test_mathematical_division() {
         let opcodes = CompilerState::compile_script("n / 3").unwrap();
         assert_eq!(opcodes,
                    Divide(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(3)))));
     }
 
     #[test]
-    fn test_compile_mathematical_exponent() {
+    fn test_mathematical_exponent() {
         let opcodes = CompilerState::compile_script("5 ** 2").unwrap();
         assert_eq!(opcodes,
                    Pow(Box::new(Literal(Int64Value(5))), Box::new(Literal(Int64Value(2)))));
     }
 
     #[test]
-    fn test_compile_mathematical_exponent_via_symbol() {
+    fn test_mathematical_exponent_via_symbol() {
         let symbols = vec!["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
         let mut num = 0;
         for symbol in symbols {
@@ -954,69 +1017,69 @@ mod tests {
     }
 
     #[test]
-    fn test_compile_mathematical_factorial() {
+    fn test_mathematical_factorial() {
         let opcodes = CompilerState::compile_script("5¡").unwrap();
         assert_eq!(opcodes, Factorial(Box::new(Literal(Int64Value(5)))));
     }
 
     #[test]
-    fn test_compile_mathematical_modulus() {
+    fn test_mathematical_modulus() {
         let opcodes = CompilerState::compile_script("n % 4").unwrap();
         assert_eq!(opcodes,
                    Modulo(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(4)))));
     }
 
     #[test]
-    fn test_compile_mathematical_multiplication() {
+    fn test_mathematical_multiplication() {
         let opcodes = CompilerState::compile_script("n * 10").unwrap();
         assert_eq!(opcodes,
                    Multiply(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(10)))));
     }
 
     #[test]
-    fn test_compile_mathematical_subtraction() {
+    fn test_mathematical_subtraction() {
         let opcodes = CompilerState::compile_script("_ - 7").unwrap();
         assert_eq!(opcodes,
                    Minus(Box::new(Variable("_".into())), Box::new(Literal(Int64Value(7)))));
     }
 
     #[test]
-    fn test_compile_to_byte_code() {
+    fn test_to_byte_code() {
         // compile script to byte code
         let byte_code = CompilerState::compile_to_byte_code(r#"
         {w:'abc', x:1.0, y:2, z:[1, 2, 3]}
         "#).unwrap();
         assert_eq!(byte_code, vec![
-            A_JSON_LITERAL, 0, 0, 0, 0, 0, 0, 0, 8,
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'w',
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c',
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'x',
-            A_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0,
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'y',
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'z',
-            A_ARRAY_LIT, 0, 0, 0, 0, 0, 0, 0, 3,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 1,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
+            E_JSON_LITERAL, 0, 0, 0, 0, 0, 0, 0, 8,
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'w',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'x',
+            E_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0,
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'y',
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'z',
+            E_ARRAY_LIT, 0, 0, 0, 0, 0, 0, 0, 3,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 1,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
         ]);
     }
 
     #[test]
     fn test_decompile_from_byte_code() {
         let byte_code = vec![
-            A_JSON_LITERAL, 0, 0, 0, 0, 0, 0, 0, 8,
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'w',
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c',
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'x',
-            A_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0,
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'y',
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'z',
-            A_ARRAY_LIT, 0, 0, 0, 0, 0, 0, 0, 3,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 1,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
+            E_JSON_LITERAL, 0, 0, 0, 0, 0, 0, 0, 8,
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'w',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'x',
+            E_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0,
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'y',
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 1, b'z',
+            E_ARRAY_LIT, 0, 0, 0, 0, 0, 0, 0, 3,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 1,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
         ];
         // decompile byte code to model code
         let code = CompilerState::decompile_from_byte_code(&byte_code).unwrap();
@@ -1110,7 +1173,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_delete() {
+    fn test_delete() {
         let opcodes = CompilerState::compile_script(r#"
         delete from stocks
         "#).unwrap();
@@ -1122,7 +1185,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_delete_where_limit() {
+    fn test_delete_where_limit() {
         let opcodes = CompilerState::compile_script(r#"
         delete from stocks
         where last_sale >= 1.0
@@ -1142,13 +1205,13 @@ mod tests {
 
 
     #[test]
-    fn test_ql_from() {
+    fn test_from() {
         let opcodes = CompilerState::compile_script("from stocks").unwrap();
         assert_eq!(opcodes, From(Box::new(Variable("stocks".into()))));
     }
 
     #[test]
-    fn test_ql_from_where_limit() {
+    fn test_from_where_limit() {
         let opcodes = CompilerState::compile_script(r#"
         from stocks where last_sale >= 1.0 limit 20
         "#).unwrap();
@@ -1168,23 +1231,23 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_into_from_variable() {
+    fn test_append_from_variable() {
         let opcodes = CompilerState::compile_script(r#"
-        into ns("compiler.into.stocks") from stocks
+        append ns("compiler.into.stocks") from stocks
         "#).unwrap();
-        assert_eq!(opcodes, InsertInto {
+        assert_eq!(opcodes, Append {
             path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
             source: Box::new(From(Box::new(Variable("stocks".into())))),
         })
     }
 
     #[test]
-    fn test_ql_into_from_json_literal() {
+    fn test_append_from_json_literal() {
         let opcodes = CompilerState::compile_script(r#"
-        into ns("compiler.into.stocks")
+        append ns("compiler.into.stocks")
         from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
         "#).unwrap();
-        assert_eq!(opcodes, InsertInto {
+        assert_eq!(opcodes, Append {
             path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
             source: Box::new(From(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -1195,16 +1258,16 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_into_from_json_array() {
+    fn test_append_from_json_array() {
         let opcodes = CompilerState::compile_script(r#"
-        into ns("compiler.into.stocks")
+        append ns("compiler.into.stocks")
         from [
             { symbol: "ABC", exchange: "NYSE", last_sale: 11.1234 },
             { symbol: "DOG", exchange: "NASDAQ", last_sale: 0.1008 },
             { symbol: "SHARK", exchange: "AMEX", last_sale: 52.08 }
         ]
         "#).unwrap();
-        assert_eq!(opcodes, InsertInto {
+        assert_eq!(opcodes, Append {
             path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
             source: Box::new(From(Box::new(
                 ArrayLiteral(vec![
@@ -1229,7 +1292,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_ns() {
+    fn test_ns() {
         let code = CompilerState::compile_script(r#"
         ns("securities.etf.stocks")
         "#).unwrap();
@@ -1237,7 +1300,18 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_overwrite() {
+    fn test_into_ns_from_variable() {
+        let opcodes = CompilerState::compile_script(r#"
+        into ns("compiler.staging.stocks") from stocks
+        "#).unwrap();
+        assert_eq!(opcodes, IntoTable {
+            target: Box::new(Ns(Box::new(Literal(StringValue("compiler.staging.stocks".to_string()))))),
+            source: Box::new(From(Box::new(Variable("stocks".to_string())))),
+        })
+    }
+
+    #[test]
+    fn test_overwrite() {
         let opcodes = CompilerState::compile_script(r#"
         overwrite stocks
         via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
@@ -1261,7 +1335,15 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_select_from() {
+    fn test_reverse_from_variable() {
+        let code = CompilerState::compile_script(r#"
+        reverse from stocks
+        "#).unwrap();
+        assert_eq!(code, Reverse(Box::new(From(Box::new(Variable("stocks".to_string()))))))
+    }
+
+    #[test]
+    fn test_select_from_variable() {
         let opcodes = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         "#).unwrap();
@@ -1277,7 +1359,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_select_from_where() {
+    fn test_select_from_where() {
         let opcodes = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale >= 1.0
@@ -1299,7 +1381,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_select_from_where_limit() {
+    fn test_select_from_where_limit() {
         let opcodes = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale <= 1.0
@@ -1322,7 +1404,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_select_from_where_order_by_limit() {
+    fn test_select_from_where_order_by_limit() {
         let opcodes = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale < 1.0
@@ -1346,7 +1428,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ql_update() {
+    fn test_update() {
         let opcodes = CompilerState::compile_script(r#"
         update stocks
         via { last_sale: 0.1111 }

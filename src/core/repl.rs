@@ -11,7 +11,6 @@ use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{Clear, ClearType};
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use tokio::runtime::Builder;
 
 use shared_lib::{cnv_error, RemoteCallRequest, RemoteCallResponse, RowJs};
 
@@ -35,8 +34,8 @@ pub enum REPLConnection {
     LocalConnection,
     RemoteConnection {
         host: String,
-        port: u32
-    }
+        port: u32,
+    },
 }
 
 /// REPL application state
@@ -117,7 +116,7 @@ impl REPLState {
             .collect::<Vec<&str>>().join("; ");
         // create a new row
         let row = Row::new(id, columns, vec![
-            Field::new(TypedValue::RowID(id)),
+            Field::new(TypedValue::RowsAffected(id)),
             Field::new(TypedValue::StringValue(clean_input)),
         ]);
         // write the row
@@ -139,7 +138,7 @@ impl REPLState {
 }
 
 /// Starts the interactive shell
-pub async fn run( mut state: REPLState) -> std::io::Result<()> {
+pub async fn run(mut state: REPLState) -> std::io::Result<()> {
     println!("Welcome to Oxide REPL. Enter \"q!\" to quit.\n");
     let mut stdout = stdout();
     while state.is_alive {
@@ -206,39 +205,26 @@ fn read_lines() -> std::io::Result<String> {
 /// Processes user input against a local Oxide instance or a remote Oxide peer
 pub async fn process_statement(state: &mut REPLState, user_input: &str) -> std::io::Result<TypedValue> {
     state.put_history(user_input)?;
-    match state.connection {
+    match &state.connection {
         REPLConnection::LocalConnection =>
-            process_local_statement(state, user_input),
-        REPLConnection::RemoteConnection { .. } =>
-            process_remote_statement(state, user_input).await,
+            state.interpreter.evaluate(user_input),
+        REPLConnection::RemoteConnection { host, port } => {
+            let body = serde_json::to_string(&RemoteCallRequest::new(user_input.to_string()))?;
+            let response = reqwest::Client::new()
+                .post(format!("http://{}:{}/rpc", host, port))
+                .body(body)
+                .header("Content-type", "application/json")
+                .send()
+                .await.map_err(|e| cnv_error!(e))?;
+            let response_body = response.text().await.map_err(|e| cnv_error!(e))?;
+            let outcome = RemoteCallResponse::from_string(response_body.as_str())?;
+            if let Some(message) = outcome.get_message() {
+                Ok(ErrorValue(message))
+            } else {
+                Ok(TypedValue::from_json(outcome.get_result()))
+            }
+        }
     }
-}
-
-/// Processes user input against a local Oxide instance
-fn process_local_statement(state: &mut REPLState, user_input: &str) -> std::io::Result<TypedValue> {
-    state.interpreter.evaluate(user_input)
-}
-
-/// Processes user input against a remote Oxide peer
-async fn process_remote_statement(state: &mut REPLState, user_input: &str) -> std::io::Result<TypedValue> {
-    let body = serde_json::to_string(&RemoteCallRequest::new(user_input.to_string()))?;
-    let response = reqwest::Client::new()
-        .post(rpc_uri("0.0.0.0", "8080"))
-        .body(body)
-        .header("Content-type", "application/json")
-        .send()
-        .await.map_err(|e| cnv_error!(e))?;
-    let response_body = response.text().await.map_err(|e| cnv_error!(e))?;
-    let outcome = RemoteCallResponse::from_string(response_body.as_str())?;
-    if let Some(message) = outcome.get_message() {
-        Ok(ErrorValue(message))
-    } else {
-        Ok(TypedValue::from_json(outcome.get_result()))
-    }
-}
-
-fn rpc_uri(host: &str, port: &str) -> String {
-    format!("http://{}:{}/rpc", host, port)
 }
 
 // prints messages to STDOUT

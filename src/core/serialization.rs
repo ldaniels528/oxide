@@ -10,165 +10,123 @@ use crate::byte_buffer::ByteBuffer;
 use crate::compiler::fail_expr;
 use crate::data_types::*;
 use crate::data_types::DataType::*;
-use crate::expression::{Expression, UNDEFINED};
+use crate::expression::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-use crate::expression::DropTarget::{IndexTarget, TableTarget};
 use crate::expression::Expression::*;
+use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::machine::MachineState;
 use crate::server::ColumnJs;
 use crate::typed_values::*;
 use crate::typed_values::TypedValue::*;
 
-// constants
-pub const A_AND: u8 = 0;
-pub const A_ARRAY_LIT: u8 = 1;
-pub const A_AS_VALUE: u8 = 2;
-pub const A_BETWEEN: u8 = 3;
-pub const A_BITWISE_AND: u8 = 4;
-pub const A_BITWISE_OR: u8 = 5;
-pub const A_CODE_BLOCK: u8 = 6;
-pub const A_CONTAINS: u8 = 7;
-pub const A_CREATE_INDEX: u8 = 8;
-pub const A_CREATE_TABLE: u8 = 9;
-pub const A_DELETE: u8 = 10;
-pub const A_DIVIDE: u8 = 12;
-pub const A_DROP: u8 = 13;
-pub const A_EQUAL: u8 = 14;
-pub const A_EVAL: u8 = 52;
-pub const A_FACTORIAL: u8 = 15;
-pub const A_FROM: u8 = 16;
-pub const A_GREATER_THAN: u8 = 17;
-pub const A_GREATER_OR_EQUAL: u8 = 18;
-pub const A_IF: u8 = 19;
-pub const A_INTO: u8 = 20;
-pub const A_JSON_LITERAL: u8 = 11;
-pub const A_LESS_THAN: u8 = 21;
-pub const A_LESS_OR_EQUAL: u8 = 22;
-pub const A_LIMIT: u8 = 23;
-pub const A_LITERAL: u8 = 24;
-pub const A_MINUS: u8 = 25;
-pub const A_MODULO: u8 = 26;
-pub const A_MULTIPLY: u8 = 27;
-pub const A_NEG: u8 = 28;
-pub const A_NOT: u8 = 29;
-pub const A_NOT_EQUAL: u8 = 30;
-pub const A_NS: u8 = 31;
-pub const A_OR: u8 = 32;
-pub const A_OVERWRITE: u8 = 33;
-pub const A_PLUS: u8 = 34;
-pub const A_POW: u8 = 35;
-pub const A_RANGE: u8 = 36;
-pub const A_RETURN: u8 = 37;
-pub const A_SELECT: u8 = 38;
-pub const A_SET_VAR: u8 = 39;
-pub const A_SHIFT_LEFT: u8 = 40;
-pub const A_SHIFT_RIGHT: u8 = 41;
-pub const A_TRUNCATE: u8 = 42;
-pub const A_TUPLE: u8 = 43;
-pub const A_UPDATE: u8 = 44;
-pub const A_VAR_GET: u8 = 45;
-pub const A_VIA: u8 = 46;
-pub const A_XOR: u8 = 47;
-pub const A_WHERE: u8 = 48;
-pub const A_WHILE: u8 = 49;
-pub const A_ANON_FX: u8 = 50;
-pub const A_NAMED_FX: u8 = 51;
-
 /// compiles the expression into binary code
 pub fn assemble(expression: &Expression) -> Vec<u8> {
     use crate::expression::Expression::*;
     match expression {
-        And(a, b) => encode(A_AND, vec![a, b]),
-        ArrayLiteral(items) => encode_vec(A_ARRAY_LIT, items),
+        And(a, b) => encode(E_AND, vec![a, b]),
+        Append { path, source } => encode(E_APPEND, vec![path, source]),
+        ArrayLiteral(items) => encode_vec(E_ARRAY_LIT, items),
         AsValue(name, expr) =>
-            encode(A_AS_VALUE, vec![&Literal(StringValue(name.to_string())), expr]),
+            encode(E_AS_VALUE, vec![&Literal(StringValue(name.to_string())), expr]),
         Between(a, b, c) =>
-            encode(A_BETWEEN, vec![a, b, c]),
+            encode(E_BETWEEN, vec![a, b, c]),
+        Betwixt(a, b, c) =>
+            encode(E_BETWIXT, vec![a, b, c]),
         BitwiseAnd(a, b) =>
-            encode(A_BITWISE_AND, vec![a, b]),
+            encode(E_BITWISE_AND, vec![a, b]),
         BitwiseOr(a, b) =>
-            encode(A_BITWISE_OR, vec![a, b]),
-        CodeBlock(ops) => encode_vec(A_CODE_BLOCK, ops),
+            encode(E_BITWISE_OR, vec![a, b]),
+        CodeBlock(ops) => encode_vec(E_CODE_BLOCK, ops),
         ColumnSet(columns) => encode_columns(columns),
-        Contains(a, b) => encode(A_CONTAINS, vec![a, b]),
-        Create(IndexEntity { path, columns }) => {
+        Contains(a, b) => encode(E_CONTAINS, vec![a, b]),
+        Create { path, entity: IndexEntity { columns } } => {
             let mut args = vec![path.deref()];
             args.extend(columns);
-            encode(A_CREATE_INDEX, args)
+            encode(E_CREATE_INDEX, args)
         }
-        Create(TableEntity { path, columns, from }) =>
-            encode(A_CREATE_TABLE, vec![path, &ColumnSet(columns.clone()), &get_or_undef(from)]),
+        Create { path, entity: TableEntity { columns, from } } =>
+            encode(E_CREATE_TABLE, vec![path, &ColumnSet(columns.clone()), &get_or_undef(from)]),
+        Declare(IndexEntity { columns }) => {
+            let mut args = vec![];
+            args.extend(columns);
+            encode(E_DECLARE_INDEX, args)
+        }
+        Declare(TableEntity { columns, from }) =>
+            encode(E_DECLARE_TABLE, vec![&ColumnSet(columns.clone()), &get_or_undef(from)]),
         Delete { path, condition, limit } =>
-            encode(A_DELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
-        Divide(a, b) => encode(A_DIVIDE, vec![a, b]),
-        Drop(IndexTarget { path, if_exists }) => encode(A_DROP, vec![path]),
-        Drop(TableTarget { path, if_exists }) => encode(A_DROP, vec![path]),
-        Equal(a, b) => encode(A_EQUAL, vec![a, b]),
-        Eval(a) => encode(A_EVAL, vec![a]),
-        Factorial(a) => encode(A_FACTORIAL, vec![a]),
-        From(src) => encode(A_FROM, vec![src]),
+            encode(E_DELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
+        Divide(a, b) => encode(E_DIVIDE, vec![a, b]),
+        Drop(IndexTarget { path, if_exists }) => encode(E_DROP, vec![path]),
+        Drop(TableTarget { path, if_exists }) => encode(E_DROP, vec![path]),
+        Equal(a, b) => encode(E_EQUAL, vec![a, b]),
+        Eval(a) => encode(E_EVAL, vec![a]),
+        Factorial(a) => encode(E_FACTORIAL, vec![a]),
+        From(src) => encode(E_FROM, vec![src]),
         FunctionCall { fx, args } => {
             let mut values = vec![fx.deref()];
             values.extend(args);
-            encode(A_WHILE, values)
+            encode(E_WHILE, values)
         }
-        GreaterThan(a, b) => encode(A_GREATER_THAN, vec![a, b]),
-        GreaterOrEqual(a, b) => encode(A_GREATER_OR_EQUAL, vec![a, b]),
+        GreaterThan(a, b) => encode(E_GREATER_THAN, vec![a, b]),
+        GreaterOrEqual(a, b) => encode(E_GREATER_OR_EQUAL, vec![a, b]),
         If { condition, a, b } =>
-            encode(A_IF, vec![condition, a, &get_or_undef(b)]),
-        InsertInto { path, source } => encode(A_INTO, vec![path, source]),
+            encode(E_IF, vec![condition, a, &get_or_undef(b)]),
+        Include(path) => encode(E_INCLUDE, vec![path]),
+        IntoTable { source, target } => encode(E_INTO_TABLE, vec![source, target]),
         JSONLiteral(tuples) => assemble_json_object(tuples),
-        LessThan(a, b) => encode(A_LESS_THAN, vec![a, b]),
-        LessOrEqual(a, b) => encode(A_LESS_OR_EQUAL, vec![a, b]),
-        Limit { from, limit } => encode(A_LIMIT, vec![from, limit]),
-        Literal(value) => encode_value(A_LITERAL, value),
-        Minus(a, b) => encode(A_MINUS, vec![a, b]),
-        Modulo(a, b) => encode(A_MODULO, vec![a, b]),
-        Multiply(a, b) => encode(A_MULTIPLY, vec![a, b]),
-        Neg(a) => encode(A_NEG, vec![a]),
-        Not(a) => encode(A_NOT, vec![a]),
-        NotEqual(a, b) => encode(A_NOT_EQUAL, vec![a, b]),
-        Ns(a) => encode(A_NS, vec![a]),
-        Or(a, b) => encode(A_OR, vec![a, b]),
+        LessThan(a, b) => encode(E_LESS_THAN, vec![a, b]),
+        LessOrEqual(a, b) => encode(E_LESS_OR_EQUAL, vec![a, b]),
+        Limit { from, limit } => encode(E_LIMIT, vec![from, limit]),
+        Literal(value) => encode_value(E_LITERAL, value),
+        Minus(a, b) => encode(E_MINUS, vec![a, b]),
+        Modulo(a, b) => encode(E_MODULO, vec![a, b]),
+        Multiply(a, b) => encode(E_MULTIPLY, vec![a, b]),
+        Neg(a) => encode(E_NEG, vec![a]),
+        Not(a) => encode(E_NOT, vec![a]),
+        NotEqual(a, b) => encode(E_NOT_EQUAL, vec![a, b]),
+        Ns(a) => encode(E_NS, vec![a]),
+        Or(a, b) => encode(E_OR, vec![a, b]),
         Overwrite { path, source, condition, limit } => {
             let mut args = vec![];
             args.push(path.deref().clone());
             args.push(source.deref().clone());
             args.push(get_or_undef(condition));
             args.push(get_or_undef(limit));
-            encode_vec(A_OVERWRITE, &args)
+            encode_vec(E_OVERWRITE, &args)
         }
-        Plus(a, b) => encode(A_PLUS, vec![a, b]),
-        Pow(a, b) => encode(A_POW, vec![a, b]),
-        Range(a, b) => encode(A_RANGE, vec![a, b]),
-        Return(a) => encode_vec(A_RETURN, a),
+        Plus(a, b) => encode(E_PLUS, vec![a, b]),
+        Pow(a, b) => encode(E_POW, vec![a, b]),
+        Range(a, b) => encode(E_RANGE, vec![a, b]),
+        Return(a) => encode_vec(E_RETURN, a),
+        Reverse(a) => encode(E_REVERSE, vec![a]),
         Select {
             fields, from, condition,
             group_by, having,
             order_by, limit
         } => assemble_select(fields, from, condition, group_by, having, order_by, limit),
         SetVariable(name, expr) =>
-            encode(A_SET_VAR, vec![&Literal(StringValue(name.into())), expr]),
-        ShiftLeft(a, b) => encode(A_SHIFT_LEFT, vec![a, b]),
-        ShiftRight(a, b) => encode(A_SHIFT_RIGHT, vec![a, b]),
+            encode(E_VAR_SET, vec![&Literal(StringValue(name.into())), expr]),
+        Shall(a) => encode(E_SHALL, vec![a]),
+        ShiftLeft(a, b) => encode(E_SHIFT_LEFT, vec![a, b]),
+        ShiftRight(a, b) => encode(E_SHIFT_RIGHT, vec![a, b]),
         Truncate { path, limit: new_size } =>
-            encode(A_TRUNCATE, vec![path, &get_or_undef(new_size)]),
-        TupleExpr(values) => encode_vec(A_TUPLE, values),
+            encode(E_TRUNCATE, vec![path, &get_or_undef(new_size)]),
+        TupleLiteral(values) => encode_vec(E_TUPLE, values),
         Update { path, source, condition, limit } => {
             let mut args: Vec<Expression> = vec![];
             args.push(path.deref().clone());
             args.push(source.deref().clone());
             args.push(get_or_undef(condition));
             args.push(get_or_undef(limit));
-            encode_vec(A_UPDATE, &args)
+            encode_vec(E_UPDATE, &args)
         }
-        Variable(name) => encode(A_VAR_GET, vec![&Literal(StringValue(name.into()))]),
-        Via(src) => encode(A_VIA, vec![src]),
-        BitwiseXor(a, b) => encode(A_XOR, vec![a, b]),
+        Variable(name) => encode(E_VAR_GET, vec![&Literal(StringValue(name.into()))]),
+        Via(src) => encode(E_VIA, vec![src]),
+        BitwiseXor(a, b) => encode(E_BITWISE_XOR, vec![a, b]),
         Where { from, condition } =>
-            encode(A_WHERE, vec![from, condition]),
+            encode(E_WHERE, vec![from, condition]),
         While { condition, code } =>
-            encode(A_WHILE, vec![condition, code]),
+            encode(E_WHILE, vec![condition, code]),
     }
 }
 
@@ -182,7 +140,7 @@ fn assemble_json_object(tuples: &Vec<(String, Expression)>) -> Vec<u8> {
     let expressions = tuples.iter().flat_map(|(k, v)| {
         vec![Literal(StringValue(k.into())), v.clone()]
     }).collect::<Vec<Expression>>();
-    encode_vec(A_JSON_LITERAL, &expressions)
+    encode_vec(E_JSON_LITERAL, &expressions)
 }
 
 /// compiles a SELECT query into binary code
@@ -195,7 +153,7 @@ fn assemble_select(
     order_by: &Option<Vec<Expression>>,
     limit: &Option<Box<Expression>>,
 ) -> Vec<u8> {
-    let mut byte_code = vec![A_SELECT];
+    let mut byte_code = vec![E_SELECT];
     byte_code.extend(encode_array(fields));
     byte_code.extend(encode_opt_as_array(from));
     byte_code.extend(encode_opt_as_array(condition));
@@ -217,14 +175,14 @@ pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
         ErrorType => assemble_bytes(T_STRING, &assemble_usize(256)),
         Float32Type => assemble_bytes(T_FLOAT32, &vec![]),
         Float64Type => assemble_bytes(T_FLOAT64, &vec![]),
-        FuncType(columns) => assemble_bytes(T_FUNC, &encode_columns(columns)),
+        FuncType(columns) => assemble_bytes(T_FUNCTION, &encode_columns(columns)),
         Int8Type => assemble_bytes(T_INT8, &vec![]),
         Int16Type => assemble_bytes(T_INT16, &vec![]),
         Int32Type => assemble_bytes(T_INT32, &vec![]),
         Int64Type => assemble_bytes(T_INT64, &vec![]),
         Int128Type => assemble_bytes(T_INT128, &vec![]),
         JSONObjectType => assemble_bytes(T_JSON_OBJECT, &vec![]),
-        RowIDType => assemble_bytes(T_ROW_ID, &vec![]),
+        RowsAffectedType => assemble_bytes(T_ROWS_AFFECTED, &vec![]),
         StringType(size) => assemble_bytes(T_STRING, &assemble_usize(*size)),
         StructureType(columns) => assemble_bytes(T_STRUCT, &encode_columns(columns)),
         TableType(columns) => assemble_bytes(T_TABLE, &encode_columns(columns)),
@@ -270,86 +228,101 @@ pub fn div(ms: MachineState) -> std::io::Result<MachineState> {
 
 pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
     match buf.next_u8() {
-        A_AND => Ok(And(decode_box(buf)?, decode_box(buf)?)),
-        A_ARRAY_LIT => Ok(ArrayLiteral(decode_array(buf)?)),
-        A_AS_VALUE => Ok(AsValue(buf.next_string(), decode_box(buf)?)),
-        A_BETWEEN => Ok(Between(decode_box(buf)?, decode_box(buf)?, decode_box(buf)?)),
-        A_BITWISE_AND => Ok(BitwiseAnd(decode_box(buf)?, decode_box(buf)?)),
-        A_BITWISE_OR => Ok(BitwiseOr(decode_box(buf)?, decode_box(buf)?)),
-        A_CODE_BLOCK => Ok(CodeBlock(decode_array(buf)?)),
-        A_CONTAINS => Ok(Contains(decode_box(buf)?, decode_box(buf)?)),
-        A_CREATE_INDEX => {
+        E_AND => Ok(And(decode_box(buf)?, decode_box(buf)?)),
+        E_APPEND => Ok(Append { path: decode_box(buf)?, source: decode_box(buf)? }),
+        E_ARRAY_LIT => Ok(ArrayLiteral(decode_array(buf)?)),
+        E_AS_VALUE => Ok(AsValue(buf.next_string(), decode_box(buf)?)),
+        E_BETWEEN => Ok(Between(decode_box(buf)?, decode_box(buf)?, decode_box(buf)?)),
+        E_BETWIXT => Ok(Betwixt(decode_box(buf)?, decode_box(buf)?, decode_box(buf)?)),
+        E_BITWISE_AND => Ok(BitwiseAnd(decode_box(buf)?, decode_box(buf)?)),
+        E_BITWISE_OR => Ok(BitwiseOr(decode_box(buf)?, decode_box(buf)?)),
+        E_CODE_BLOCK => Ok(CodeBlock(decode_array(buf)?)),
+        E_CONTAINS => Ok(Contains(decode_box(buf)?, decode_box(buf)?)),
+        E_CREATE_INDEX => {
             let mut args = decode_array(buf)?;
             assert!(args.len() >= 2);
-            Ok(Create(IndexEntity {
+            Ok(Create {
                 path: Box::new(args.pop().unwrap().clone()),
-                columns: args,
-            }))
+                entity: IndexEntity {
+                    columns: args,
+                },
+            })
         }
-        A_CREATE_TABLE =>
-            Ok(Create(TableEntity {
+        E_CREATE_TABLE =>
+            Ok(Create {
                 path: decode_box(buf)?,
-                columns: buf.next_columns(),
-                from: decode_opt(buf)?,
-            })),
-        A_DELETE =>
+                entity: TableEntity {
+                    columns: buf.next_columns(),
+                    from: decode_opt(buf)?,
+                },
+            }),
+        E_DECLARE_INDEX =>
+            Ok(Declare(IndexEntity { columns: decode_array(buf)? })),
+        E_DECLARE_TABLE =>
+            Ok(Declare(TableEntity { columns: buf.next_columns(), from: decode_opt(buf)? })),
+        E_DELETE =>
             Ok(Delete {
                 path: decode_box(buf)?,
                 condition: decode_opt(buf)?,
                 limit: decode_opt(buf)?,
             }),
-        A_DIVIDE => Ok(Divide(decode_box(buf)?, decode_box(buf)?)),
-        A_DROP => Ok(Drop(TableTarget { path: decode_box(buf)?, if_exists: false })),
-        A_EQUAL => Ok(Equal(decode_box(buf)?, decode_box(buf)?)),
-        A_FACTORIAL => Ok(Factorial(decode_box(buf)?)),
-        A_FROM => Ok(From(decode_box(buf)?)),
-        A_GREATER_OR_EQUAL => Ok(GreaterOrEqual(decode_box(buf)?, decode_box(buf)?)),
-        A_GREATER_THAN => Ok(GreaterThan(decode_box(buf)?, decode_box(buf)?)),
-        A_IF => Ok(If { condition: decode_box(buf)?, a: decode_box(buf)?, b: decode_opt(buf)? }),
-        A_INTO => Ok(InsertInto { path: decode_box(buf)?, source: decode_box(buf)? }),
-        A_JSON_LITERAL => Ok(JSONLiteral(decode_json_object(buf)?)),
-        A_LESS_OR_EQUAL => Ok(LessOrEqual(decode_box(buf)?, decode_box(buf)?)),
-        A_LESS_THAN => Ok(LessThan(decode_box(buf)?, decode_box(buf)?)),
-        A_LIMIT => Ok(Limit { from: decode_box(buf)?, limit: decode_box(buf)? }),
-        A_LITERAL => Ok(Literal(buf.next_value()?)),
-        A_MINUS => Ok(Minus(decode_box(buf)?, decode_box(buf)?)),
-        A_MODULO => Ok(Modulo(decode_box(buf)?, decode_box(buf)?)),
-        A_MULTIPLY => Ok(Multiply(decode_box(buf)?, decode_box(buf)?)),
-        A_NEG => Ok(Neg(decode_box(buf)?)),
-        A_NOT => Ok(Not(decode_box(buf)?)),
-        A_NOT_EQUAL => Ok(NotEqual(decode_box(buf)?, decode_box(buf)?)),
-        A_OR => Ok(Or(decode_box(buf)?, decode_box(buf)?)),
-        A_OVERWRITE => Ok(Overwrite {
+        E_DIVIDE => Ok(Divide(decode_box(buf)?, decode_box(buf)?)),
+        E_DROP => Ok(Drop(TableTarget { path: decode_box(buf)?, if_exists: false })),
+        E_EQUAL => Ok(Equal(decode_box(buf)?, decode_box(buf)?)),
+        E_EVAL => Ok(Eval(decode_box(buf)?)),
+        E_FACTORIAL => Ok(Factorial(decode_box(buf)?)),
+        E_FROM => Ok(From(decode_box(buf)?)),
+        E_GREATER_OR_EQUAL => Ok(GreaterOrEqual(decode_box(buf)?, decode_box(buf)?)),
+        E_GREATER_THAN => Ok(GreaterThan(decode_box(buf)?, decode_box(buf)?)),
+        E_IF => Ok(If { condition: decode_box(buf)?, a: decode_box(buf)?, b: decode_opt(buf)? }),
+        E_INCLUDE => Ok(Include(decode_box(buf)?)),
+        E_INTO_TABLE => Ok(IntoTable { target: decode_box(buf)?, source: decode_box(buf)? }),
+        E_JSON_LITERAL => Ok(JSONLiteral(decode_json_object(buf)?)),
+        E_LESS_OR_EQUAL => Ok(LessOrEqual(decode_box(buf)?, decode_box(buf)?)),
+        E_LESS_THAN => Ok(LessThan(decode_box(buf)?, decode_box(buf)?)),
+        E_LIMIT => Ok(Limit { from: decode_box(buf)?, limit: decode_box(buf)? }),
+        E_LITERAL => Ok(Literal(buf.next_value()?)),
+        E_MINUS => Ok(Minus(decode_box(buf)?, decode_box(buf)?)),
+        E_MODULO => Ok(Modulo(decode_box(buf)?, decode_box(buf)?)),
+        E_MULTIPLY => Ok(Multiply(decode_box(buf)?, decode_box(buf)?)),
+        E_NEG => Ok(Neg(decode_box(buf)?)),
+        E_NOT => Ok(Not(decode_box(buf)?)),
+        E_NOT_EQUAL => Ok(NotEqual(decode_box(buf)?, decode_box(buf)?)),
+        E_NS => Ok(Ns(decode_box(buf)?)),
+        E_OR => Ok(Or(decode_box(buf)?, decode_box(buf)?)),
+        E_OVERWRITE => Ok(Overwrite {
             path: decode_box(buf)?,
             source: decode_box(buf)?,
             condition: decode_opt(buf)?,
             limit: decode_opt(buf)?,
         }),
-        A_PLUS => Ok(Plus(decode_box(buf)?, decode_box(buf)?)),
-        A_POW => Ok(Pow(decode_box(buf)?, decode_box(buf)?)),
-        A_RANGE => Ok(Range(decode_box(buf)?, decode_box(buf)?)),
-        A_RETURN => Ok(Return(decode_array(buf)?)),
-        A_SELECT => disassemble_select(buf),
-        A_SET_VAR =>
+        E_PLUS => Ok(Plus(decode_box(buf)?, decode_box(buf)?)),
+        E_POW => Ok(Pow(decode_box(buf)?, decode_box(buf)?)),
+        E_RANGE => Ok(Range(decode_box(buf)?, decode_box(buf)?)),
+        E_RETURN => Ok(Return(decode_array(buf)?)),
+        E_REVERSE => Ok(Reverse(decode_box(buf)?)),
+        E_SELECT => disassemble_select(buf),
+        E_VAR_SET =>
             match disassemble(buf)? {
                 Literal(StringValue(name)) => Ok(SetVariable(name, decode_box(buf)?)),
                 z => fail_expr("Expected String", &z)
             }
-        A_SHIFT_LEFT => Ok(ShiftLeft(decode_box(buf)?, decode_box(buf)?)),
-        A_SHIFT_RIGHT => Ok(ShiftRight(decode_box(buf)?, decode_box(buf)?)),
-        A_TRUNCATE => Ok(Truncate { path: decode_box(buf)?, limit: decode_opt(buf)? }),
-        A_TUPLE => Ok(TupleExpr(decode_array(buf)?)),
-        A_UPDATE => disassemble_update(buf),
-        A_VAR_GET =>
+        E_SHALL => Ok(Shall(decode_box(buf)?)),
+        E_SHIFT_LEFT => Ok(ShiftLeft(decode_box(buf)?, decode_box(buf)?)),
+        E_SHIFT_RIGHT => Ok(ShiftRight(decode_box(buf)?, decode_box(buf)?)),
+        E_TRUNCATE => Ok(Truncate { path: decode_box(buf)?, limit: decode_opt(buf)? }),
+        E_TUPLE => Ok(TupleLiteral(decode_array(buf)?)),
+        E_UPDATE => disassemble_update(buf),
+        E_VAR_GET =>
             match disassemble(buf)? {
                 Literal(StringValue(name)) => Ok(Variable(name)),
                 z => fail_expr("Expected identifier", &z)
             }
-        A_VIA => Ok(Via(decode_box(buf)?)),
-        A_XOR => Ok(BitwiseXor(decode_box(buf)?, decode_box(buf)?)),
-        A_WHERE => Ok(Where { from: decode_box(buf)?, condition: decode_box(buf)? }),
-        A_WHILE => Ok(While { condition: decode_box(buf)?, code: decode_box(buf)? }),
-        x => fail(format!("Invalid expression code {}", x))
+        E_VIA => Ok(Via(decode_box(buf)?)),
+        E_BITWISE_XOR => Ok(BitwiseXor(decode_box(buf)?, decode_box(buf)?)),
+        E_WHERE => Ok(Where { from: decode_box(buf)?, condition: decode_box(buf)? }),
+        E_WHILE => Ok(While { condition: decode_box(buf)?, code: decode_box(buf)? }),
+        z => fail(format!("Invalid expression code {}", z))
     }
 }
 
@@ -431,15 +404,22 @@ fn decode_value(buf: &mut ByteBuffer) -> std::io::Result<TypedValue> {
             T_UNDEFINED => Ok(Undefined),
             T_NULL => Ok(Null),
             T_BLOB => Ok(BLOB(buf.next_blob())),
+            T_BOOLEAN => Ok(Boolean(buf.next_bool())),
             T_CLOB => Ok(CLOB(buf.next_clob())),
             T_DATE => Ok(DateValue(buf.next_i64())),
             T_FLOAT32 => Ok(Float32Value(buf.next_f32())),
             T_FLOAT64 => Ok(Float64Value(buf.next_f64())),
-            T_INT8 => Ok(UInt8Value(buf.next_u8())),
+            T_INT8 => Ok(Int8Value(buf.next_i8())),
             T_INT16 => Ok(Int16Value(buf.next_i16())),
             T_INT32 => Ok(Int32Value(buf.next_i32())),
             T_INT64 => Ok(Int64Value(buf.next_i64())),
+            T_INT128 => Ok(Int128Value(buf.next_i128())),
             T_STRING => Ok(StringValue(buf.next_string())),
+            T_UINT8 => Ok(UInt8Value(buf.next_u8())),
+            T_UINT16 => Ok(UInt16Value(buf.next_u16())),
+            T_UINT32 => Ok(UInt32Value(buf.next_u32())),
+            T_UINT64 => Ok(UInt64Value(buf.next_u64())),
+            T_UINT128 => Ok(UInt128Value(buf.next_u128())),
             T_UUID => Ok(UUIDValue(buf.next_uuid())),
             x => fail(format!("Unhandled value code {}", x))
         }
@@ -464,7 +444,7 @@ fn decode_data_type(buf: &mut ByteBuffer) -> std::io::Result<DataType> {
         T_INT64 => Ok(Int64Type),
         T_INT128 => Ok(Int128Type),
         T_JSON_OBJECT => Ok(JSONObjectType),
-        T_ROW_ID => Ok(RowIDType),
+        T_ROWS_AFFECTED => Ok(RowsAffectedType),
         T_STRING => Ok(StringType(buf.next_u32() as usize)),
         T_TABLE => Ok(TableType(buf.next_columns())),
         T_UINT8 => Ok(UInt8Type),
@@ -603,7 +583,7 @@ mod tests {
     fn test_literal() {
         let model = Literal(StringValue("hello".into()));
         let byte_code = vec![
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 5, b'h', b'e', b'l', b'l', b'o',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 5, b'h', b'e', b'l', b'l', b'o',
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model);
@@ -613,7 +593,7 @@ mod tests {
     fn test_variable() {
         let model = Variable("name".into());
         let byte_code = vec![
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'n', b'a', b'm', b'e',
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'n', b'a', b'm', b'e',
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model);
@@ -625,11 +605,11 @@ mod tests {
                          Box::new(Multiply(Box::new(Literal(Int64Value(4))),
                                            Box::new(Literal(Int64Value(3))))));
         let byte_code = vec![
-            A_PLUS,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
-            A_MULTIPLY,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 4,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
+            E_PLUS,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 2,
+            E_MULTIPLY,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 4,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
         ];
         let mut buf = ByteBuffer::wrap(byte_code.clone());
         assert_eq!(assemble(&model), byte_code);
@@ -649,14 +629,14 @@ mod tests {
             limit: Some(Box::new(Literal(Int64Value(100)))),
         };
         let byte_code = vec![
-            A_DELETE,
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6,
+            E_DELETE,
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6,
             b's', b't', b'o', b'c', b'k', b's',
-            A_LESS_OR_EQUAL,
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9,
+            E_LESS_OR_EQUAL,
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9,
             b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
-            A_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 100,
+            E_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 100,
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model)
@@ -680,28 +660,28 @@ mod tests {
         };
         let byte_code = vec![
             // select symbol, exchange, last_sale
-            A_SELECT, 0, 0, 0, 0, 0, 0, 0, 3,
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
+            E_SELECT, 0, 0, 0, 0, 0, 0, 0, 3,
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
             // from stocks
             0, 0, 0, 0, 0, 0, 0, 1,
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b't', b'o', b'c', b'k', b's',
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b't', b'o', b'c', b'k', b's',
             // where last_sale <= 1.0
             0, 0, 0, 0, 0, 0, 0, 1,
-            A_LESS_OR_EQUAL,
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
-            A_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0, // 1.0
+            E_LESS_OR_EQUAL,
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
+            E_LITERAL, T_FLOAT64, 63, 240, 0, 0, 0, 0, 0, 0, // 1.0
             // group by ...
             0, 0, 0, 0, 0, 0, 0, 0,
             // having ...
             0, 0, 0, 0, 0, 0, 0, 0,
             // order by symbol
             0, 0, 0, 0, 0, 0, 0, 1,
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
             // limit 5
             0, 0, 0, 0, 0, 0, 0, 1,
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 5,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 5,
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model)
@@ -724,18 +704,18 @@ mod tests {
         };
         let byte_code = vec![
             // update stocks
-            A_UPDATE, 0, 0, 0, 0, 0, 0, 0, 4,
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b't', b'o', b'c', b'k', b's',
+            E_UPDATE, 0, 0, 0, 0, 0, 0, 0, 4,
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b't', b'o', b'c', b'k', b's',
             // via { last_sale: 0.1111 }
-            A_VIA, T_INT8, 0, 0, 0, 0, 0, 0, 0, 2,
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
-            A_LITERAL, T_FLOAT64, 63, 188, 113, 12, 178, 149, 233, 226, // 0.1111
+            E_VIA, E_JSON_LITERAL, 0, 0, 0, 0, 0, 0, 0, 2,
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
+            E_LITERAL, T_FLOAT64, 63, 188, 113, 12, 178, 149, 233, 226, // 0.1111
             // where symbol == 'ABC'
-            A_EQUAL,
-            A_VAR_GET, A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+            E_EQUAL,
+            E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
             // limit 10
-            A_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 10,
+            E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 10,
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model)
@@ -781,13 +761,13 @@ mod tests {
             ("last_sale".to_string(), Literal(Float64Value(11.1111))),
         ]);
         let byte_code = vec![
-            A_JSON_LITERAL, 0, 0, 0, 0, 0, 0, 0, 6,
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 3, b'T', b'R', b'X',
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
-            A_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
-            A_LITERAL, T_FLOAT64, 64, 38, 56, 226, 25, 101, 43, 212,
+            E_JSON_LITERAL, 0, 0, 0, 0, 0, 0, 0, 6,
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6, b's', b'y', b'm', b'b', b'o', b'l',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 3, b'T', b'R', b'X',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 8, b'e', b'x', b'c', b'h', b'a', b'n', b'g', b'e',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
+            E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 9, b'l', b'a', b's', b't', b'_', b's', b'a', b'l', b'e',
+            E_LITERAL, T_FLOAT64, 64, 38, 56, 226, 25, 101, 43, 212,
         ];
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model);

@@ -40,7 +40,7 @@ You'll find the executables in `./target/release/`:
 
 #### Run the tests
 
-To run the tests (~ 130 tests at the time of writing):
+To run the tests (~ 330 tests at the time of writing):
 
 ```bash
 cargo test
@@ -112,31 +112,30 @@ oxide.public[1]> create table ns("ldaniels.securities.stocks") (
 [1] Boolean in 9.5 millis
 true
 
-oxide.public[2]> into ns("ldaniels.securities.stocks")
-                from { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
-[2] RowID in 15.2 millis
+oxide.public[2]> append ns("interpreter.reverse.stocks")
+                 from { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
+[2] RowsAffected in 9.2 millis
 1
 
-oxide.public[3]> into ns("ldaniels.securities.stocks")
-                from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
-[3] RowID in 13.8 millis
-1
+oxide.public[3]> append ns("interpreter.reverse.stocks")
+                 from [
+                    { symbol: "TRX", exchange: "OTCBB", last_sale: 0.0076 },
+                    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                 ]
+[3] RowsAffected in 13.8 millis
+3
 
-oxide.public[4]> into ns("ldaniels.securities.stocks")
-                from { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-[4] RowID in 11.8 millis
-1
-
-oxide.public[5]> from ns("ldaniels.securities.stocks")
-[5] Table ~ 3 row(s) in 10.1 millis
+oxide.public[4]> reverse from ns("interpreter.reverse.stocks")
+[4] Table ~ 4 row(s) in 10.1 millis
 |-------------------------------|
 | symbol | exchange | last_sale |
 |-------------------------------|
-| ABC    | AMEX     | 12.49     |
-| BOOM   | NYSE     | 56.88     |
 | JET    | NASDAQ   | 32.12     |
+| BOOM   | NYSE     | 56.88     |
+| TRX    | OTCBB    | 0.0076    |
+| ABC    | AMEX     | 12.49     |
 |-------------------------------|
-
 ```
 
 ### API/REST

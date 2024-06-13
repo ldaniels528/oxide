@@ -18,35 +18,35 @@ use crate::tokens::Token;
 use crate::tokens::Token::Atom;
 
 pub const T_UNDEFINED: u8 = 0;
-pub const T_NULL: u8 = 1;
-pub const T_ARRAY: u8 = 2;
-pub const T_BLOB: u8 = 3;
-pub const T_BOOLEAN: u8 = 4;
-pub const T_CLOB: u8 = 5;
-pub const T_DATE: u8 = 6;
-pub const T_ERROR: u8 = 29;
-pub const T_ENUM: u8 = 7;
-pub const T_FLOAT32: u8 = 8;
-pub const T_FLOAT64: u8 = 9;
-pub const T_FUNC: u8 = 10;
-pub const T_INT8: u8 = 11;
-pub const T_INT16: u8 = 12;
-pub const T_INT32: u8 = 13;
-pub const T_INT64: u8 = 14;
-pub const T_INT128: u8 = 15;
-pub const T_JSON_OBJECT: u8 = 16;
-pub const T_ROW_ID: u8 = 17;
-pub const T_STRING: u8 = 18;
-pub const T_STRUCT: u8 = 19;
-pub const T_TABLE_REF: u8 = 20;
-pub const T_TABLE: u8 = 21;
-pub const T_TUPLE: u8 = 22;
-pub const T_UINT8: u8 = 23;
-pub const T_UINT16: u8 = 24;
-pub const T_UINT32: u8 = 25;
-pub const T_UINT64: u8 = 26;
-pub const T_UINT128: u8 = 27;
-pub const T_UUID: u8 = 28;
+pub const T_NULL: u8 = 4;
+pub const T_ARRAY: u8 = 8;
+pub const T_BLOB: u8 = 12;
+pub const T_BOOLEAN: u8 = 16;
+pub const T_CLOB: u8 = 20;
+pub const T_DATE: u8 = 24;
+pub const T_ERROR: u8 = 28;
+pub const T_ENUM: u8 = 32;
+pub const T_FLOAT32: u8 = 36;
+pub const T_FLOAT64: u8 = 40;
+pub const T_FUNCTION: u8 = 44;
+pub const T_INT8: u8 = 48;
+pub const T_INT16: u8 = 52;
+pub const T_INT32: u8 = 56;
+pub const T_INT64: u8 = 60;
+pub const T_INT128: u8 = 64;
+pub const T_JSON_OBJECT: u8 = 68;
+pub const T_ROWS_AFFECTED: u8 = 72;
+pub const T_STRING: u8 = 76;
+pub const T_STRUCT: u8 = 80;
+pub const T_TABLE_REF: u8 = 84;
+pub const T_TABLE: u8 = 88;
+pub const T_TUPLE: u8 = 92;
+pub const T_UINT8: u8 = 96;
+pub const T_UINT16: u8 = 100;
+pub const T_UINT32: u8 = 104;
+pub const T_UINT64: u8 = 108;
+pub const T_UINT128: u8 = 112;
+pub const T_UUID: u8 = 116;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
@@ -65,7 +65,7 @@ pub enum DataType {
     Int64Type,
     Int128Type,
     JSONObjectType,
-    RowIDType,
+    RowsAffectedType,
     StringType(usize),
     StructureType(Vec<ColumnJs>),
     TableType(Vec<ColumnJs>),
@@ -129,7 +129,7 @@ impl DataType {
                 "i64" => Ok(Int64Type),
                 "i128" => Ok(Int128Type),
                 "JSON" => Ok(JSONObjectType),
-                "RowID" => Ok(RowIDType),
+                "RowsAffected" => Ok(RowsAffectedType),
                 "String" => size_parameter(ts, |size| StringType(size)),
                 "struct" => column_parameters(ts, |columns| StructureType(columns)),
                 "Table" => column_parameters(ts, |columns| TableType(columns)),
@@ -165,7 +165,7 @@ impl DataType {
             Int64Type => 8,
             Int128Type => 16,
             JSONObjectType => 512,
-            RowIDType => 8,
+            RowsAffectedType => 8,
             StringType(size) => *size + size.to_be_bytes().len(),
             StructureType(columns) => columns.len() * 8,
             TableType(columns) => columns.len() * 8,
@@ -189,14 +189,14 @@ impl DataType {
             ErrorType => T_ERROR,
             Float32Type => T_FLOAT32,
             Float64Type => T_FLOAT64,
-            FuncType(..) => T_FUNC,
+            FuncType(..) => T_FUNCTION,
             Int8Type => T_INT8,
             Int16Type => T_INT16,
             Int32Type => T_INT32,
             Int64Type => T_INT64,
             Int128Type => T_INT128,
             JSONObjectType => T_JSON_OBJECT,
-            RowIDType => T_ROW_ID,
+            RowsAffectedType => T_ROWS_AFFECTED,
             StringType(..) => T_STRING,
             StructureType(..) => T_STRUCT,
             TableType(..) => T_TABLE,
@@ -226,7 +226,7 @@ impl DataType {
             Int64Type => "i64".into(),
             Int128Type => "i128".into(),
             JSONObjectType => "struct".into(),
-            RowIDType => "RecordNumber".into(),
+            RowsAffectedType => "RowsAffected".into(),
             StringType(size) => format!("String({})", size),
             StructureType(columns) => format!("struct({})", ColumnJs::render_columns(columns)),
             TableType(columns) => format!("Table({})", ColumnJs::render_columns(columns)),
@@ -340,8 +340,8 @@ mod tests {
     }
 
     #[test]
-    fn test_row_id() {
-        verify("RowID", RowIDType);
+    fn test_rows_affected() {
+        verify("RowsAffected", RowsAffectedType);
     }
 
     #[test]

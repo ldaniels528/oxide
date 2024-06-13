@@ -177,7 +177,7 @@ impl Row {
     /// Returns a [HashMap] containing name-values pairs that represent the row's internal state.
     pub fn to_hash_map(&self) -> HashMap<String, TypedValue> {
         let mut mapping = HashMap::new();
-        mapping.insert("_id".into(), TypedValue::RowID(self.id));
+        mapping.insert("_id".into(), TypedValue::RowsAffected(self.id));
         for (field, column) in self.fields.iter().zip(&self.columns) {
             mapping.insert(column.get_name().to_string(), field.value.clone());
         }
@@ -346,7 +346,7 @@ mod tests {
         use maplit::hashmap;
         let row = make_quote(111, &make_table_columns(), "AAA", "TCE", 1230.78);
         assert_eq!(row.to_hash_map(), hashmap!(
-            "_id".into() => TypedValue::RowID(111),
+            "_id".into() => TypedValue::RowsAffected(111),
             "symbol".into() => TypedValue::StringValue("AAA".into()),
             "exchange".into() => TypedValue::StringValue("TCE".into()),
             "last_sale".into() => TypedValue::Float64Value(1230.78),

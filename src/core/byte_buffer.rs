@@ -15,7 +15,6 @@ use crate::serialization::disassemble;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::*;
-use crate::typed_values::TypedValue::*;
 
 /// A JVM-inspired Byte Buffer utility (Big Endian)
 pub struct ByteBuffer {
@@ -298,7 +297,7 @@ impl ByteBuffer {
             T_DATE => Ok(DateValue(self.next_i64())),
             T_FLOAT32 => Ok(Float32Value(self.next_f32())),
             T_FLOAT64 => Ok(Float64Value(self.next_f64())),
-            T_FUNC => Ok(Function {
+            T_FUNCTION => Ok(Function {
                 params: self.next_columns(),
                 code: Box::new(disassemble(self)?),
             }),
@@ -308,7 +307,7 @@ impl ByteBuffer {
             T_INT64 => Ok(Int64Value(self.next_i64())),
             T_INT128 => Ok(Int128Value(self.next_i128())),
             T_JSON_OBJECT => Ok(JSONObjectValue(self.next_json()?)),
-            T_ROW_ID => Ok(RowID(self.next_u32() as usize)),
+            T_ROWS_AFFECTED => Ok(RowsAffected(self.next_u32() as usize)),
             T_STRING => Ok(StringValue(self.next_string())),
             T_TABLE_REF => Ok(TableRef(self.next_string())),
             T_TABLE => Ok(TableValue(self.next_table()?)),
