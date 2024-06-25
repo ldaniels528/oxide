@@ -26,7 +26,7 @@ use crate::fields::Field;
 use crate::model_row_collection::ModelRowCollection;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
-use crate::serialization::{disassemble};
+use crate::serialization::disassemble;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::*;
@@ -42,6 +42,7 @@ const UUID_FORMAT: &str =
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     Undefined,
+    Ack,
     Null,
     Array(Vec<TypedValue>),
     BLOB(Vec<u8>),
@@ -136,7 +137,7 @@ impl TypedValue {
 
     pub fn encode_value(value: &TypedValue) -> Vec<u8> {
         match value {
-            Null | Undefined => [0u8; 0].to_vec(),
+            Ack | Null | Undefined => [0u8; 0].to_vec(),
             Array(items) => {
                 let mut bytes = vec![];
                 bytes.extend(items.len().to_be_bytes());
@@ -278,6 +279,7 @@ impl TypedValue {
 
     pub fn get_type_name(&self) -> String {
         let result = match *self {
+            Ack => "Ack",
             Undefined => "Undefined",
             Null => "Null",
             Function { .. } => "Function",
@@ -313,6 +315,7 @@ impl TypedValue {
 
     pub fn ordinal(&self) -> u8 {
         match *self {
+            Ack => T_ACK,
             Undefined => T_UNDEFINED,
             Null => T_NULL,
             Function { .. } => T_FUNCTION,
@@ -355,6 +358,7 @@ impl TypedValue {
 
     pub fn to_json(&self) -> serde_json::Value {
         match self {
+            Ack => serde_json::Value::Bool(true),
             Array(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
             BLOB(bytes) => serde_json::json!(bytes),
@@ -400,6 +404,7 @@ impl TypedValue {
 
     pub fn unwrap_value(&self) -> String {
         match self {
+            Ack => "ack".to_string(),
             Array(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("[{}]", values.join(", "))
@@ -456,6 +461,7 @@ impl TypedValue {
         let iso_date_regex = Regex::new(ISO_DATE_FORMAT).map_err(|e| cnv_error!(e))?;
         let uuid_regex = Regex::new(UUID_FORMAT).map_err(|e| cnv_error!(e))?;
         let result = match raw_value {
+            s if s == "ack" => Ack,
             s if s == "false" => Boolean(false),
             s if s == "null" => Null,
             s if s == "true" => Boolean(true),
@@ -629,6 +635,8 @@ impl Add for TypedValue {
 
     fn add(self, rhs: Self) -> Self::Output {
         match (&self, &rhs) {
+            (Ack, Boolean(_)) => Boolean(true),
+            (Boolean(_), Ack) => Boolean(true),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
             (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
             _ => Self::numeric_op_2f(&self, &rhs, |a, b| a + b).unwrap_or(Undefined)
@@ -880,13 +888,25 @@ mod tests {
 
     #[test]
     fn test_to_json() {
-        verify_to_json(Boolean(false), serde_json::json!(false));
-        verify_to_json(Boolean(true), serde_json::json!(true));
+        verify_to_json(Ack, serde_json::Value::Bool(true));
+        verify_to_json(Boolean(false), serde_json::Value::Bool(false));
+        verify_to_json(Boolean(true), serde_json::Value::Bool(true));
         verify_to_json(DateValue(1709163679081), serde_json::Value::String("2024-02-28T23:41:19.081Z".into()));
+        verify_to_json(Float32Value(38.15999984741211), serde_json::json!(38.15999984741211));
         verify_to_json(Float64Value(100.1), serde_json::json!(100.1));
-        verify_to_json(Int64Value(100), serde_json::json!(100));
+        verify_to_json(Int8Value(-100), serde_json::json!(-100));
+        verify_to_json(Int16Value(-1000), serde_json::json!(-1000));
+        verify_to_json(Int32Value(-123_456), serde_json::json!(-123_456));
+        verify_to_json(Int64Value(-123_456_789), serde_json::json!(-123_456_789));
+        verify_to_json(Int128Value(-123_456_789), serde_json::json!(-123_456_789));
+        verify_to_json(UInt8Value(100), serde_json::json!(100));
+        verify_to_json(UInt16Value(1000), serde_json::json!(1000));
+        verify_to_json(UInt32Value(123_456), serde_json::json!(123_456));
+        verify_to_json(UInt64Value(123_456_789), serde_json::json!(123_456_789));
+        verify_to_json(UInt128Value(123_456_789), serde_json::json!(123_456_789));
         verify_to_json(Null, serde_json::Value::Null);
         verify_to_json(StringValue("Hello World".into()), serde_json::Value::String("Hello World".into()));
+        verify_to_json(Undefined, serde_json::Value::Null);
         verify_to_json(UUIDValue([
             0x67, 0x45, 0x23, 0x01, 0xAB, 0xCD, 0xEF, 0x89,
             0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
@@ -895,6 +915,7 @@ mod tests {
 
     #[test]
     fn test_wrap_and_unwrap_value() {
+        verify_wrap_unwrap("ack", Ack);
         verify_wrap_unwrap("false", Boolean(false));
         verify_wrap_unwrap("true", Boolean(true));
         verify_wrap_unwrap("2024-02-28T23:41:19.081Z", DateValue(1709163679081));
@@ -902,6 +923,7 @@ mod tests {
         verify_wrap_unwrap("100", Int64Value(100));
         verify_wrap_unwrap("null", Null);
         verify_wrap_unwrap("Hello World", StringValue("Hello World".into()));
+        verify_wrap_unwrap("undefined", Undefined);
         verify_wrap_unwrap("67452301-abcd-ef89-1234-567890abcdef", UUIDValue([
             0x67, 0x45, 0x23, 0x01, 0xAB, 0xCD, 0xEF, 0x89,
             0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,

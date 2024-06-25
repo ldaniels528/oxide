@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
 
-use crate::expression::{Expression, FALSE, MutateTarget, NULL, TRUE, UNDEFINED};
+use crate::expression::{ACK, Expression, FALSE, Infrastructure, MutateTarget, Mutation, NULL, Queryable, TRUE, UNDEFINED};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::TableTarget;
@@ -167,10 +167,15 @@ impl CompilerState {
     fn parse_keyword(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(Atom { text, .. }), ts) = ts.next() {
             match text.as_str() {
+                "[!]" => self.parse_expression_1a(ts, MustDie),
+                "[+]" => self.parse_expression_1a(ts, MustAck),
+                "[-]" => self.parse_expression_1a(ts, MustNotAck),
+                "[~]" => self.parse_expression_1a(ts, MustIgnoreAck),
+                "ack" => Ok((ACK, ts)),
                 "append" => self.parse_keyword_append(ts),
                 "create" => self.parse_keyword_create(ts),
                 "delete" => self.parse_keyword_delete(ts),
-                "drop" => self.parse_mutate_target(ts, Drop),
+                "drop" => self.parse_mutate_target(ts, |m| Perform(Infrastructure::Drop(m))),
                 "eval" => self.parse_expression_1a(ts, Eval),
                 "false" => Ok((FALSE, ts)),
                 "fn" => self.parse_keyword_fn(ts),
@@ -179,14 +184,14 @@ impl CompilerState {
                     self.parse_keyword_queryables(from, ts)
                 }
                 "include" => self.parse_expression_1a(ts, Include),
-                "into" => self.parse_keyword_into(ts),
+                "if" => self.parse_keyword_if(ts),
+                "iff" => self.parse_keyword_iff(ts),
                 "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &ts),
                 "ns" => self.parse_expression_1a(ts, Ns),
                 "null" => Ok((NULL, ts)),
                 "overwrite" => self.parse_keyword_overwrite(ts),
-                "reverse" => self.parse_expression_1a(ts, Reverse),
+                "reverse" => self.parse_expression_1a(ts, |q| Inquire(Queryable::Reverse(q))),
                 "select" => self.parse_keyword_select(ts),
-                "shall" => self.parse_expression_1a(ts, Shall),
                 "table" => self.parse_keyword_table(ts),
                 "true" => Ok((TRUE, ts)),
                 "undefined" => Ok((UNDEFINED, ts)),
@@ -206,7 +211,7 @@ impl CompilerState {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.compile_next(ts)?;
         let (source, ts) = self.compile_next(ts)?;
-        Ok((Append { path: Box::new(table), source: Box::new(source) }, ts))
+        Ok((Mutate(Mutation::Append { path: Box::new(table), source: Box::new(source) }), ts))
     }
 
     fn parse_keyword_create(
@@ -228,10 +233,10 @@ impl CompilerState {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (index, ts) = self.compile_next(ts)?;
         if let (ArrayLiteral(columns), ts) = self.compile_next(ts.clone())? {
-            Ok((Create {
+            Ok((Perform(Infrastructure::Create {
                 path: Box::new(index),
                 entity: IndexEntity { columns },
-            }, ts))
+            }), ts))
         } else {
             fail_near("Columns expected", &ts)
         }
@@ -252,10 +257,10 @@ impl CompilerState {
             } else {
                 (None, ts)
             };
-            Ok((Create {
+            Ok((Perform(Infrastructure::Create {
                 path: Box::new(table),
                 entity: TableEntity { columns, from },
-            }, ts))
+            }), ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }
@@ -270,7 +275,7 @@ impl CompilerState {
         let from = from.expect("Expected keyword 'from'");
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Delete { path: Box::new(from), condition: condition.map(Box::new), limit: limit.map(Box::new) }, ts))
+        Ok((Mutate(Mutation::Delete { path: Box::new(from), condition: condition.map(Box::new), limit: limit.map(Box::new) }), ts))
     }
 
     /// Produces a function variant
@@ -291,15 +296,38 @@ impl CompilerState {
         }
     }
 
-    /// Parses an 'into' (copy) expression
-    /// ex: into ns("compiler.staging.stocks") from stocks
-    fn parse_keyword_into(
+    /// Parses an if expression
+    /// ex: if (x > 5) x else 5
+    fn parse_keyword_if(
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (target, ts) = self.compile_next(ts)?;
-        let (source, ts) = self.compile_next(ts)?;
-        Ok((IntoTable { target: Box::new(target), source: Box::new(source) }, ts))
+        let (condition, ts) = self.compile_next(ts)?;
+        let (a, ts) = self.compile_next(ts)?;
+        let (b, ts) = self.next_keyword_expr("else", ts)?;
+        Ok((If {
+            condition: Box::new(condition),
+            a: Box::new(a),
+            b: b.map(Box::new),
+        }, ts))
+    }
+
+    /// Parses an if function
+    /// ex: iff(x > 5, x, 5)
+    fn parse_keyword_iff(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (args, ts) = self.expect_arguments(ts)?;
+        match args.as_slice() {
+            [c, a, b] =>
+                Ok((If {
+                    condition: Box::new(c.clone()),
+                    a: Box::new(a.clone()),
+                    b: Some(Box::new(b.clone())),
+                }, ts)),
+            x => fail_near("Syntax error. Usage: iff(cond, a, b)", &ts)
+        }
     }
 
     /// compiles an OVERWRITE statement:
@@ -315,12 +343,12 @@ impl CompilerState {
         let (source, ts) = self.compile_next(ts)?;
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Overwrite {
+        Ok((Mutate(Mutation::Overwrite {
             path: Box::new(table),
             source: Box::new(source),
             condition: condition.map(Box::new),
             limit: limit.map(Box::new),
-        }, ts))
+        }), ts))
     }
 
     fn parse_keyword_queryables(
@@ -331,11 +359,11 @@ impl CompilerState {
         match ts.clone() {
             t if t.is("limit") => {
                 let (expr, ts) = self.compile_next(ts.skip())?;
-                self.parse_keyword_queryables(Limit { from: Box::new(host), limit: Box::new(expr) }, ts)
+                self.parse_keyword_queryables(Inquire(Queryable::Limit { from: Box::new(host), limit: Box::new(expr) }), ts)
             }
             t if t.is("where") => {
                 let (expr, ts) = self.compile_next(ts.skip())?;
-                self.parse_keyword_queryables(Where { from: Box::new(host), condition: Box::new(expr) }, ts)
+                self.parse_keyword_queryables(Inquire(Queryable::Where { from: Box::new(host), condition: Box::new(expr) }), ts)
             }
             _ => Ok((host, ts))
         }
@@ -352,7 +380,7 @@ impl CompilerState {
         let (having, ts) = self.next_keyword_expr("having", ts)?;
         let (order_by, ts) = self.next_keyword_expression_list("order", "by", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Select {
+        Ok((Inquire(Queryable::Select {
             fields,
             from: from.map(Box::new),
             condition: condition.map(Box::new),
@@ -360,7 +388,7 @@ impl CompilerState {
             having: having.map(Box::new),
             order_by,
             limit: limit.map(Box::new),
-        }, ts))
+        }), ts))
     }
 
     /// Parses a table expression.
@@ -378,7 +406,7 @@ impl CompilerState {
             } else {
                 (None, ts)
             };
-            Ok((Declare(TableEntity { columns, from }), ts))
+            Ok((Perform(Infrastructure::Declare(TableEntity { columns, from })), ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }
@@ -391,12 +419,12 @@ impl CompilerState {
         let (source, ts) = self.compile_next(ts)?;
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Update {
+        Ok((Mutate(Mutation::Update {
             path: Box::new(table),
             source: Box::new(source),
             condition: condition.map(Box::new),
             limit: limit.map(Box::new),
-        }, ts))
+        }), ts))
     }
 
     fn parse_atom(
@@ -776,7 +804,7 @@ pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io:
 #[cfg(test)]
 mod tests {
     use crate::data_types::*;
-    use crate::expression::{E_ARRAY_LIT, E_JSON_LITERAL, E_LITERAL};
+    use crate::expression::{E_ARRAY_LIT, E_JSON_LITERAL, E_LITERAL, Infrastructure, Mutation, Queryable};
     use crate::server::ColumnJs;
     use crate::typed_values::TypedValue::{Float64Value, Int64Value};
 
@@ -890,7 +918,7 @@ mod tests {
         let code = CompilerState::compile_script(r#"
         create index ns("compiler.create.stocks") [symbol, exchange]
         "#).unwrap();
-        assert_eq!(code, Create {
+        assert_eq!(code, Perform(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
             entity: IndexEntity {
                 columns: vec![
@@ -898,7 +926,7 @@ mod tests {
                     Variable("exchange".into()),
                 ],
             },
-        });
+        }));
     }
 
     #[test]
@@ -910,7 +938,7 @@ mod tests {
             exchange: String(8),
             last_sale: f64)
         "#).unwrap();
-        assert_eq!(code, Create {
+        assert_eq!(code, Perform(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
             entity: TableEntity {
                 columns: vec![
@@ -920,7 +948,7 @@ mod tests {
                 ],
                 from: None,
             },
-        });
+        }));
     }
 
     #[test]
@@ -931,14 +959,14 @@ mod tests {
             exchange: String(8),
             last_sale: f64
         )"#).unwrap();
-        assert_eq!(model, Declare(TableEntity {
+        assert_eq!(model, Perform(Infrastructure::Declare(TableEntity {
             columns: vec![
                 ColumnJs::new("symbol", "String(8)", None),
                 ColumnJs::new("exchange", "String(8)", None),
                 ColumnJs::new("last_sale", "f64", None),
             ],
             from: None,
-        }));
+        })));
     }
 
     #[test]
@@ -947,11 +975,56 @@ mod tests {
         drop table ns('finance.securities.stocks')
         "#).unwrap();
         assert_eq!(code,
-                   Drop(TableTarget {
+                   Perform(Infrastructure::Drop(TableTarget {
                        path: Box::new(Ns(Box::new(Literal(StringValue("finance.securities.stocks".into()))))),
                        if_exists: false,
-                   })
+                   }))
         );
+    }
+
+    #[test]
+    fn test_if() {
+        let code = CompilerState::compile_script(r#"
+        if(n > 100) "Yes"
+        "#).unwrap();
+        assert_eq!(code, If {
+            condition: Box::new(GreaterThan(
+                Box::new(Variable("n".to_string())),
+                Box::new(Literal(Int64Value(100)))
+            )),
+            a: Box::new(Literal(StringValue("Yes".to_string()))),
+            b: None,
+        });
+    }
+
+    #[test]
+    fn test_if_else() {
+        let code = CompilerState::compile_script(r#"
+        if(n > 100) n else m
+        "#).unwrap();
+        assert_eq!(code, If {
+            condition: Box::new(GreaterThan(
+                Box::new(Variable("n".to_string())),
+                Box::new(Literal(Int64Value(100)))
+            )),
+            a: Box::new(Variable("n".to_string())),
+            b: Some(Box::new(Variable("m".to_string()))),
+        });
+    }
+
+    #[test]
+    fn test_iff() {
+        let code = CompilerState::compile_script(r#"
+        iff(x > 5, a, b)
+        "#).unwrap();
+        assert_eq!(code, If {
+            condition: Box::new(GreaterThan(
+                Box::new(Variable("x".to_string())),
+                Box::new(Literal(Int64Value(5)))
+            )),
+            a: Box::new(Variable("a".to_string())),
+            b: Some(Box::new(Variable("b".to_string()))),
+        });
     }
 
     #[test]
@@ -1041,6 +1114,36 @@ mod tests {
         let opcodes = CompilerState::compile_script("_ - 7").unwrap();
         assert_eq!(opcodes,
                    Minus(Box::new(Variable("_".into())), Box::new(Literal(Int64Value(7)))));
+    }
+
+    #[test]
+    fn test_must_succeed() {
+        let code = CompilerState::compile_script(r#"
+        [+] eval "5 + 7"
+        "#).unwrap();
+        assert_eq!(code, MustAck(Box::new(
+            Eval(Box::new(Literal(StringValue("5 + 7".to_string()))))
+        )));
+    }
+
+    #[test]
+    fn test_must_not_succeed() {
+        let code = CompilerState::compile_script(r#"
+        [-] eval "7 / 0"
+        "#).unwrap();
+        assert_eq!(code, MustNotAck(Box::new(
+            Eval(Box::new(Literal(StringValue("7 / 0".to_string()))))
+        )))
+    }
+
+    #[test]
+    fn test_must_ignore_failure() {
+        let code = CompilerState::compile_script(r#"
+        [~] eval "7 / 0"
+        "#).unwrap();
+        assert_eq!(code, MustIgnoreAck(Box::new(
+            Eval(Box::new(Literal(StringValue("7 / 0".to_string()))))
+        )))
     }
 
     #[test]
@@ -1177,11 +1280,11 @@ mod tests {
         let opcodes = CompilerState::compile_script(r#"
         delete from stocks
         "#).unwrap();
-        assert_eq!(opcodes, Delete {
+        assert_eq!(opcodes, Mutate(Mutation::Delete {
             path: Box::new(Variable("stocks".into())),
             condition: None,
             limit: None,
-        })
+        }))
     }
 
     #[test]
@@ -1191,7 +1294,7 @@ mod tests {
         where last_sale >= 1.0
         limit 100
         "#).unwrap();
-        assert_eq!(opcodes, Delete {
+        assert_eq!(opcodes, Mutate(Mutation::Delete {
             path: Box::new(Variable("stocks".into())),
             condition: Some(
                 Box::new(GreaterOrEqual(
@@ -1200,7 +1303,7 @@ mod tests {
                 ))
             ),
             limit: Some(Box::new(Literal(Int64Value(100)))),
-        })
+        }))
     }
 
 
@@ -1216,17 +1319,17 @@ mod tests {
         from stocks where last_sale >= 1.0 limit 20
         "#).unwrap();
         assert_eq!(opcodes,
-                   Limit {
+                   Inquire(Queryable::Limit {
                        from: Box::new(
-                           Where {
+                           Inquire(Queryable::Where {
                                from: Box::new(From(Box::new(Variable("stocks".into())))),
                                condition: Box::new(GreaterOrEqual(
                                    Box::new(Variable("last_sale".into())),
                                    Box::new(Literal(Float64Value(1.0))),
                                )),
-                           }),
+                           })),
                        limit: Box::new(Literal(Int64Value(20))),
-                   }
+                   })
         );
     }
 
@@ -1235,10 +1338,10 @@ mod tests {
         let opcodes = CompilerState::compile_script(r#"
         append ns("compiler.into.stocks") from stocks
         "#).unwrap();
-        assert_eq!(opcodes, Append {
+        assert_eq!(opcodes, Mutate(Mutation::Append {
             path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
             source: Box::new(From(Box::new(Variable("stocks".into())))),
-        })
+        }))
     }
 
     #[test]
@@ -1247,14 +1350,14 @@ mod tests {
         append ns("compiler.into.stocks")
         from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
         "#).unwrap();
-        assert_eq!(opcodes, Append {
+        assert_eq!(opcodes, Mutate(Mutation::Append {
             path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
             source: Box::new(From(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("ABC".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
                 ("last_sale".into(), Literal(Float64Value(0.1008))),
             ])))),
-        })
+        }))
     }
 
     #[test]
@@ -1267,7 +1370,7 @@ mod tests {
             { symbol: "SHARK", exchange: "AMEX", last_sale: 52.08 }
         ]
         "#).unwrap();
-        assert_eq!(opcodes, Append {
+        assert_eq!(opcodes, Mutate(Mutation::Append {
             path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
             source: Box::new(From(Box::new(
                 ArrayLiteral(vec![
@@ -1288,7 +1391,7 @@ mod tests {
                     ]),
                 ]))
             )),
-        })
+        }))
     }
 
     #[test]
@@ -1300,17 +1403,6 @@ mod tests {
     }
 
     #[test]
-    fn test_into_ns_from_variable() {
-        let opcodes = CompilerState::compile_script(r#"
-        into ns("compiler.staging.stocks") from stocks
-        "#).unwrap();
-        assert_eq!(opcodes, IntoTable {
-            target: Box::new(Ns(Box::new(Literal(StringValue("compiler.staging.stocks".to_string()))))),
-            source: Box::new(From(Box::new(Variable("stocks".to_string())))),
-        })
-    }
-
-    #[test]
     fn test_overwrite() {
         let opcodes = CompilerState::compile_script(r#"
         overwrite stocks
@@ -1318,7 +1410,7 @@ mod tests {
         where symbol == "ABCQ"
         limit 5
         "#).unwrap();
-        assert_eq!(opcodes, Overwrite {
+        assert_eq!(opcodes, Mutate(Mutation::Overwrite {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -1331,7 +1423,7 @@ mod tests {
                     Box::new(Literal(StringValue("ABCQ".into()))),
                 ))),
             limit: Some(Box::new(Literal(Int64Value(5)))),
-        })
+        }))
     }
 
     #[test]
@@ -1339,7 +1431,7 @@ mod tests {
         let code = CompilerState::compile_script(r#"
         reverse from stocks
         "#).unwrap();
-        assert_eq!(code, Reverse(Box::new(From(Box::new(Variable("stocks".to_string()))))))
+        assert_eq!(code, Inquire(Queryable::Reverse(Box::new(From(Box::new(Variable("stocks".to_string())))))))
     }
 
     #[test]
@@ -1347,7 +1439,7 @@ mod tests {
         let opcodes = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         "#).unwrap();
-        assert_eq!(opcodes, Select {
+        assert_eq!(opcodes, Inquire(Queryable::Select {
             fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
             from: Some(Box::new(Variable("stocks".into()))),
             condition: None,
@@ -1355,7 +1447,7 @@ mod tests {
             having: None,
             order_by: None,
             limit: None,
-        })
+        }))
     }
 
     #[test]
@@ -1364,7 +1456,7 @@ mod tests {
         select symbol, exchange, last_sale from stocks
         where last_sale >= 1.0
         "#).unwrap();
-        assert_eq!(opcodes, Select {
+        assert_eq!(opcodes, Inquire(Queryable::Select {
             fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
             from: Some(Box::new(Variable("stocks".into()))),
             condition: Some(
@@ -1377,7 +1469,7 @@ mod tests {
             having: None,
             order_by: None,
             limit: None,
-        })
+        }))
     }
 
     #[test]
@@ -1387,7 +1479,7 @@ mod tests {
         where last_sale <= 1.0
         limit 5
         "#).unwrap();
-        assert_eq!(opcodes, Select {
+        assert_eq!(opcodes, Inquire(Queryable::Select {
             fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
             from: Some(Box::new(Variable("stocks".into()))),
             condition: Some(
@@ -1400,18 +1492,18 @@ mod tests {
             having: None,
             order_by: None,
             limit: Some(Box::new(Literal(Int64Value(5)))),
-        })
+        }))
     }
 
     #[test]
     fn test_select_from_where_order_by_limit() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcode = CompilerState::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale < 1.0
         order by symbol
         limit 5
         "#).unwrap();
-        assert_eq!(opcodes, Select {
+        assert_eq!(opcode, Inquire(Queryable::Select {
             fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
             from: Some(Box::new(Variable("stocks".into()))),
             condition: Some(
@@ -1424,7 +1516,7 @@ mod tests {
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
             limit: Some(Box::new(Literal(Int64Value(5)))),
-        })
+        }))
     }
 
     #[test]
@@ -1435,7 +1527,7 @@ mod tests {
         where symbol == "ABC"
         limit 10
         "#).unwrap();
-        assert_eq!(opcodes, Update {
+        assert_eq!(opcodes, Mutate(Mutation::Update {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("last_sale".into(), Literal(Float64Value(0.1111))),
@@ -1447,6 +1539,6 @@ mod tests {
                 ))
             ),
             limit: Some(Box::new(Literal(Int64Value(10)))),
-        })
+        }))
     }
 }

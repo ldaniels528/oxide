@@ -24,7 +24,6 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
     use crate::expression::Expression::*;
     match expression {
         And(a, b) => encode(E_AND, vec![a, b]),
-        Append { path, source } => encode(E_APPEND, vec![path, source]),
         ArrayLiteral(items) => encode_vec(E_ARRAY_LIT, items),
         AsValue(name, expr) =>
             encode(E_AS_VALUE, vec![&Literal(StringValue(name.to_string())), expr]),
@@ -36,28 +35,12 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
             encode(E_BITWISE_AND, vec![a, b]),
         BitwiseOr(a, b) =>
             encode(E_BITWISE_OR, vec![a, b]),
+        BitwiseXor(a, b) =>
+            encode(E_BITWISE_XOR, vec![a, b]),
         CodeBlock(ops) => encode_vec(E_CODE_BLOCK, ops),
         ColumnSet(columns) => encode_columns(columns),
         Contains(a, b) => encode(E_CONTAINS, vec![a, b]),
-        Create { path, entity: IndexEntity { columns } } => {
-            let mut args = vec![path.deref()];
-            args.extend(columns);
-            encode(E_CREATE_INDEX, args)
-        }
-        Create { path, entity: TableEntity { columns, from } } =>
-            encode(E_CREATE_TABLE, vec![path, &ColumnSet(columns.clone()), &get_or_undef(from)]),
-        Declare(IndexEntity { columns }) => {
-            let mut args = vec![];
-            args.extend(columns);
-            encode(E_DECLARE_INDEX, args)
-        }
-        Declare(TableEntity { columns, from }) =>
-            encode(E_DECLARE_TABLE, vec![&ColumnSet(columns.clone()), &get_or_undef(from)]),
-        Delete { path, condition, limit } =>
-            encode(E_DELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
         Divide(a, b) => encode(E_DIVIDE, vec![a, b]),
-        Drop(IndexTarget { path, if_exists }) => encode(E_DROP, vec![path]),
-        Drop(TableTarget { path, if_exists }) => encode(E_DROP, vec![path]),
         Equal(a, b) => encode(E_EQUAL, vec![a, b]),
         Eval(a) => encode(E_EVAL, vec![a]),
         Factorial(a) => encode(E_FACTORIAL, vec![a]),
@@ -72,20 +55,72 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         If { condition, a, b } =>
             encode(E_IF, vec![condition, a, &get_or_undef(b)]),
         Include(path) => encode(E_INCLUDE, vec![path]),
-        IntoTable { source, target } => encode(E_INTO_TABLE, vec![source, target]),
+        Inquire(q) => assemble_inquiry(q),
         JSONLiteral(tuples) => assemble_json_object(tuples),
         LessThan(a, b) => encode(E_LESS_THAN, vec![a, b]),
         LessOrEqual(a, b) => encode(E_LESS_OR_EQUAL, vec![a, b]),
-        Limit { from, limit } => encode(E_LIMIT, vec![from, limit]),
         Literal(value) => encode_value(E_LITERAL, value),
         Minus(a, b) => encode(E_MINUS, vec![a, b]),
         Modulo(a, b) => encode(E_MODULO, vec![a, b]),
         Multiply(a, b) => encode(E_MULTIPLY, vec![a, b]),
+        MustAck(a) => encode(E_MUST_ACK, vec![a]),
+        MustDie(a) => encode(E_MUST_DIE, vec![a]),
+        MustIgnoreAck(a) => encode(E_MUST_IGNORE_ACK, vec![a]),
+        MustNotAck(a) => encode(E_MUST_NOT_ACK, vec![a]),
+        Mutate(m) => assemble_modification(m),
         Neg(a) => encode(E_NEG, vec![a]),
         Not(a) => encode(E_NOT, vec![a]),
         NotEqual(a, b) => encode(E_NOT_EQUAL, vec![a, b]),
         Ns(a) => encode(E_NS, vec![a]),
         Or(a, b) => encode(E_OR, vec![a, b]),
+        Perform(i) => assemble_infrastructure(i),
+        Plus(a, b) => encode(E_PLUS, vec![a, b]),
+        Pow(a, b) => encode(E_POW, vec![a, b]),
+        Range(a, b) => encode(E_RANGE, vec![a, b]),
+        Return(a) => encode_vec(E_RETURN, a),
+        SetVariable(name, expr) =>
+            encode(E_VAR_SET, vec![&Literal(StringValue(name.into())), expr]),
+        ShiftLeft(a, b) => encode(E_SHIFT_LEFT, vec![a, b]),
+        ShiftRight(a, b) => encode(E_SHIFT_RIGHT, vec![a, b]),
+        TupleLiteral(values) => encode_vec(E_TUPLE, values),
+        Variable(name) => encode(E_VAR_GET, vec![&Literal(StringValue(name.into()))]),
+        Via(src) => encode(E_VIA, vec![src]),
+        While { condition, code } =>
+            encode(E_WHILE, vec![condition, code]),
+    }
+}
+
+
+/// compiles the [Infrastructure] into binary code
+pub fn assemble_infrastructure(expression: &Infrastructure) -> Vec<u8> {
+    use Infrastructure::*;
+    match expression {
+        Create { path, entity: IndexEntity { columns } } => {
+            let mut args = vec![path.deref()];
+            args.extend(columns);
+            encode(E_CREATE_INDEX, args)
+        }
+        Create { path, entity: TableEntity { columns, from } } =>
+            encode(E_CREATE_TABLE, vec![path, &ColumnSet(columns.clone()), &get_or_undef(from)]),
+        Declare(IndexEntity { columns }) => {
+            let mut args = vec![];
+            args.extend(columns);
+            encode(E_DECLARE_INDEX, args)
+        }
+        Declare(TableEntity { columns, from }) =>
+            encode(E_DECLARE_TABLE, vec![&ColumnSet(columns.clone()), &get_or_undef(from)]),
+        Drop(IndexTarget { path, if_exists }) => encode(E_DROP, vec![path]),
+        Drop(TableTarget { path, if_exists }) => encode(E_DROP, vec![path]),
+    }
+}
+
+/// compiles the [Mutation] into binary code
+pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
+    use Mutation::*;
+    match expression {
+        Append { path, source } => encode(E_APPEND, vec![path, source]),
+        Delete { path, condition, limit } =>
+            encode(E_DELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
         Overwrite { path, source, condition, limit } => {
             let mut args = vec![];
             args.push(path.deref().clone());
@@ -94,24 +129,8 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
             args.push(get_or_undef(limit));
             encode_vec(E_OVERWRITE, &args)
         }
-        Plus(a, b) => encode(E_PLUS, vec![a, b]),
-        Pow(a, b) => encode(E_POW, vec![a, b]),
-        Range(a, b) => encode(E_RANGE, vec![a, b]),
-        Return(a) => encode_vec(E_RETURN, a),
-        Reverse(a) => encode(E_REVERSE, vec![a]),
-        Select {
-            fields, from, condition,
-            group_by, having,
-            order_by, limit
-        } => assemble_select(fields, from, condition, group_by, having, order_by, limit),
-        SetVariable(name, expr) =>
-            encode(E_VAR_SET, vec![&Literal(StringValue(name.into())), expr]),
-        Shall(a) => encode(E_SHALL, vec![a]),
-        ShiftLeft(a, b) => encode(E_SHIFT_LEFT, vec![a, b]),
-        ShiftRight(a, b) => encode(E_SHIFT_RIGHT, vec![a, b]),
         Truncate { path, limit: new_size } =>
             encode(E_TRUNCATE, vec![path, &get_or_undef(new_size)]),
-        TupleLiteral(values) => encode_vec(E_TUPLE, values),
         Update { path, source, condition, limit } => {
             let mut args: Vec<Expression> = vec![];
             args.push(path.deref().clone());
@@ -120,13 +139,22 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
             args.push(get_or_undef(limit));
             encode_vec(E_UPDATE, &args)
         }
-        Variable(name) => encode(E_VAR_GET, vec![&Literal(StringValue(name.into()))]),
-        Via(src) => encode(E_VIA, vec![src]),
-        BitwiseXor(a, b) => encode(E_BITWISE_XOR, vec![a, b]),
+    }
+}
+
+/// compiles the [Queryable] into binary code
+pub fn assemble_inquiry(expression: &Queryable) -> Vec<u8> {
+    use Queryable::*;
+    match expression {
+        Limit { from, limit } => encode(E_LIMIT, vec![from, limit]),
+        Reverse(a) => encode(E_REVERSE, vec![a]),
+        Select {
+            fields, from, condition,
+            group_by, having,
+            order_by, limit
+        } => assemble_select(fields, from, condition, group_by, having, order_by, limit),
         Where { from, condition } =>
             encode(E_WHERE, vec![from, condition]),
-        While { condition, code } =>
-            encode(E_WHILE, vec![condition, code]),
     }
 }
 
@@ -227,9 +255,10 @@ pub fn div(ms: MachineState) -> std::io::Result<MachineState> {
 }
 
 pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
+    use Expression::*;
     match buf.next_u8() {
         E_AND => Ok(And(decode_box(buf)?, decode_box(buf)?)),
-        E_APPEND => Ok(Append { path: decode_box(buf)?, source: decode_box(buf)? }),
+        E_APPEND => Ok(Mutate(Mutation::Append { path: decode_box(buf)?, source: decode_box(buf)? })),
         E_ARRAY_LIT => Ok(ArrayLiteral(decode_array(buf)?)),
         E_AS_VALUE => Ok(AsValue(buf.next_string(), decode_box(buf)?)),
         E_BETWEEN => Ok(Between(decode_box(buf)?, decode_box(buf)?, decode_box(buf)?)),
@@ -241,33 +270,33 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_CREATE_INDEX => {
             let mut args = decode_array(buf)?;
             assert!(args.len() >= 2);
-            Ok(Create {
+            Ok(Perform(Infrastructure::Create {
                 path: Box::new(args.pop().unwrap().clone()),
                 entity: IndexEntity {
                     columns: args,
                 },
-            })
+            }))
         }
         E_CREATE_TABLE =>
-            Ok(Create {
+            Ok(Perform(Infrastructure::Create {
                 path: decode_box(buf)?,
                 entity: TableEntity {
                     columns: buf.next_columns(),
                     from: decode_opt(buf)?,
                 },
-            }),
+            })),
         E_DECLARE_INDEX =>
-            Ok(Declare(IndexEntity { columns: decode_array(buf)? })),
+            Ok(Perform(Infrastructure::Declare(IndexEntity { columns: decode_array(buf)? }))),
         E_DECLARE_TABLE =>
-            Ok(Declare(TableEntity { columns: buf.next_columns(), from: decode_opt(buf)? })),
+            Ok(Perform(Infrastructure::Declare(TableEntity { columns: buf.next_columns(), from: decode_opt(buf)? }))),
         E_DELETE =>
-            Ok(Delete {
+            Ok(Mutate(Mutation::Delete {
                 path: decode_box(buf)?,
                 condition: decode_opt(buf)?,
                 limit: decode_opt(buf)?,
-            }),
+            })),
         E_DIVIDE => Ok(Divide(decode_box(buf)?, decode_box(buf)?)),
-        E_DROP => Ok(Drop(TableTarget { path: decode_box(buf)?, if_exists: false })),
+        E_DROP => Ok(Perform(Infrastructure::Drop(TableTarget { path: decode_box(buf)?, if_exists: false }))),
         E_EQUAL => Ok(Equal(decode_box(buf)?, decode_box(buf)?)),
         E_EVAL => Ok(Eval(decode_box(buf)?)),
         E_FACTORIAL => Ok(Factorial(decode_box(buf)?)),
@@ -276,41 +305,43 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_GREATER_THAN => Ok(GreaterThan(decode_box(buf)?, decode_box(buf)?)),
         E_IF => Ok(If { condition: decode_box(buf)?, a: decode_box(buf)?, b: decode_opt(buf)? }),
         E_INCLUDE => Ok(Include(decode_box(buf)?)),
-        E_INTO_TABLE => Ok(IntoTable { target: decode_box(buf)?, source: decode_box(buf)? }),
         E_JSON_LITERAL => Ok(JSONLiteral(decode_json_object(buf)?)),
         E_LESS_OR_EQUAL => Ok(LessOrEqual(decode_box(buf)?, decode_box(buf)?)),
         E_LESS_THAN => Ok(LessThan(decode_box(buf)?, decode_box(buf)?)),
-        E_LIMIT => Ok(Limit { from: decode_box(buf)?, limit: decode_box(buf)? }),
+        E_LIMIT => Ok(Inquire(Queryable::Limit { from: decode_box(buf)?, limit: decode_box(buf)? })),
         E_LITERAL => Ok(Literal(buf.next_value()?)),
         E_MINUS => Ok(Minus(decode_box(buf)?, decode_box(buf)?)),
         E_MODULO => Ok(Modulo(decode_box(buf)?, decode_box(buf)?)),
         E_MULTIPLY => Ok(Multiply(decode_box(buf)?, decode_box(buf)?)),
+        E_MUST_ACK => Ok(MustAck(decode_box(buf)?)),
+        E_MUST_DIE => Ok(MustDie(decode_box(buf)?)),
+        E_MUST_IGNORE_ACK => Ok(MustIgnoreAck(decode_box(buf)?)),
+        E_MUST_NOT_ACK => Ok(MustNotAck(decode_box(buf)?)),
         E_NEG => Ok(Neg(decode_box(buf)?)),
         E_NOT => Ok(Not(decode_box(buf)?)),
         E_NOT_EQUAL => Ok(NotEqual(decode_box(buf)?, decode_box(buf)?)),
         E_NS => Ok(Ns(decode_box(buf)?)),
         E_OR => Ok(Or(decode_box(buf)?, decode_box(buf)?)),
-        E_OVERWRITE => Ok(Overwrite {
+        E_OVERWRITE => Ok(Mutate(Mutation::Overwrite {
             path: decode_box(buf)?,
             source: decode_box(buf)?,
             condition: decode_opt(buf)?,
             limit: decode_opt(buf)?,
-        }),
+        })),
         E_PLUS => Ok(Plus(decode_box(buf)?, decode_box(buf)?)),
         E_POW => Ok(Pow(decode_box(buf)?, decode_box(buf)?)),
         E_RANGE => Ok(Range(decode_box(buf)?, decode_box(buf)?)),
         E_RETURN => Ok(Return(decode_array(buf)?)),
-        E_REVERSE => Ok(Reverse(decode_box(buf)?)),
+        E_REVERSE => Ok(Inquire(Queryable::Reverse(decode_box(buf)?))),
         E_SELECT => disassemble_select(buf),
         E_VAR_SET =>
             match disassemble(buf)? {
                 Literal(StringValue(name)) => Ok(SetVariable(name, decode_box(buf)?)),
                 z => fail_expr("Expected String", &z)
             }
-        E_SHALL => Ok(Shall(decode_box(buf)?)),
         E_SHIFT_LEFT => Ok(ShiftLeft(decode_box(buf)?, decode_box(buf)?)),
         E_SHIFT_RIGHT => Ok(ShiftRight(decode_box(buf)?, decode_box(buf)?)),
-        E_TRUNCATE => Ok(Truncate { path: decode_box(buf)?, limit: decode_opt(buf)? }),
+        E_TRUNCATE => Ok(Mutate(Mutation::Truncate { path: decode_box(buf)?, limit: decode_opt(buf)? })),
         E_TUPLE => Ok(TupleLiteral(decode_array(buf)?)),
         E_UPDATE => disassemble_update(buf),
         E_VAR_GET =>
@@ -320,7 +351,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
             }
         E_VIA => Ok(Via(decode_box(buf)?)),
         E_BITWISE_XOR => Ok(BitwiseXor(decode_box(buf)?, decode_box(buf)?)),
-        E_WHERE => Ok(Where { from: decode_box(buf)?, condition: decode_box(buf)? }),
+        E_WHERE => Ok(Inquire(Queryable::Where { from: decode_box(buf)?, condition: decode_box(buf)? })),
         E_WHILE => Ok(While { condition: decode_box(buf)?, code: decode_box(buf)? }),
         z => fail(format!("Invalid expression code {}", z))
     }
@@ -344,7 +375,7 @@ fn disassemble_select(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
     let having = decode_array_as_opt(buf)?;
     let order_by = decode_array_opt(buf)?;
     let limit = decode_array_as_opt(buf)?;
-    Ok(Select { fields, from, condition, group_by, having, order_by, limit })
+    Ok(Inquire(Queryable::Select { fields, from, condition, group_by, having, order_by, limit }))
 }
 
 fn disassemble_update(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
@@ -356,7 +387,7 @@ fn disassemble_update(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
     let source = Box::new(args[1].clone());
     let condition = if args.len() > 2 { Some(Box::new(args[2].clone())) } else { None };
     let limit = if args.len() > 3 { Some(Box::new(args[3].clone())) } else { None };
-    Ok(Update { path, source, condition, limit })
+    Ok(Mutate(Mutation::Update { path, source, condition, limit }))
 }
 
 fn decode_array(buf: &mut ByteBuffer) -> std::io::Result<Vec<Expression>> {
@@ -618,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let model = Delete {
+        let model = Mutate(Mutation::Delete {
             path: Box::new(Variable("stocks".into())),
             condition: Some(
                 Box::new(LessOrEqual(
@@ -627,7 +658,7 @@ mod tests {
                 ))
             ),
             limit: Some(Box::new(Literal(Int64Value(100)))),
-        };
+        });
         let byte_code = vec![
             E_DELETE,
             E_VAR_GET, E_LITERAL, T_STRING, 0, 0, 0, 0, 0, 0, 0, 6,
@@ -644,7 +675,7 @@ mod tests {
 
     #[test]
     fn test_select() {
-        let model = Select {
+        let model = Inquire(Queryable::Select {
             fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
             from: Some(Box::new(Variable("stocks".into()))),
             condition: Some(
@@ -657,7 +688,7 @@ mod tests {
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
             limit: Some(Box::new(Literal(Int64Value(5)))),
-        };
+        });
         let byte_code = vec![
             // select symbol, exchange, last_sale
             E_SELECT, 0, 0, 0, 0, 0, 0, 0, 3,
@@ -689,7 +720,7 @@ mod tests {
 
     #[test]
     fn test_update() {
-        let model = Update {
+        let model = Mutate(Mutation::Update {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("last_sale".into(), Literal(Float64Value(0.1111))),
@@ -701,7 +732,7 @@ mod tests {
                 ))
             ),
             limit: Some(Box::new(Literal(Int64Value(10)))),
-        };
+        });
         let byte_code = vec![
             // update stocks
             E_UPDATE, 0, 0, 0, 0, 0, 0, 0, 4,

@@ -49,12 +49,12 @@ impl Token {
 
     /// creates a new operator token
     pub fn operator(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        let barrier_symbols: Vec<String> = vec![
+        let barrier_symbols = vec![
             ",", ";", "[", "]", "(", ")", "{", "}", "=>",
-        ].iter().map(|s| s.to_string()).collect();
+        ].iter().map(|s| s.to_string()).collect::<Vec<String>>();
         let precedence = Self::determine_precedence(text.as_str());
         let is_postfix = text == "¡" || text == "²" || text == "³";
-        let is_barrier = barrier_symbols.contains(&text.to_string());
+        let is_barrier = barrier_symbols.contains(&text.clone());
         Operator { text, start, end, line_number, column_number, precedence, is_postfix, is_barrier }
     }
 
@@ -77,14 +77,7 @@ impl Token {
     ////////////////////////////////////////////////////////////////
 
     pub fn contains(&self, text: &str) -> bool {
-        let contents = match self {
-            Atom { text, .. }
-            | Backticks { text, .. }
-            | DoubleQuoted { text, .. }
-            | Numeric { text, .. }
-            | Operator { text, .. }
-            | SingleQuoted { text, .. } => text
-        };
+        let contents = self.get_raw_value();
         text == contents.as_str() || contents.contains(text)
     }
 

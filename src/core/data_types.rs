@@ -18,6 +18,7 @@ use crate::tokens::Token;
 use crate::tokens::Token::Atom;
 
 pub const T_UNDEFINED: u8 = 0;
+pub const T_ACK: u8 = 0;
 pub const T_NULL: u8 = 4;
 pub const T_ARRAY: u8 = 8;
 pub const T_BLOB: u8 = 12;

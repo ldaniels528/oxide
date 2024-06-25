@@ -53,7 +53,13 @@ mod tests {
     use crate::table_columns::TableColumn;
     use crate::testdata::{make_dataframe_ns, make_quote, make_quote_columns, make_table_columns};
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::{ErrorValue, Int64Value};
+
+    #[test]
+    fn test_basic_state_retention() {
+        let mut interpreter = Interpreter::new();
+        assert_eq!(interpreter.evaluate("x := 5").unwrap(), TypedValue::Ack);
+        assert_eq!(interpreter.evaluate("x¡").unwrap(), TypedValue::Float64Value(120.))
+    }
 
     #[test]
     fn test_evaluate_n_pow_2() {
@@ -77,7 +83,7 @@ mod tests {
         let value = interpreter.evaluate(r#"
         eval "5 + 7"
         "#).unwrap();
-        assert_eq!(value, Int64Value(12))
+        assert_eq!(value, TypedValue::Int64Value(12))
     }
 
     #[test]
@@ -86,7 +92,68 @@ mod tests {
         let value = interpreter.evaluate(r#"
         eval 123
         "#).unwrap();
-        assert_eq!(value, ErrorValue("Type mismatch - expected String, got i64".into()))
+        assert_eq!(value, TypedValue::ErrorValue("Type mismatch - expected String, got i64".into()))
+    }
+
+    #[test]
+    fn test_directive_ack() {
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.evaluate(r#"
+        [+] x := 67
+        "#).unwrap();
+        assert_eq!(value, TypedValue::Ack);
+    }
+
+    #[test]
+    fn test_directive_die() {
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.evaluate(r#"
+        [!] "Kaboom!!!"
+        "#).unwrap();
+        assert_eq!(value, TypedValue::ErrorValue("Kaboom!!!".to_string()));
+    }
+
+    #[test]
+    fn test_if_defined() {
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.evaluate(r#"
+        x := 7
+        if(x > 5) "Yes"
+        "#).unwrap();
+        assert_eq!(value, TypedValue::StringValue("Yes".to_string()));
+    }
+
+    #[test]
+    fn test_if_undefined() {
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.evaluate(r#"
+        x := 4
+        if(x > 5) "Yes"
+        "#).unwrap();
+        assert_eq!(value, TypedValue::Undefined);
+    }
+
+    #[test]
+    fn test_if_else() {
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.evaluate(r#"
+        x := 4
+        if(x > 5) "Yes"
+        else if(x < 5) "Maybe"
+        else "No"
+        "#).unwrap();
+        assert_eq!(value, TypedValue::StringValue("Maybe".to_string()));
+    }
+
+    #[test]
+    fn test_iff() {
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.evaluate(r#"
+        x := 3
+        y := iff(x > 5, "Yes", "No")
+        y
+        "#).unwrap();
+        assert_eq!(value, TypedValue::StringValue("No".to_string()));
     }
 
     #[test]
@@ -110,16 +177,17 @@ mod tests {
         include 123
         "#).unwrap();
         assert_eq!(
-            result, ErrorValue("Type mismatch - expected String, got i64".to_string())
+            result, TypedValue::ErrorValue("Type mismatch - expected String, got i64".to_string())
         )
     }
 
     #[test]
     fn test_lambda_functions() {
         let mut interpreter = Interpreter::new();
-        interpreter.evaluate(r#"
+        let value = interpreter.evaluate(r#"
         product := fn (a, b) => a * b
         "#).unwrap();
+        assert_eq!(value, TypedValue::Ack);
 
         let value = interpreter.evaluate(r#"
         product(2, 5)
@@ -130,24 +198,13 @@ mod tests {
     #[test]
     fn test_named_functions() {
         let mut interpreter = Interpreter::new();
-        interpreter.evaluate(r#"
+        assert_eq!(TypedValue::Ack, interpreter.evaluate(r#"
         fn product(a, b) => a * b
-        "#).unwrap();
+        "#).unwrap());
 
-        let value = interpreter.evaluate(r#"
+        assert_eq!(TypedValue::Int64Value(10), interpreter.evaluate(r#"
         product(2, 5)
-        "#).unwrap();
-        assert_eq!(value, TypedValue::Int64Value(10))
-    }
-
-    #[test]
-    fn test_state_retention() {
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate("x := 5").unwrap();
-        assert_eq!(result, TypedValue::Boolean(true));
-
-        let result = interpreter.evaluate("x¡").unwrap();
-        assert_eq!(result, TypedValue::Float64Value(120.))
+        "#).unwrap())
     }
 
     #[test]
@@ -159,7 +216,7 @@ mod tests {
             exchange: String(8),
             last_sale: f64)
         "#).unwrap();
-        assert_eq!(result, TypedValue::Boolean(true))
+        assert_eq!(result, TypedValue::Ack)
     }
 
     #[test]
@@ -192,8 +249,8 @@ mod tests {
         // delete some rows
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            delete from ns("interpreter.delete.stocks")
-            where last_sale >= 1.0
+            stocks := ns("interpreter.delete.stocks")
+            delete from stocks where last_sale >= 1.0
         "#).unwrap();
         assert_eq!(result, TypedValue::RowsAffected(3));
 
@@ -205,11 +262,11 @@ mod tests {
     }
 
     #[test]
-    fn test_append_to_namespace() {
+    fn test_append_row_to_namespace() {
         // create a table with test data
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let ns = Namespace::parse("interpreter.into.stocks").unwrap();
+        let ns = Namespace::parse("interpreter.append.stocks").unwrap();
         let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
         assert_eq!(1, df.append(&make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
         assert_eq!(1, df.append(&make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
@@ -219,8 +276,8 @@ mod tests {
         // insert some rows
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            append ns("interpreter.into.stocks")
-            from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
+            stocks := ns("interpreter.append.stocks")
+            append stocks from { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
         "#).unwrap();
         assert_eq!(result, TypedValue::RowsAffected(1));
 
@@ -232,6 +289,51 @@ mod tests {
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
             make_quote(4, &phys_columns, "BOOM", "NYSE", 56.88),
         ]);
+    }
+
+    #[test]
+    fn test_append_rows_to_namespace() {
+        // create a table with test data
+        let columns = make_quote_columns();
+        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let ns = Namespace::parse("interpreter.append_rows.stocks").unwrap();
+        let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
+        df.resize(0).unwrap();
+
+        // insert some rows
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            stocks := ns("interpreter.append_rows.stocks")
+            append stocks from [
+                { symbol: "ABC", exchange: "AMEX", last_sale: 11.88 },
+                { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                { symbol: "GOTO", exchange: "NYSE", last_sale: 0.1428 },
+                { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
+            ]
+        "#).unwrap();
+        assert_eq!(result, TypedValue::RowsAffected(5));
+
+        // verify the rows
+        assert_eq!(df.read_fully().unwrap(), vec![
+            make_quote(0, &phys_columns, "ABC", "AMEX", 11.88),
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+            make_quote(3, &phys_columns, "GOTO", "NYSE", 0.1428),
+            make_quote(4, &phys_columns, "BOOM", "NYSE", 56.88),
+        ]);
+    }
+
+    #[test]
+    fn test_simple_process_chain() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            [+] stocks := ns("interpreter.mustnot.stocks")
+            [~] drop table stocks
+            [-] drop table stocks
+            "#
+        ).unwrap();
+        assert_eq!(result, TypedValue::Boolean(false));
     }
 
     #[test]
@@ -250,7 +352,8 @@ mod tests {
         // overwrite a row
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            overwrite ns("interpreter.overwrite.stocks")
+            stocks := ns("interpreter.overwrite.stocks")
+            overwrite stocks
             via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99}
             where symbol == "BOOM"
         "#).unwrap();
@@ -282,8 +385,9 @@ mod tests {
         // compile and execute the code
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
+            stocks := ns("interpreter.select.stocks")
             select symbol, exchange, last_sale
-            from ns("interpreter.select.stocks")
+            from stocks
             where last_sale > 1.0
             order by symbol
             limit 5
@@ -326,15 +430,13 @@ mod tests {
     fn test_reverse_from_namespace() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            stocks := ns("interpreter.reverse.stocks")
-            drop table stocks
-            shall create table `stocks` (
-                symbol: String(8),
-                exchange: String(8),
-                last_sale: f64
-            )
-            shall append stocks
-                from [
+            [+] stocks := ns("interpreter.reverse.stocks")
+            [~] drop table stocks
+            [+] create table `stocks` (
+                    symbol: String(8),
+                    exchange: String(8),
+                    last_sale: f64)
+            [+] append stocks from [
                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -354,24 +456,48 @@ mod tests {
     }
 
     #[test]
+    fn test_reverse_from_variable() {
+        let phys_columns = make_table_columns();
+        let mut interpreter = Interpreter::new();
+        interpreter.with_variable("stocks", TypedValue::TableValue(
+            ModelRowCollection::from_rows(vec![
+                make_quote(0, &phys_columns, "ABC", "AMEX", 11.88),
+                make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+                make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+                make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
+            ])));
+
+        let result = interpreter.evaluate(r#"
+            reverse from stocks
+        "#).unwrap();
+        assert_eq!(result, TypedValue::TableValue(ModelRowCollection::from_rows(vec![
+            make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
+            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(0, &phys_columns, "ABC", "AMEX", 11.88),
+        ])));
+    }
+
+    #[test]
     fn test_infrastructure_expression() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            stocks := ns("interpreter.create.stocks")
-            drop table stocks
-            shall
-                create table $stocks (
+            [+] stocks := ns("interpreter.create.stocks")
+            [~] drop table stocks
+            [+] create table $stocks (
                     symbol: String(8),
                     exchange: String(8),
                     last_sale: f64
                 )
-            and append stocks
+            [+] append stocks
                 from [
                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
                 ]
-            from stocks
+            [+] from stocks
         "#).unwrap();
         let phys_columns = make_table_columns();
         assert_eq!(result, TypedValue::TableValue(ModelRowCollection::from_rows(vec![
@@ -381,7 +507,7 @@ mod tests {
         ])));
 
         let result = interpreter.evaluate(r#"
-            shall delete from stocks where last_sale < 30.0
+            [+] delete from stocks where last_sale < 30.0
         "#).unwrap();
         assert_eq!(result, TypedValue::RowsAffected(1));
     }

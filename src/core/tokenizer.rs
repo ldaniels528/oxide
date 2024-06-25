@@ -9,6 +9,11 @@ const COMPOUND_OPERATORS: [&str; 22] = [
     "->", "<-", ">=", "<=", "=>",
     "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
 ];
+
+const COMPOUND_SYMBOLS: [&str; 6] = [
+    "[^]", "[!]", "[+]", "[-]", "[~]", "[_]",
+];
+
 const SIMPLE_OPERATORS: [char; 39] = [
     '!', '¡', '@', '#', '$', '%', '^', '&', '×', '*', '÷', '/', '+', '-', '=',
     '(', ')', '<', '>', '{', '}', '[', ']', ',', ';', '?', '\\', '|', '~',
@@ -83,6 +88,7 @@ fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
 
 fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
+        next_compound_symbol_token,
         next_compound_operator_token,
         next_operator_token,
         next_numeric_token,
@@ -193,19 +199,31 @@ fn next_quoted_string_token(inputs: &Vec<char>, pos: &mut usize, make_token: New
     None
 }
 
+fn is_same(a: &[char], b: &str) -> bool {
+    let aa: String = a.iter().collect();
+    let bb: String = b.into();
+    aa == bb
+}
+
 fn next_compound_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
-    fn same(a: &[char], b: &str) -> bool {
-        let aa: String = a.iter().collect();
-        let bb: String = b.into();
-        aa == bb
-    }
     let symbol_len = 2;
     let start = *pos;
     if has_at_least(inputs, pos, symbol_len) &&
-        COMPOUND_OPERATORS.iter().any(|gl| same(&inputs[start..(start + symbol_len)], gl)) {
+        COMPOUND_OPERATORS.iter().any(|gl| is_same(&inputs[start..(start + symbol_len)], gl)) {
         *pos += symbol_len;
         let end = *pos;
         generate_token(&inputs, start, end, Token::operator)
+    } else { None }
+}
+
+fn next_compound_symbol_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    let symbol_len = 3;
+    let start = *pos;
+    if has_at_least(inputs, pos, symbol_len) &&
+        COMPOUND_SYMBOLS.iter().any(|gl| is_same(&inputs[start..(start + symbol_len)], gl)) {
+        *pos += symbol_len;
+        let end = *pos;
+        generate_token(&inputs, start, end, Token::atom)
     } else { None }
 }
 

@@ -12,37 +12,13 @@ use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::serialization::assemble;
 use crate::server::ColumnJs;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Boolean, Null, Undefined};
+use crate::typed_values::TypedValue::{Ack, Boolean, Null, Undefined};
 
+pub const ACK: Expression = Literal(Ack);
 pub const FALSE: Expression = Literal(Boolean(false));
 pub const TRUE: Expression = Literal(Boolean(true));
 pub const NULL: Expression = Literal(Null);
 pub const UNDEFINED: Expression = Literal(Undefined);
-
-/// Represents a Creation Entity
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum CreationEntity {
-    IndexEntity {
-        columns: Vec<Expression>,
-    },
-    TableEntity {
-        columns: Vec<ColumnJs>,
-        from: Option<Box<Expression>>,
-    },
-}
-
-/// Represents a Mutation Target
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum MutateTarget {
-    IndexTarget {
-        path: Box<Expression>,
-        if_exists: bool,
-    },
-    TableTarget {
-        path: Box<Expression>,
-        if_exists: bool,
-    },
-}
 
 // constants
 pub const E_AND: u8 = 0;
@@ -72,7 +48,6 @@ pub const E_GREATER_THAN: u8 = 90;
 pub const E_GREATER_OR_EQUAL: u8 = 95;
 pub const E_IF: u8 = 100;
 pub const E_INCLUDE: u8 = 105;
-pub const E_INTO_TABLE: u8 = 110;
 pub const E_JSON_LITERAL: u8 = 115;
 pub const E_LESS_THAN: u8 = 120;
 pub const E_LESS_OR_EQUAL: u8 = 125;
@@ -80,8 +55,12 @@ pub const E_LIMIT: u8 = 130;
 pub const E_LITERAL: u8 = 135;
 pub const E_MINUS: u8 = 140;
 pub const E_MODULO: u8 = 145;
-pub const E_MULTIPLY: u8 = 150;
-pub const E_NEG: u8 = 155;
+pub const E_MULTIPLY: u8 = 147;
+pub const E_MUST_ACK: u8 = 149;
+pub const E_MUST_DIE: u8 = 151;
+pub const E_MUST_IGNORE_ACK: u8 = 153;
+pub const E_MUST_NOT_ACK: u8 = 155;
+pub const E_NEG: u8 = 157;
 pub const E_NOT: u8 = 160;
 pub const E_NOT_EQUAL: u8 = 165;
 pub const E_NS: u8 = 170;
@@ -93,7 +72,6 @@ pub const E_RANGE: u8 = 195;
 pub const E_RETURN: u8 = 200;
 pub const E_REVERSE: u8 = 205;
 pub const E_SELECT: u8 = 210;
-pub const E_SHALL: u8 = 220;
 pub const E_SHIFT_LEFT: u8 = 225;
 pub const E_SHIFT_RIGHT: u8 = 230;
 pub const E_TRUNCATE: u8 = 235;
@@ -105,14 +83,35 @@ pub const E_VIA: u8 = 247;
 pub const E_WHERE: u8 = 251;
 pub const E_WHILE: u8 = 255;
 
+/// Represents a Creation Entity
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CreationEntity {
+    IndexEntity {
+        columns: Vec<Expression>,
+    },
+    TableEntity {
+        columns: Vec<ColumnJs>,
+        from: Option<Box<Expression>>,
+    },
+}
+
+/// Represents a Mutation Target
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum MutateTarget {
+    IndexTarget {
+        path: Box<Expression>,
+        if_exists: bool,
+    },
+    TableTarget {
+        path: Box<Expression>,
+        if_exists: bool,
+    },
+}
+
 /// Represents an Expression
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Expression {
     And(Box<Expression>, Box<Expression>),
-    Append {
-        path: Box<Expression>,
-        source: Box<Expression>,
-    },
     ArrayLiteral(Vec<Expression>),
     AsValue(String, Box<Expression>),
     Between(Box<Expression>, Box<Expression>, Box<Expression>),
@@ -123,15 +122,7 @@ pub enum Expression {
     CodeBlock(Vec<Expression>),
     ColumnSet(Vec<ColumnJs>),
     Contains(Box<Expression>, Box<Expression>),
-    Create { path: Box<Expression>, entity: CreationEntity },
-    Declare(CreationEntity),
-    Delete {
-        path: Box<Expression>,
-        condition: Option<Box<Expression>>,
-        limit: Option<Box<Expression>>,
-    },
     Divide(Box<Expression>, Box<Expression>),
-    Drop(MutateTarget),
     Equal(Box<Expression>, Box<Expression>),
     Eval(Box<Expression>),
     Factorial(Box<Expression>),
@@ -145,58 +136,35 @@ pub enum Expression {
         b: Option<Box<Expression>>,
     },
     Include(Box<Expression>),
-    IntoTable { source: Box<Expression>, target: Box<Expression> },
+    Inquire(Queryable),
     JSONLiteral(Vec<(String, Expression)>),
     LessOrEqual(Box<Expression>, Box<Expression>),
     LessThan(Box<Expression>, Box<Expression>),
-    Limit { from: Box<Expression>, limit: Box<Expression> },
     Literal(TypedValue),
     Minus(Box<Expression>, Box<Expression>),
     Modulo(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
+    MustAck(Box<Expression>),
+    MustDie(Box<Expression>),
+    MustIgnoreAck(Box<Expression>),
+    MustNotAck(Box<Expression>),
+    Mutate(Mutation),
     Neg(Box<Expression>),
     Not(Box<Expression>),
     NotEqual(Box<Expression>, Box<Expression>),
     Ns(Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
-    Overwrite {
-        path: Box<Expression>,
-        source: Box<Expression>,
-        condition: Option<Box<Expression>>,
-        limit: Option<Box<Expression>>,
-    },
+    Perform(Infrastructure),
     Plus(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
     Range(Box<Expression>, Box<Expression>),
     Return(Vec<Expression>),
-    Reverse(Box<Expression>),
-    Select {
-        fields: Vec<Expression>,
-        from: Option<Box<Expression>>,
-        condition: Option<Box<Expression>>,
-        group_by: Option<Vec<Expression>>,
-        having: Option<Box<Expression>>,
-        order_by: Option<Vec<Expression>>,
-        limit: Option<Box<Expression>>,
-    },
     SetVariable(String, Box<Expression>),
-    Shall(Box<Expression>),
     ShiftLeft(Box<Expression>, Box<Expression>),
     ShiftRight(Box<Expression>, Box<Expression>),
-    Truncate {
-        path: Box<Expression>,
-        limit: Option<Box<Expression>>,
-    },
     TupleLiteral(Vec<Expression>),
-    Update {
-        path: Box<Expression>,
-        source: Box<Expression>,
-        condition: Option<Box<Expression>>,
-        limit: Option<Box<Expression>>,
-    },
     Variable(String),
     Via(Box<Expression>),
-    Where { from: Box<Expression>, condition: Box<Expression> },
     While {
         condition: Box<Expression>,
         code: Box<Expression>,
@@ -242,12 +210,66 @@ impl Display for Expression {
     }
 }
 
+/// Represents an infrastructure construction/deconstruction event
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Infrastructure {
+    Create { path: Box<Expression>, entity: CreationEntity },
+    Declare(CreationEntity),
+    Drop(MutateTarget),
+}
+
+/// Represents a data modification event
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Mutation {
+    Append {
+        path: Box<Expression>,
+        source: Box<Expression>,
+    },
+    Delete {
+        path: Box<Expression>,
+        condition: Option<Box<Expression>>,
+        limit: Option<Box<Expression>>,
+    },
+    Overwrite {
+        path: Box<Expression>,
+        source: Box<Expression>,
+        condition: Option<Box<Expression>>,
+        limit: Option<Box<Expression>>,
+    },
+    Truncate {
+        path: Box<Expression>,
+        limit: Option<Box<Expression>>,
+    },
+    Update {
+        path: Box<Expression>,
+        source: Box<Expression>,
+        condition: Option<Box<Expression>>,
+        limit: Option<Box<Expression>>,
+    },
+}
+
+/// Represents a queryable
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Queryable {
+    Limit { from: Box<Expression>, limit: Box<Expression> },
+    Reverse(Box<Expression>),
+    Select {
+        fields: Vec<Expression>,
+        from: Option<Box<Expression>>,
+        condition: Option<Box<Expression>>,
+        group_by: Option<Vec<Expression>>,
+        having: Option<Box<Expression>>,
+        order_by: Option<Vec<Expression>>,
+        limit: Option<Box<Expression>>,
+    },
+    Where { from: Box<Expression>, condition: Box<Expression> },
+}
+
 pub fn decompile(expr: &Expression) -> String {
+    use Expression::*;
     match expr {
         And(a, b) =>
             format!("{} && {}", decompile(a), decompile(b)),
-        Append { path, source } =>
-            format!("append {} {}", decompile(path), decompile(source)),
         ArrayLiteral(items) =>
             format!("[{}]", items.iter().map(|i| decompile(i)).collect::<Vec<String>>().join(", ")),
         AsValue(name, expr) =>
@@ -270,37 +292,13 @@ pub fn decompile(expr: &Expression) -> String {
                 .collect::<Vec<String>>().join(", ")),
         Contains(a, b) =>
             format!("{} contains {}", decompile(a), decompile(b)),
-        Create { path, entity } =>
-            match entity {
-                IndexEntity { columns } =>
-                    format!("create index {} [{}]", decompile(path), decompile_list(columns)),
-                TableEntity { columns, from } =>
-                    format!("create table {} ({})", decompile(path), decompile_columns(columns)),
-            }
-        Declare(entity) =>
-            match entity {
-                IndexEntity { columns } =>
-                    format!("index [{}]", decompile_list(columns)),
-                TableEntity { columns, from } =>
-                    format!("table({})", decompile_columns(columns)),
-            }
-        Delete { path, condition, limit } =>
-            format!("delete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
         Divide(a, b) =>
             format!("{} / {}", decompile(a), decompile(b)),
-        Factorial(a) =>
-            format!("¡{}", decompile(a)),
-        Drop(target) => {
-            let (kind, path, if_exists) = match target {
-                IndexTarget { path, if_exists } => ("index", path, if_exists),
-                TableTarget { path, if_exists } => ("table", path, if_exists),
-            };
-            format!("drop {} {}{}", kind, decompile_if_exists(*if_exists), decompile(path))
-        }
+        Factorial(a) => format!("¡{}", decompile(a)),
+        From(a) => format!("from {}", decompile(a)),
         Equal(a, b) =>
             format!("{} == {}", decompile(a), decompile(b)),
         Eval(a) => format!("eval {}", decompile(a)),
-        From(a) => format!("from {}", decompile(a)),
         FunctionCall { fx, args } =>
             format!("{}({})", decompile(fx), decompile_list(args)),
         GreaterThan(a, b) =>
@@ -312,8 +310,7 @@ pub fn decompile(expr: &Expression) -> String {
                 .map(|x| format!(" else {}", decompile(&x)))
                 .unwrap_or("".into())),
         Include(path) => format!("include {}", decompile(path)),
-        IntoTable { source, target } =>
-            format!("{} into {}", decompile(source), decompile(target)),
+        Inquire(q) => decompile_queryable(q),
         JSONLiteral(items) => {
             let dict = items.iter()
                 .map(|(k, v)| format!("{}: {}", k, v))
@@ -325,8 +322,6 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{} < {}", decompile(a), decompile(b)),
         LessOrEqual(a, b) =>
             format!("{} <= {}", decompile(a), decompile(b)),
-        Limit { from: a, limit: b } =>
-            format!("{} limit {}", decompile(a), decompile(b)),
         Literal(value) => value.to_code(),
         Minus(a, b) =>
             format!("{} - {}", decompile(a), decompile(b)),
@@ -334,6 +329,11 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{} % {}", decompile(a), decompile(b)),
         Multiply(a, b) =>
             format!("{} * {}", decompile(a), decompile(b)),
+        MustAck(a) => format!("[+] {}", decompile(a)),
+        MustDie(a) => format!("[!] {}", decompile(a)),
+        MustIgnoreAck(a) => format!("[~] {}", decompile(a)),
+        MustNotAck(a) => format!("[-] {}", decompile(a)),
+        Mutate(m) => decompile_modification(m),
         Neg(a) => format!("-({})", decompile(a)),
         Not(a) => format!("!{}", decompile(a)),
         NotEqual(a, b) =>
@@ -341,11 +341,7 @@ pub fn decompile(expr: &Expression) -> String {
         Ns(a) => format!("ns({})", decompile(a)),
         Or(a, b) =>
             format!("{} || {}", decompile(a), decompile(b)),
-        Overwrite { path, source, condition, limit } =>
-            format!("overwrite {} {}{}{}", decompile(path), decompile(source),
-                    condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
-                    limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
-            ),
+        Perform(i) => decompile_infrastructure(i),
         Plus(a, b) =>
             format!("{} + {}", decompile(a), decompile(b)),
         Pow(a, b) =>
@@ -354,8 +350,73 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{}..{}", decompile(a), decompile(b)),
         Return(items) =>
             format!("return {}", decompile_list(items)),
-        Reverse(a) => format!("reverse {}", decompile(a)),
-        Select { fields, from, condition, group_by, having, order_by, limit } =>
+        SetVariable(name, value) =>
+            format!("{} := {}", name, decompile(value)),
+        ShiftLeft(a, b) =>
+            format!("{} << {}", decompile(a), decompile(b)),
+        ShiftRight(a, b) =>
+            format!("{} >> {}", decompile(a), decompile(b)),
+        TupleLiteral(items) =>
+            format!("({})", decompile_list(items)),
+        Variable(name) => name.to_string(),
+        Via(expr) => format!("via {}", decompile(expr)),
+        While { condition, code } =>
+            format!("while {} do {}", decompile(condition), decompile(code)),
+    }
+}
+
+pub fn decompile_infrastructure(expr: &Infrastructure) -> String {
+    match expr {
+        Infrastructure::Create { path, entity } =>
+            match entity {
+                IndexEntity { columns } =>
+                    format!("create index {} [{}]", decompile(path), decompile_list(columns)),
+                TableEntity { columns, from } =>
+                    format!("create table {} ({})", decompile(path), decompile_columns(columns)),
+            }
+        Infrastructure::Declare(entity) =>
+            match entity {
+                IndexEntity { columns } =>
+                    format!("index [{}]", decompile_list(columns)),
+                TableEntity { columns, from } =>
+                    format!("table({})", decompile_columns(columns)),
+            }
+        Infrastructure::Drop(target) => {
+            let (kind, path, if_exists) = match target {
+                IndexTarget { path, if_exists } => ("index", path, if_exists),
+                TableTarget { path, if_exists } => ("table", path, if_exists),
+            };
+            format!("drop {} {}{}", kind, decompile_if_exists(*if_exists), decompile(path))
+        }
+    }
+}
+
+pub fn decompile_modification(expr: &Mutation) -> String {
+    match expr {
+        Mutation::Append { path, source } =>
+            format!("append {} {}", decompile(path), decompile(source)),
+        Mutation::Delete { path, condition, limit } =>
+            format!("delete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
+        Mutation::Overwrite { path, source, condition, limit } =>
+            format!("overwrite {} {}{}{}", decompile(path), decompile(source),
+                    condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
+                    limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
+            ),
+        Mutation::Truncate { path, limit } =>
+            format!("truncate {}{}", decompile(path), decompile_limit(limit)),
+        Mutation::Update { path, source, condition, limit } =>
+            format!("update {} {} where {}{}", decompile(path), decompile(source), decompile_opt(condition), decompile_opt(limit)),
+    }
+}
+
+pub fn decompile_queryable(expr: &Queryable) -> String {
+    match expr {
+        Queryable::Limit { from: a, limit: b } =>
+            format!("{} limit {}", decompile(a), decompile(b)),
+        Queryable::Where { from, condition } =>
+            format!("{} where {}", decompile(from), decompile(condition)),
+        Queryable::Reverse(a) => format!("reverse {}", decompile(a)),
+        Queryable::Select { fields, from, condition, group_by, having, order_by, limit } =>
             format!("select {}{}{}{}{}{}{}", decompile_list(fields),
                     from.clone().map(|e| format!(" from {}", decompile(&e))).unwrap_or("".into()),
                     condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
@@ -364,25 +425,6 @@ pub fn decompile(expr: &Expression) -> String {
                     having.clone().map(|e| format!(" having {}", decompile(&e))).unwrap_or("".into()),
                     order_by.clone().map(|e| format!(" order by {}", decompile_list(&e))).unwrap_or("".into()),
             ),
-        SetVariable(name, value) =>
-            format!("{} := {}", name, decompile(value)),
-        Shall(a) => format!("shall {}", decompile(a)),
-        ShiftLeft(a, b) =>
-            format!("{} << {}", decompile(a), decompile(b)),
-        ShiftRight(a, b) =>
-            format!("{} >> {}", decompile(a), decompile(b)),
-        Truncate { path, limit } =>
-            format!("truncate {}{}", decompile(path), decompile_limit(limit)),
-        TupleLiteral(items) =>
-            format!("({})", decompile_list(items)),
-        Update { path, source, condition, limit } =>
-            format!("update {} {} where {}{}", decompile(path), decompile(source), decompile_opt(condition), decompile_opt(limit)),
-        Variable(name) => name.to_string(),
-        Via(expr) => format!("via {}", decompile(expr)),
-        Where { from, condition } =>
-            format!("{} where {}", decompile(from), decompile(condition)),
-        While { condition, code } =>
-            format!("while {} do {}", decompile(condition), decompile(code)),
     }
 }
 
@@ -422,7 +464,7 @@ fn decompile_update_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> 
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::expression::{FALSE, TRUE};
+    use crate::expression::{FALSE, Mutation, Queryable, TRUE};
     use crate::expression::Expression::*;
     use crate::machine::MachineState;
     use crate::typed_values::TypedValue::{Boolean, Float64Value, Int32Value, Int64Value, StringValue};
@@ -432,14 +474,17 @@ mod tests {
         let from = From(Box::new(
             Ns(Box::new(Literal(StringValue("machine.overwrite.stocks".into()))))
         ));
-        let from = Where {
+        let from = Inquire(Queryable::Where {
             from: Box::new(from),
             condition: Box::new(GreaterOrEqual(
                 Box::new(Variable("last_sale".into())),
                 Box::new(Literal(Float64Value(1.25))),
             )),
-        };
-        let from = Limit { from: Box::new(from), limit: Box::new(Literal(Int64Value(5))) };
+        });
+        let from = Inquire(Queryable::Limit {
+            from: Box::new(from),
+            limit: Box::new(Literal(Int64Value(5))),
+        });
         assert_eq!(
             from.to_code(),
             "from ns(\"machine.overwrite.stocks\") where last_sale >= 1.25 limit 5"
@@ -577,7 +622,7 @@ mod tests {
 
     #[test]
     fn test_overwrite() {
-        let model = Overwrite {
+        let model = Mutate(Mutation::Overwrite {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("BOX".into()))),
@@ -589,7 +634,7 @@ mod tests {
                 Box::new(Literal(StringValue("BOX".into()))),
             ))),
             limit: Some(Box::new(Literal(Int64Value(1)))),
-        };
+        });
         assert_eq!(
             model.to_code(),
             r#"overwrite stocks via {symbol: "BOX", exchange: "NYSE", last_sale: 21.77} where symbol == "BOX" limit 1"#)

@@ -10,17 +10,18 @@ use std::ptr::null;
 
 use actix_web::web::to;
 use crossterm::terminal::window_size;
-use log::error;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 
 use shared_lib::{cnv_error, fail};
 
 use crate::{row, serialization};
-use crate::compiler::{CompilerState, fail_expr, fail_near, fail_unexpected, fail_unhandled_expr, fail_value};
+use crate::compiler::{fail_expr, fail_near, fail_unexpected, fail_unhandled_expr, fail_value};
+use crate::compiler::CompilerState;
 use crate::cursor::Cursor;
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::dataframes::DataFrame;
-use crate::expression::{Expression, TRUE, UNDEFINED};
+use crate::expression::{Expression, Infrastructure, Mutation, Queryable, TRUE, UNDEFINED};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::{ArrayLiteral, ColumnSet, From, Literal, Ns, Variable, Via};
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
@@ -92,19 +93,28 @@ impl MachineState {
         limit: TypedValue,
         f: fn(Self, &mut DataFrame, &Vec<Expression>, &Vec<Expression>, &Option<Box<Expression>>, TypedValue) -> std::io::Result<(Self, TypedValue)>,
     ) -> std::io::Result<(Self, TypedValue)> {
+        use TypedValue::*;
         match table {
-            TypedValue::TableValue(mrc) => {
+            TableValue(mrc) => {
                 let mut df = DataFrame::from_row_collection(Namespace::temp(), Box::new(mrc));
                 f(ms, &mut df, fields, values, condition, limit)
             }
-            TypedValue::TableRef(path) => {
+            TableRef(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let mut df = DataFrame::load(ns)?;
                 f(ms, &mut df, fields, values, condition, limit)
             }
             x =>
-                fail(format!("Type mismatch: expected an iterable near {}", x))
+                Ok((ms, ErrorValue(format!("Type mismatch: expected an iterable near {}", x))))
         }
+    }
+
+    pub fn error_expr(message: impl Into<String>, expr: &Expression) -> TypedValue {
+        ErrorValue(format!("{} near {}", message.into(), expr.to_code()))
+    }
+
+    pub fn error_unexpected(expected_type: impl Into<String>, value: &TypedValue) -> TypedValue {
+        ErrorValue(format!("Expected a(n) {}, but got {:?}", expected_type.into(), value))
     }
 
     fn split(row: &Row) -> (Vec<Expression>, Vec<Expression>) {
@@ -127,8 +137,6 @@ impl MachineState {
         match expression {
             And(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
-            Append { path, source } =>
-                self.evaluate_ql_into(path, source),
             ArrayLiteral(items) => self.evaluate_array(items),
             AsValue(name, expr) => {
                 let (ms, tv) = self.evaluate(expr)?;
@@ -154,20 +162,8 @@ impl MachineState {
                 Ok((ms, Array(values)))
             }
             Contains(a, b) => self.evaluate_contains(a, b),
-            Create { path, entity: IndexEntity { columns } } =>
-                self.evaluate_ql_create_index(path, columns),
-            Create { path, entity: TableEntity { columns, from } } =>
-                self.evaluate_ql_create_table(path, columns, from),
-            Declare(IndexEntity { columns }) =>
-                self.evaluate_ql_declare_index(columns),
-            Declare(TableEntity { columns, from }) =>
-                self.evaluate_ql_declare_table(columns, from),
-            Delete { path, condition, limit } =>
-                self.evaluate_ql_delete(path, condition, limit),
             Divide(a, b) =>
                 self.expand2(a, b, |aa, bb| aa / bb),
-            Drop(IndexTarget { path, if_exists }) => self.evaluate_ql_drop(path, *if_exists),
-            Drop(TableTarget { path, if_exists }) => self.evaluate_ql_drop(path, *if_exists),
             Equal(a, b) =>
                 self.expand2(a, b, |aa, bb| Boolean(aa == bb)),
             Eval(a) => self.evaluate_eval(&a),
@@ -182,16 +178,12 @@ impl MachineState {
             If { condition, a, b } =>
                 self.evaluate_if_then_else(condition, a, b),
             Include(path) => self.evaluate_include(path),
-            IntoTable { source, target } => self.evaluate_into_table(source, target),
+            Inquire(q) => self.evaluate_inquiry(q),
             JSONLiteral(items) => self.evaluate_json(items),
             LessThan(a, b) =>
                 self.expand2(a, b, |aa, bb| Boolean(aa < bb)),
             LessOrEqual(a, b) =>
                 self.expand2(a, b, |aa, bb| Boolean(aa <= bb)),
-            Limit { from, limit } => {
-                let (ms, limit) = self.evaluate(limit)?;
-                ms.evaluate_queryable(from, &UNDEFINED, limit)
-            }
             Literal(value) => Ok((self.clone(), value.clone())),
             Minus(a, b) =>
                 self.expand2(a, b, |aa, bb| aa - bb),
@@ -199,6 +191,11 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) =>
                 self.expand2(a, b, |aa, bb| aa * bb),
+            MustAck(a) => self.evaluate_ql_must_ack(a),
+            MustDie(a) => self.evaluate_ql_must_die(a),
+            MustIgnoreAck(a) => self.evaluate_ql_must_ignore_ack(a),
+            MustNotAck(a) => self.evaluate_ql_must_not_ack(a),
+            Mutate(m) => self.evaluate_mutation(m),
             Neg(a) => self.evaluate_neg(a),
             Not(a) => self.expand1(a, |aa| !aa),
             NotEqual(a, b) =>
@@ -206,8 +203,7 @@ impl MachineState {
             Ns(a) => self.evaluate_ql_ns(a),
             Or(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
-            Overwrite { path, source, condition, limit } =>
-                self.evaluate_ql_overwrite(path, source, condition, limit),
+            Perform(i) => self.evaluate_infrastructure(i),
             Plus(a, b) =>
                 self.expand2(a, b, |aa, bb| aa + bb),
             Pow(a, b) =>
@@ -218,18 +214,62 @@ impl MachineState {
                 let (ms, result) = self.evaluate_array(a)?;
                 Ok((ms, result))
             }
-            Reverse(a) => self.evaluate_reverse(a),
-            Select { fields, from, condition, group_by, having, order_by, limit } =>
-                self.evaluate_ql_select(fields, from, condition, group_by, having, order_by, limit),
             SetVariable(name, expr) => {
                 let (ms, value) = self.evaluate(expr)?;
-                Ok((ms.set(name, value), Boolean(true)))
+                Ok((ms.set(name, value), Ack))
             }
-            Shall(a) => self.evaluate_ql_shall(a),
             ShiftLeft(a, b) =>
                 self.expand2(a, b, |aa, bb| aa << bb),
             ShiftRight(a, b) =>
                 self.expand2(a, b, |aa, bb| aa >> bb),
+            TupleLiteral(values) => self.evaluate_array(values),
+            Variable(name) => Ok((self.clone(), self.get(&name).unwrap_or(Undefined))),
+            Via(src) => self.evaluate_queryable(src, &UNDEFINED, Undefined),
+            While { condition, code } =>
+                self.evaluate_while(condition, code),
+        }
+    }
+
+    pub fn evaluate_infrastructure(&self, expression: &Infrastructure) -> std::io::Result<(Self, TypedValue)> {
+        use Infrastructure::*;
+        match expression {
+            Create { path, entity: IndexEntity { columns } } =>
+                self.evaluate_ql_create_index(path, columns),
+            Create { path, entity: TableEntity { columns, from } } =>
+                self.evaluate_ql_create_table(path, columns, from),
+            Declare(IndexEntity { columns }) =>
+                self.evaluate_ql_declare_index(columns),
+            Declare(TableEntity { columns, from }) =>
+                self.evaluate_ql_declare_table(columns, from),
+            Drop(IndexTarget { path, if_exists }) => self.evaluate_ql_drop(path, *if_exists),
+            Drop(TableTarget { path, if_exists }) => self.evaluate_ql_drop(path, *if_exists),
+        }
+    }
+
+    pub fn evaluate_inquiry(&self, expression: &Queryable) -> std::io::Result<(Self, TypedValue)> {
+        use Queryable::*;
+        match expression {
+            Limit { from, limit } => {
+                let (ms, limit) = self.evaluate(limit)?;
+                ms.evaluate_queryable(from, &UNDEFINED, limit)
+            }
+            Reverse(a) => self.evaluate_reverse(a),
+            Select { fields, from, condition, group_by, having, order_by, limit } =>
+                self.evaluate_ql_select(fields, from, condition, group_by, having, order_by, limit),
+            Where { from, condition } =>
+                self.evaluate_queryable(from, condition, Undefined),
+        }
+    }
+
+    pub fn evaluate_mutation(&self, expression: &Mutation) -> std::io::Result<(Self, TypedValue)> {
+        use Mutation::*;
+        match expression {
+            Append { path, source } =>
+                self.evaluate_ql_into(path, source),
+            Delete { path, condition, limit } =>
+                self.evaluate_ql_delete(path, condition, limit),
+            Overwrite { path, source, condition, limit } =>
+                self.evaluate_ql_overwrite(path, source, condition, limit),
             Truncate { path, limit } =>
                 match limit {
                     None => self.evaluate_ql_truncate(path, Boolean(false)),
@@ -238,15 +278,8 @@ impl MachineState {
                         ms.evaluate_ql_truncate(path, limit)
                     }
                 }
-            TupleLiteral(values) => self.evaluate_array(values),
             Update { path, source, condition, limit } =>
                 self.evaluate_ql_update(path, source, condition, limit),
-            Variable(name) => Ok((self.clone(), self.get(&name).unwrap_or(Undefined))),
-            Via(src) => self.evaluate_queryable(src, &UNDEFINED, Undefined),
-            Where { from, condition } =>
-                self.evaluate_queryable(from, condition, Undefined),
-            While { condition, code } =>
-                self.evaluate_while(condition, code),
         }
     }
 
@@ -290,7 +323,8 @@ impl MachineState {
                           array.push(name.to_string());
                           (ms, array)
                       }
-                      expr => panic!("Expected a column, got \"{}\" instead", expr),
+                      expr =>
+                          panic!("Expected a column, got \"{}\" instead", expr),
                   });
         Ok((ms, results))
     }
@@ -363,17 +397,20 @@ impl MachineState {
         a: &Expression,
         b: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
+        use TypedValue::*;
         let ms0 = self.clone();
         let (ms, result) = ms0.evaluate(condition)?;
         match result {
-            TypedValue::Null | TypedValue::Undefined => Ok((ms, result)),
-            TypedValue::Boolean(is_true) =>
+            Ack => Ok((ms0, ms.evaluate(a)?.1)),
+            Boolean(is_true) =>
                 if is_true {
                     Ok((ms0, ms.evaluate(a)?.1))
                 } else if let Some(expr) = b {
                     Ok((ms0, ms.evaluate(expr)?.1))
                 } else { Ok((ms0, Undefined)) },
-            other => fail_unexpected("Boolean", &other)
+            Null | Undefined => Ok((ms, result)),
+            other =>
+                Ok((ms0, Self::error_unexpected("Boolean", &other)))
         }
     }
 
@@ -404,14 +441,21 @@ impl MachineState {
     ) -> std::io::Result<(Self, TypedValue)> {
         let (ms, source) = self.evaluate(source)?;
         let (ms, target) = ms.evaluate(target)?;
+        let rows_1 = self.assume_table_value_or_reference(&source, |rc| {
+            rc.read_range(0..rc.len()?)
+        })?;
         match target {
             TableRef(namespace) => {
                 let ns = Namespace::parse(namespace.as_str())?;
-                match source {
-                    TableRef(q_name) => Ok((ms, RowsAffected(5))),
-                    TableValue(mrc) => Ok((ms, RowsAffected(5))),
-                    z => fail_value(format!("Source {} is not a table", &z), &z)
-                }
+                let mut frc = FileRowCollection::open(&ns)?;
+                for row in rows_1 { frc.overwrite(frc.len()?, &row)?; }
+                Ok((ms, TableRef(namespace)))
+            }
+            TableValue(mrc) => {
+                let mut rows = vec![];
+                rows.extend(mrc.get_rows());
+                rows.extend(rows_1);
+                Ok((ms, TableValue(ModelRowCollection::from_rows(rows))))
             }
             z => fail_value(format!("Target {} is not a table", &z), &z)
         }
@@ -469,9 +513,10 @@ impl MachineState {
                     config.get_partitions().clone(),
                 );
                 config.save(&ns)?;
-                Ok((ms, Boolean(true)))
+                Ok((ms, Ack))
             }
-            x => fail(format!("Type mismatch: expected an iterable near {}", x))
+            x =>
+                Ok((ms, ErrorValue(format!("Type mismatch: expected an iterable near {}", x))))
         }
     }
 
@@ -489,7 +534,7 @@ impl MachineState {
                 let ns = Namespace::parse(path.as_str())?;
                 let config = DataFrameConfig::new(columns.clone(), vec![], vec![]);
                 DataFrame::create(ns, config)?;
-                Ok((ms, Boolean(true)))
+                Ok((ms, Ack))
             }
             x => fail(format!("Type mismatch: expected an iterable near {}", x))
         }
@@ -562,6 +607,7 @@ impl MachineState {
         table: &Expression,
         source: &Expression,
     ) -> std::io::Result<(MachineState, TypedValue)> {
+        let ms = self.clone();
         if let From(source) = source {
             // determine the writable target
             let mut writable = self.expect_row_collection(table)?;
@@ -572,19 +618,20 @@ impl MachineState {
 
             // write the rows to the target
             let inserted = self.write_rows(&mut writable, rows)?;
-            Ok((self.clone(), RowsAffected(inserted)))
+            Ok((ms, RowsAffected(inserted)))
         } else {
-            fail_expr("A queryable was expected".to_string(), source)
+            Ok((ms, Self::error_expr("A queryable was expected".to_string(), source)))
         }
     }
 
     fn evaluate_ql_ns(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (ms, result) = self.evaluate(expr)?;
-        match result {
-            StringValue(path) => Ok((ms, TableRef(path))),
-            TableRef(path) => Ok((ms, TableRef(path))),
-            x => fail_unexpected("TableRef", &x)
-        }
+        let result = match result {
+            StringValue(path) => TableRef(path),
+            TableRef(path) => TableRef(path),
+            x => Self::error_unexpected("TableRef", &x),
+        };
+        Ok((ms, result))
     }
 
     fn evaluate_ql_overwrite(
@@ -626,17 +673,55 @@ impl MachineState {
         }
     }
 
-    fn evaluate_ql_shall(
+    fn is_successful_ack(value: &TypedValue) -> bool {
+        match value {
+            Ack | Boolean(true) | TableRef(_) | TableValue(_) => true,
+            RowsAffected(n) if *n >= 0 => true,
+            _ => false
+        }
+    }
+
+    fn evaluate_ql_must_die(
         &self,
         expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
+        info!("{}", expr.to_code());
+        let (ms, value) = self.evaluate(expr)?;
+        Ok((ms, ErrorValue(value.unwrap_value())))
+    }
+
+    fn evaluate_ql_must_ignore_ack(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        info!("{}", expr.to_code());
+        let (ms, _) = self.evaluate_eval(expr)?;
+        Ok((ms, Ack))
+    }
+
+    fn evaluate_ql_must_ack(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        info!("{}", expr.to_code());
         let (ms, value) = self.evaluate(expr)?;
         match value {
-            Boolean(true) => Ok((ms, Boolean(true))),
-            RowsAffected(n) if n >= 0 => Ok((ms, RowsAffected(n))),
-            TableRef(path) => Ok((ms, TableRef(path))),
-            TableValue(mrc) => Ok((ms, TableValue(mrc))),
-            z => fail_value("Expected true, Table(..) or RowsAffected(n) where n >= 1", &z)
+            v if Self::is_successful_ack(&v) => Ok((ms, v.clone())),
+            v =>
+                Ok((ms, ErrorValue(format!("Expected true, Table(..) or RowsAffected(_ >= 1), but got {}", &v))))
+        }
+    }
+
+    fn evaluate_ql_must_not_ack(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        info!("{}", expr.to_code());
+        let (ms, value) = self.evaluate(expr)?;
+        match value {
+            v if Self::is_successful_ack(&v) =>
+                Ok((ms, ErrorValue(format!("Expected a non-success value, but got {}", &v)))),
+            v => Ok((ms, v))
         }
     }
 
@@ -708,21 +793,11 @@ impl MachineState {
         table: &Box<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let (ms, table) = self.evaluate(table)?;
-        match table {
-            TableValue(mut mrc) => {
-                let ns = Namespace::new("_", "_", "test");
-                let df = DataFrame::from_row_collection(ns, Box::new(mrc.clone()));
-                let rows = df.reverse()?;
-                Ok((ms, TableValue(ModelRowCollection::from_rows(rows))))
-            }
-            TableRef(name) => {
-                let ns = Namespace::parse(name.as_str())?;
-                let df = DataFrame::load(ns)?;
-                let rows = df.reverse()?;
-                Ok((ms, TableValue(ModelRowCollection::from_rows(rows))))
-            }
-            value => fail_value("Queryable expected", &value)
-        }
+        let result = self.assume_dataframe(&table, |df| {
+            let rows = df.reverse()?;
+            Ok(TableValue(ModelRowCollection::from_rows(rows)))
+        })?;
+        Ok((ms, result))
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
@@ -742,13 +817,52 @@ impl MachineState {
         let mut ms = self.clone();
         let mut is_done = false;
         while !is_done {
-            if let (ms1, Boolean(true)) = ms.evaluate(condition)? {
+            if let (ms1, Ack | Boolean(true)) = ms.evaluate(condition)? {
                 ms = ms1;
                 let (ms2, _) = ms.evaluate(code)?;
                 ms = ms2;
             } else { is_done = true }
         }
-        Ok((ms, Boolean(true)))
+        Ok((ms, Ack))
+    }
+
+    fn assume_table_value_or_reference<A>(
+        &self,
+        table: &TypedValue,
+        f: fn(Box<dyn RowCollection>) -> std::io::Result<A>,
+    ) -> std::io::Result<A> {
+        match table {
+            TableRef(namespace) => {
+                let ns = Namespace::parse(namespace.as_str())?;
+                let frc = FileRowCollection::open(&ns)?;
+                f(Box::new(frc))
+            }
+            TableValue(mrc) => f(Box::new(mrc.clone())),
+            z =>
+                return fail_value(format!("{} is not a table", z), z)
+        }
+    }
+
+    fn assume_dataframe<A>(
+        &self,
+        table: &TypedValue,
+        f: fn(DataFrame) -> std::io::Result<A>,
+    ) -> std::io::Result<A> {
+        match table {
+            TableRef(namespace) => {
+                let ns = Namespace::parse(namespace.as_str())?;
+                f(DataFrame::load(ns)?)
+            }
+            TableValue(mrc) =>
+                f(DataFrame::new(
+                    Namespace::new("_", "_", "_"),
+                    mrc.get_columns().clone(),
+                    Box::new(mrc.clone()),
+                )),
+
+            z =>
+                return fail_value(format!("{} is not a table", z), z)
+        }
     }
 
     /// executes the specified instructions on this state machine.
@@ -1095,18 +1209,18 @@ mod tests {
 
     #[test]
     fn test_create_table() {
-        let model = Create {
+        let model = Perform(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue("machine.create.stocks".into()))))),
             entity: TableEntity {
                 columns: make_quote_columns(),
                 from: None,
             },
-        };
+        });
 
         // create the table
         let ms = MachineState::new();
         let (_, result) = ms.evaluate(&model).unwrap();
-        assert_eq!(result, Boolean(true));
+        assert_eq!(result, Ack);
 
         // decompile back to source code
         assert_eq!(
@@ -1121,23 +1235,23 @@ mod tests {
         let ms = MachineState::new();
 
         // drop table if exists ns("machine.index.stocks")
-        let (ms, result) = ms.evaluate(&Drop(TableTarget {
+        let (ms, result) = ms.evaluate(&Perform(Infrastructure::Drop(TableTarget {
             path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
             if_exists: true,
-        })).unwrap();
+        }))).unwrap();
 
         // create table ns("machine.index.stocks") (...)
-        let (ms, result) = ms.evaluate(&Create {
+        let (ms, result) = ms.evaluate(&Perform(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
             entity: TableEntity {
                 columns: make_quote_columns(),
                 from: None,
             },
-        }).unwrap();
-        assert_eq!(result, Boolean(true));
+        })).unwrap();
+        assert_eq!(result, Ack);
 
         // create index ns("machine.index.stocks") [symbol, exchange]
-        let model = Create {
+        let model = Perform(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
             entity: IndexEntity {
                 columns: vec![
@@ -1145,9 +1259,9 @@ mod tests {
                     Variable("exchange".into()),
                 ],
             },
-        };
+        });
         let (_, result) = ms.evaluate(&model).unwrap();
-        assert_eq!(result, Boolean(true));
+        assert_eq!(result, Ack);
 
         // decompile back to source code
         assert_eq!(
@@ -1158,14 +1272,14 @@ mod tests {
 
     #[test]
     fn test_declare_table() {
-        let model = Declare(TableEntity {
+        let model = Perform(Infrastructure::Declare(TableEntity {
             columns: vec![
                 ColumnJs::new("symbol", "String(8)", None),
                 ColumnJs::new("exchange", "String(8)", None),
                 ColumnJs::new("last_sale", "f64", None),
             ],
             from: None,
-        });
+        }));
 
         let ms = MachineState::new();
         let (ms, result) = ms.evaluate(&model).unwrap();
@@ -1181,7 +1295,7 @@ mod tests {
         let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
         let (df, phys_columns) = create_file_table(ns_path);
 
-        let model = Drop(TableTarget { path: Box::new(ns), if_exists: false });
+        let model = Perform(Infrastructure::Drop(TableTarget { path: Box::new(ns), if_exists: false }));
         assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
 
         let ms = MachineState::new();
@@ -1237,7 +1351,7 @@ mod tests {
             SetVariable("add".to_string(), Box::new(Literal(fx.clone())))
         ]).unwrap();
         assert_eq!(ms.get("add").unwrap(), fx);
-        assert_eq!(result, TypedValue::Boolean(true));
+        assert_eq!(result, TypedValue::Ack);
 
         // execute the function via function call in scope: add(2, 3)
         let model = FunctionCall {
@@ -1268,16 +1382,16 @@ mod tests {
                 make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
             ])));
 
-        let model = Limit {
-            from: Box::new(Where {
+        let model = Inquire(Queryable::Limit {
+            from: Box::new(Inquire(Queryable::Where {
                 from: Box::new(From(Box::new(Variable("stocks".into())))),
                 condition: Box::new(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
                     Box::new(Literal(Float64Value(1.0))),
                 )),
-            }),
+            })),
             limit: Box::new(Literal(Int64Value(2))),
-        };
+        });
         assert_eq!(model.to_code(), "from stocks where last_sale >= 1 limit 2");
 
         let (_, result) = ms.evaluate(&model).unwrap();
@@ -1320,14 +1434,14 @@ mod tests {
 
         // insert some rows
         let ms = MachineState::new();
-        let (_, result) = ms.evaluate(&Append {
+        let (_, result) = ms.evaluate(&Mutate(Mutation::Append {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
             source: Box::new(From(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("REX".into()))),
                 ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
                 ("last_sale".into(), Literal(Float64Value(16.99))),
             ])))),
-        }).unwrap();
+        })).unwrap();
         assert_eq!(result, RowsAffected(1));
 
         // verify the remaining rows
@@ -1343,29 +1457,9 @@ mod tests {
     }
 
     #[test]
-    fn test_into_ns_from_variable() {
-        let model = IntoTable {
-            target: Box::new(Ns(Box::new(Literal(StringValue("machine.staging.stocks".to_string()))))),
-            source: Box::new(From(Box::new(Variable("stocks".to_string())))),
-        };
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let ms = MachineState::new()
-            .with_variable("stocks", TableValue(ModelRowCollection::from_rows(vec![
-                make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
-                make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-                make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
-                make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
-            ])));
-        let (_, result) = ms.evaluate(&model).unwrap();
-        assert_eq!(result, RowsAffected(5))
-    }
-
-    #[test]
     fn test_overwrite_rows_in_namespace() {
         let ns_path = "machine.overwrite.stocks";
-        let model = Overwrite {
+        let model = Mutate(Mutation::Overwrite {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("BOOM".into()))),
@@ -1377,7 +1471,7 @@ mod tests {
                 Box::new(Literal(StringValue("BOOM".into()))),
             ))),
             limit: None,
-        };
+        });
         assert_eq!(model.to_code(), r#"overwrite ns("machine.overwrite.stocks") via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99} where symbol == "BOOM""#);
 
         // create a table with test data
@@ -1430,7 +1524,7 @@ mod tests {
 
     #[test]
     fn test_reverse_from_variable() {
-        let model = Reverse(Box::new(From(Box::new(Variable("stocks".to_string())))));
+        let model = Inquire(Queryable::Reverse(Box::new(From(Box::new(Variable("stocks".to_string()))))));
         let phys_columns = make_table_columns();
         let ms = MachineState::new()
             .with_variable("stocks", TableValue(ModelRowCollection::from_rows(vec![
@@ -1458,7 +1552,7 @@ mod tests {
 
         // execute the query
         let ms = MachineState::new();
-        let (_, result) = ms.evaluate(&Select {
+        let (_, result) = ms.evaluate(&Inquire(Queryable::Select {
             fields: vec![
                 Variable("symbol".into()),
                 Variable("exchange".into()),
@@ -1473,7 +1567,7 @@ mod tests {
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
             limit: Some(Box::new(Literal(Int64Value(5)))),
-        }).unwrap();
+        })).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
@@ -1488,7 +1582,7 @@ mod tests {
             .with_variable("stocks", TableValue(mrc));
 
         // execute the code
-        let (_, result) = ms.evaluate(&Select {
+        let (_, result) = ms.evaluate(&Inquire(Queryable::Select {
             fields: vec![
                 Variable("symbol".into()),
                 Variable("exchange".into()),
@@ -1503,7 +1597,7 @@ mod tests {
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
             limit: Some(Box::new(Literal(Int64Value(5)))),
-        }).unwrap();
+        })).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
@@ -1513,7 +1607,7 @@ mod tests {
     #[ignore]
     #[test]
     fn test_update_rows_in_memory() {
-        let model = Update {
+        let model = Mutate(Mutation::Update {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
@@ -1525,7 +1619,7 @@ mod tests {
                 ))
             ),
             limit: Some(Box::new(Literal(Int64Value(5)))),
-        };
+        });
 
         // perform the update and verify
         let (mrc, phys_columns) = create_memory_table();
@@ -1553,7 +1647,7 @@ mod tests {
         let (df, phys_columns) = create_file_table(ns_path);
 
         // create the instruction model
-        let model = Update {
+        let model = Mutate(Mutation::Update {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
@@ -1565,7 +1659,7 @@ mod tests {
                 ))
             ),
             limit: Some(Box::new(Literal(Int64Value(5)))),
-        };
+        });
 
         // update some rows
         let (_, delta) = MachineState::new().evaluate(&model).unwrap();
@@ -1584,10 +1678,10 @@ mod tests {
 
     #[test]
     fn test_truncate_table() {
-        let model = Truncate {
+        let model = Mutate(Mutation::Truncate {
             path: Box::new(Variable("stocks".into())),
             limit: Some(Box::new(Literal(Int64Value(0)))),
-        };
+        });
 
         let (mrc, phys_columns) = create_memory_table();
         let ms = MachineState::new().with_variable("stocks", TableValue(mrc));
