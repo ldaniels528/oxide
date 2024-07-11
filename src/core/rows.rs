@@ -15,7 +15,7 @@ use crate::byte_buffer::ByteBuffer;
 use crate::codec;
 use crate::expression::Expression;
 use crate::fields::Field;
-use crate::machine::MachineState;
+use crate::machine::Machine;
 use crate::row_metadata::RowMetadata;
 use crate::server::determine_column_value;
 use crate::table_columns::TableColumn;
@@ -163,10 +163,10 @@ impl Row {
     /// returns the total record size (in bytes)
     pub fn get_record_size(&self) -> usize { Self::compute_record_size(&self.columns) }
 
-    pub fn matches(&self, ms: &MachineState, condition: &Option<Box<Expression>>) -> bool {
+    pub fn matches(&self, machine: &Machine, condition: &Option<Box<Expression>>) -> bool {
         if let Some(condition) = condition {
-            let ms = ms.with_row(self);
-            if let Ok((_, TypedValue::Boolean(v))) = ms.evaluate(condition) { v } else { true }
+            let machine = machine.with_row(self);
+            if let Ok((_, TypedValue::Boolean(v))) = machine.evaluate(condition) { v } else { true }
         } else { true }
     }
 

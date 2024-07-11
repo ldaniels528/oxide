@@ -10,6 +10,7 @@ use crate::data_types::DataType;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::ErrorValue;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TableColumn {
@@ -21,6 +22,17 @@ pub struct TableColumn {
 }
 
 impl TableColumn {
+
+    pub fn validate_compatibility(cs0: &Vec<TableColumn>, cs1: &Vec<TableColumn>) -> TypedValue {
+        match (cs0, cs1) {
+            (a, b) if a.len() != b.len() =>
+                ErrorValue(format!("Mismatched number of arguments: {} vs. {}", cs0.len(), cs1.len())),
+            _ =>
+                TypedValue::Ack
+        }
+
+    }
+
     pub fn new(name: impl Into<String>,
                data_type: DataType,
                default_value: TypedValue,

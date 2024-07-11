@@ -14,7 +14,8 @@ use crate::expression::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
-use crate::machine::MachineState;
+use crate::expression::Mutation::IntoTable;
+use crate::machine::Machine;
 use crate::server::ColumnJs;
 use crate::typed_values::*;
 use crate::typed_values::TypedValue::*;
@@ -82,6 +83,13 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
             encode(E_VAR_SET, vec![&Literal(StringValue(name.into())), expr]),
         ShiftLeft(a, b) => encode(E_SHIFT_LEFT, vec![a, b]),
         ShiftRight(a, b) => encode(E_SHIFT_RIGHT, vec![a, b]),
+        StdErr(a) => encode(E_STDERR, vec![a]),
+        StdOut(a) => encode(E_STDOUT, vec![a]),
+        SystemCall(args) => {
+            let mut my_args = vec![];
+            for arg in args { my_args.push(arg) }
+            encode(E_SYSTEM_CALL, my_args)
+        }
         TupleLiteral(values) => encode_vec(E_TUPLE, values),
         Variable(name) => encode(E_VAR_GET, vec![&Literal(StringValue(name.into()))]),
         Via(src) => encode(E_VIA, vec![src]),
@@ -109,8 +117,8 @@ pub fn assemble_infrastructure(expression: &Infrastructure) -> Vec<u8> {
         }
         Declare(TableEntity { columns, from }) =>
             encode(E_DECLARE_TABLE, vec![&ColumnSet(columns.clone()), &get_or_undef(from)]),
-        Drop(IndexTarget { path, if_exists }) => encode(E_DROP, vec![path]),
-        Drop(TableTarget { path, if_exists }) => encode(E_DROP, vec![path]),
+        Drop(IndexTarget { path }) => encode(E_DROP, vec![path]),
+        Drop(TableTarget { path }) => encode(E_DROP, vec![path]),
     }
 }
 
@@ -121,6 +129,7 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
         Append { path, source } => encode(E_APPEND, vec![path, source]),
         Delete { path, condition, limit } =>
             encode(E_DELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
+        IntoTable(a, b) => encode(E_INTO_TABLE, vec![a, b]),
         Overwrite { path, source, condition, limit } => {
             let mut args = vec![];
             args.push(path.deref().clone());
@@ -195,6 +204,7 @@ fn assemble_select(
 /// decodes the typed value based on the supplied data type and buffer
 pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
     match data_type {
+        AckType => assemble_bytes(T_ACK, &vec![]),
         BLOBType(size) => assemble_bytes(T_BLOB, &assemble_usize(*size)),
         BooleanType => assemble_bytes(T_BOOLEAN, &vec![]),
         CLOBType(size) => assemble_bytes(T_CLOB, &assemble_usize(*size)),
@@ -235,23 +245,23 @@ pub fn assemble_value(value: &TypedValue) -> Vec<u8> {
 }
 
 /// arithmetic addition
-pub fn add(ms: MachineState) -> std::io::Result<MachineState> {
-    let (ms, y) = ms.pop_or(Undefined);
-    let (ms, x) = ms.pop_or(Undefined);
-    Ok(ms.push(x + y))
+pub fn add(machine: Machine) -> std::io::Result<Machine> {
+    let (machine, y) = machine.pop_or(Undefined);
+    let (machine, x) = machine.pop_or(Undefined);
+    Ok(machine.push(x + y))
 }
 
 /// arithmetic decrement
-pub fn dec(ms: MachineState) -> std::io::Result<MachineState> {
-    let (ms, x) = ms.pop_or(Undefined);
-    ms.transform_numeric(x, |n| Int64Value(n - 1), |n| Float64Value(n - 1.))
+pub fn dec(machine: Machine) -> std::io::Result<Machine> {
+    let (machine, x) = machine.pop_or(Undefined);
+    machine.transform_numeric(x, |n| Int64Value(n - 1), |n| Float64Value(n - 1.))
 }
 
 /// arithmetic division
-pub fn div(ms: MachineState) -> std::io::Result<MachineState> {
-    let (ms, y) = ms.pop_or(Undefined);
-    let (ms, x) = ms.pop_or(Undefined);
-    Ok(ms.push(x / y))
+pub fn div(machine: Machine) -> std::io::Result<Machine> {
+    let (machine, y) = machine.pop_or(Undefined);
+    let (machine, x) = machine.pop_or(Undefined);
+    Ok(machine.push(x / y))
 }
 
 pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
@@ -296,7 +306,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
                 limit: decode_opt(buf)?,
             })),
         E_DIVIDE => Ok(Divide(decode_box(buf)?, decode_box(buf)?)),
-        E_DROP => Ok(Perform(Infrastructure::Drop(TableTarget { path: decode_box(buf)?, if_exists: false }))),
+        E_DROP => Ok(Perform(Infrastructure::Drop(TableTarget { path: decode_box(buf)? }))),
         E_EQUAL => Ok(Equal(decode_box(buf)?, decode_box(buf)?)),
         E_EVAL => Ok(Eval(decode_box(buf)?)),
         E_FACTORIAL => Ok(Factorial(decode_box(buf)?)),
@@ -305,6 +315,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_GREATER_THAN => Ok(GreaterThan(decode_box(buf)?, decode_box(buf)?)),
         E_IF => Ok(If { condition: decode_box(buf)?, a: decode_box(buf)?, b: decode_opt(buf)? }),
         E_INCLUDE => Ok(Include(decode_box(buf)?)),
+        E_INTO_TABLE => Ok(Mutate(Mutation::IntoTable(decode_box(buf)?, decode_box(buf)?))),
         E_JSON_LITERAL => Ok(JSONLiteral(decode_json_object(buf)?)),
         E_LESS_OR_EQUAL => Ok(LessOrEqual(decode_box(buf)?, decode_box(buf)?)),
         E_LESS_THAN => Ok(LessThan(decode_box(buf)?, decode_box(buf)?)),
@@ -334,6 +345,9 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_RETURN => Ok(Return(decode_array(buf)?)),
         E_REVERSE => Ok(Inquire(Queryable::Reverse(decode_box(buf)?))),
         E_SELECT => disassemble_select(buf),
+        E_STDERR => Ok(StdErr(decode_box(buf)?)),
+        E_STDOUT => Ok(StdErr(decode_box(buf)?)),
+        E_SYSTEM_CALL => Ok(SystemCall(decode_array(buf)?)),
         E_VAR_SET =>
             match disassemble(buf)? {
                 Literal(StringValue(name)) => Ok(SetVariable(name, decode_box(buf)?)),
@@ -561,7 +575,7 @@ fn encode_vec(id: u8, ops: &Vec<Expression>) -> Vec<u8> {
 }
 
 /// arithmetic factorial
-pub fn fact(ms: MachineState) -> std::io::Result<MachineState> {
+pub fn fact(machine: Machine) -> std::io::Result<Machine> {
     fn fact_i64(n: i64) -> TypedValue {
         fn fact_i(n: i64) -> i64 { if n <= 1 { 1 } else { n * fact_i(n - 1) } }
         Int64Value(fact_i(n))
@@ -572,8 +586,8 @@ pub fn fact(ms: MachineState) -> std::io::Result<MachineState> {
         Float64Value(fact_f(n))
     }
 
-    let (ms, number) = ms.pop_or(Undefined);
-    ms.transform_numeric(number, fact_i64, fact_f64)
+    let (machine, number) = machine.pop_or(Undefined);
+    machine.transform_numeric(number, fact_i64, fact_f64)
 }
 
 fn get_or_undef(opt: &Option<Box<Expression>>) -> Expression {
@@ -581,30 +595,30 @@ fn get_or_undef(opt: &Option<Box<Expression>>) -> Expression {
 }
 
 /// arithmetic increment
-pub fn inc(ms: MachineState) -> std::io::Result<MachineState> {
-    let (ms, x) = ms.pop_or(Undefined);
-    ms.transform_numeric(x, |n| Int64Value(n + 1), |n| Float64Value(n + 1.))
+pub fn inc(machine: Machine) -> std::io::Result<Machine> {
+    let (machine, x) = machine.pop_or(Undefined);
+    machine.transform_numeric(x, |n| Int64Value(n + 1), |n| Float64Value(n + 1.))
 }
 
 /// arithmetic multiplication
-pub fn mul(ms: MachineState) -> std::io::Result<MachineState> {
-    let (ms, y) = ms.pop_or(Undefined);
-    let (ms, x) = ms.pop_or(Undefined);
-    Ok(ms.push(x * y))
+pub fn mul(machine: Machine) -> std::io::Result<Machine> {
+    let (machine, y) = machine.pop_or(Undefined);
+    let (machine, x) = machine.pop_or(Undefined);
+    Ok(machine.push(x * y))
 }
 
 /// arithmetic subtraction
-pub fn sub(ms: MachineState) -> std::io::Result<MachineState> {
-    let (ms, y) = ms.pop_or(Undefined);
-    let (ms, x) = ms.pop_or(Undefined);
-    Ok(ms.push(x - y))
+pub fn sub(machine: Machine) -> std::io::Result<Machine> {
+    let (machine, y) = machine.pop_or(Undefined);
+    let (machine, x) = machine.pop_or(Undefined);
+    Ok(machine.push(x - y))
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
     use crate::expression::Expression::*;
-    use crate::machine::MachineState;
+    use crate::machine::Machine;
     use crate::typed_values::TypedValue::{Float64Value, Int32Value, Int64Value};
     use crate::typed_values::TypedValue::*;
 
@@ -754,33 +768,33 @@ mod tests {
 
     #[test]
     fn test_dec() {
-        let ms = MachineState::new().push(Int64Value(6));
-        let ms = dec(ms).unwrap();
-        let (_, result) = ms.pop();
+        let machine = Machine::new().push(Int64Value(6));
+        let machine = dec(machine).unwrap();
+        let (_, result) = machine.pop();
         assert_eq!(result, Some(Int64Value(5)));
     }
 
     #[test]
     fn test_inc() {
-        let ms = MachineState::new().push(Int64Value(6));
-        let ms = inc(ms).unwrap();
-        let (_, result) = ms.pop();
+        let machine = Machine::new().push(Int64Value(6));
+        let machine = inc(machine).unwrap();
+        let (_, result) = machine.pop();
         assert_eq!(result, Some(Int64Value(7)));
     }
 
     #[test]
     fn test_fact_i32() {
-        let ms = MachineState::new().push(Int32Value(5));
-        let ms = fact(ms).unwrap();
-        let (_, result) = ms.pop();
+        let machine = Machine::new().push(Int32Value(5));
+        let machine = fact(machine).unwrap();
+        let (_, result) = machine.pop();
         assert_eq!(result, Some(Int64Value(120)));
     }
 
     #[test]
     fn test_fact_f64() {
-        let ms = MachineState::new().push(Float64Value(6.));
-        let ms = fact(ms).unwrap();
-        let (_, result) = ms.pop();
+        let machine = Machine::new().push(Float64Value(6.));
+        let machine = fact(machine).unwrap();
+        let (_, result) = machine.pop();
         assert_eq!(result, Some(Float64Value(720.)));
     }
 
@@ -807,7 +821,7 @@ mod tests {
     #[test]
     fn test_multiple_opcodes() {
         // execute the program
-        let (ms, value) = MachineState::new()
+        let (machine, value) = Machine::new()
             .push_all(vec![
                 2., 3., // add
                 4., // mul
@@ -819,6 +833,6 @@ mod tests {
 
         // verify the result
         assert_eq!(value, Float64Value(-0.08));
-        assert_eq!(ms.stack_len(), 0)
+        assert_eq!(machine.stack_len(), 0)
     }
 }

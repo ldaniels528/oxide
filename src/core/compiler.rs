@@ -18,13 +18,13 @@ use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, Sin
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Function, Int64Value, StringValue};
 
-/// Represents the Oxide compiler state
+/// Represents the Oxide compiler
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CompilerState {
+pub struct Compiler {
     stack: Vec<Expression>,
 }
 
-impl CompilerState {
+impl Compiler {
 
     ////////////////////////////////////////////////////////////////
     // static methods
@@ -33,14 +33,14 @@ impl CompilerState {
     /// compiles the source code into a [Vec<Expression>]; a graph representing
     /// the program's executable code
     pub fn compile_script(source_code: &str) -> std::io::Result<Expression> {
-        let mut compiler = CompilerState::new();
+        let mut compiler = Compiler::new();
         let (code, _) = compiler.compile(TokenSlice::from_string(source_code))?;
         Ok(code)
     }
 
     /// compiles the source code into byte code
     pub fn compile_to_byte_code(source_code: &str) -> std::io::Result<Vec<u8>> {
-        let code = CompilerState::compile_script(source_code)?;
+        let code = Compiler::compile_script(source_code)?;
         let byte_code = assemble(&code);
         Ok(byte_code)
     }
@@ -50,9 +50,9 @@ impl CompilerState {
         Ok(disassemble_fully(&byte_code)?)
     }
 
-    /// creates a new [CompilerState] instance
+    /// creates a new [Compiler] instance
     pub fn new() -> Self {
-        CompilerState {
+        Compiler {
             stack: vec![],
         }
     }
@@ -63,7 +63,7 @@ impl CompilerState {
 
     /// compiles the entire [TokenSlice] into an [Expression]
     pub fn compile(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        fn push(compiler: &mut CompilerState, ts: TokenSlice) -> std::io::Result<TokenSlice> {
+        fn push(compiler: &mut Compiler, ts: TokenSlice) -> std::io::Result<TokenSlice> {
             let start = ts.get_position();
             let (expr, ts) = compiler.compile_next(ts)?;
             // ensure we actually moved the cursor
@@ -186,18 +186,26 @@ impl CompilerState {
                 "include" => self.parse_expression_1a(ts, Include),
                 "if" => self.parse_keyword_if(ts),
                 "iff" => self.parse_keyword_iff(ts),
+                "into" => {
+                    let value = self.pop().unwrap();
+                    self.parse_expression_2a(ts, value, |a, b| Mutate(Mutation::IntoTable(a, b)))
+                }
                 "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &ts),
                 "ns" => self.parse_expression_1a(ts, Ns),
                 "null" => Ok((NULL, ts)),
                 "overwrite" => self.parse_keyword_overwrite(ts),
                 "reverse" => self.parse_expression_1a(ts, |q| Inquire(Queryable::Reverse(q))),
                 "select" => self.parse_keyword_select(ts),
+                "stderr" => self.parse_expression_1a(ts, StdErr),
+                "stdout" => self.parse_expression_1a(ts, StdOut),
+                "syscall" => self.parse_keyword_syscall(ts),
                 "table" => self.parse_keyword_table(ts),
                 "true" => Ok((TRUE, ts)),
                 "undefined" => Ok((UNDEFINED, ts)),
                 "update" => self.parse_keyword_update(ts),
                 "via" => self.parse_expression_1a(ts, Via),
                 "where" => fail_near("`from` is expected before `where`: from stocks where last_sale < 1.0", &ts),
+                "while" => self.parse_keyword_while(ts),
                 name => self.expect_function_call_or_variable(name, ts)
             }
         } else { fail("Unexpected end of input") }
@@ -250,13 +258,14 @@ impl CompilerState {
         let (table, ts) = self.compile_next(ts)?;
         if let (ColumnSet(columns), ts) = self.expect_parameters(ts.clone())? {
             // from { symbol: "ABC", exchange: "NYSE", last_sale: 67.89 }
-            let (from, ts) = if ts.is("from") {
-                let ts = ts.expect("from")?;
-                let (from, ts) = self.compile_next(ts)?;
-                (Some(Box::new(from)), ts)
-            } else {
-                (None, ts)
-            };
+            let (from, ts) =
+                if ts.is("from") {
+                    let ts = ts.expect("from")?;
+                    let (from, ts) = self.compile_next(ts)?;
+                    (Some(Box::new(from)), ts)
+                } else {
+                    (None, ts)
+                };
             Ok((Perform(Infrastructure::Create {
                 path: Box::new(table),
                 entity: TableEntity { columns, from },
@@ -326,7 +335,7 @@ impl CompilerState {
                     a: Box::new(a.clone()),
                     b: Some(Box::new(b.clone())),
                 }, ts)),
-            x => fail_near("Syntax error. Usage: iff(cond, a, b)", &ts)
+            _ => fail_near("Syntax error. Usage: iff(cond, a, b)", &ts)
         }
     }
 
@@ -391,6 +400,13 @@ impl CompilerState {
         }), ts))
     }
 
+    /// Parses a SYSCALL statement:
+    /// ex: syscall("ps", "aux")
+    fn parse_keyword_syscall(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        let (args, ts) = self.expect_arguments(ts)?;
+        Ok((SystemCall(args), ts))
+    }
+
     /// Parses a table expression.
     /// ex: stocks := table (symbol: String(8), exchange: String(8), last_sale: f64)
     fn parse_keyword_table(
@@ -427,6 +443,20 @@ impl CompilerState {
         }), ts))
     }
 
+    /// Parses a while expression
+    /// ex: x := 0 while (x < 5) { x := x + 1 }
+    fn parse_keyword_while(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (condition, ts) = self.compile_next(ts)?;
+        let (code, ts) = self.compile_next(ts)?;
+        Ok((While {
+            condition: Box::new(condition),
+            code: Box::new(code),
+        }, ts))
+    }
+
     fn parse_atom(
         &mut self,
         ts: TokenSlice,
@@ -453,7 +483,7 @@ impl CompilerState {
                 match keyword.as_str() {
                     "table" => {
                         let (expr, ts) = self.compile_next(ts)?;
-                        Ok((f(TableTarget { path: Box::new(expr), if_exists: false }), ts))
+                        Ok((f(TableTarget { path: Box::new(expr) }), ts))
                     }
                     z => fail_near(format!("Invalid type `{}`, try `table` instead", z), &ts)
                 }
@@ -469,7 +499,7 @@ impl CompilerState {
         symbol: String,
         _precedence: usize,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        fn pow(compiler: &mut CompilerState, ts: TokenSlice, n: i64) -> std::io::Result<(Expression, TokenSlice)> {
+        fn pow(compiler: &mut Compiler, ts: TokenSlice, n: i64) -> std::io::Result<(Expression, TokenSlice)> {
             compiler.parse_expression_2b(ts, Literal(Int64Value(n)), Pow)
         }
         match symbol.as_str() {
@@ -812,7 +842,7 @@ mod tests {
 
     #[test]
     fn test_array() {
-        assert_eq!(CompilerState::compile_script("[1, 4, 2, 8, 5, 7]").unwrap(),
+        assert_eq!(Compiler::compile_script("[1, 4, 2, 8, 5, 7]").unwrap(),
                    ArrayLiteral(vec![
                        Literal(Int64Value(1)), Literal(Int64Value(4)), Literal(Int64Value(2)),
                        Literal(Int64Value(8)), Literal(Int64Value(5)), Literal(Int64Value(7)),
@@ -821,13 +851,13 @@ mod tests {
 
     #[test]
     fn test_as_expression() {
-        let code = CompilerState::compile_script(r#"symbol: "ABC""#).unwrap();
+        let code = Compiler::compile_script(r#"symbol: "ABC""#).unwrap();
         assert_eq!(code, AsValue("symbol".to_string(), Box::new(Literal(StringValue("ABC".into())))));
     }
 
     #[test]
     fn test_bitwise_and() {
-        assert_eq!(CompilerState::compile_script("20 & 3").unwrap(),
+        assert_eq!(Compiler::compile_script("20 & 3").unwrap(),
                    BitwiseAnd(
                        Box::new(Literal(Int64Value(20))),
                        Box::new(Literal(Int64Value(3))),
@@ -836,7 +866,7 @@ mod tests {
 
     #[test]
     fn test_bitwise_or() {
-        assert_eq!(CompilerState::compile_script("20 | 3").unwrap(),
+        assert_eq!(Compiler::compile_script("20 | 3").unwrap(),
                    BitwiseOr(
                        Box::new(Literal(Int64Value(20))),
                        Box::new(Literal(Int64Value(3))),
@@ -848,7 +878,7 @@ mod tests {
         // examples:
         // fn add(a: u64, b: u64) => a + b
         // fn add(a: u64, b: u64) : u64 => a + b
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         fn add(a, b) => a + b
         "#).unwrap();
         assert_eq!(code,
@@ -873,7 +903,7 @@ mod tests {
         // examples:
         // fn (a: u64, b: u64) : u64 => a + b
         // fn (a, b) => a + b
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         fn (a, b) => a * b
         "#).unwrap();
         assert_eq!(code,
@@ -893,7 +923,7 @@ mod tests {
 
     #[test]
     fn test_eval() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         eval "5 + 7"
         "#).unwrap();
         assert_eq!(code, Eval(Box::new(Literal(StringValue("5 + 7".to_string())))))
@@ -901,7 +931,7 @@ mod tests {
 
     #[test]
     fn test_function_call() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         f(2, 3)
         "#).unwrap();
         assert_eq!(code, FunctionCall {
@@ -914,8 +944,8 @@ mod tests {
     }
 
     #[test]
-    fn test_create_index() {
-        let code = CompilerState::compile_script(r#"
+    fn create_index_in_namespace() {
+        let code = Compiler::compile_script(r#"
         create index ns("compiler.create.stocks") [symbol, exchange]
         "#).unwrap();
         assert_eq!(code, Perform(Infrastructure::Create {
@@ -930,9 +960,9 @@ mod tests {
     }
 
     #[test]
-    fn test_create_table() {
+    fn create_table_in_namespace() {
         let ns_path = "compiler.create.stocks";
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         create table ns("compiler.create.stocks") (
             symbol: String(8),
             exchange: String(8),
@@ -953,7 +983,7 @@ mod tests {
 
     #[test]
     fn test_declare_table() {
-        let model = CompilerState::compile_script(r#"
+        let model = Compiler::compile_script(r#"
         table(
             symbol: String(8),
             exchange: String(8),
@@ -971,26 +1001,25 @@ mod tests {
 
     #[test]
     fn test_drop_table() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         drop table ns('finance.securities.stocks')
         "#).unwrap();
         assert_eq!(code,
                    Perform(Infrastructure::Drop(TableTarget {
                        path: Box::new(Ns(Box::new(Literal(StringValue("finance.securities.stocks".into()))))),
-                       if_exists: false,
                    }))
         );
     }
 
     #[test]
     fn test_if() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         if(n > 100) "Yes"
         "#).unwrap();
         assert_eq!(code, If {
             condition: Box::new(GreaterThan(
                 Box::new(Variable("n".to_string())),
-                Box::new(Literal(Int64Value(100)))
+                Box::new(Literal(Int64Value(100))),
             )),
             a: Box::new(Literal(StringValue("Yes".to_string()))),
             b: None,
@@ -999,13 +1028,13 @@ mod tests {
 
     #[test]
     fn test_if_else() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         if(n > 100) n else m
         "#).unwrap();
         assert_eq!(code, If {
             condition: Box::new(GreaterThan(
                 Box::new(Variable("n".to_string())),
-                Box::new(Literal(Int64Value(100)))
+                Box::new(Literal(Int64Value(100))),
             )),
             a: Box::new(Variable("n".to_string())),
             b: Some(Box::new(Variable("m".to_string()))),
@@ -1014,13 +1043,13 @@ mod tests {
 
     #[test]
     fn test_iff() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         iff(x > 5, a, b)
         "#).unwrap();
         assert_eq!(code, If {
             condition: Box::new(GreaterThan(
                 Box::new(Variable("x".to_string())),
-                Box::new(Literal(Int64Value(5)))
+                Box::new(Literal(Int64Value(5))),
             )),
             a: Box::new(Variable("a".to_string())),
             b: Some(Box::new(Variable("b".to_string()))),
@@ -1029,7 +1058,7 @@ mod tests {
 
     #[test]
     fn test_json_literal_value() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         {symbol: "ABC", exchange: "NYSE", last_sale: 16.79}
         "#).unwrap();
         assert_eq!(code,
@@ -1043,36 +1072,36 @@ mod tests {
 
     #[test]
     fn test_numeric_literal_value() {
-        assert_eq!(CompilerState::compile_script("1_234_567_890").unwrap(),
+        assert_eq!(Compiler::compile_script("1_234_567_890").unwrap(),
                    Literal(Int64Value(1_234_567_890)));
 
-        assert_eq!(CompilerState::compile_script("1_234_567.890").unwrap(),
+        assert_eq!(Compiler::compile_script("1_234_567.890").unwrap(),
                    Literal(Float64Value(1_234_567.890)));
     }
 
     #[test]
     fn test_not_expression() {
-        assert_eq!(CompilerState::compile_script("!false").unwrap(), Not(Box::new(FALSE)));
-        assert_eq!(CompilerState::compile_script("!true").unwrap(), Not(Box::new(TRUE)));
+        assert_eq!(Compiler::compile_script("!false").unwrap(), Not(Box::new(FALSE)));
+        assert_eq!(Compiler::compile_script("!true").unwrap(), Not(Box::new(TRUE)));
     }
 
     #[test]
     fn test_mathematical_addition() {
-        let opcodes = CompilerState::compile_script("n + 3").unwrap();
+        let opcodes = Compiler::compile_script("n + 3").unwrap();
         assert_eq!(opcodes,
                    Plus(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(3)))));
     }
 
     #[test]
     fn test_mathematical_division() {
-        let opcodes = CompilerState::compile_script("n / 3").unwrap();
+        let opcodes = Compiler::compile_script("n / 3").unwrap();
         assert_eq!(opcodes,
                    Divide(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(3)))));
     }
 
     #[test]
     fn test_mathematical_exponent() {
-        let opcodes = CompilerState::compile_script("5 ** 2").unwrap();
+        let opcodes = Compiler::compile_script("5 ** 2").unwrap();
         assert_eq!(opcodes,
                    Pow(Box::new(Literal(Int64Value(5))), Box::new(Literal(Int64Value(2)))));
     }
@@ -1082,7 +1111,7 @@ mod tests {
         let symbols = vec!["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
         let mut num = 0;
         for symbol in symbols {
-            let opcodes = CompilerState::compile_script(format!("5{}", symbol).as_str()).unwrap();
+            let opcodes = Compiler::compile_script(format!("5{}", symbol).as_str()).unwrap();
             assert_eq!(opcodes,
                        Pow(Box::new(Literal(Int64Value(5))), Box::new(Literal(Int64Value(num)))));
             num += 1
@@ -1091,34 +1120,34 @@ mod tests {
 
     #[test]
     fn test_mathematical_factorial() {
-        let opcodes = CompilerState::compile_script("5¡").unwrap();
+        let opcodes = Compiler::compile_script("5¡").unwrap();
         assert_eq!(opcodes, Factorial(Box::new(Literal(Int64Value(5)))));
     }
 
     #[test]
     fn test_mathematical_modulus() {
-        let opcodes = CompilerState::compile_script("n % 4").unwrap();
+        let opcodes = Compiler::compile_script("n % 4").unwrap();
         assert_eq!(opcodes,
                    Modulo(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(4)))));
     }
 
     #[test]
     fn test_mathematical_multiplication() {
-        let opcodes = CompilerState::compile_script("n * 10").unwrap();
+        let opcodes = Compiler::compile_script("n * 10").unwrap();
         assert_eq!(opcodes,
                    Multiply(Box::new(Variable("n".into())), Box::new(Literal(Int64Value(10)))));
     }
 
     #[test]
     fn test_mathematical_subtraction() {
-        let opcodes = CompilerState::compile_script("_ - 7").unwrap();
+        let opcodes = Compiler::compile_script("_ - 7").unwrap();
         assert_eq!(opcodes,
                    Minus(Box::new(Variable("_".into())), Box::new(Literal(Int64Value(7)))));
     }
 
     #[test]
     fn test_must_succeed() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         [+] eval "5 + 7"
         "#).unwrap();
         assert_eq!(code, MustAck(Box::new(
@@ -1128,7 +1157,7 @@ mod tests {
 
     #[test]
     fn test_must_not_succeed() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         [-] eval "7 / 0"
         "#).unwrap();
         assert_eq!(code, MustNotAck(Box::new(
@@ -1138,7 +1167,7 @@ mod tests {
 
     #[test]
     fn test_must_ignore_failure() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         [~] eval "7 / 0"
         "#).unwrap();
         assert_eq!(code, MustIgnoreAck(Box::new(
@@ -1149,7 +1178,7 @@ mod tests {
     #[test]
     fn test_to_byte_code() {
         // compile script to byte code
-        let byte_code = CompilerState::compile_to_byte_code(r#"
+        let byte_code = Compiler::compile_to_byte_code(r#"
         {w:'abc', x:1.0, y:2, z:[1, 2, 3]}
         "#).unwrap();
         assert_eq!(byte_code, vec![
@@ -1185,7 +1214,7 @@ mod tests {
             E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
         ];
         // decompile byte code to model code
-        let code = CompilerState::decompile_from_byte_code(&byte_code).unwrap();
+        let code = Compiler::decompile_from_byte_code(&byte_code).unwrap();
         assert_eq!(code,
                    JSONLiteral(vec![
                        ("w".into(), Literal(StringValue("abc".into()))),
@@ -1205,7 +1234,7 @@ mod tests {
     #[test]
     fn test_maybe_curly_brackets() {
         let ts = TokenSlice::from_string(r#"{w:'abc', x:1.0, y:2, z:[1, 2, 3]}"#);
-        let mut compiler = CompilerState::new();
+        let mut compiler = Compiler::new();
         let (result, _) = compiler.maybe_curly_brackets(ts).unwrap();
         let result = result.unwrap();
         assert_eq!(result, JSONLiteral(vec![
@@ -1222,7 +1251,7 @@ mod tests {
 
     #[test]
     fn test_next_argument_list() {
-        let mut compiler = CompilerState::new();
+        let mut compiler = Compiler::new();
         let ts = TokenSlice::from_string("(abc, 123, 'Hello')");
         let (items, _) = compiler.expect_arguments(ts).unwrap();
         assert_eq!(items, vec![Variable("abc".into()), Literal(Int64Value(123)), Literal(StringValue("Hello".into()))])
@@ -1230,7 +1259,7 @@ mod tests {
 
     #[test]
     fn test_next_expression() {
-        let mut compiler = CompilerState::new();
+        let mut compiler = Compiler::new();
         let ts = TokenSlice::from_string("abc");
         let (expr, _) = compiler.compile_next(ts).unwrap();
         assert_eq!(expr, Variable("abc".into()))
@@ -1238,7 +1267,7 @@ mod tests {
 
     #[test]
     fn test_next_expression_list() {
-        let mut compiler = CompilerState::new();
+        let mut compiler = Compiler::new();
         let ts = TokenSlice::from_string("abc, 123.0, 'Hello'");
         let (items, _) = compiler.next_expression_list(ts).unwrap();
         assert_eq!(items, Some(vec![Variable("abc".into()), Literal(Float64Value(123.)), Literal(StringValue("Hello".into()))]))
@@ -1246,7 +1275,7 @@ mod tests {
 
     #[test]
     fn test_order_of_operations_1() {
-        let opcodes = CompilerState::compile_script("2 + (4 * 3)").unwrap();
+        let opcodes = Compiler::compile_script("2 + (4 * 3)").unwrap();
         assert_eq!(opcodes,
                    Plus(Box::new(Literal(Int64Value(2))),
                         Box::new(Multiply(Box::new(Literal(Int64Value(4))),
@@ -1256,7 +1285,7 @@ mod tests {
 
     #[test]
     fn test_order_of_operations_2() {
-        let opcodes = CompilerState::compile_script("(4.0 / 3.0) + (4 * 3)").unwrap();
+        let opcodes = Compiler::compile_script("(4.0 / 3.0) + (4 * 3)").unwrap();
         assert_eq!(opcodes,
                    Plus(
                        Box::new(Divide(Box::new(Literal(Float64Value(4.0))), Box::new(Literal(Float64Value(3.0))))),
@@ -1267,7 +1296,7 @@ mod tests {
     #[ignore]
     #[test]
     fn test_order_of_operations_3() {
-        let opcodes = CompilerState::compile_script("2 - 4 * 3").unwrap();
+        let opcodes = Compiler::compile_script("2 - 4 * 3").unwrap();
         assert_eq!(opcodes,
                    Minus(Box::new(Literal(Float64Value(2.))),
                          Box::new(Multiply(Box::new(Literal(Float64Value(4.))),
@@ -1277,7 +1306,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         delete from stocks
         "#).unwrap();
         assert_eq!(opcodes, Mutate(Mutation::Delete {
@@ -1289,7 +1318,7 @@ mod tests {
 
     #[test]
     fn test_delete_where_limit() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         delete from stocks
         where last_sale >= 1.0
         limit 100
@@ -1309,13 +1338,13 @@ mod tests {
 
     #[test]
     fn test_from() {
-        let opcodes = CompilerState::compile_script("from stocks").unwrap();
+        let opcodes = Compiler::compile_script("from stocks").unwrap();
         assert_eq!(opcodes, From(Box::new(Variable("stocks".into()))));
     }
 
     #[test]
     fn test_from_where_limit() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         from stocks where last_sale >= 1.0 limit 20
         "#).unwrap();
         assert_eq!(opcodes,
@@ -1335,7 +1364,7 @@ mod tests {
 
     #[test]
     fn test_append_from_variable() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         append ns("compiler.into.stocks") from stocks
         "#).unwrap();
         assert_eq!(opcodes, Mutate(Mutation::Append {
@@ -1346,7 +1375,7 @@ mod tests {
 
     #[test]
     fn test_append_from_json_literal() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         append ns("compiler.into.stocks")
         from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
         "#).unwrap();
@@ -1362,7 +1391,7 @@ mod tests {
 
     #[test]
     fn test_append_from_json_array() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         append ns("compiler.into.stocks")
         from [
             { symbol: "ABC", exchange: "NYSE", last_sale: 11.1234 },
@@ -1396,7 +1425,7 @@ mod tests {
 
     #[test]
     fn test_ns() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         ns("securities.etf.stocks")
         "#).unwrap();
         assert_eq!(code, Ns(Box::new(Literal(StringValue("securities.etf.stocks".to_string())))))
@@ -1404,7 +1433,7 @@ mod tests {
 
     #[test]
     fn test_overwrite() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         overwrite stocks
         via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
         where symbol == "ABCQ"
@@ -1428,7 +1457,7 @@ mod tests {
 
     #[test]
     fn test_reverse_from_variable() {
-        let code = CompilerState::compile_script(r#"
+        let code = Compiler::compile_script(r#"
         reverse from stocks
         "#).unwrap();
         assert_eq!(code, Inquire(Queryable::Reverse(Box::new(From(Box::new(Variable("stocks".to_string())))))))
@@ -1436,7 +1465,7 @@ mod tests {
 
     #[test]
     fn test_select_from_variable() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         "#).unwrap();
         assert_eq!(opcodes, Inquire(Queryable::Select {
@@ -1452,7 +1481,7 @@ mod tests {
 
     #[test]
     fn test_select_from_where() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale >= 1.0
         "#).unwrap();
@@ -1474,7 +1503,7 @@ mod tests {
 
     #[test]
     fn test_select_from_where_limit() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale <= 1.0
         limit 5
@@ -1497,7 +1526,7 @@ mod tests {
 
     #[test]
     fn test_select_from_where_order_by_limit() {
-        let opcode = CompilerState::compile_script(r#"
+        let opcode = Compiler::compile_script(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale < 1.0
         order by symbol
@@ -1520,8 +1549,19 @@ mod tests {
     }
 
     #[test]
+    fn test_system_call() {
+        let model = Compiler::compile_script(r#"
+        syscall("cat", "LICENSE")
+        "#).unwrap();
+        assert_eq!(model, SystemCall(vec![
+            Literal(StringValue("cat".into())),
+            Literal(StringValue("LICENSE".into())),
+        ]));
+    }
+
+    #[test]
     fn test_update() {
-        let opcodes = CompilerState::compile_script(r#"
+        let opcodes = Compiler::compile_script(r#"
         update stocks
         via { last_sale: 0.1111 }
         where symbol == "ABC"

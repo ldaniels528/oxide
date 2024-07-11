@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
 
-use crate::compiler::{CompilerState, fail_near};
+use crate::compiler::{Compiler, fail_near};
 use crate::data_types::DataType::*;
 use crate::expression::Expression::{ColumnSet, Literal};
 use crate::server::ColumnJs;
@@ -51,6 +51,7 @@ pub const T_UUID: u8 = 116;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
+    AckType,
     BLOBType(usize),
     BooleanType,
     CLOBType(usize),
@@ -84,7 +85,7 @@ impl DataType {
         let ts = TokenSlice::from_string(column_type);
 
         fn column_parameters(ts: TokenSlice, f: fn(Vec<ColumnJs>) -> DataType) -> io::Result<DataType> {
-            let mut compiler = CompilerState::new();
+            let mut compiler = Compiler::new();
             if let (ColumnSet(params), ts) = compiler.expect_parameters(ts)? {
                 //assert!(ts.is_empty());
                 Ok(f(params))
@@ -92,7 +93,7 @@ impl DataType {
         }
 
         fn size_parameter(ts: TokenSlice, f: fn(usize) -> DataType) -> io::Result<DataType> {
-            let mut compiler = CompilerState::new();
+            let mut compiler = Compiler::new();
             let (args, ts) = compiler.expect_arguments(ts)?;
             if args.len() == 1 {
                 match args[0].clone() {
@@ -108,13 +109,14 @@ impl DataType {
         }
 
         fn string_parameters(ts: TokenSlice, f: fn(Vec<String>) -> DataType) -> io::Result<DataType> {
-            let mut compiler = CompilerState::new();
+            let mut compiler = Compiler::new();
             let (args, ts) = compiler.expect_atom_arguments(ts)?;
             Ok(f(args))
         }
 
         if let (Some(Atom { text: name, .. }), ts) = ts.next() {
             match name.as_str() {
+                "Ack" => Ok(AckType),
                 "BLOB" => size_parameter(ts, |size| BLOBType(size)),
                 "Boolean" => Ok(BooleanType),
                 "CLOB" => size_parameter(ts, |size| CLOBType(size)),
@@ -151,6 +153,7 @@ impl DataType {
     pub fn compute_max_physical_size(&self) -> usize {
         use crate::data_types::DataType::*;
         let width: usize = match self {
+            AckType => 0,
             BLOBType(size) => *size,
             BooleanType => 1,
             CLOBType(size) => *size,
@@ -182,6 +185,7 @@ impl DataType {
 
     pub fn ordinal(&self) -> u8 {
         match self {
+            AckType => T_ACK,
             BLOBType(..) => T_BLOB,
             BooleanType => T_BOOLEAN,
             CLOBType(..) => T_CLOB,
@@ -212,6 +216,7 @@ impl DataType {
 
     pub fn to_column_type(&self) -> String {
         match self {
+            AckType => "Ack".into(),
             BLOBType(size) => format!("BLOB({})", size),
             BooleanType => "Boolean".into(),
             CLOBType(size) => format!("CLOB({})", size),
@@ -241,15 +246,16 @@ impl DataType {
     }
 
     fn transfer_to_string_array(token_slice: &[Token]) -> Vec<&str> {
+        use Token::*;
         token_slice.into_iter()
             .fold(Vec::new(), |mut acc, t| {
                 match t {
-                    Token::Operator { text: value, .. } if value == "," => acc,
-                    Token::Atom { text: value, .. } => {
+                    Operator { text: value, .. } if value == "," => acc,
+                    Atom { text: value, .. } => {
                         acc.push(value);
                         acc
                     }
-                    Token::Numeric { text: value, .. } => {
+                    Numeric { text: value, .. } => {
                         acc.push(value);
                         acc
                     }

@@ -12,13 +12,12 @@ use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::serialization::assemble;
 use crate::server::ColumnJs;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Ack, Boolean, Null, Undefined};
 
-pub const ACK: Expression = Literal(Ack);
-pub const FALSE: Expression = Literal(Boolean(false));
-pub const TRUE: Expression = Literal(Boolean(true));
-pub const NULL: Expression = Literal(Null);
-pub const UNDEFINED: Expression = Literal(Undefined);
+pub const ACK: Expression = Literal(TypedValue::Ack);
+pub const FALSE: Expression = Literal(TypedValue::Boolean(false));
+pub const TRUE: Expression = Literal(TypedValue::Boolean(true));
+pub const NULL: Expression = Literal(TypedValue::Null);
+pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
 
 // constants
 pub const E_AND: u8 = 0;
@@ -48,6 +47,7 @@ pub const E_GREATER_THAN: u8 = 90;
 pub const E_GREATER_OR_EQUAL: u8 = 95;
 pub const E_IF: u8 = 100;
 pub const E_INCLUDE: u8 = 105;
+pub const E_INTO_TABLE: u8 = 110;
 pub const E_JSON_LITERAL: u8 = 115;
 pub const E_LESS_THAN: u8 = 120;
 pub const E_LESS_OR_EQUAL: u8 = 125;
@@ -74,11 +74,14 @@ pub const E_REVERSE: u8 = 205;
 pub const E_SELECT: u8 = 210;
 pub const E_SHIFT_LEFT: u8 = 225;
 pub const E_SHIFT_RIGHT: u8 = 230;
-pub const E_TRUNCATE: u8 = 235;
-pub const E_TUPLE: u8 = 237;
-pub const E_UPDATE: u8 = 239;
-pub const E_VAR_GET: u8 = 241;
-pub const E_VAR_SET: u8 = 243;
+pub const E_SYSTEM_CALL: u8 = 231;
+pub const E_STDERR: u8 = 233;
+pub const E_STDOUT: u8 = 235;
+pub const E_TRUNCATE: u8 = 237;
+pub const E_TUPLE: u8 = 239;
+pub const E_UPDATE: u8 = 241;
+pub const E_VAR_GET: u8 = 243;
+pub const E_VAR_SET: u8 = 245;
 pub const E_VIA: u8 = 247;
 pub const E_WHERE: u8 = 251;
 pub const E_WHILE: u8 = 255;
@@ -100,11 +103,9 @@ pub enum CreationEntity {
 pub enum MutateTarget {
     IndexTarget {
         path: Box<Expression>,
-        if_exists: bool,
     },
     TableTarget {
         path: Box<Expression>,
-        if_exists: bool,
     },
 }
 
@@ -162,6 +163,9 @@ pub enum Expression {
     SetVariable(String, Box<Expression>),
     ShiftLeft(Box<Expression>, Box<Expression>),
     ShiftRight(Box<Expression>, Box<Expression>),
+    StdErr(Box<Expression>),
+    StdOut(Box<Expression>),
+    SystemCall(Vec<Expression>),
     TupleLiteral(Vec<Expression>),
     Variable(String),
     Via(Box<Expression>),
@@ -230,6 +234,7 @@ pub enum Mutation {
         condition: Option<Box<Expression>>,
         limit: Option<Box<Expression>>,
     },
+    IntoTable(Box<Expression>, Box<Expression>),
     Overwrite {
         path: Box<Expression>,
         source: Box<Expression>,
@@ -356,6 +361,10 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{} << {}", decompile(a), decompile(b)),
         ShiftRight(a, b) =>
             format!("{} >> {}", decompile(a), decompile(b)),
+        StdErr(a) => format!("stderr {}", decompile(a)),
+        StdOut(a) => format!("stdout {}", decompile(a)),
+        SystemCall(args) =>
+            format!("system({})", decompile_list(args)),
         TupleLiteral(items) =>
             format!("({})", decompile_list(items)),
         Variable(name) => name.to_string(),
@@ -382,11 +391,11 @@ pub fn decompile_infrastructure(expr: &Infrastructure) -> String {
                     format!("table({})", decompile_columns(columns)),
             }
         Infrastructure::Drop(target) => {
-            let (kind, path, if_exists) = match target {
-                IndexTarget { path, if_exists } => ("index", path, if_exists),
-                TableTarget { path, if_exists } => ("table", path, if_exists),
+            let (kind, path) = match target {
+                IndexTarget { path } => ("index", path),
+                TableTarget { path } => ("table", path),
             };
-            format!("drop {} {}{}", kind, decompile_if_exists(*if_exists), decompile(path))
+            format!("drop {} {}", kind, decompile(path))
         }
     }
 }
@@ -397,6 +406,8 @@ pub fn decompile_modification(expr: &Mutation) -> String {
             format!("append {} {}", decompile(path), decompile(source)),
         Mutation::Delete { path, condition, limit } =>
             format!("delete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
+        Mutation::IntoTable(a, b) =>
+            format!("{} into {}", decompile(a), decompile(b)),
         Mutation::Overwrite { path, source, condition, limit } =>
             format!("overwrite {} {}{}{}", decompile(path), decompile(source),
                     condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
@@ -466,123 +477,113 @@ fn decompile_update_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> 
 mod tests {
     use crate::expression::{FALSE, Mutation, Queryable, TRUE};
     use crate::expression::Expression::*;
-    use crate::machine::MachineState;
+    use crate::machine::Machine;
     use crate::typed_values::TypedValue::{Boolean, Float64Value, Int32Value, Int64Value, StringValue};
 
     #[test]
-    fn test_decompile_from() {
-        let from = From(Box::new(
-            Ns(Box::new(Literal(StringValue("machine.overwrite.stocks".into()))))
-        ));
-        let from = Inquire(Queryable::Where {
-            from: Box::new(from),
-            condition: Box::new(GreaterOrEqual(
-                Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Float64Value(1.25))),
-            )),
-        });
-        let from = Inquire(Queryable::Limit {
-            from: Box::new(from),
-            limit: Box::new(Literal(Int64Value(5))),
-        });
-        assert_eq!(
-            from.to_code(),
-            "from ns(\"machine.overwrite.stocks\") where last_sale >= 1.25 limit 5"
-        )
-    }
-
-    #[test]
     fn test_and() {
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let model = And(Box::new(TRUE), Box::new(FALSE));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(false));
         assert_eq!(model.to_code(), "true && false")
     }
 
     #[test]
     fn test_between() {
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let model = Between(
-            Box::new(Literal(Int32Value(5))),
+            Box::new(Literal(Int32Value(10))),
             Box::new(Literal(Int32Value(1))),
             Box::new(Literal(Int32Value(10))));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
-        assert_eq!(model.to_code(), "5 between 1 and 10")
+        assert_eq!(model.to_code(), "10 between 1 and 10")
+    }
+
+    #[test]
+    fn test_betwixt() {
+        let machine = Machine::new();
+        let model = Betwixt(
+            Box::new(Literal(Int32Value(10))),
+            Box::new(Literal(Int32Value(1))),
+            Box::new(Literal(Int32Value(10))));
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, Boolean(false));
+        assert_eq!(model.to_code(), "10 betwixt 1 and 10")
     }
 
     #[test]
     fn test_eq() {
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let model = Equal(
             Box::new(Literal(Int32Value(5))),
             Box::new(Literal(Int32Value(5))));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5 == 5")
     }
 
     #[test]
     fn test_gt() {
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let model = GreaterThan(
             Box::new(Literal(Int32Value(5))),
             Box::new(Literal(Int32Value(1))));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5 > 1")
     }
 
     #[test]
     fn test_gte() {
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let model = GreaterOrEqual(
             Box::new(Literal(Int32Value(5))),
             Box::new(Literal(Int32Value(1))));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5 >= 1")
     }
 
     #[test]
     fn test_lt() {
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let model = LessThan(
             Box::new(Literal(Int32Value(4))),
             Box::new(Literal(Int32Value(5))));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "4 < 5")
     }
 
     #[test]
     fn test_lte() {
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let model = LessOrEqual(
             Box::new(Literal(Int32Value(1))),
             Box::new(Literal(Int32Value(5))));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "1 <= 5")
     }
 
     #[test]
     fn test_ne() {
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let model = NotEqual(
             Box::new(Literal(Int32Value(-5))),
             Box::new(Literal(Int32Value(5))));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "-5 != 5")
     }
 
     #[test]
     fn test_or() {
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let model = Or(Box::new(TRUE), Box::new(FALSE));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "true || false")
     }
@@ -618,6 +619,28 @@ mod tests {
         };
         assert!(op.is_control_flow());
         assert_eq!(op.to_code(), "if x < y 1 else 10");
+    }
+
+    #[test]
+    fn test_from() {
+        let from = From(Box::new(
+            Ns(Box::new(Literal(StringValue("machine.overwrite.stocks".into()))))
+        ));
+        let from = Inquire(Queryable::Where {
+            from: Box::new(from),
+            condition: Box::new(GreaterOrEqual(
+                Box::new(Variable("last_sale".into())),
+                Box::new(Literal(Float64Value(1.25))),
+            )),
+        });
+        let from = Inquire(Queryable::Limit {
+            from: Box::new(from),
+            limit: Box::new(Literal(Int64Value(5))),
+        });
+        assert_eq!(
+            from.to_code(),
+            "from ns(\"machine.overwrite.stocks\") where last_sale >= 1.25 limit 5"
+        )
     }
 
     #[test]

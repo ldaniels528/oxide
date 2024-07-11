@@ -5,7 +5,7 @@
 use std::fmt::Debug;
 
 use crate::expression::Expression;
-use crate::machine::MachineState;
+use crate::machine::Machine;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 
@@ -75,8 +75,8 @@ impl Cursor {
     pub fn get(&mut self, pos: usize) -> std::io::Result<Option<Row>> {
         let (row, rmd) = self.rc.read(pos)?;
         if rmd.is_allocated {
-            let ms = MachineState::new().with_row(&row);
-            if row.matches(&ms, &self.condition) {
+            let machine = Machine::new().with_row(&row);
+            if row.matches(&machine, &self.condition) {
                 return Ok(Some(row));
             }
         }

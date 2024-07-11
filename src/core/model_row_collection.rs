@@ -85,7 +85,7 @@ impl RowCollection for ModelRowCollection {
 
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
 
-    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<usize> {
+    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<TypedValue> {
         // resize the rows to prevent overflow
         if self.row_data.len() <= id {
             self.row_data.resize(id + 1, (RowMetadata::new(false), Row::empty(&self.columns)));
@@ -96,13 +96,13 @@ impl RowCollection for ModelRowCollection {
         if self.watermark <= id {
             self.watermark = id + 1;
         }
-        Ok(1)
+        Ok(TypedValue::Ack)
     }
 
-    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<usize> {
+    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<TypedValue> {
         let (_, row) = self.row_data[id].clone();
         self.row_data[id] = (metadata.clone(), row);
-        Ok(1)
+        Ok(TypedValue::Ack)
     }
 
     fn read(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
@@ -127,10 +127,10 @@ impl RowCollection for ModelRowCollection {
         Ok(rows)
     }
 
-    fn resize(&mut self, new_size: usize) -> std::io::Result<()> {
+    fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
         self.row_data.resize(new_size, (RowMetadata::new(true), Row::empty(&self.columns)));
         self.watermark = new_size;
-        Ok(())
+        Ok(TypedValue::Ack)
     }
 }
 

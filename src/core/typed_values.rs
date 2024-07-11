@@ -83,7 +83,17 @@ impl TypedValue {
     pub fn contains(&self, value: &TypedValue) -> bool {
         match &self {
             Array(items) => items.contains(value),
-            JSONObjectValue(_items) => todo!(),
+            JSONObjectValue(items) => {
+                match value {
+                    StringValue(name) => {
+                        for (s, _) in items {
+                            if name == s { return true; }
+                        }
+                        false
+                    }
+                    _ => false
+                }
+            }
             TableValue(mrc) =>
                 match value {
                     JSONObjectValue(tuples) =>
@@ -97,6 +107,7 @@ impl TypedValue {
     /// decodes the typed value based on the supplied data type and buffer
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
         match data_type {
+            AckType => Ack,
             BLOBType(_size) => BLOB(vec![]),
             BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             CLOBType(_size) => CLOB(vec![]),
@@ -200,9 +211,10 @@ impl TypedValue {
         buffer: &mut ByteBuffer,
     ) -> std::io::Result<TypedValue> {
         let tv = match data_type {
-            BLOBType(_size) => BLOB(buffer.next_blob()),
+            AckType => Ack,
+            BLOBType(_) => BLOB(buffer.next_blob()),
             BooleanType => Boolean(buffer.next_bool()),
-            CLOBType(_size) => CLOB(buffer.next_clob()),
+            CLOBType(_) => CLOB(buffer.next_clob()),
             DateType => DateValue(buffer.next_i64()),
             EnumType(labels) => {
                 let index = buffer.next_u32();
@@ -222,9 +234,9 @@ impl TypedValue {
             Int128Type => Int128Value(buffer.next_i128()),
             JSONObjectType => JSONObjectValue(buffer.next_json()?),
             RowsAffectedType => RowsAffected(buffer.next_row_id()),
-            StringType(size) => StringValue(buffer.next_string()),
-            StructureType(columns) => StructValue(buffer.next_struct()?),
-            TableType(columns) => TableValue(buffer.next_table()?),
+            StringType(_) => StringValue(buffer.next_string()),
+            StructureType(columns) => StructValue(buffer.next_struct_with_columns(columns)?),
+            TableType(columns) => TableValue(buffer.next_table_with_columns(columns)?),
             UInt8Type => UInt8Value(buffer.next_u8()),
             UInt16Type => UInt16Value(buffer.next_u16()),
             UInt32Type => UInt32Value(buffer.next_u32()),
@@ -242,6 +254,40 @@ impl TypedValue {
             (Null, _) => Some(Null),
             (_, Null) => Some(Null),
             _ => None
+        }
+    }
+
+    pub fn is_boolean(&self) -> bool {
+        matches!(self, Ack | Boolean(..))
+    }
+
+    pub fn is_compatible(&self, other: &TypedValue) -> bool {
+        match (self, other) {
+            (a, b) if a.is_boolean() && b.is_boolean() => true,
+            (a, b) if a.is_numeric() && b.is_numeric() => true,
+            (a, b) if a.is_string() && b.is_string() => true,
+            (a, b) => a.unwrap_value() == b.unwrap_value()
+        }
+    }
+
+    pub fn is_numeric(&self) -> bool {
+        use TypedValue::*;
+        matches!(self, Ack | RowsAffected(..)
+            | Int8Value(..) | Int16Value(..) | Int32Value(..)
+            | Int64Value(..) | Int128Value(..)
+            | UInt8Value(..) | UInt16Value(..) | UInt32Value(..)
+            | UInt64Value(..) | UInt128Value(..))
+    }
+
+    pub fn is_string(&self) -> bool {
+        matches!(self, StringValue(..))
+    }
+
+    pub fn is_successful_ack(&self) -> bool {
+        match self {
+            Ack | Boolean(true) | TableRef(_) | TableValue(_) => true,
+            RowsAffected(n) if *n >= 0 => true,
+            _ => false
         }
     }
 
@@ -451,7 +497,7 @@ impl TypedValue {
         }
     }
 
-    pub fn is_numeric(value: &str) -> io::Result<bool> {
+    pub fn is_numeric_value(value: &str) -> io::Result<bool> {
         let decimal_regex = Regex::new(DECIMAL_FORMAT)
             .map_err(|e| cnv_error!(e))?;
         Ok(decimal_regex.is_match(value))
@@ -467,7 +513,7 @@ impl TypedValue {
             s if s == "true" => Boolean(true),
             s if s == "undefined" => Undefined,
             s if s.is_empty() => Null,
-            s if Self::is_numeric(s)? => Self::from_numeric(s)?,
+            s if Self::is_numeric_value(s)? => Self::from_numeric(s)?,
             s if iso_date_regex.is_match(s) =>
                 DateValue(DateTime::parse_from_rfc3339(s)
                     .map_err(|e| cnv_error!(e))?.timestamp_millis()),
@@ -527,16 +573,18 @@ impl TypedValue {
     //      UTILITY METHODS
     ///////////////////////////////////////////////////////////////
 
-    fn assume_bool(&self) -> Option<bool> {
+    pub fn assume_bool(&self) -> Option<bool> {
         match &self {
+            Ack => Some(true),
             Boolean(b) => Some(*b),
-            RowsAffected(n) if *n > 0 => Some(true),
+            RowsAffected(n) => Some(*n > 0),
             _ => None
         }
     }
 
-    fn assume_f64(&self) -> Option<f64> {
+    pub fn assume_f64(&self) -> Option<f64> {
         match &self {
+            Ack => Some(1f64),
             Float32Value(n) => Some(*n as f64),
             Float64Value(n) => Some(*n),
             Int8Value(n) => Some(*n as f64),
@@ -554,14 +602,21 @@ impl TypedValue {
         }
     }
 
-    fn assume_i64(&self) -> Option<i64> {
+    pub fn assume_i64(&self) -> Option<i64> {
         match &self {
+            Ack => Some(1),
             Float32Value(n) => Some(*n as i64),
             Float64Value(n) => Some(*n as i64),
-            UInt8Value(n) => Some(*n as i64),
+            Int8Value(n) => Some(*n as i64),
             Int16Value(n) => Some(*n as i64),
             Int32Value(n) => Some(*n as i64),
             Int64Value(n) => Some(*n),
+            Int128Value(n) => Some(*n as i64),
+            UInt8Value(n) => Some(*n as i64),
+            UInt16Value(n) => Some(*n as i64),
+            UInt32Value(n) => Some(*n as i64),
+            UInt64Value(n) => Some(*n as i64),
+            UInt128Value(n) => Some(*n as i64),
             RowsAffected(n) => Some(*n as i64),
             _ => None
         }
@@ -569,12 +624,19 @@ impl TypedValue {
 
     pub fn assume_usize(&self) -> Option<usize> {
         match &self {
+            Ack => Some(1),
             Float32Value(n) => Some(*n as usize),
             Float64Value(n) => Some(*n as usize),
-            UInt8Value(n) => Some(*n as usize),
+            Int8Value(n) => Some(*n as usize),
             Int16Value(n) => Some(*n as usize),
             Int32Value(n) => Some(*n as usize),
             Int64Value(n) => Some(*n as usize),
+            Int128Value(n) => Some(*n as usize),
+            UInt8Value(n) => Some(*n as usize),
+            UInt16Value(n) => Some(*n as usize),
+            UInt32Value(n) => Some(*n as usize),
+            UInt64Value(n) => Some(*n as usize),
+            UInt128Value(n) => Some(*n as usize),
             RowsAffected(n) => Some(*n),
             _ => None
         }
@@ -582,11 +644,18 @@ impl TypedValue {
 
     fn numeric_op_1f(lhs: &Self, ff: fn(f64) -> f64) -> Option<Self> {
         match lhs {
+            Ack => Some(Int64Value(1)),
             Float64Value(a) => Some(Float64Value(ff(*a))),
             Float32Value(a) => Some(Float32Value(ff(*a as f64) as f32)),
+            Int128Value(a) => Some(Int128Value(ff(*a as f64) as i128)),
             Int64Value(a) => Some(Int64Value(ff(*a as f64) as i64)),
             Int32Value(a) => Some(Int32Value(ff(*a as f64) as i32)),
             Int16Value(a) => Some(Int16Value(ff(*a as f64) as i16)),
+            Int8Value(a) => Some(Int8Value(ff(*a as f64) as i8)),
+            UInt128Value(a) => Some(UInt128Value(ff(*a as f64) as u128)),
+            UInt64Value(a) => Some(UInt64Value(ff(*a as f64) as u64)),
+            UInt32Value(a) => Some(UInt32Value(ff(*a as f64) as u32)),
+            UInt16Value(a) => Some(UInt16Value(ff(*a as f64) as u16)),
             UInt8Value(a) => Some(UInt8Value(ff(*a as f64) as u8)),
             RowsAffected(a) => Some(RowsAffected(ff(*a as f64) as usize)),
             _ => Some(Float64Value(lhs.assume_f64()?))
@@ -596,18 +665,23 @@ impl TypedValue {
     fn numeric_op_2f(lhs: &Self, rhs: &Self, ff: fn(f64, f64) -> f64) -> Option<Self> {
         match Self::intercept_unknowns(lhs, rhs) {
             Some(value) => Some(value),
-            None => {
+            None =>
                 match (lhs, rhs) {
                     (Float64Value(a), Float64Value(b)) => Some(Float64Value(ff(*a, *b))),
                     (Float32Value(a), Float32Value(b)) => Some(Float32Value(ff(*a as f64, *b as f64) as f32)),
+                    (Int128Value(a), Int128Value(b)) => Some(Int128Value(ff(*a as f64, *b as f64) as i128)),
                     (Int64Value(a), Int64Value(b)) => Some(Int64Value(ff(*a as f64, *b as f64) as i64)),
                     (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as f64, *b as f64) as i32)),
                     (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as f64, *b as f64) as i16)),
+                    (Int8Value(a), Int8Value(b)) => Some(Int8Value(ff(*a as f64, *b as f64) as i8)),
+                    (UInt128Value(a), UInt128Value(b)) => Some(UInt128Value(ff(*a as f64, *b as f64) as u128)),
+                    (UInt64Value(a), UInt64Value(b)) => Some(UInt64Value(ff(*a as f64, *b as f64) as u64)),
+                    (UInt32Value(a), UInt32Value(b)) => Some(UInt32Value(ff(*a as f64, *b as f64) as u32)),
+                    (UInt16Value(a), UInt16Value(b)) => Some(UInt16Value(ff(*a as f64, *b as f64) as u16)),
                     (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as f64, *b as f64) as u8)),
                     (RowsAffected(a), RowsAffected(b)) => Some(RowsAffected(ff(*a as f64, *b as f64) as usize)),
                     _ => Some(Float64Value(ff(lhs.assume_f64()?, rhs.assume_f64()?)))
                 }
-            }
         }
     }
 
@@ -618,9 +692,15 @@ impl TypedValue {
                 match (lhs, rhs) {
                     (Float64Value(a), Float64Value(b)) => Some(Float64Value(ff(*a as i64, *b as i64) as f64)),
                     (Float32Value(a), Float32Value(b)) => Some(Float32Value(ff(*a as i64, *b as i64) as f32)),
+                    (Int128Value(a), Int128Value(b)) => Some(Int128Value(ff(*a as i64, *b as i64) as i128)),
                     (Int64Value(a), Int64Value(b)) => Some(Int64Value(ff(*a as i64, *b as i64) as i64)),
                     (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as i64, *b as i64) as i32)),
                     (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as i64, *b as i64) as i16)),
+                    (Int8Value(a), Int8Value(b)) => Some(Int8Value(ff(*a as i64, *b as i64) as i8)),
+                    (UInt128Value(a), UInt128Value(b)) => Some(UInt128Value(ff(*a as i64, *b as i64) as u128)),
+                    (UInt64Value(a), UInt64Value(b)) => Some(UInt64Value(ff(*a as i64, *b as i64) as u64)),
+                    (UInt32Value(a), UInt32Value(b)) => Some(UInt32Value(ff(*a as i64, *b as i64) as u32)),
+                    (UInt16Value(a), UInt16Value(b)) => Some(UInt16Value(ff(*a as i64, *b as i64) as u16)),
                     (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as i64, *b as i64) as u8)),
                     (RowsAffected(a), RowsAffected(b)) => Some(RowsAffected(ff(*a as i64, *b as i64) as usize)),
                     _ => Some(Int64Value(ff(lhs.assume_i64()?, rhs.assume_i64()?)))

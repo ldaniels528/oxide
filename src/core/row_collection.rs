@@ -7,6 +7,7 @@ use std::fs::File;
 use std::sync::Arc;
 
 use crate::byte_row_collection::ByteRowCollection;
+use crate::fields::Field;
 use crate::file_row_collection::FileRowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
@@ -15,8 +16,85 @@ use crate::typed_values::TypedValue;
 
 /// represents the underlying storage resource for the dataframe
 pub trait RowCollection: Debug {
+    /// Appends the given row to the end of the table
+    fn append(&mut self, row: Row) -> std::io::Result<TypedValue> {
+        let id = self.len()?;
+        let row = row.with_row_id(id);
+        self.overwrite(id, &row)
+    }
+
     /// Returns true, if the given item matches a [Row] found within it
     fn contains(&self, item: &Row) -> bool { self.index_of(item).is_some() }
+
+    /// deletes an existing row by ID from the table
+    fn delete_row(&mut self, id: usize) -> std::io::Result<TypedValue> {
+        self.overwrite_metadata(id, &RowMetadata::new(false))
+    }
+
+    /// Removes rows that satisfy the include function
+    fn delete_rows(&mut self, include: fn(&Row, &RowMetadata) -> bool) -> std::io::Result<TypedValue> {
+        let (mut id, mut removals) = (0, 0);
+        let eof = self.len()?;
+        while id < eof {
+            let (row, metadata) = self.read(id)?;
+            if metadata.is_allocated && include(&row, &metadata) {
+                if self.overwrite_metadata(row.get_id(), &metadata.as_delete())? == TypedValue::Ack {
+                    removals += 1
+                }
+            }
+            id += 1;
+        }
+        Ok(TypedValue::RowsAffected(removals))
+    }
+
+    /// Evaluates a callback function for each active row in the table
+    fn fold_left(
+        &self,
+        initial: TypedValue,
+        callback: fn(TypedValue, Row) -> TypedValue,
+    ) -> TypedValue {
+        match self.len() {
+            Ok(eof) => {
+                let mut result = initial;
+                let mut id = 0;
+                while id < eof {
+                    if let Ok((row, metadata)) = self.read(id) {
+                        if metadata.is_allocated {
+                            result = callback(result, row)
+                        }
+                    }
+                    id += 1
+                }
+                result
+            }
+            Err(err) => TypedValue::ErrorValue(err.to_string())
+        }
+    }
+
+    /// Evaluates a callback function for each active row in the table
+    fn fold_right(
+        &self,
+        initial: TypedValue,
+        callback: fn(TypedValue, Row) -> TypedValue,
+    ) -> TypedValue {
+        match self.len() {
+            Ok(eof) => {
+                let mut result = initial;
+                let mut id = 1;
+                while id <= eof {
+                    let row_id = eof - id;
+                    if let Ok((row, metadata)) = self.read(row_id) {
+                        if metadata.is_allocated {
+                            result = callback(result, row)
+                        }
+                    }
+                    id += 1
+                }
+                result
+            }
+            Err(err) => TypedValue::ErrorValue(err.to_string())
+        }
+    }
 
     /// returns the columns that represent device
     fn get_columns(&self) -> &Vec<TableColumn>;
@@ -30,22 +108,51 @@ pub trait RowCollection: Debug {
     /// returns the number of active rows in the table
     fn len(&self) -> std::io::Result<usize>;
 
-    /// overwrites the specified row by ID
-    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<usize>;
+    /// replaces the specified row by ID
+    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<TypedValue>;
 
     /// overwrites the metadata of a specified row by ID
-    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<usize>;
+    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<TypedValue>;
 
     fn read(&self, id: usize) -> std::io::Result<(Row, RowMetadata)>;
+
+    fn read_all_rows(&self) -> std::io::Result<Vec<Row>> {
+        self.read_range(0..self.len()?)
+    }
 
     fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue>;
 
     fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>>;
 
     /// resizes (shrink or grow) the table
-    fn resize(&mut self, new_size: usize) -> std::io::Result<()>;
+    fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue>;
 
     fn to_row_offset(&self, id: usize) -> u64 { (id * self.get_record_size()) as u64 }
+
+    /// overwrites the specified row by ID
+    fn update(&mut self, id: usize, row: &Row) -> std::io::Result<TypedValue> {
+        // retrieve the original record
+        let (row0, rmd0) = self.read(id)?;
+        // verify compatibility between the columns of the incoming row vs. table row
+        let (cols0, cols1) = (row0.get_columns(), row.get_columns());
+        match TableColumn::validate_compatibility(cols0, cols1) {
+            TypedValue::ErrorValue(err) => Ok(TypedValue::ErrorValue(err)),
+            _ => {
+                // if it is deleted, then use the incoming row
+                let row: Row = if !rmd0.is_allocated { row.with_row_id(id) } else {
+                    // otherwise, construct a new composite row
+                    Row::new(id, cols1.clone(), row0.get_fields().iter().zip(row.get_fields().iter())
+                        .map(|(field0, field1)| {
+                            Field::new(match (field0.value.clone(), field1.value.clone()) {
+                                (a, TypedValue::Undefined) => a,
+                                (_, b) => b
+                            })
+                        }).collect::<Vec<Field>>())
+                };
+                self.overwrite(id, &row)
+            }
+        }
+    }
 }
 
 impl dyn RowCollection {
@@ -86,7 +193,7 @@ mod tests {
         let mut rc = <dyn RowCollection>::from_bytes(columns.clone(), vec![]);
 
         // create a new row
-        assert_eq!(rc.overwrite(row.get_id(), &row).unwrap(), 1);
+        assert_eq!(rc.overwrite(row.get_id(), &row).unwrap(), TypedValue::Ack);
 
         // read and verify the row
         let (row, rmd) = rc.read(0).unwrap();
@@ -113,12 +220,10 @@ mod tests {
 
     #[test]
     fn test_write_then_read_row() {
-        let columns = make_table_columns();
-
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a new row
             let row = make_quote(2, &columns, "AMD", "NYSE", 88.78);
-            assert_eq!(rc.overwrite(row.get_id(), &row).unwrap(), 1);
+            assert_eq!(rc.overwrite(row.get_id(), &row).unwrap(), TypedValue::Ack);
 
             // read and verify the row
             let (new_row, meta) = rc.read(row.get_id()).unwrap();
@@ -127,45 +232,185 @@ mod tests {
         }
 
         // test the variants
-        verify_variants("write_then_read", columns.clone(), test_variant);
+        verify_variants("write_then_read", make_table_columns(), test_variant);
     }
 
     #[test]
     fn test_write_then_read_field() {
-        let columns = make_table_columns();
-
-        fn test_variant(label: &str, mut frc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write two rows
-            assert_eq!(1, frc.overwrite(0, &make_quote(0, &columns, "INTC", "NYSE", 66.77)).unwrap());
-            assert_eq!(1, frc.overwrite(1, &make_quote(1, &columns, "AMD", "NASDAQ", 77.66)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "INTC", "NYSE", 66.77)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(1, &columns, "AMD", "NASDAQ", 77.66)).unwrap());
 
             // read the first column of the first row
-            assert_eq!(frc.read_field(0, 0).unwrap(), StringValue("INTC".into()));
+            assert_eq!(rc.read_field(0, 0).unwrap(), StringValue("INTC".into()));
 
             // read the second column of the second row
-            assert_eq!(frc.read_field(1, 1).unwrap(), StringValue("NASDAQ".into()));
+            assert_eq!(rc.read_field(1, 1).unwrap(), StringValue("NASDAQ".into()));
         }
 
         // test the variants
-        verify_variants("read_field", columns.clone(), test_variant);
+        verify_variants("read_field", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_delete_row() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(1, &columns, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(2, &columns, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(3, &columns, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(4, &columns, "OXIDE", "OSS", 0.00)).unwrap());
+
+            // delete even rows
+            assert_eq!(TypedValue::Ack, rc.delete_row(0).unwrap());
+            assert_eq!(TypedValue::Ack, rc.delete_row(2).unwrap());
+            assert_eq!(TypedValue::Ack, rc.delete_row(4).unwrap());
+
+            // retrieve the entire range of rows
+            let rows = rc.read_all_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(1, &columns, "ATT", "NYSE", 98.44),
+                make_quote(3, &columns, "X", "NASDAQ", 33.33),
+            ]);
+        }
+
+        // test the variants
+        verify_variants("delete_row", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_delete_rows() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(1, &columns, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(2, &columns, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(3, &columns, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(4, &columns, "OXIDE", "OSS", 0.00)).unwrap());
+
+            // delete even rows
+            assert_eq!(TypedValue::RowsAffected(3), rc.delete_rows(|row, meta| {
+                row.get_id() % 2 == 0
+            }).unwrap());
+
+            // retrieve the entire range of rows
+            let rows = rc.read_all_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(1, &columns, "ATT", "NYSE", 98.44),
+                make_quote(3, &columns, "X", "NASDAQ", 33.33),
+            ]);
+        }
+
+        // test the variants
+        verify_variants("delete_rows", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_fold_left() {
+        use TypedValue::*;
+
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "OXIDE", "OSS", 0.00)).unwrap());
+
+            // resize and verify
+            assert_eq!(Float64Value(152.99759999999998),
+                       rc.fold_left(Float64Value(0.), |agg, row| agg + row.get("last_sale")));
+        }
+
+        // test the variants
+        verify_variants("fold_left", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_fold_right() {
+        use TypedValue::*;
+
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(Ack, rc.append(make_quote(0, &columns, "OXIDE", "OSS", 0.00)).unwrap());
+
+            // resize and verify
+            assert_eq!(Float64Value(347.00239999999997),
+                       rc.fold_right(Float64Value(500.), |agg, row| agg - row.get("last_sale")));
+        }
+
+        // test the variants
+        verify_variants("fold_right", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_update_row() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "OXIDE", "OSS", 0.00)).unwrap());
+
+            // retrieve the entire range of rows
+            let rows = rc.read_all_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(0, &columns, "GE", "NYSE", 21.22),
+                make_quote(1, &columns, "ATT", "NYSE", 98.44),
+                make_quote(2, &columns, "H", "OTC_BB", 0.0076),
+                make_quote(3, &columns, "X", "NASDAQ", 33.33),
+                make_quote(4, &columns, "OXIDE", "OSS", 0.00),
+            ]);
+
+            // update a row
+            assert_eq!(TypedValue::Ack,
+                       rc.update(2, &make_quote(2, &columns, "H.Q", "OTC_BB", 0.0001)).unwrap());
+
+            // retrieve the entire range of rows
+            let rows = rc.read_all_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(0, &columns, "GE", "NYSE", 21.22),
+                make_quote(1, &columns, "ATT", "NYSE", 98.44),
+                make_quote(2, &columns, "H.Q", "OTC_BB", 0.0001),
+                make_quote(3, &columns, "X", "NASDAQ", 33.33),
+                make_quote(4, &columns, "OXIDE", "OSS", 0.00),
+            ]);
+        }
+
+        // test the variants
+        verify_variants("update", make_table_columns(), test_variant);
     }
 
     #[test]
     fn test_write_delete_then_read_range() {
-        let columns = make_table_columns();
-
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(1, rc.overwrite(0, &make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
-            assert_eq!(1, rc.overwrite(1, &make_quote(1, &columns, "ATT", "NYSE", 98.44)).unwrap());
-            assert_eq!(1, rc.overwrite(2, &make_quote(2, &columns, "H", "OTC_BB", 0.0076)).unwrap());
-            assert_eq!(1, rc.overwrite(3, &make_quote(3, &columns, "GG", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.append(make_quote(0, &columns, "GG", "NASDAQ", 33.33)).unwrap());
+
+            // verify the initial state
+            let rows = rc.read_all_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(0, &columns, "GE", "NYSE", 21.22),
+                make_quote(1, &columns, "ATT", "NYSE", 98.44),
+                make_quote(2, &columns, "H", "OTC_BB", 0.0076),
+                make_quote(3, &columns, "GG", "NASDAQ", 33.33),
+            ]);
 
             // delete a row
-            assert_eq!(1, rc.overwrite_metadata(2, &RowMetadata::new(false)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.overwrite_metadata(2, &RowMetadata::new(false)).unwrap());
 
-            // retrieve the entire range of rows
-            let rows = rc.read_range(0..rc.len().unwrap()).unwrap();
+            // verify the current state
+            let rows = rc.read_all_rows().unwrap();
             assert_eq!(rows, vec![
                 make_quote(0, &columns, "GE", "NYSE", 21.22),
                 make_quote(1, &columns, "ATT", "NYSE", 98.44),
@@ -174,36 +419,32 @@ mod tests {
         }
 
         // test the variants
-        verify_variants("delete", columns.clone(), test_variant);
+        verify_variants("delete", make_table_columns(), test_variant);
     }
 
     #[test]
     fn test_resize_shrink() {
-        let columns = make_table_columns();
-
-        fn test_variant(label: &str, mut frc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // insert some rows and verify the size
-            assert_eq!(1, frc.overwrite(5, &make_quote(0, &columns, "DUMMY", "OTC_BB", 0.0001)).unwrap());
-            assert_eq!(6, frc.len().unwrap());
+            assert_eq!(TypedValue::Ack, rc.overwrite(5, &make_quote(0, &columns, "DUMMY", "OTC_BB", 0.0001)).unwrap());
+            assert_eq!(6, rc.len().unwrap());
 
             // resize and verify
-            let _ = frc.resize(0).unwrap();
-            assert_eq!(frc.len().unwrap(), 0);
+            let _ = rc.resize(0).unwrap();
+            assert_eq!(rc.len().unwrap(), 0);
         }
 
         // test the variants
-        verify_variants("resize_shrink", columns.clone(), test_variant);
+        verify_variants("resize_shrink", make_table_columns(), test_variant);
     }
 
     #[test]
     fn test_resize_grow() {
-        let columns = make_table_columns();
-
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             rc.resize(0).unwrap();
 
             // insert some rows and verify the size
-            assert_eq!(1, rc.overwrite(5, &make_quote(0, &columns, "DUMMY", "OTC_BB", 0.0001)).unwrap());
+            assert_eq!(TypedValue::Ack, rc.overwrite(5, &make_quote(0, &columns, "DUMMY", "OTC_BB", 0.0001)).unwrap());
             assert!(rc.len().unwrap() >= 6);
 
             // resize and verify
@@ -212,21 +453,19 @@ mod tests {
         }
 
         // test the variants
-        verify_variants("resize_grow", columns.clone(), test_variant);
+        verify_variants("resize_grow", make_table_columns(), test_variant);
     }
 
     #[ignore]
     #[test]
     fn test_performance() {
-        let columns = make_table_columns();
-
-        fn test_variant(label: &str, mut frc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
-            test_write_performance(label, &mut frc, &columns, 10_000).unwrap();
-            test_read_performance(label, &frc).unwrap();
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            test_write_performance(label, &mut rc, &columns, 10_000).unwrap();
+            test_read_performance(label, &rc).unwrap();
         }
 
         // test the variants
-        verify_variants("performance", columns.clone(), test_variant);
+        verify_variants("performance", make_table_columns(), test_variant);
     }
 
     fn test_write_performance(label: &str, rc: &mut Box<dyn RowCollection>, columns: &Vec<TableColumn>, total: usize) -> std::io::Result<()> {

@@ -5,8 +5,11 @@
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
-use std::io::Read;
+use std::io::{ErrorKind, Read};
+use std::ops::Deref;
+use std::process::Output;
 use std::ptr::null;
+use std::sync::Arc;
 
 use actix_web::web::to;
 use crossterm::terminal::window_size;
@@ -17,13 +20,14 @@ use shared_lib::{cnv_error, fail};
 
 use crate::{row, serialization};
 use crate::compiler::{fail_expr, fail_near, fail_unexpected, fail_unhandled_expr, fail_value};
-use crate::compiler::CompilerState;
+use crate::compiler::Compiler;
 use crate::cursor::Cursor;
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::dataframes::DataFrame;
 use crate::expression::{Expression, Infrastructure, Mutation, Queryable, TRUE, UNDEFINED};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-use crate::expression::Expression::{ArrayLiteral, ColumnSet, From, Literal, Ns, Variable, Via};
+use crate::expression::Expression::{ArrayLiteral, ColumnSet, From, Literal, Ns, Perform, Variable, Via};
+use crate::expression::Infrastructure::Declare;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::fields::Field;
 use crate::file_row_collection::FileRowCollection;
@@ -31,6 +35,7 @@ use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::row_collection::RowCollection;
+use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
@@ -39,16 +44,16 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
 /// represents an Oxide executable instruction (opcode)
-pub type OpCode = fn(MachineState) -> std::io::Result<MachineState>;
+pub type OpCode = fn(Machine) -> std::io::Result<Machine>;
 
 /// Represents the state of the machine.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct MachineState {
+pub struct Machine {
     stack: Vec<TypedValue>,
     variables: HashMap<String, TypedValue>,
 }
 
-impl MachineState {
+impl Machine {
 
     ////////////////////////////////////////////////////////////////
     // static methods
@@ -59,17 +64,17 @@ impl MachineState {
         Self { stack, variables }
     }
 
-    fn expand(ms: Self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
+    fn expand(machine: Self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
         match expr {
-            Some(item) => ms.evaluate(item),
-            None => Ok((ms, TypedValue::Undefined))
+            Some(item) => machine.evaluate(item),
+            None => Ok((machine, TypedValue::Undefined))
         }
     }
 
-    fn expand_vec(ms: Self, expr: &Option<Vec<Expression>>) -> std::io::Result<(Self, TypedValue)> {
+    fn expand_vec(machine: Self, expr: &Option<Vec<Expression>>) -> std::io::Result<(Self, TypedValue)> {
         match expr {
-            Some(items) => ms.evaluate_array(items),
-            None => Ok((ms, TypedValue::Undefined))
+            Some(items) => machine.evaluate_array(items),
+            None => Ok((machine, TypedValue::Undefined))
         }
     }
 
@@ -85,7 +90,7 @@ impl MachineState {
     }
 
     fn orchestrate_io(
-        ms: Self,
+        machine: Self,
         table: TypedValue,
         fields: &Vec<Expression>,
         values: &Vec<Expression>,
@@ -97,15 +102,15 @@ impl MachineState {
         match table {
             TableValue(mrc) => {
                 let mut df = DataFrame::from_row_collection(Namespace::temp(), Box::new(mrc));
-                f(ms, &mut df, fields, values, condition, limit)
+                f(machine, &mut df, fields, values, condition, limit)
             }
             TableRef(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let mut df = DataFrame::load(ns)?;
-                f(ms, &mut df, fields, values, condition, limit)
+                f(machine, &mut df, fields, values, condition, limit)
             }
             x =>
-                Ok((ms, ErrorValue(format!("Type mismatch: expected an iterable near {}", x))))
+                Ok((machine, ErrorValue(format!("Type mismatch: expected an iterable near {}", x))))
         }
     }
 
@@ -139,8 +144,8 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
             ArrayLiteral(items) => self.evaluate_array(items),
             AsValue(name, expr) => {
-                let (ms, tv) = self.evaluate(expr)?;
-                Ok((ms.with_variable(name, tv.clone()), tv))
+                let (machine, tv) = self.evaluate(expr)?;
+                Ok((machine.with_variable(name, tv.clone()), tv))
             }
             Between(a, b, c) =>
                 self.expand3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa <= cc))),
@@ -154,12 +159,12 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa ^ bb),
             CodeBlock(ops) => self.evaluate_scope(ops),
             ColumnSet(columns) => {
-                let ms = self.clone();
+                let machine = self.clone();
                 let values = columns.iter()
-                    .map(|c| ms.variables.clone().get(c.get_name()).map(|c| c.clone())
+                    .map(|c| machine.variables.clone().get(c.get_name()).map(|c| c.clone())
                         .unwrap_or(Undefined))
                     .collect::<Vec<TypedValue>>();
-                Ok((ms, Array(values)))
+                Ok((machine, Array(values)))
             }
             Contains(a, b) => self.evaluate_contains(a, b),
             Divide(a, b) =>
@@ -168,7 +173,7 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| Boolean(aa == bb)),
             Eval(a) => self.evaluate_eval(&a),
             Factorial(a) => self.expand1(a, |aa| aa.factorial().unwrap_or(Undefined)),
-            From(src) => self.evaluate_queryable(src, &UNDEFINED, Undefined),
+            From(src) => self.perform_table_row_query(src, &UNDEFINED, Undefined),
             FunctionCall { fx, args } =>
                 self.evaluate_function_call(fx, args),
             GreaterThan(a, b) =>
@@ -191,16 +196,16 @@ impl MachineState {
                 self.expand2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) =>
                 self.expand2(a, b, |aa, bb| aa * bb),
-            MustAck(a) => self.evaluate_ql_must_ack(a),
-            MustDie(a) => self.evaluate_ql_must_die(a),
-            MustIgnoreAck(a) => self.evaluate_ql_must_ignore_ack(a),
-            MustNotAck(a) => self.evaluate_ql_must_not_ack(a),
+            MustAck(a) => self.evaluate_directive_ack(a),
+            MustDie(a) => self.evaluate_directive_die(a),
+            MustIgnoreAck(a) => self.evaluate_directive_ignore_ack(a),
+            MustNotAck(a) => self.evaluate_directive_not_ack(a),
             Mutate(m) => self.evaluate_mutation(m),
             Neg(a) => self.evaluate_neg(a),
             Not(a) => self.expand1(a, |aa| !aa),
             NotEqual(a, b) =>
                 self.expand2(a, b, |aa, bb| Boolean(aa != bb)),
-            Ns(a) => self.evaluate_ql_ns(a),
+            Ns(a) => self.perform_table_ns(a),
             Or(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
             Perform(i) => self.evaluate_infrastructure(i),
@@ -211,20 +216,23 @@ impl MachineState {
             Range(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
             Return(a) => {
-                let (ms, result) = self.evaluate_array(a)?;
-                Ok((ms, result))
+                let (machine, result) = self.evaluate_array(a)?;
+                Ok((machine, result))
             }
             SetVariable(name, expr) => {
-                let (ms, value) = self.evaluate(expr)?;
-                Ok((ms.set(name, value), Ack))
+                let (machine, value) = self.evaluate(expr)?;
+                Ok((machine.set(name, value), Ack))
             }
             ShiftLeft(a, b) =>
                 self.expand2(a, b, |aa, bb| aa << bb),
             ShiftRight(a, b) =>
                 self.expand2(a, b, |aa, bb| aa >> bb),
+            StdErr(a) => self.write_to_console(a),
+            StdOut(a) => self.write_to_console(a),
+            SystemCall(args) => self.execute_system_call(args),
             TupleLiteral(values) => self.evaluate_array(values),
             Variable(name) => Ok((self.clone(), self.get(&name).unwrap_or(Undefined))),
-            Via(src) => self.evaluate_queryable(src, &UNDEFINED, Undefined),
+            Via(src) => self.perform_table_row_query(src, &UNDEFINED, Undefined),
             While { condition, code } =>
                 self.evaluate_while(condition, code),
         }
@@ -234,15 +242,15 @@ impl MachineState {
         use Infrastructure::*;
         match expression {
             Create { path, entity: IndexEntity { columns } } =>
-                self.evaluate_ql_create_index(path, columns),
+                self.perform_table_create_index(path, columns),
             Create { path, entity: TableEntity { columns, from } } =>
-                self.evaluate_ql_create_table(path, columns, from),
+                self.perform_table_create_table(path, columns, from),
             Declare(IndexEntity { columns }) =>
-                self.evaluate_ql_declare_index(columns),
+                self.perform_table_declare_index(columns),
             Declare(TableEntity { columns, from }) =>
-                self.evaluate_ql_declare_table(columns, from),
-            Drop(IndexTarget { path, if_exists }) => self.evaluate_ql_drop(path, *if_exists),
-            Drop(TableTarget { path, if_exists }) => self.evaluate_ql_drop(path, *if_exists),
+                self.perform_table_declare_table(columns, from),
+            Drop(IndexTarget { path }) => self.perform_table_drop(path),
+            Drop(TableTarget { path }) => self.perform_table_drop(path),
         }
     }
 
@@ -250,14 +258,14 @@ impl MachineState {
         use Queryable::*;
         match expression {
             Limit { from, limit } => {
-                let (ms, limit) = self.evaluate(limit)?;
-                ms.evaluate_queryable(from, &UNDEFINED, limit)
+                let (machine, limit) = self.evaluate(limit)?;
+                machine.perform_table_row_query(from, &UNDEFINED, limit)
             }
-            Reverse(a) => self.evaluate_reverse(a),
+            Reverse(a) => self.perform_table_row_reverse(a),
             Select { fields, from, condition, group_by, having, order_by, limit } =>
-                self.evaluate_ql_select(fields, from, condition, group_by, having, order_by, limit),
+                self.perform_table_row_selection(fields, from, condition, group_by, having, order_by, limit),
             Where { from, condition } =>
-                self.evaluate_queryable(from, condition, Undefined),
+                self.perform_table_row_query(from, condition, Undefined),
         }
     }
 
@@ -265,21 +273,23 @@ impl MachineState {
         use Mutation::*;
         match expression {
             Append { path, source } =>
-                self.evaluate_ql_into(path, source),
+                self.perform_table_row_append(path, source),
             Delete { path, condition, limit } =>
-                self.evaluate_ql_delete(path, condition, limit),
+                self.perform_table_row_delete(path, condition, limit),
+            IntoTable(source, target) =>
+                self.perform_table_into(target, source),
             Overwrite { path, source, condition, limit } =>
-                self.evaluate_ql_overwrite(path, source, condition, limit),
+                self.perform_table_row_overwrite(path, source, condition, limit),
             Truncate { path, limit } =>
                 match limit {
-                    None => self.evaluate_ql_truncate(path, Boolean(false)),
+                    None => self.perform_table_row_resize(path, Boolean(false)),
                     Some(limit) => {
-                        let (ms, limit) = self.evaluate(limit)?;
-                        ms.evaluate_ql_truncate(path, limit)
+                        let (machine, limit) = self.evaluate(limit)?;
+                        machine.perform_table_row_resize(path, limit)
                     }
                 }
             Update { path, source, condition, limit } =>
-                self.evaluate_ql_update(path, source, condition, limit),
+                self.perform_table_row_update(path, source, condition, limit),
         }
     }
 
@@ -299,16 +309,16 @@ impl MachineState {
         &self,
         ops: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, results) = ops.iter()
+        let (machine, results) = ops.iter()
             .fold((self.clone(), vec![]),
-                  |(ms, mut array), op| match ms.evaluate(op) {
-                      Ok((ms, tv)) => {
+                  |(machine, mut array), op| match machine.evaluate(op) {
+                      Ok((machine, tv)) => {
                           array.push(tv);
-                          (ms, array)
+                          (machine, array)
                       }
                       Err(err) => panic!("{}", err.to_string())
                   });
-        Ok((ms, Array(results)))
+        Ok((machine, Array(results)))
     }
 
     /// evaluates the specified [Expression]; returning an array ([String]) result.
@@ -316,17 +326,17 @@ impl MachineState {
         &self,
         ops: &Vec<Expression>,
     ) -> std::io::Result<(Self, Vec<String>)> {
-        let (ms, results) = ops.iter()
+        let (machine, results) = ops.iter()
             .fold((self.clone(), vec![]),
-                  |(ms, mut array), op| match op {
+                  |(machine, mut array), op| match op {
                       Variable(name) => {
                           array.push(name.to_string());
-                          (ms, array)
+                          (machine, array)
                       }
                       expr =>
                           panic!("Expected a column, got \"{}\" instead", expr),
                   });
-        Ok((ms, results))
+        Ok((machine, results))
     }
 
     fn evaluate_contains(
@@ -334,30 +344,74 @@ impl MachineState {
         a: &Expression,
         b: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, a) = self.evaluate(a)?;
-        let (ms, b) = ms.evaluate(b)?;
-        Ok((ms, TypedValue::Boolean(a.contains(&b))))
+        let (machine, a) = self.evaluate(a)?;
+        let (machine, b) = machine.evaluate(b)?;
+        Ok((machine, TypedValue::Boolean(a.contains(&b))))
+    }
+
+    fn evaluate_directive_die(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        info!("{}", expr.to_code());
+        let (machine, value) = self.evaluate(expr)?;
+        Ok((machine, ErrorValue(value.unwrap_value())))
+    }
+
+    fn evaluate_directive_ignore_ack(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        info!("{}", expr.to_code());
+        let (machine, _) = self.evaluate_eval(expr)?;
+        Ok((machine, Ack))
+    }
+
+    fn evaluate_directive_ack(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        info!("{}", expr.to_code());
+        let (machine, value) = self.evaluate(expr)?;
+        match value {
+            v if v.is_successful_ack() => Ok((machine, v.clone())),
+            v =>
+                Ok((machine, ErrorValue(format!("Expected true, Table(..) or RowsAffected(_ >= 1), but got {}", &v))))
+        }
+    }
+
+    fn evaluate_directive_not_ack(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        info!("{}", expr.to_code());
+        let (machine, value) = self.evaluate(expr)?;
+        match value {
+            v if v.is_successful_ack() =>
+                Ok((machine, ErrorValue(format!("Expected a non-success value, but got {}", &v)))),
+            v => Ok((machine, v))
+        }
     }
 
     fn evaluate_eval(
         &self,
         string_expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, string_value) = self.evaluate(string_expr)?;
+        let (machine, string_value) = self.evaluate(string_expr)?;
         match string_value {
             TypedValue::StringValue(ql) => {
-                match CompilerState::compile_script(ql.as_str()) {
+                match Compiler::compile_script(ql.as_str()) {
                     Ok(opcode) => {
-                        match ms.evaluate(&opcode) {
-                            Ok((ms, tv)) => Ok((ms, tv)),
-                            Err(err) => Ok((ms, TypedValue::ErrorValue(err.to_string())))
+                        match machine.evaluate(&opcode) {
+                            Ok((machine, tv)) => Ok((machine, tv)),
+                            Err(err) => Ok((machine, TypedValue::ErrorValue(err.to_string())))
                         }
                     }
-                    Err(err) => Ok((ms, TypedValue::ErrorValue(err.to_string())))
+                    Err(err) => Ok((machine, TypedValue::ErrorValue(err.to_string())))
                 }
             }
             x =>
-                Ok((ms, TypedValue::ErrorValue(format!("Type mismatch - expected String, got {}", x.get_type_name()))))
+                Ok((machine, TypedValue::ErrorValue(format!("Type mismatch - expected String, got {}", x.get_type_name()))))
         }
     }
 
@@ -367,11 +421,11 @@ impl MachineState {
         args: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         // extract the arguments
-        if let (ms, TypedValue::Array(args)) = self.evaluate_array(args)? {
+        if let (machine, TypedValue::Array(args)) = self.evaluate_array(args)? {
             // evaluate the anonymous- or named-function
-            match ms.evaluate(fx)? {
-                (ms, Function { params, code }) =>
-                    ms.create_function_arguments(params, args).evaluate(&code),
+            match machine.evaluate(fx)? {
+                (machine, Function { params, code }) =>
+                    machine.create_function_arguments(params, args).evaluate(&code),
                 _ => fail(format!("'{}' is not a function", fx.to_code()))
             }
         } else {
@@ -386,8 +440,8 @@ impl MachineState {
     ) -> Self {
         assert_eq!(params.len(), args.len());
         params.iter().zip(args.iter())
-            .fold(self.clone(), |ms, (c, v)|
-                ms.with_variable(c.get_name(), v.clone()))
+            .fold(self.clone(), |machine, (c, v)|
+                machine.with_variable(c.get_name(), v.clone()))
     }
 
     /// Evaluates an if-then-else expression
@@ -399,16 +453,16 @@ impl MachineState {
     ) -> std::io::Result<(Self, TypedValue)> {
         use TypedValue::*;
         let ms0 = self.clone();
-        let (ms, result) = ms0.evaluate(condition)?;
+        let (machine, result) = ms0.evaluate(condition)?;
         match result {
-            Ack => Ok((ms0, ms.evaluate(a)?.1)),
+            Ack => Ok((ms0, machine.evaluate(a)?.1)),
             Boolean(is_true) =>
                 if is_true {
-                    Ok((ms0, ms.evaluate(a)?.1))
+                    Ok((ms0, machine.evaluate(a)?.1))
                 } else if let Some(expr) = b {
-                    Ok((ms0, ms.evaluate(expr)?.1))
+                    Ok((ms0, machine.evaluate(expr)?.1))
                 } else { Ok((ms0, Undefined)) },
-            Null | Undefined => Ok((ms, result)),
+            Null | Undefined => Ok((machine, result)),
             other =>
                 Ok((ms0, Self::error_unexpected("Boolean", &other)))
         }
@@ -419,45 +473,18 @@ impl MachineState {
         path: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         // evaluate the script path
-        let (ms, path_value) = self.evaluate(path)?;
+        let (machine, path_value) = self.evaluate(path)?;
         if let TypedValue::StringValue(script_path) = path_value {
             // read the script file contents into the string
             let mut file = File::open(script_path)?;
             let mut script_code = String::new();
             file.read_to_string(&mut script_code)?;
             // compile and execute the string (script code)
-            let opcode = CompilerState::compile_script(script_code.as_str())?;
-            ms.evaluate(&opcode)
+            let opcode = Compiler::compile_script(script_code.as_str())?;
+            machine.evaluate(&opcode)
         } else {
-            Ok((ms, TypedValue::ErrorValue(format!("Type mismatch - expected String, got {}",
+            Ok((machine, TypedValue::ErrorValue(format!("Type mismatch - expected String, got {}",
                                                    path_value.get_type_name()))))
-        }
-    }
-
-    fn evaluate_into_table(
-        &self,
-        source: &Expression,
-        target: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, source) = self.evaluate(source)?;
-        let (ms, target) = ms.evaluate(target)?;
-        let rows_1 = self.assume_table_value_or_reference(&source, |rc| {
-            rc.read_range(0..rc.len()?)
-        })?;
-        match target {
-            TableRef(namespace) => {
-                let ns = Namespace::parse(namespace.as_str())?;
-                let mut frc = FileRowCollection::open(&ns)?;
-                for row in rows_1 { frc.overwrite(frc.len()?, &row)?; }
-                Ok((ms, TableRef(namespace)))
-            }
-            TableValue(mrc) => {
-                let mut rows = vec![];
-                rows.extend(mrc.get_rows());
-                rows.extend(rows_1);
-                Ok((ms, TableValue(ModelRowCollection::from_rows(rows))))
-            }
-            z => fail_value(format!("Target {} is not a table", &z), &z)
         }
     }
 
@@ -477,33 +504,93 @@ impl MachineState {
         &self,
         expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, result) = self.evaluate(expr)?;
+        let (machine, result) = self.evaluate(expr)?;
         let neg_result = match result {
+            Ack => Boolean(false),
             Boolean(n) => Boolean(!n),
-            UInt8Value(n) => Int16Value(-(n as i16)),
+            Int8Value(n) => Int8Value(-n),
             Int16Value(n) => Int16Value(-n),
             Int32Value(n) => Int32Value(-n),
             Int64Value(n) => Int64Value(-n),
+            Int128Value(n) => Int128Value(-n),
+            UInt8Value(n) => Int16Value(-(n as i16)),
+            UInt16Value(n) => Int32Value(-(n as i32)),
+            UInt32Value(n) => Int64Value(-(n as i64)),
+            UInt64Value(n) => Int128Value(-(n as i128)),
+            UInt128Value(n) => ErrorValue(format!("{} cannot be negated", n)),
             Float32Value(n) => Float32Value(-n),
             Float64Value(n) => Float64Value(-n),
             RowsAffected(n) => Int64Value(-(n as i64)),
-            x => x
+            z => ErrorValue(format!("{} cannot be negated", z.unwrap_value())),
         };
-        Ok((ms, neg_result))
+        Ok((machine, neg_result))
     }
 
-    fn evaluate_ql_create_index(
+    fn write_to_console(
+        &self,
+        expr: &Box<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, result) = self.evaluate(expr)?;
+        print!("{}", result.unwrap_value());
+        Ok((machine, TypedValue::Ack))
+    }
+
+    fn execute_system_call(
+        &self,
+        args: &Vec<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let machine = self.clone();
+        if let Ok((machine, Array(items))) = machine.evaluate_array(args) {
+            let items: Vec<String> = items.iter().map(|i| i.unwrap_value()).collect();
+            if let Some((command, cmd_args)) = Self::split_first(items) {
+                let output: Output = std::process::Command::new(command).args(cmd_args).output()?;
+                let result: TypedValue =
+                    if output.status.success() {
+                        let raw_text = String::from_utf8_lossy(&output.stdout);
+                        StringValue(raw_text.to_string())
+                    } else {
+                        let message = String::from_utf8_lossy(&output.stderr);
+                        ErrorValue(message.to_string())
+                    };
+                Ok((machine, result))
+            } else {
+                Ok((machine, ErrorValue(format!("Expected array but got {:?}", args))))
+            }
+        } else {
+            Ok((machine, ErrorValue(format!("Expected array but got {:?}", args))))
+        }
+    }
+
+    fn evaluate_while(
+        &self,
+        condition: &Expression,
+        code: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let mut machine = self.clone();
+        let mut n = 0;
+        while let Ok((ms1, Ack | Boolean(true))) = machine.evaluate(condition) {
+            println!("BEFORE {} - {:?}", n, ms1);
+            let (ms2, _) = ms1.evaluate(code)?;
+            println!("AFTER {} - {:?}", n, ms2);
+            machine = ms2;
+            n = n + 1;
+        }
+        Ok((machine, Ack))
+    }
+
+    fn perform_table_create_index(
         &self,
         index: &Expression,
         columns: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, result) = self.evaluate(index)?;
+        let (machine, result) = self.evaluate(index)?;
         match result.clone() {
-            Null | Undefined => Ok((ms, result)),
-            TableValue(mrc) => todo!(),
+            Null | Undefined => Ok((machine, result)),
+            TableValue(mrc) =>
+                Ok((machine, ErrorValue("Memory collections are not yet support indexes".to_string()))),
             TableRef(path) => {
                 let ns = Namespace::parse(path.as_str())?;
-                let (ms, columns) = self.evaluate_atoms(columns)?;
+                let (machine, columns) = self.evaluate_atoms(columns)?;
                 let config = DataFrameConfig::load(&ns)?;
                 let mut indices = config.get_indices().clone();
                 indices.push(HashIndexConfig::new(columns, false));
@@ -513,42 +600,42 @@ impl MachineState {
                     config.get_partitions().clone(),
                 );
                 config.save(&ns)?;
-                Ok((ms, Ack))
+                Ok((machine, Ack))
             }
             x =>
-                Ok((ms, ErrorValue(format!("Type mismatch: expected an iterable near {}", x))))
+                Ok((machine, ErrorValue(format!("Type mismatch: expected an iterable near {}", x))))
         }
     }
 
-    fn evaluate_ql_create_table(
+    fn perform_table_create_table(
         &self,
         table: &Expression,
         columns: &Vec<ColumnJs>,
         from: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, result) = self.evaluate(table)?;
+        let (machine, result) = self.evaluate(table)?;
         match result.clone() {
-            Null | Undefined => Ok((ms, result)),
+            Null | Undefined => Ok((machine, result)),
             TableValue(mrc) => todo!(),
             TableRef(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let config = DataFrameConfig::new(columns.clone(), vec![], vec![]);
                 DataFrame::create(ns, config)?;
-                Ok((ms, Ack))
+                Ok((machine, Ack))
             }
             x => fail(format!("Type mismatch: expected an iterable near {}", x))
         }
     }
 
-    fn evaluate_ql_declare_index(
+    fn perform_table_declare_index(
         &self,
         columns: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         // TODO determine how to implement
-        Ok((self.clone(), ErrorValue("Not yet implemented".to_string())))
+        Ok((self.clone(), ErrorValue("Not yet implemented".into())))
     }
 
-    fn evaluate_ql_declare_table(
+    fn perform_table_declare_table(
         &self,
         columns: &Vec<ColumnJs>,
         from: &Option<Box<Expression>>,
@@ -557,57 +644,112 @@ impl MachineState {
         Ok((self.clone(), TableValue(ModelRowCollection::new(columns, vec![]))))
     }
 
-    fn evaluate_ql_delete(
-        &self,
-        from: &Expression,
-        condition: &Option<Box<Expression>>,
-        limit: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, limit) = Self::expand(self.clone(), limit)?;
-        let (ms, result) = ms.evaluate(from)?;
-        Self::orchestrate_io(ms, result, &vec![], &vec![], condition, limit, |ms, df, _fields, _values, condition, limit| {
-            let deleted = df.delete_where(&ms, &condition, limit).unwrap();
-            Ok((ms, RowsAffected(deleted)))
-        })
-    }
-
-    fn evaluate_ql_drop(&self, table: &Expression, if_exists: bool) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, table) = self.evaluate(table)?;
+    fn perform_table_drop(&self, table: &Expression) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, table) = self.evaluate(table)?;
         match table {
             TableRef(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let result = fs::remove_file(ns.get_table_file_path());
-                Ok((ms, Boolean(result.is_ok())))
+                Ok((machine, if result.is_ok() { Ack } else { Boolean(false) }))
             }
-            _ => Ok((ms, Boolean(false)))
+            _ => Ok((machine, Boolean(false)))
         }
     }
 
-    fn evaluate_ql_append(
-        &self,
-        table: &Expression,
-        fields: &Vec<Expression>,
-        values: &Vec<Expression>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, table) = self.clone().evaluate(table)?;
-        Self::orchestrate_io(ms, table, &fields, &values, &None, Undefined, |ms, df, fields, values, condition, limit| {
-            let (ms, field_names) = ms.evaluate_atoms(fields)?;
-            if let (ms, Array(values)) = ms.evaluate_array(values)? {
-                let empty_fields = vec![Field::new(Null); df.get_columns().len()];
-                let row = Row::new(0, df.get_columns().clone(), empty_fields);
-                let new_row = DataFrame::transform_row(row, field_names, values)?;
-                let inserted = df.append(&new_row)?;
-                Ok((ms, RowsAffected(inserted)))
-            } else { fail("Array expression expected") }
-        })
-    }
-
-    fn evaluate_ql_into(
+    fn perform_table_into(
         &self,
         table: &Expression,
         source: &Expression,
-    ) -> std::io::Result<(MachineState, TypedValue)> {
-        let ms = self.clone();
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let machine = self.clone();
+        let (machine, rows) = match source {
+            From(source) =>
+                self.extract_rows_from_query(source, table)?,
+            Literal(TableValue(mrc)) =>
+                (machine, mrc.get_rows()),
+            Literal(TableRef(name)) => {
+                let ns = Namespace::parse(name.as_str())?;
+                let frc = FileRowCollection::open(&ns)?;
+                (machine, frc.read_all_rows()?)
+            }
+            Perform(Declare(TableEntity { columns, from })) =>
+                self.extract_rows_from_table_declaration(table, from, columns)?,
+            z =>
+                return Ok((machine, Self::error_expr(format!("A queryable was expected near {}", z.to_code()), source)))
+        };
+
+        // write the rows to the target
+        let mut writable = machine.expect_row_collection(table)?;
+        let inserted = machine.write_rows(&mut writable, rows)?;
+        Ok((machine, RowsAffected(inserted)))
+    }
+
+    fn extract_rows_from_table_declaration(
+        &self,
+        table: &Expression,
+        from: &Option<Box<Expression>>,
+        columns: &Vec<ColumnJs>,
+    ) -> std::io::Result<(Machine, Vec<Row>)> {
+        let machine = self.clone();
+        // create the config and an empty data file
+        let ns = self.expect_namespace(table)?;
+        let cfg = DataFrameConfig::new(columns.clone(), vec![], vec![]);
+        cfg.save(&ns)?;
+        FileRowCollection::open_crw(&ns)?;
+        // decipher the "from" expression
+        let columns = TableColumn::from_columns(columns)?;
+        let results = match from {
+            Some(expr) => machine.expect_rows(expr.deref(), &columns)?,
+            None => vec![]
+        };
+        Ok((machine, results))
+    }
+
+    fn extract_rows_from_query(
+        &self,
+        source: &Expression,
+        table: &Expression,
+    ) -> std::io::Result<(Machine, Vec<Row>)> {
+        let machine = self.clone();
+
+        // determine the writable target
+        let mut writable = machine.expect_row_collection(table)?;
+
+        // retrieve rows from the source
+        let columns = writable.get_columns();
+        let rows = machine.expect_rows(source, columns)?;
+        Ok((machine, rows))
+    }
+
+    fn perform_table_ns(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, result) = self.evaluate(expr)?;
+        let result = match result {
+            StringValue(path) => TableRef(path),
+            TableRef(path) => TableRef(path),
+            x => Self::error_unexpected("TableRef", &x),
+        };
+        Ok((machine, result))
+    }
+
+    fn perform_table_row_resize(
+        &self,
+        table: &Expression,
+        limit: TypedValue,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, table) = self.evaluate(table)?;
+        Self::orchestrate_io(machine, table, &vec![], &vec![], &None, limit, |machine, df, _fields, _values, condition, limit| {
+            let limit = limit.assume_usize().unwrap_or(0);
+            let new_size = df.resize(limit)?;
+            Ok((machine, RowsAffected(new_size)))
+        })
+    }
+
+    fn perform_table_row_append(
+        &self,
+        table: &Expression,
+        source: &Expression,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let machine = self.clone();
         if let From(source) = source {
             // determine the writable target
             let mut writable = self.expect_row_collection(table)?;
@@ -618,39 +760,43 @@ impl MachineState {
 
             // write the rows to the target
             let inserted = self.write_rows(&mut writable, rows)?;
-            Ok((ms, RowsAffected(inserted)))
+            Ok((machine, RowsAffected(inserted)))
         } else {
-            Ok((ms, Self::error_expr("A queryable was expected".to_string(), source)))
+            Ok((machine, Self::error_expr("A queryable was expected".to_string(), source)))
         }
     }
 
-    fn evaluate_ql_ns(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, result) = self.evaluate(expr)?;
-        let result = match result {
-            StringValue(path) => TableRef(path),
-            TableRef(path) => TableRef(path),
-            x => Self::error_unexpected("TableRef", &x),
-        };
-        Ok((ms, result))
+    fn perform_table_row_delete(
+        &self,
+        from: &Expression,
+        condition: &Option<Box<Expression>>,
+        limit: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, limit) = Self::expand(self.clone(), limit)?;
+        let (machine, result) = machine.evaluate(from)?;
+        Self::orchestrate_io(machine, result, &vec![], &vec![], condition, limit, |machine, df, _fields, _values, condition, limit| {
+            let deleted = df.delete_where(&machine, &condition, limit).unwrap();
+            Ok((machine, RowsAffected(deleted)))
+        })
     }
 
-    fn evaluate_ql_overwrite(
+    fn perform_table_row_overwrite(
         &self,
         table: &Expression,
         source: &Expression,
         condition: &Option<Box<Expression>>,
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, limit) = Self::expand(self.clone(), limit)?;
-        let (ms, tv_table) = ms.evaluate(table)?;
+        let (machine, limit) = Self::expand(self.clone(), limit)?;
+        let (machine, tv_table) = machine.evaluate(table)?;
         let (fields, values) = self.expect_via(&table, &source)?;
-        Self::orchestrate_io(ms, tv_table, &fields, &values, condition, limit, |ms, df, fields, values, condition, limit| {
-            let overwritten = df.overwrite_where(&ms, fields, values, condition, limit).unwrap();
-            Ok((ms, RowsAffected(overwritten)))
+        Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
+            let overwritten = df.overwrite_where(&machine, fields, values, condition, limit).unwrap();
+            Ok((machine, RowsAffected(overwritten)))
         })
     }
 
-    fn evaluate_ql_select(
+    fn perform_table_row_selection(
         &self,
         fields: &Vec<Expression>,
         from: &Option<Box<Expression>>,
@@ -660,109 +806,44 @@ impl MachineState {
         _order_by: &Option<Vec<Expression>>,
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, limit) = Self::expand(self.clone(), limit)?;
+        let (machine, limit) = Self::expand(self.clone(), limit)?;
         match from {
-            None => ms.evaluate_array(fields),
+            None => machine.evaluate_array(fields),
             Some(source) => {
-                let (ms, table) = ms.evaluate(source)?;
-                Self::orchestrate_io(ms, table, &vec![], &vec![], condition, limit, |ms, df, _, _, condition, limit| {
-                    let rows = df.read_where(&ms, condition, limit)?;
-                    Ok((ms, TableValue(ModelRowCollection::from_rows(rows))))
+                let (machine, table) = machine.evaluate(source)?;
+                Self::orchestrate_io(machine, table, &vec![], &vec![], condition, limit, |machine, df, _, _, condition, limit| {
+                    let rows = df.read_where(&machine, condition, limit)?;
+                    Ok((machine, TableValue(ModelRowCollection::from_rows(rows))))
                 })
             }
         }
     }
 
-    fn is_successful_ack(value: &TypedValue) -> bool {
-        match value {
-            Ack | Boolean(true) | TableRef(_) | TableValue(_) => true,
-            RowsAffected(n) if *n >= 0 => true,
-            _ => false
-        }
-    }
-
-    fn evaluate_ql_must_die(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        info!("{}", expr.to_code());
-        let (ms, value) = self.evaluate(expr)?;
-        Ok((ms, ErrorValue(value.unwrap_value())))
-    }
-
-    fn evaluate_ql_must_ignore_ack(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        info!("{}", expr.to_code());
-        let (ms, _) = self.evaluate_eval(expr)?;
-        Ok((ms, Ack))
-    }
-
-    fn evaluate_ql_must_ack(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        info!("{}", expr.to_code());
-        let (ms, value) = self.evaluate(expr)?;
-        match value {
-            v if Self::is_successful_ack(&v) => Ok((ms, v.clone())),
-            v =>
-                Ok((ms, ErrorValue(format!("Expected true, Table(..) or RowsAffected(_ >= 1), but got {}", &v))))
-        }
-    }
-
-    fn evaluate_ql_must_not_ack(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        info!("{}", expr.to_code());
-        let (ms, value) = self.evaluate(expr)?;
-        match value {
-            v if Self::is_successful_ack(&v) =>
-                Ok((ms, ErrorValue(format!("Expected a non-success value, but got {}", &v)))),
-            v => Ok((ms, v))
-        }
-    }
-
-    fn evaluate_ql_update(
+    fn perform_table_row_update(
         &self,
         table: &Expression,
         source: &Expression,
         condition: &Option<Box<Expression>>,
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, limit) = Self::expand(self.clone(), limit)?;
-        let (ms, tv_table) = ms.evaluate(table)?;
+        let (machine, limit) = Self::expand(self.clone(), limit)?;
+        let (machine, tv_table) = machine.evaluate(table)?;
         let (fields, values) = self.expect_via(&table, &source)?;
-        Self::orchestrate_io(ms, tv_table, &fields, &values, condition, limit, |ms, df, fields, values, condition, limit| {
-            let modified = df.update_where(&ms, fields, values, condition, limit).unwrap();
-            Ok((ms, RowsAffected(modified)))
-        })
-    }
-
-    fn evaluate_ql_truncate(
-        &self,
-        table: &Expression,
-        limit: TypedValue,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, table) = self.evaluate(table)?;
-        Self::orchestrate_io(ms, table, &vec![], &vec![], &None, limit, |ms, df, _fields, _values, condition, limit| {
-            let limit = limit.assume_usize().unwrap_or(0);
-            let new_size = df.resize(limit)?;
-            Ok((ms, RowsAffected(new_size)))
+        Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
+            let modified = df.update_where(&machine, fields, values, condition, limit).unwrap();
+            Ok((machine, RowsAffected(modified)))
         })
     }
 
     /// Evaluates the queryable [Expression] (e.g. from, limit and where)
     /// e.g.: from ns("interpreter.select.stocks") where last_sale > 1.0 limit 1
-    fn evaluate_queryable(
+    fn perform_table_row_query(
         &self,
         src: &Expression,
         condition: &Expression,
         limit: TypedValue,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, result) = self.evaluate(src)?;
+        let (machine, result) = self.evaluate(src)?;
         let limit = match limit {
             Null | Undefined => None,
             value =>
@@ -775,55 +856,38 @@ impl MachineState {
         match result {
             TableValue(mrc) => {
                 let mut cursor = Cursor::filter(Box::new(mrc), condition.clone());
-                Ok((ms, TableValue(ModelRowCollection::from_rows(cursor.take(limit)?))))
+                Ok((machine, TableValue(ModelRowCollection::from_rows(cursor.take(limit)?))))
             }
             TableRef(name) => {
                 let ns = Namespace::parse(name.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
                 let mut cursor = Cursor::filter(Box::new(frc), condition.clone());
-                Ok((ms, TableValue(ModelRowCollection::from_rows(cursor.take(limit)?))))
+                Ok((machine, TableValue(ModelRowCollection::from_rows(cursor.take(limit)?))))
             }
             value => fail_value("Queryable expected", &value)
         }
     }
 
     /// Reverse orders a collection
-    pub fn evaluate_reverse(
+    pub fn perform_table_row_reverse(
         &self,
         table: &Box<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, table) = self.evaluate(table)?;
+        let (machine, table) = self.evaluate(table)?;
         let result = self.assume_dataframe(&table, |df| {
             let rows = df.reverse()?;
             Ok(TableValue(ModelRowCollection::from_rows(rows)))
         })?;
-        Ok((ms, result))
+        Ok((machine, result))
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
     pub fn evaluate_scope(&self, ops: &Vec<Expression>) -> std::io::Result<(Self, TypedValue)> {
         Ok(ops.iter().fold((self.clone(), Undefined),
-                           |(ms, _), op| match ms.evaluate(op) {
-                               Ok((ms, tv)) => (ms, tv),
+                           |(machine, _), op| match machine.evaluate(op) {
+                               Ok((machine, tv)) => (machine, tv),
                                Err(err) => panic!("{}", err.to_string())
                            }))
-    }
-
-    fn evaluate_while(
-        &self,
-        condition: &Expression,
-        code: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let mut ms = self.clone();
-        let mut is_done = false;
-        while !is_done {
-            if let (ms1, Ack | Boolean(true)) = ms.evaluate(condition)? {
-                ms = ms1;
-                let (ms2, _) = ms.evaluate(code)?;
-                ms = ms2;
-            } else { is_done = true }
-        }
-        Ok((ms, Ack))
     }
 
     fn assume_table_value_or_reference<A>(
@@ -867,10 +931,10 @@ impl MachineState {
 
     /// executes the specified instructions on this state machine.
     pub fn execute(&self, ops: &Vec<OpCode>) -> std::io::Result<(Self, TypedValue)> {
-        let mut ms = self.clone();
-        for op in ops { ms = op(ms)? }
-        let (ms, result) = ms.pop_or(Undefined);
-        Ok((ms, result))
+        let mut machine = self.clone();
+        for op in ops { machine = op(machine)? }
+        let (machine, result) = machine.pop_or(Undefined);
+        Ok((machine, result))
     }
 
     /// evaluates the boxed expression and applies the supplied function
@@ -879,8 +943,8 @@ impl MachineState {
         a: &Expression,
         f: fn(TypedValue) -> TypedValue,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, aa) = self.evaluate(a)?;
-        Ok((ms, f(aa)))
+        let (machine, aa) = self.evaluate(a)?;
+        Ok((machine, f(aa)))
     }
 
     /// evaluates the two boxed expressions and applies the supplied function
@@ -890,9 +954,9 @@ impl MachineState {
         b: &Expression,
         f: fn(TypedValue, TypedValue) -> TypedValue,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, aa) = self.evaluate(a)?;
-        let (ms, bb) = ms.evaluate(b)?;
-        Ok((ms, f(aa, bb)))
+        let (machine, aa) = self.evaluate(a)?;
+        let (machine, bb) = machine.evaluate(b)?;
+        Ok((machine, f(aa, bb)))
     }
 
     /// evaluates the three boxed expressions and applies the supplied function
@@ -903,10 +967,20 @@ impl MachineState {
         c: &Expression,
         f: fn(TypedValue, TypedValue, TypedValue) -> TypedValue,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, aa) = self.evaluate(a)?;
-        let (ms, bb) = ms.evaluate(b)?;
-        let (ms, cc) = ms.evaluate(c)?;
-        Ok((ms, f(aa, bb, cc)))
+        let (machine, aa) = self.evaluate(a)?;
+        let (machine, bb) = machine.evaluate(b)?;
+        let (machine, cc) = machine.evaluate(c)?;
+        Ok((machine, f(aa, bb, cc)))
+    }
+
+    fn expect_namespace(&self, table: &Expression) -> std::io::Result<Namespace> {
+        match table {
+            Ns(path) => {
+                let path = self.expect_string(path)?;
+                Namespace::parse(path.as_str())
+            }
+            e => fail_expr("A writable was expected".to_string(), e)
+        }
     }
 
     fn expect_row_collection(&self, table: &Expression) -> std::io::Result<Box<dyn RowCollection>> {
@@ -924,7 +998,6 @@ impl MachineState {
             e => fail_expr("A writable was expected".to_string(), e)
         }
     }
-
 
     fn expect_rows(
         &self,
@@ -946,7 +1019,7 @@ impl MachineState {
             TableRef(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
-                frc.read_range(0..frc.len()?)
+                frc.read_all_rows()
             }
             TableValue(mrc) => Ok(mrc.get_rows()),
             tv => fail_value("A queryable was expected".to_string(), &tv)
@@ -1017,8 +1090,8 @@ impl MachineState {
 
     /// returns a value from the stack or the default value if the stack is empty.
     pub fn pop_or(&self, default_value: TypedValue) -> (Self, TypedValue) {
-        let (ms, result) = self.pop();
-        (ms, result.unwrap_or(default_value))
+        let (machine, result) = self.pop();
+        (machine, result.unwrap_or(default_value))
     }
 
     /// pushes a value unto the stack
@@ -1030,13 +1103,18 @@ impl MachineState {
 
     /// pushes a collection of values unto the stack
     pub fn push_all(&self, values: Vec<TypedValue>) -> Self {
-        values.iter().fold(self.clone(), |ms, tv| ms.push(tv.clone()))
+        values.iter().fold(self.clone(), |machine, tv| machine.push(tv.clone()))
     }
 
     pub fn set(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.clone();
         variables.insert(name.to_string(), value);
         Self::construct(self.stack.clone(), variables)
+    }
+
+    fn split_first<T>(vec: Vec<T>) -> Option<(T, Vec<T>)> {
+        let mut iter = vec.into_iter();
+        iter.next().map(|first| (first, iter.collect()))
     }
 
     pub fn stack_len(&self) -> usize {
@@ -1060,8 +1138,8 @@ impl MachineState {
 
     pub fn with_row(&self, row: &Row) -> Self {
         row.get_fields().iter().zip(row.get_columns().iter())
-            .fold(self.clone(), |ms, (f, c)| {
-                ms.with_variable(c.get_name(), f.value.clone())
+            .fold(self.clone(), |machine, (f, c)| {
+                machine.with_variable(c.get_name(), f.value.clone())
             })
     }
 
@@ -1075,7 +1153,9 @@ impl MachineState {
         let mut written = 0;
         for row in rows {
             let new_id = writable.len()?;
-            written += writable.overwrite(new_id, &row.with_row_id(new_id))?
+            if writable.overwrite(new_id, &row.with_row_id(new_id))? == TypedValue::Ack {
+                written += 1
+            }
         }
         Ok(written)
     }
@@ -1084,7 +1164,7 @@ impl MachineState {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::compiler::CompilerState;
+    use crate::compiler::Compiler;
     use crate::expression::{FALSE, NULL, TRUE};
     use crate::expression::Expression::*;
     use crate::table_columns::TableColumn;
@@ -1099,7 +1179,7 @@ mod tests {
             "3.25", "true", "false", "null", "undefined",
         ]);
 
-        let (_, array) = MachineState::new().evaluate_array(&models).unwrap();
+        let (_, array) = Machine::new().evaluate_array(&models).unwrap();
         assert_eq!(array, Array(vec![Float64Value(3.25), Boolean(true), Boolean(false), Null, Undefined]));
     }
 
@@ -1111,10 +1191,10 @@ mod tests {
         );
         assert_eq!(model.to_code(), "symbol: \"ABC\"");
 
-        let ms = MachineState::new();
-        let (ms, tv) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new();
+        let (machine, tv) = machine.evaluate(&model).unwrap();
         assert_eq!(tv, StringValue("ABC".into()));
-        assert_eq!(ms.get("symbol"), Some(StringValue("ABC".into())));
+        assert_eq!(machine.get("symbol"), Some(StringValue("ABC".into())));
     }
 
     #[test]
@@ -1122,11 +1202,11 @@ mod tests {
         let model = ColumnSet(make_quote_columns());
         assert_eq!(model.to_code(), "(symbol: String(8), exchange: String(8), last_sale: f64)");
 
-        let ms = MachineState::new()
+        let machine = Machine::new()
             .with_variable("symbol", StringValue("ABC".into()))
             .with_variable("exchange", StringValue("NYSE".into()))
             .with_variable("last_sale", Float64Value(12.66));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Array(vec![
             StringValue("ABC".into()),
             StringValue("NYSE".into()),
@@ -1136,13 +1216,13 @@ mod tests {
 
     #[test]
     fn test_divide() {
-        let ms = MachineState::new().with_variable("x", Int64Value(50));
+        let machine = Machine::new().with_variable("x", Int64Value(50));
         let model = Divide(Box::new(Variable("x".into())), Box::new(Literal(Int64Value(7))));
         assert_eq!(model.to_code(), "x / 7");
 
-        let (ms, result) = ms.evaluate(&model).unwrap();
+        let (machine, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Int64Value(7));
-        assert_eq!(ms.get("x"), Some(Int64Value(50)));
+        assert_eq!(machine.get("x"), Some(Int64Value(50)));
     }
 
     #[test]
@@ -1150,8 +1230,8 @@ mod tests {
         let model = Factorial(Box::new(Literal(Float64Value(6.))));
         assert_eq!(model.to_code(), "¡6");
 
-        let ms = MachineState::new();
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Float64Value(720.))
     }
 
@@ -1160,8 +1240,8 @@ mod tests {
         let model = Eval(Box::new(Literal(StringValue("5 + 7".to_string()))));
         assert_eq!(model.to_code(), "eval \"5 + 7\"");
 
-        let ms = MachineState::new();
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Int64Value(12))
     }
 
@@ -1177,12 +1257,12 @@ mod tests {
         };
         assert_eq!(model.to_code(), r#"if num > 25 "Yes" else "No""#);
 
-        let ms = MachineState::new().with_variable("num", Int64Value(5));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new().with_variable("num", Int64Value(5));
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("No".into()));
 
-        let ms = MachineState::new().with_variable("num", Int64Value(37));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new().with_variable("num", Int64Value(37));
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("Yes".into()));
     }
 
@@ -1198,12 +1278,12 @@ mod tests {
         };
         assert_eq!(model.to_code(), r#"if num < 10 "Yes" else "No""#);
 
-        let ms = MachineState::new().with_variable("num", Int64Value(5));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new().with_variable("num", Int64Value(5));
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("Yes".into()));
 
-        let ms = MachineState::new().with_variable("num", Int64Value(99));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new().with_variable("num", Int64Value(99));
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("No".into()));
     }
 
@@ -1218,8 +1298,8 @@ mod tests {
         });
 
         // create the table
-        let ms = MachineState::new();
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Ack);
 
         // decompile back to source code
@@ -1232,16 +1312,15 @@ mod tests {
     #[test]
     fn test_create_table_with_index() {
         let path = "machine.index.stocks";
-        let ms = MachineState::new();
+        let machine = Machine::new();
 
         // drop table if exists ns("machine.index.stocks")
-        let (ms, result) = ms.evaluate(&Perform(Infrastructure::Drop(TableTarget {
+        let (machine, result) = machine.evaluate(&Perform(Infrastructure::Drop(TableTarget {
             path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
-            if_exists: true,
         }))).unwrap();
 
         // create table ns("machine.index.stocks") (...)
-        let (ms, result) = ms.evaluate(&Perform(Infrastructure::Create {
+        let (machine, result) = machine.evaluate(&Perform(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
             entity: TableEntity {
                 columns: make_quote_columns(),
@@ -1260,7 +1339,7 @@ mod tests {
                 ],
             },
         });
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Ack);
 
         // decompile back to source code
@@ -1281,8 +1360,8 @@ mod tests {
             from: None,
         }));
 
-        let ms = MachineState::new();
-        let (ms, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new();
+        let (machine, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, TypedValue::TableValue(ModelRowCollection::new(
             make_table_columns(), vec![],
         )))
@@ -1295,12 +1374,12 @@ mod tests {
         let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
         let (df, phys_columns) = create_file_table(ns_path);
 
-        let model = Perform(Infrastructure::Drop(TableTarget { path: Box::new(ns), if_exists: false }));
+        let model = Perform(Infrastructure::Drop(TableTarget { path: Box::new(ns) }));
         assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
 
-        let ms = MachineState::new();
-        let (_, result) = ms.evaluate(&model).unwrap();
-        assert_eq!(result, Boolean(true))
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, Ack)
     }
 
     #[test]
@@ -1322,7 +1401,7 @@ mod tests {
         };
 
         // evaluate the function
-        let (ms, result) = MachineState::new()
+        let (machine, result) = Machine::new()
             .with_variable("n", Int64Value(3))
             .evaluate(&model)
             .unwrap();
@@ -1346,11 +1425,11 @@ mod tests {
         };
 
         // publish the function in scope: fn add(a, b) => a + b
-        let ms = MachineState::new();
-        let (ms, result) = ms.evaluate_scope(&vec![
+        let machine = Machine::new();
+        let (machine, result) = machine.evaluate_scope(&vec![
             SetVariable("add".to_string(), Box::new(Literal(fx.clone())))
         ]).unwrap();
-        assert_eq!(ms.get("add").unwrap(), fx);
+        assert_eq!(machine.get("add").unwrap(), fx);
         assert_eq!(result, TypedValue::Ack);
 
         // execute the function via function call in scope: add(2, 3)
@@ -1361,7 +1440,7 @@ mod tests {
                 Literal(Int64Value(3)),
             ],
         };
-        let (ms, result) = ms
+        let (machine, result) = machine
             .evaluate(&model)
             .unwrap();
         assert_eq!(result, Int64Value(5));
@@ -1373,7 +1452,7 @@ mod tests {
         // create a table with test data
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let ms = MachineState::new()
+        let machine = Machine::new()
             .with_variable("stocks", TableValue(ModelRowCollection::from_rows(vec![
                 make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
                 make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -1394,7 +1473,7 @@ mod tests {
         });
         assert_eq!(model.to_code(), "from stocks where last_sale >= 1 limit 2");
 
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
             make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
@@ -1409,16 +1488,16 @@ mod tests {
         let (df, phys_columns) = create_file_table(ns_path);
 
         // delete some rows
-        let ms = MachineState::new();
-        let code = CompilerState::compile_script(r#"
+        let machine = Machine::new();
+        let code = Compiler::compile_script(r#"
             delete from ns("machine.delete.stocks")
             where last_sale > 1.0
             "#).unwrap();
-        let (_, result) = ms.evaluate(&code).unwrap();
+        let (_, result) = machine.evaluate(&code).unwrap();
         assert_eq!(result, RowsAffected(3));
 
         // verify the remaining rows
-        let rows = df.read_fully().unwrap();
+        let rows = df.read_all_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
@@ -1428,13 +1507,13 @@ mod tests {
     #[test]
     fn test_append_namespace() {
         // create a table with test data
-        let ns_path = "machine.into.stocks";
+        let ns_path = "machine.append.stocks";
         let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
         let (df, phys_columns) = create_file_table(ns_path);
 
         // insert some rows
-        let ms = MachineState::new();
-        let (_, result) = ms.evaluate(&Mutate(Mutation::Append {
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&Mutate(Mutation::Append {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
             source: Box::new(From(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("REX".into()))),
@@ -1445,7 +1524,7 @@ mod tests {
         assert_eq!(result, RowsAffected(1));
 
         // verify the remaining rows
-        let rows = df.read_fully().unwrap();
+        let rows = df.read_all_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -1479,12 +1558,12 @@ mod tests {
         let (df, phys_columns) = create_file_table(ns_path);
 
         // overwrite some rows
-        let ms = MachineState::new();
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, RowsAffected(1));
 
         // verify the remaining rows
-        let rows = df.read_fully().unwrap();
+        let rows = df.read_all_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -1504,18 +1583,18 @@ mod tests {
                                    Box::new(Literal(Int64Value(3))))))
         ];
 
-        let (_ms, result) = MachineState::new().evaluate_scope(&opcodes).unwrap();
+        let (_ms, result) = Machine::new().evaluate_scope(&opcodes).unwrap();
         assert_eq!(result, Float64Value(14.))
     }
 
     #[test]
     fn test_push_all() {
-        let ms = MachineState::new().push_all(vec![
+        let machine = Machine::new().push_all(vec![
             Float32Value(2.), Float64Value(3.),
             Int16Value(4), Int32Value(5),
             Int64Value(6), StringValue("Hello World".into()),
         ]);
-        assert_eq!(ms.stack, vec![
+        assert_eq!(machine.stack, vec![
             Float32Value(2.), Float64Value(3.),
             Int16Value(4), Int32Value(5),
             Int64Value(6), StringValue("Hello World".into()),
@@ -1526,7 +1605,7 @@ mod tests {
     fn test_reverse_from_variable() {
         let model = Inquire(Queryable::Reverse(Box::new(From(Box::new(Variable("stocks".to_string()))))));
         let phys_columns = make_table_columns();
-        let ms = MachineState::new()
+        let machine = Machine::new()
             .with_variable("stocks", TableValue(ModelRowCollection::from_rows(vec![
                 make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
                 make_quote(1, &phys_columns, "GAS.Q", "OTC", 0.2456),
@@ -1534,7 +1613,7 @@ mod tests {
                 make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
                 make_quote(4, &phys_columns, "VAPOR", "NYSE", 0.0289),
             ])));
-        let (ms, value) = ms.evaluate(&model).unwrap();
+        let (machine, value) = machine.evaluate(&model).unwrap();
         assert_eq!(value, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(4, &phys_columns, "VAPOR", "NYSE", 0.0289),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
@@ -1551,8 +1630,8 @@ mod tests {
             create_file_table("machine.select.stocks");
 
         // execute the query
-        let ms = MachineState::new();
-        let (_, result) = ms.evaluate(&Inquire(Queryable::Select {
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&Inquire(Queryable::Select {
             fields: vec![
                 Variable("symbol".into()),
                 Variable("exchange".into()),
@@ -1578,11 +1657,11 @@ mod tests {
     #[test]
     fn test_select_from_variable() {
         let (mrc, phys_columns) = create_memory_table();
-        let ms = MachineState::new()
+        let machine = Machine::new()
             .with_variable("stocks", TableValue(mrc));
 
         // execute the code
-        let (_, result) = ms.evaluate(&Inquire(Queryable::Select {
+        let (_, result) = machine.evaluate(&Inquire(Queryable::Select {
             fields: vec![
                 Variable("symbol".into()),
                 Variable("exchange".into()),
@@ -1604,6 +1683,38 @@ mod tests {
         ])));
     }
 
+    #[test]
+    fn test_system_call() {
+        let model = SystemCall(vec![
+            Literal(StringValue("cat".into())),
+            Literal(StringValue("LICENSE".into())),
+        ]);
+        let machine = Machine::new();
+        let (machine, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, StringValue(r#"MIT License
+
+Copyright (c) 2024 Lawrence Daniels
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"#.into()))
+    }
+
     #[ignore]
     #[test]
     fn test_update_rows_in_memory() {
@@ -1623,14 +1734,14 @@ mod tests {
 
         // perform the update and verify
         let (mrc, phys_columns) = create_memory_table();
-        let ms = MachineState::new().with_variable("stocks", TableValue(mrc));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new().with_variable("stocks", TableValue(mrc));
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, RowsAffected(2));
 
         // retrieve and verify all rows
         let model = From(Box::new(Variable("stocks".into())));
-        let (ms, result) = ms.evaluate(&model).unwrap();
-        assert_eq!(ms.get("stocks").unwrap(), TableValue(ModelRowCollection::from_rows(vec![
+        let (machine, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(machine.get("stocks").unwrap(), TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "OTC_BB", 0.2456),
             make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
@@ -1662,11 +1773,11 @@ mod tests {
         });
 
         // update some rows
-        let (_, delta) = MachineState::new().evaluate(&model).unwrap();
+        let (_, delta) = Machine::new().evaluate(&model).unwrap();
         assert_eq!(delta, RowsAffected(2));
 
         // verify the rows
-        let rows = df.read_fully().unwrap();
+        let rows = df.read_all_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "OTC_BB", 0.2456),
@@ -1684,18 +1795,18 @@ mod tests {
         });
 
         let (mrc, phys_columns) = create_memory_table();
-        let ms = MachineState::new().with_variable("stocks", TableValue(mrc));
-        let (_, result) = ms.evaluate(&model).unwrap();
+        let machine = Machine::new().with_variable("stocks", TableValue(mrc));
+        let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, RowsAffected(1))
     }
 
     #[test]
     fn test_variables() {
-        let ms = MachineState::new()
+        let machine = Machine::new()
             .with_variable("abc", Int32Value(5))
             .with_variable("xyz", Int32Value(58));
-        assert_eq!(ms.get("abc"), Some(Int32Value(5)));
-        assert_eq!(ms.get("xyz"), Some(Int32Value(58)));
+        assert_eq!(machine.get("abc"), Some(Int32Value(5)));
+        assert_eq!(machine.get("xyz"), Some(Int32Value(58)));
     }
 
     #[test]
@@ -1714,9 +1825,9 @@ mod tests {
         };
         assert_eq!(model.to_code(), "while num < 5 do num := num + 1");
 
-        let ms = MachineState::new().with_variable("num", Int64Value(0));
-        let (ms, result) = ms.evaluate(&model).unwrap();
-        assert_eq!(ms.get("num"), Some(Int64Value(5)))
+        let machine = Machine::new().with_variable("num", Int64Value(0));
+        let (machine, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(machine.get("num"), Some(Int64Value(5)))
     }
 
     fn create_memory_table() -> (ModelRowCollection, Vec<TableColumn>) {

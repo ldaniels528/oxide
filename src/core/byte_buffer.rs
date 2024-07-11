@@ -4,7 +4,7 @@
 
 use std::ops::Index;
 
-use shared_lib::{fail, RowJs};
+use shared_lib::{fail, FieldJs, RowJs};
 
 use crate::codec;
 use crate::data_types::*;
@@ -193,7 +193,14 @@ impl ByteBuffer {
 
     pub fn next_rows(&mut self) -> std::io::Result<Vec<Row>> {
         let columns = self.next_columns();
-        let t_columns = TableColumn::from_columns(&columns)?;
+        self.next_rows_with_columns(&columns)
+    }
+
+    pub fn next_rows_with_columns(
+        &mut self,
+        columns: &Vec<ColumnJs>,
+    ) -> std::io::Result<Vec<Row>> {
+        let t_columns = TableColumn::from_columns(columns)?;
         let n_rows = self.next_u64();
         let mut rows = vec![];
         for _ in 0..n_rows {
@@ -225,19 +232,37 @@ impl ByteBuffer {
     pub fn next_string_opt(&mut self) -> Option<String> {
         match self.next_u64() as usize {
             0 => None,
-            n => {
-                let bytes = self.next_bytes(n);
-                Some(String::from_utf8(bytes).unwrap())
-            }
+            n => String::from_utf8(self.next_bytes(n)).ok()
         }
     }
 
     pub fn next_struct(&mut self) -> std::io::Result<RowJs> {
-        todo!()
+        let columns = self.next_columns();
+        self.next_struct_with_columns(&columns)
+    }
+
+    pub fn next_struct_with_columns(
+        &mut self,
+        columns: &Vec<ColumnJs>,
+    ) -> std::io::Result<RowJs> {
+        let fields = columns.iter().map(|column| {
+            let value = TypedValue::Null.to_json(); // TODO decode the value
+            FieldJs::new(column.get_name(), value)
+        }).collect::<Vec<FieldJs>>();
+        Ok(RowJs::new(None, fields))
     }
 
     pub fn next_table(&mut self) -> std::io::Result<ModelRowCollection> {
-        Ok(ModelRowCollection::from_rows(self.next_rows()?))
+        let rows = self.next_rows()?;
+        Ok(ModelRowCollection::from_rows(rows))
+    }
+
+    pub fn next_table_with_columns(
+        &mut self,
+        columns: &Vec<ColumnJs>,
+    ) -> std::io::Result<ModelRowCollection> {
+        let rows = self.next_rows_with_columns(columns)?;
+        Ok(ModelRowCollection::from_rows(rows))
     }
 
     pub fn next_u8(&mut self) -> u8 {
@@ -309,8 +334,9 @@ impl ByteBuffer {
             T_JSON_OBJECT => Ok(JSONObjectValue(self.next_json()?)),
             T_ROWS_AFFECTED => Ok(RowsAffected(self.next_u32() as usize)),
             T_STRING => Ok(StringValue(self.next_string())),
-            T_TABLE_REF => Ok(TableRef(self.next_string())),
+            T_STRUCT => Ok(StructValue(self.next_struct()?)),
             T_TABLE => Ok(TableValue(self.next_table()?)),
+            T_TABLE_REF => Ok(TableRef(self.next_string())),
             T_TUPLE => Ok(TupleValue(self.next_array()?)),
             T_UINT8 => Ok(UInt8Value(self.next_u8())),
             T_UINT16 => Ok(UInt16Value(self.next_u16())),

@@ -11,7 +11,7 @@ use crate::dataframe_config::DataFrameConfig;
 use crate::expression::Expression;
 use crate::fields::Field;
 use crate::file_row_collection::FileRowCollection;
-use crate::machine::MachineState;
+use crate::machine::Machine;
 use crate::namespaces::Namespace;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
@@ -59,17 +59,19 @@ impl DataFrame {
     pub fn append(&mut self, row: &Row) -> std::io::Result<usize> {
         let new_row_id = self.device.len()?;
         self.device.overwrite(new_row_id, &row.with_row_id(new_row_id))
+            .map(|v| v.assume_usize().unwrap_or(0))
     }
 
     /// deletes an existing row by ID from the table
     pub fn delete(&mut self, id: usize) -> std::io::Result<usize> {
         self.device.overwrite_metadata(id, &RowMetadata::new(false))
+            .map(|v| v.assume_usize().unwrap_or(0))
     }
 
     /// deletes rows from the table based on a condition
     pub fn delete_where(
         &mut self,
-        ms: &MachineState,
+        machine: &Machine,
         condition: &Option<Box<Expression>>,
         limit: TypedValue,
     ) -> std::io::Result<usize> {
@@ -78,7 +80,7 @@ impl DataFrame {
             // read an active row
             if let Some(row) = self.read_one(id)? {
                 // if the predicate matches the condition, delete the row.
-                if row.matches(ms, condition) {
+                if row.matches(machine, condition) {
                     deleted += self.delete(id)?;
                 }
             }
@@ -147,12 +149,13 @@ impl DataFrame {
     /// overwrites a specified row by ID
     pub fn overwrite(&mut self, row: Row) -> std::io::Result<usize> {
         self.device.overwrite(row.get_id(), &row)
+            .map(|v| v.assume_usize().unwrap_or(0))
     }
 
     /// overwrites rows that match the supplied criteria
     pub fn overwrite_where(
         &mut self,
-        ms: &MachineState,
+        machine: &Machine,
         fields: &Vec<Expression>,
         values: &Vec<Expression>,
         condition: &Option<Box<Expression>>,
@@ -163,9 +166,9 @@ impl DataFrame {
             // read an active row
             if let Some(row) = self.read_one(id)? {
                 // if the predicate matches the condition, overwrite the row.
-                if row.matches(ms, condition) {
-                    let (ms, my_fields) = ms.with_row(&row).evaluate_atoms(fields)?;
-                    if let (_, TypedValue::Array(my_values)) = ms.evaluate_array(values)? {
+                if row.matches(machine, condition) {
+                    let (machine, my_fields) = machine.with_row(&row).evaluate_atoms(fields)?;
+                    if let (_, TypedValue::Array(my_values)) = machine.evaluate_array(values)? {
                         let new_row = Self::transform_row(row, my_fields, my_values)?;
                         overwritten += self.overwrite(new_row)?;
                     }
@@ -181,8 +184,8 @@ impl DataFrame {
     }
 
     /// reads all rows
-    pub fn read_fully(&self) -> std::io::Result<Vec<Row>> {
-        self.device.read_range(0..self.len()?)
+    pub fn read_all_rows(&self) -> std::io::Result<Vec<Row>> {
+        self.device.read_all_rows()
     }
 
     /// reads a row by ID
@@ -216,7 +219,7 @@ impl DataFrame {
     /// reads all rows matching the supplied condition
     pub fn read_where(
         &self,
-        ms: &MachineState,
+        machine: &Machine,
         condition: &Option<Box<Expression>>,
         limit: TypedValue,
     ) -> std::io::Result<Vec<Row>> {
@@ -225,7 +228,7 @@ impl DataFrame {
             // read an active row
             if let Some(row) = self.read_one(id)? {
                 // if the predicate matches the condition, include the row.
-                if row.matches(ms, condition) { out.push(row); }
+                if row.matches(machine, condition) { out.push(row); }
             }
         }
         Ok(out)
@@ -250,6 +253,7 @@ impl DataFrame {
     /// restores a deleted row to an active state
     pub fn undelete(&mut self, id: usize) -> std::io::Result<usize> {
         self.device.overwrite_metadata(id, &RowMetadata::new(true))
+            .map(|v| v.assume_usize().unwrap_or(0))
     }
 
     /// updates a specified row by ID
@@ -276,7 +280,7 @@ impl DataFrame {
     /// updates rows that match the supplied criteria
     pub fn update_where(
         &mut self,
-        ms: &MachineState,
+        machine: &Machine,
         fields: &Vec<Expression>,
         values: &Vec<Expression>,
         condition: &Option<Box<Expression>>,
@@ -287,9 +291,9 @@ impl DataFrame {
             // read an active row
             if let Some(row) = self.read_one(id)? {
                 // if the predicate matches the condition, update the row.
-                if row.matches(ms, condition) {
-                    let (ms, field_names) = ms.with_row(&row).evaluate_atoms(fields)?;
-                    if let (_, TypedValue::Array(field_values)) = ms.evaluate_array(values)? {
+                if row.matches(machine, condition) {
+                    let (machine, field_names) = machine.with_row(&row).evaluate_atoms(fields)?;
+                    if let (_, TypedValue::Array(field_values)) = machine.evaluate_array(values)? {
                         let new_row = Self::transform_row(row.clone(), field_names, field_values)?;
                         updated += self.update(new_row)?;
                     }
@@ -356,7 +360,7 @@ mod tests {
     use crate::data_types::DataType::{Float64Type, StringType};
     use crate::dataframes::DataFrame;
     use crate::expression::Expression::{Equal, Literal, Variable};
-    use crate::machine::MachineState;
+    use crate::machine::Machine;
     use crate::namespaces::Namespace;
     use crate::row;
     use crate::table_columns::TableColumn;
@@ -376,7 +380,7 @@ mod tests {
         // concatenate the dataframes
         df0 += df1;
         // re-read the rows
-        let rows = df0.read_fully().unwrap();
+        let rows = df0.read_all_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(0, &columns, "RACE", "NASD", 123.45),
             make_quote(1, &columns, "BEER", "AMEX", 357.12),
@@ -411,7 +415,7 @@ mod tests {
         assert_eq!(1, df.append(&make_quote(0, &columns, "BEEF", "CAKE", 100.0)).unwrap());
 
         // verify the rows
-        let rows = df.read_fully().unwrap();
+        let rows = df.read_all_rows().unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0], make_quote(0, &columns, "RICE", "PIPE", 42.11));
         assert_eq!(rows[1], make_quote(1, &columns, "BEEF", "CAKE", 100.0));
@@ -432,7 +436,7 @@ mod tests {
         assert_eq!(df.delete(1).unwrap(), 1);
 
         // verify the rows
-        let rows = df.read_fully().unwrap();
+        let rows = df.read_all_rows().unwrap();
         assert_eq!(rows, vec![
             row!(0, phys_columns, vec![
                 StringValue("UNO".into()), StringValue("AMEX".into()), Float64Value(11.77),
@@ -539,7 +543,7 @@ mod tests {
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "AWAY", "AMEX", 123.45)).unwrap(), 1);
 
         // updates rows where ...
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let fields = vec![
             Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into()),
         ];
@@ -550,10 +554,10 @@ mod tests {
             Box::new(Variable("exchange".into())),
             Box::new(Literal(StringValue("NYSE".into()))),
         )));
-        assert_eq!(df.overwrite_where(&ms, &fields, &values, &condition, Int64Value(2)).unwrap(), 2);
+        assert_eq!(df.overwrite_where(&machine, &fields, &values, &condition, Int64Value(2)).unwrap(), 2);
 
         // verify the rows
-        assert_eq!(df.read_fully().unwrap(), vec![
+        assert_eq!(df.read_all_rows().unwrap(), vec![
             make_quote(0, &make_table_columns(), "XXX", "YYY", 0.),
             make_quote(1, &make_table_columns(), "XXX", "YYY", 0.),
             make_quote(2, &make_table_columns(), "FLY", "AMEX", 51.11),
@@ -657,14 +661,14 @@ mod tests {
         ]);
 
         // verify the row was deleted
-        let rows = df.read_fully().unwrap();
+        let rows = df.read_all_rows().unwrap();
         assert_eq!(rows, vec![row_0.clone(), row_2.clone()]);
 
         // restore the middle row
         assert_eq!(df.undelete(1).unwrap(), 1);
 
         // verify the row was restored
-        let rows = df.read_fully().unwrap();
+        let rows = df.read_all_rows().unwrap();
         assert_eq!(rows, vec![row_0.clone(), row_1.clone(), row_2.clone()]);
     }
 
@@ -704,17 +708,17 @@ mod tests {
         assert_eq!(df.append(&make_quote(0, &make_table_columns(), "AWAY", "AMEX", 123.45)).unwrap(), 1);
 
         // updates rows where ...
-        let ms = MachineState::new();
+        let machine = Machine::new();
         let fields = vec![Variable("last_sale".into())];
         let values = vec![Literal(Float64Value(11.1111))];
         let condition = Some(Box::new(Equal(
             Box::new(Variable("exchange".into())),
             Box::new(Literal(StringValue("NYSE".into()))),
         )));
-        assert_eq!(df.update_where(&ms, &fields, &values, &condition, Int64Value(2)).unwrap(), 2);
+        assert_eq!(df.update_where(&machine, &fields, &values, &condition, Int64Value(2)).unwrap(), 2);
 
         // verify the rows
-        assert_eq!(df.read_fully().unwrap(), vec![
+        assert_eq!(df.read_all_rows().unwrap(), vec![
             make_quote(0, &make_table_columns(), "WE", "NYSE", 11.1111),
             make_quote(1, &make_table_columns(), "CAN", "NYSE", 11.1111),
             make_quote(2, &make_table_columns(), "FLY", "AMEX", 51.11),

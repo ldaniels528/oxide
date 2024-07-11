@@ -78,16 +78,16 @@ impl RowCollection for FileRowCollection {
         Ok((self.file.metadata()?.len() as usize) / self.record_size)
     }
 
-    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<usize> {
+    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<TypedValue> {
         let offset = self.to_row_offset(id);
         let _ = &self.file.write_at(&row.encode(), offset)?;
-        Ok(1)
+        Ok(TypedValue::Ack)
     }
 
-    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<usize> {
+    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<TypedValue> {
         let offset = self.to_row_offset(id);
         let _ = &self.file.write_at(&[metadata.encode()], offset)?;
-        Ok(1)
+        Ok(TypedValue::Ack)
     }
 
     fn read(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
@@ -117,11 +117,11 @@ impl RowCollection for FileRowCollection {
         Ok(rows)
     }
 
-    fn resize(&mut self, new_size: usize) -> std::io::Result<()> {
+    fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
         let new_length = new_size as u64 * self.record_size as u64;
         // modify the file
         self.file.set_len(new_length)?;
-        Ok(())
+        Ok(TypedValue::Ack)
     }
 }
 
