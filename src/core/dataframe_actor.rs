@@ -30,7 +30,7 @@ impl DataframeActor {
     }
 
     fn append_row(&mut self, ns: Namespace, row: Row) -> std::io::Result<usize> {
-        self.get_or_load_dataframe(ns)?.append(&row)
+        self.get_or_load_dataframe(ns)?.append(row)
     }
 
     fn create_table(&mut self, ns: Namespace, cfg: DataFrameConfig) -> std::io::Result<&mut DataFrame> {

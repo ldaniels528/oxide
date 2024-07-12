@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use actix_web::web::to;
 use crossterm::terminal::window_size;
-use log::{error, info};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
 use shared_lib::{cnv_error, fail};
@@ -101,10 +101,10 @@ impl Machine {
         use TypedValue::*;
         match table {
             TableValue(mrc) => {
-                let mut df = DataFrame::from_row_collection(Namespace::temp(), Box::new(mrc));
+                let mut df = DataFrame::from_row_collection(Box::new(mrc));
                 f(machine, &mut df, fields, values, condition, limit)
             }
-            TableRef(path) => {
+            TableNs(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let mut df = DataFrame::load(ns)?;
                 f(machine, &mut df, fields, values, condition, limit)
@@ -142,6 +142,7 @@ impl Machine {
         match expression {
             And(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
+            ArrayIndex(a, b) => self.evaluate_array_index(a, b),
             ArrayLiteral(items) => self.evaluate_array(items),
             AsValue(name, expr) => {
                 let (machine, tv) = self.evaluate(expr)?;
@@ -238,7 +239,36 @@ impl Machine {
         }
     }
 
-    pub fn evaluate_infrastructure(&self, expression: &Infrastructure) -> std::io::Result<(Self, TypedValue)> {
+    pub fn evaluate_array_index(
+        &self,
+        array_expr: &Expression,
+        index_expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let machine = self.clone();
+        match machine.evaluate(array_expr) {
+            Ok((machine, Array(items))) => {
+                let (machine, value) = match machine.evaluate(index_expr) {
+                    Ok((machine, index)) => {
+                        let idx = index.assume_usize().unwrap_or(0);
+                        let value = if idx < items.len() { items[idx].clone() } else { Undefined };
+                        //println!("evaluate_array_index: value => {}", value);
+                        (machine, value)
+                    }
+                    Err(err) => (machine, ErrorValue(err.to_string()))
+                };
+                Ok((machine, value))
+            }
+            Ok((machine, other)) =>
+                Ok((machine, ErrorValue(format!("Type mismatch: array expected near {}", other)))),
+            Err(err) =>
+                Ok((machine, ErrorValue(err.to_string())))
+        }
+    }
+
+    pub fn evaluate_infrastructure(
+        &self,
+        expression: &Infrastructure,
+    ) -> std::io::Result<(Self, TypedValue)> {
         use Infrastructure::*;
         match expression {
             Create { path, entity: IndexEntity { columns } } =>
@@ -276,7 +306,7 @@ impl Machine {
                 self.perform_table_row_append(path, source),
             Delete { path, condition, limit } =>
                 self.perform_table_row_delete(path, condition, limit),
-            IntoTable(source, target) =>
+            IntoNs(source, target) =>
                 self.perform_table_into(target, source),
             Overwrite { path, source, condition, limit } =>
                 self.perform_table_row_overwrite(path, source, condition, limit),
@@ -288,6 +318,8 @@ impl Machine {
                         machine.perform_table_row_resize(path, limit)
                     }
                 }
+            Undelete { path, condition, limit } =>
+                self.perform_table_row_undelete(path, condition, limit),
             Update { path, source, condition, limit } =>
                 self.perform_table_row_update(path, source, condition, limit),
         }
@@ -374,7 +406,7 @@ impl Machine {
         info!("{}", expr.to_code());
         let (machine, value) = self.evaluate(expr)?;
         match value {
-            v if v.is_successful_ack() => Ok((machine, v.clone())),
+            v if v.is_ok() => Ok((machine, v.clone())),
             v =>
                 Ok((machine, ErrorValue(format!("Expected true, Table(..) or RowsAffected(_ >= 1), but got {}", &v))))
         }
@@ -387,7 +419,7 @@ impl Machine {
         info!("{}", expr.to_code());
         let (machine, value) = self.evaluate(expr)?;
         match value {
-            v if v.is_successful_ack() =>
+            v if v.is_ok() =>
                 Ok((machine, ErrorValue(format!("Expected a non-success value, but got {}", &v)))),
             v => Ok((machine, v))
         }
@@ -454,17 +486,12 @@ impl Machine {
         use TypedValue::*;
         let ms0 = self.clone();
         let (machine, result) = ms0.evaluate(condition)?;
-        match result {
-            Ack => Ok((ms0, machine.evaluate(a)?.1)),
-            Boolean(is_true) =>
-                if is_true {
-                    Ok((ms0, machine.evaluate(a)?.1))
-                } else if let Some(expr) = b {
-                    Ok((ms0, machine.evaluate(expr)?.1))
-                } else { Ok((ms0, Undefined)) },
-            Null | Undefined => Ok((machine, result)),
-            other =>
-                Ok((ms0, Self::error_unexpected("Boolean", &other)))
+        if result.is_ok() {
+            machine.evaluate(a)
+        } else if let Some(b) = b {
+            machine.evaluate(b)
+        } else {
+            Ok((ms0, Undefined))
         }
     }
 
@@ -484,7 +511,7 @@ impl Machine {
             machine.evaluate(&opcode)
         } else {
             Ok((machine, TypedValue::ErrorValue(format!("Type mismatch - expected String, got {}",
-                                                   path_value.get_type_name()))))
+                                                        path_value.get_type_name()))))
         }
     }
 
@@ -567,15 +594,18 @@ impl Machine {
         code: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         let mut machine = self.clone();
-        let mut n = 0;
-        while let Ok((ms1, Ack | Boolean(true))) = machine.evaluate(condition) {
-            println!("BEFORE {} - {:?}", n, ms1);
-            let (ms2, _) = ms1.evaluate(code)?;
-            println!("AFTER {} - {:?}", n, ms2);
-            machine = ms2;
-            n = n + 1;
+        let mut is_looping = true;
+        let mut outcome = Undefined;
+        while is_looping {
+            let (_, result) = machine.evaluate(condition)?;
+            is_looping = result.is_true();
+            if is_looping {
+                let (m, result) = machine.evaluate(code)?;
+                machine = m;
+                outcome = result;
+            }
         }
-        Ok((machine, Ack))
+        Ok((machine, outcome))
     }
 
     fn perform_table_create_index(
@@ -584,11 +614,11 @@ impl Machine {
         columns: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, result) = self.evaluate(index)?;
-        match result.clone() {
+        match result {
             Null | Undefined => Ok((machine, result)),
-            TableValue(mrc) =>
-                Ok((machine, ErrorValue("Memory collections are not yet support indexes".to_string()))),
-            TableRef(path) => {
+            TableValue(_mrc) =>
+                Ok((machine, ErrorValue("Memory collections do not yet support indexes".to_string()))),
+            TableNs(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let (machine, columns) = self.evaluate_atoms(columns)?;
                 let config = DataFrameConfig::load(&ns)?;
@@ -616,14 +646,16 @@ impl Machine {
         let (machine, result) = self.evaluate(table)?;
         match result.clone() {
             Null | Undefined => Ok((machine, result)),
-            TableValue(mrc) => todo!(),
-            TableRef(path) => {
+            TableValue(_mrc) =>
+                Ok((machine, ErrorValue("Memory collections do not 'create' keyword".to_string()))),
+            TableNs(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let config = DataFrameConfig::new(columns.clone(), vec![], vec![]);
                 DataFrame::create(ns, config)?;
                 Ok((machine, Ack))
             }
-            x => fail(format!("Type mismatch: expected an iterable near {}", x))
+            x =>
+                Ok((machine, ErrorValue(format!("Type mismatch: expected an iterable near {}", x))))
         }
     }
 
@@ -647,7 +679,7 @@ impl Machine {
     fn perform_table_drop(&self, table: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (machine, table) = self.evaluate(table)?;
         match table {
-            TableRef(path) => {
+            TableNs(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let result = fs::remove_file(ns.get_table_file_path());
                 Ok((machine, if result.is_ok() { Ack } else { Boolean(false) }))
@@ -667,21 +699,21 @@ impl Machine {
                 self.extract_rows_from_query(source, table)?,
             Literal(TableValue(mrc)) =>
                 (machine, mrc.get_rows()),
-            Literal(TableRef(name)) => {
+            Literal(TableNs(name)) => {
                 let ns = Namespace::parse(name.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
                 (machine, frc.read_all_rows()?)
             }
             Perform(Declare(TableEntity { columns, from })) =>
-                self.extract_rows_from_table_declaration(table, from, columns)?,
-            z =>
-                return Ok((machine, Self::error_expr(format!("A queryable was expected near {}", z.to_code()), source)))
+                machine.extract_rows_from_table_declaration(table, from, columns)?,
+            source =>
+                self.extract_rows_from_query(source, table)?,
         };
 
         // write the rows to the target
         let mut writable = machine.expect_row_collection(table)?;
         let inserted = machine.write_rows(&mut writable, rows)?;
-        Ok((machine, RowsAffected(inserted)))
+        Ok((machine, if inserted == 1 { Ack } else { RowsAffected(inserted) }))
     }
 
     fn extract_rows_from_table_declaration(
@@ -724,9 +756,9 @@ impl Machine {
     fn perform_table_ns(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (machine, result) = self.evaluate(expr)?;
         let result = match result {
-            StringValue(path) => TableRef(path),
-            TableRef(path) => TableRef(path),
-            x => Self::error_unexpected("TableRef", &x),
+            StringValue(path) => TableNs(path),
+            TableNs(path) => TableNs(path),
+            x => Self::error_unexpected("Table reference", &x),
         };
         Ok((machine, result))
     }
@@ -775,7 +807,7 @@ impl Machine {
         let (machine, limit) = Self::expand(self.clone(), limit)?;
         let (machine, result) = machine.evaluate(from)?;
         Self::orchestrate_io(machine, result, &vec![], &vec![], condition, limit, |machine, df, _fields, _values, condition, limit| {
-            let deleted = df.delete_where(&machine, &condition, limit).unwrap();
+            let deleted = df.delete_where(&machine, &condition, limit).ok().unwrap_or(0);
             Ok((machine, RowsAffected(deleted)))
         })
     }
@@ -791,47 +823,8 @@ impl Machine {
         let (machine, tv_table) = machine.evaluate(table)?;
         let (fields, values) = self.expect_via(&table, &source)?;
         Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
-            let overwritten = df.overwrite_where(&machine, fields, values, condition, limit).unwrap();
+            let overwritten = df.overwrite_where(&machine, fields, values, condition, limit).ok().unwrap_or(0);
             Ok((machine, RowsAffected(overwritten)))
-        })
-    }
-
-    fn perform_table_row_selection(
-        &self,
-        fields: &Vec<Expression>,
-        from: &Option<Box<Expression>>,
-        condition: &Option<Box<Expression>>,
-        _group_by: &Option<Vec<Expression>>,
-        _having: &Option<Box<Expression>>,
-        _order_by: &Option<Vec<Expression>>,
-        limit: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, limit) = Self::expand(self.clone(), limit)?;
-        match from {
-            None => machine.evaluate_array(fields),
-            Some(source) => {
-                let (machine, table) = machine.evaluate(source)?;
-                Self::orchestrate_io(machine, table, &vec![], &vec![], condition, limit, |machine, df, _, _, condition, limit| {
-                    let rows = df.read_where(&machine, condition, limit)?;
-                    Ok((machine, TableValue(ModelRowCollection::from_rows(rows))))
-                })
-            }
-        }
-    }
-
-    fn perform_table_row_update(
-        &self,
-        table: &Expression,
-        source: &Expression,
-        condition: &Option<Box<Expression>>,
-        limit: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, limit) = Self::expand(self.clone(), limit)?;
-        let (machine, tv_table) = machine.evaluate(table)?;
-        let (fields, values) = self.expect_via(&table, &source)?;
-        Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
-            let modified = df.update_where(&machine, fields, values, condition, limit).unwrap();
-            Ok((machine, RowsAffected(modified)))
         })
     }
 
@@ -858,7 +851,7 @@ impl Machine {
                 let mut cursor = Cursor::filter(Box::new(mrc), condition.clone());
                 Ok((machine, TableValue(ModelRowCollection::from_rows(cursor.take(limit)?))))
             }
-            TableRef(name) => {
+            TableNs(name) => {
                 let ns = Namespace::parse(name.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
                 let mut cursor = Cursor::filter(Box::new(frc), condition.clone());
@@ -881,6 +874,62 @@ impl Machine {
         Ok((machine, result))
     }
 
+
+    fn perform_table_row_selection(
+        &self,
+        fields: &Vec<Expression>,
+        from: &Option<Box<Expression>>,
+        condition: &Option<Box<Expression>>,
+        _group_by: &Option<Vec<Expression>>,
+        _having: &Option<Box<Expression>>,
+        _order_by: &Option<Vec<Expression>>,
+        limit: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, limit) = Self::expand(self.clone(), limit)?;
+        match from {
+            None => machine.evaluate_array(fields),
+            Some(source) => {
+                let (machine, table) = machine.evaluate(source)?;
+                Self::orchestrate_io(machine, table, &vec![], &vec![], condition, limit, |machine, df, _, _, condition, limit| {
+                    let rows = df.read_where(&machine, condition, limit)?;
+                    Ok((machine, TableValue(ModelRowCollection::from_rows(rows))))
+                })
+            }
+        }
+    }
+
+    fn perform_table_row_undelete(
+        &self,
+        from: &Expression,
+        condition: &Option<Box<Expression>>,
+        limit: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, limit) = Self::expand(self.clone(), limit)?;
+        let (machine, result) = machine.evaluate(from)?;
+        Self::orchestrate_io(machine, result, &vec![], &vec![], condition, limit, |machine, df, _fields, _values, condition, limit| {
+            match df.undelete_where(&machine, &condition, limit) {
+                Ok(restored) => Ok((machine, RowsAffected(restored))),
+                Err(err) => Ok((machine, ErrorValue(err.to_string()))),
+            }
+        })
+    }
+
+    fn perform_table_row_update(
+        &self,
+        table: &Expression,
+        source: &Expression,
+        condition: &Option<Box<Expression>>,
+        limit: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, limit) = Self::expand(self.clone(), limit)?;
+        let (machine, tv_table) = machine.evaluate(table)?;
+        let (fields, values) = self.expect_via(&table, &source)?;
+        Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
+            let modified = df.update_where(&machine, fields, values, condition, limit).ok().unwrap_or(0);
+            Ok((machine, RowsAffected(modified)))
+        })
+    }
+
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
     pub fn evaluate_scope(&self, ops: &Vec<Expression>) -> std::io::Result<(Self, TypedValue)> {
         Ok(ops.iter().fold((self.clone(), Undefined),
@@ -896,7 +945,7 @@ impl Machine {
         f: fn(Box<dyn RowCollection>) -> std::io::Result<A>,
     ) -> std::io::Result<A> {
         match table {
-            TableRef(namespace) => {
+            TableNs(namespace) => {
                 let ns = Namespace::parse(namespace.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
                 f(Box::new(frc))
@@ -913,17 +962,12 @@ impl Machine {
         f: fn(DataFrame) -> std::io::Result<A>,
     ) -> std::io::Result<A> {
         match table {
-            TableRef(namespace) => {
+            TableNs(namespace) => {
                 let ns = Namespace::parse(namespace.as_str())?;
                 f(DataFrame::load(ns)?)
             }
             TableValue(mrc) =>
-                f(DataFrame::new(
-                    Namespace::new("_", "_", "_"),
-                    mrc.get_columns().clone(),
-                    Box::new(mrc.clone()),
-                )),
-
+                f(DataFrame::new(Box::new(mrc.clone()))),
             z =>
                 return fail_value(format!("{} is not a table", z), z)
         }
@@ -974,28 +1018,22 @@ impl Machine {
     }
 
     fn expect_namespace(&self, table: &Expression) -> std::io::Result<Namespace> {
-        match table {
-            Ns(path) => {
-                let path = self.expect_string(path)?;
-                Namespace::parse(path.as_str())
-            }
-            e => fail_expr("A writable was expected".to_string(), e)
+        let (_, v_table) = self.evaluate(table)?;
+        match v_table {
+            TableNs(path) => Namespace::parse(path.as_str()),
+            x => fail_unexpected("Table namespace", &x)
         }
     }
 
-    fn expect_row_collection(&self, table: &Expression) -> std::io::Result<Box<dyn RowCollection>> {
-        match table {
-            Ns(path) =>
-                Self::load_row_collection(self.expect_string(path)?),
-            table => {
-                let (_, table) = self.evaluate(table)?;
-                match table {
-                    TableRef(path) => Self::load_row_collection(path),
-                    TableValue(mrc) => Ok(Box::new(mrc)),
-                    x => fail_unexpected("TableRef", &x)
-                }
-            }
-            e => fail_expr("A writable was expected".to_string(), e)
+    fn expect_row_collection(
+        &self,
+        table: &Expression,
+    ) -> std::io::Result<Box<dyn RowCollection>> {
+        let (_, v_table) = self.evaluate(table)?;
+        match v_table {
+            TableNs(path) => Self::load_row_collection(path),
+            TableValue(mrc) => Ok(Box::new(mrc)),
+            x => fail_unexpected("Table reference", &x)
         }
     }
 
@@ -1016,7 +1054,7 @@ impl Machine {
                 Ok(rows)
             }
             JSONObjectValue(tuples) => Ok(vec![Row::from_tuples(0, columns, &tuples)]),
-            TableRef(path) => {
+            TableNs(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
                 frc.read_all_rows()
@@ -1153,7 +1191,7 @@ impl Machine {
         let mut written = 0;
         for row in rows {
             let new_id = writable.len()?;
-            if writable.overwrite(new_id, &row.with_row_id(new_id))? == TypedValue::Ack {
+            if writable.overwrite_row(new_id, row.with_row_id(new_id))?.is_ok() {
                 written += 1
             }
         }
@@ -1173,7 +1211,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_array() {
+    fn test_array_declaration() {
         let models = vec![Literal(Float64Value(3.25)), TRUE, FALSE, NULL, UNDEFINED];
         assert_eq!(models.iter().map(|e| e.to_code()).collect::<Vec<String>>(), vec![
             "3.25", "true", "false", "null", "undefined",
@@ -1184,7 +1222,23 @@ mod tests {
     }
 
     #[test]
-    fn test_as() {
+    fn test_array_indexing() {
+        let model = ArrayIndex(
+            Box::new(ArrayLiteral(vec![
+                Literal(Int64Value(1)), Literal(Int64Value(4)), Literal(Int64Value(2)),
+                Literal(Int64Value(8)), Literal(Int64Value(5)), Literal(Int64Value(7)),
+            ])),
+            Box::new(Literal(Int64Value(5))),
+        );
+        assert_eq!(model.to_code(), "[1, 4, 2, 8, 5, 7][5]");
+
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, Int64Value(7))
+    }
+
+    #[test]
+    fn test_aliases() {
         let model = AsValue(
             "symbol".to_string(),
             Box::new(Literal(StringValue("ABC".into()))),
@@ -1246,7 +1300,7 @@ mod tests {
     }
 
     #[test]
-    fn test_if_1() {
+    fn test_if_else_flow_1() {
         let model = If {
             condition: Box::new(GreaterThan(
                 Box::new(Variable("num".into())),
@@ -1267,7 +1321,7 @@ mod tests {
     }
 
     #[test]
-    fn test_if_2() {
+    fn test_if_else_flow_2() {
         let model = If {
             condition: Box::new(LessThan(
                 Box::new(Variable("num".into())),
@@ -1501,6 +1555,47 @@ mod tests {
         assert_eq!(rows, vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+        ]);
+    }
+
+    #[test]
+    fn test_undelete_rows_from_namespace() {
+        // create a table with test data
+        let ns_path = "machine.undelete.stocks";
+        let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
+        let (df, phys_columns) = create_file_table(ns_path);
+
+        // delete some rows
+        let machine = Machine::new();
+        let code = Compiler::compile_script(r#"
+            stocks := ns("machine.undelete.stocks")
+            delete from stocks where last_sale > 1.0
+            "#).unwrap();
+        let (machine, result) = machine.evaluate(&code).unwrap();
+        assert_eq!(result, RowsAffected(3));
+
+        // verify the remaining rows
+        let rows = df.read_all_rows().unwrap();
+        assert_eq!(rows, vec![
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+        ]);
+
+        // undelete the rows
+        let code = Compiler::compile_script(r#"
+            undelete from stocks where last_sale > 1.0
+            "#).unwrap();
+        let (_, result) = machine.evaluate(&code).unwrap();
+        assert_eq!(result, RowsAffected(3));
+
+        // verify the remaining rows
+        let rows = df.read_all_rows().unwrap();
+        assert_eq!(rows, vec![
+            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+            make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
         ]);
     }
 
@@ -1823,7 +1918,7 @@ SOFTWARE.
                 Box::new(Literal(Int64Value(1))),
             )))),
         };
-        assert_eq!(model.to_code(), "while num < 5 do num := num + 1");
+        assert_eq!(model.to_code(), "while num < 5 num := num + 1");
 
         let machine = Machine::new().with_variable("num", Int64Value(0));
         let (machine, result) = machine.evaluate(&model).unwrap();
@@ -1851,11 +1946,11 @@ SOFTWARE.
         }
 
         let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
-        assert_eq!(1, df.append(&make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
-        assert_eq!(1, df.append(&make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
-        assert_eq!(1, df.append(&make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
-        assert_eq!(1, df.append(&make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
-        assert_eq!(1, df.append(&make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)).unwrap());
+        assert_eq!(1, df.append(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
+        assert_eq!(1, df.append(make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
+        assert_eq!(1, df.append(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
+        assert_eq!(1, df.append(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
+        assert_eq!(1, df.append(make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)).unwrap());
         (df, phys_columns)
     }
 }

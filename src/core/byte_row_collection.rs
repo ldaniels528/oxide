@@ -87,7 +87,7 @@ impl RowCollection for ByteRowCollection {
 
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
 
-    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<TypedValue> {
+    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
         // resize the rows to prevent overflow
         if self.row_data.len() <= id {
             self.row_data.resize(id + 1, vec![]);
@@ -101,7 +101,7 @@ impl RowCollection for ByteRowCollection {
         Ok(TypedValue::Ack)
     }
 
-    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<TypedValue> {
+    fn overwrite_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
         self.row_data[id][0] = metadata.encode();
         Ok(TypedValue::Ack)
     }

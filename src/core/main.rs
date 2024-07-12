@@ -13,10 +13,7 @@ use actix_session::storage::CookieSessionStore;
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use actix_web::cookie::Key;
 use actix_web_actors::ws;
-use crossterm::event::{Event, KeyEvent, poll, read};
-use crossterm::terminal::enable_raw_mode;
 use log::{error, info, LevelFilter};
-use serde_json::Value;
 
 use rest_server::*;
 use shared_lib::{cnv_error, fail, get_host_and_port, RowJs};

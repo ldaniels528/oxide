@@ -120,7 +120,7 @@ impl REPLState {
             Field::new(TypedValue::StringValue(clean_input)),
         ]);
         // write the row
-        mrc.overwrite(id, &row)?;
+        mrc.overwrite_row(id, row)?;
         // replace the history table in memory
         self.interpreter.with_variable(HISTORY_TABLE_NAME, TypedValue::TableValue(mrc));
         self.counter += 1;

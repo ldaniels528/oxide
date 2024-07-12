@@ -81,6 +81,30 @@ impl Token {
         text == contents.as_str() || contents.contains(text)
     }
 
+    /// Returns the column number of the [Token]
+    pub fn get_column_number(&self) -> usize {
+        match &self {
+            Atom { column_number, .. }
+            | Backticks { column_number, .. }
+            | DoubleQuoted { column_number, .. }
+            | Numeric { column_number, .. }
+            | Operator { column_number, .. }
+            | SingleQuoted { column_number, .. } => *column_number
+        }
+    }
+
+    /// Returns the line number of the [Token]
+    pub fn get_line_number(&self) -> usize {
+        match &self {
+            Atom { line_number, .. }
+            | Backticks { line_number, .. }
+            | DoubleQuoted { line_number, .. }
+            | Numeric { line_number, .. }
+            | Operator { line_number, .. }
+            | SingleQuoted { line_number, .. } => *line_number
+        }
+    }
+
     /// Returns the "raw" value of the [Token]
     pub fn get_raw_value(&self) -> String {
         (match &self {
@@ -171,7 +195,7 @@ impl Token {
                 let s: String = text.chars().filter(|c| *c != '_').collect();
                 match s.parse::<A>() {
                     Ok(number) => Ok(number),
-                    Err(_) => fail(format!("Could not convert '{}' to numeric", s))
+                    Err(_) => fail(format!("Cannot convert '{}' to numeric", s))
                 }
             }
             t => fail(format!("Cannot convert {} to numeric", t.get_raw_value()))

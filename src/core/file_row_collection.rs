@@ -78,13 +78,13 @@ impl RowCollection for FileRowCollection {
         Ok((self.file.metadata()?.len() as usize) / self.record_size)
     }
 
-    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<TypedValue> {
+    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
         let offset = self.to_row_offset(id);
         let _ = &self.file.write_at(&row.encode(), offset)?;
         Ok(TypedValue::Ack)
     }
 
-    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<TypedValue> {
+    fn overwrite_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
         let offset = self.to_row_offset(id);
         let _ = &self.file.write_at(&[metadata.encode()], offset)?;
         Ok(TypedValue::Ack)

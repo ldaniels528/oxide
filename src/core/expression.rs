@@ -21,8 +21,9 @@ pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
 
 // constants
 pub const E_AND: u8 = 0;
-pub const E_APPEND: u8 = 3;
-pub const E_ARRAY_LIT: u8 = 5;
+pub const E_APPEND: u8 = 2;
+pub const E_ARRAY_IDX: u8 = 4;
+pub const E_ARRAY_LIT: u8 = 6;
 pub const E_AS_VALUE: u8 = 10;
 pub const E_BETWEEN: u8 = 15;
 pub const E_BETWIXT: u8 = 20;
@@ -47,7 +48,7 @@ pub const E_GREATER_THAN: u8 = 90;
 pub const E_GREATER_OR_EQUAL: u8 = 95;
 pub const E_IF: u8 = 100;
 pub const E_INCLUDE: u8 = 105;
-pub const E_INTO_TABLE: u8 = 110;
+pub const E_INTO_NS: u8 = 110;
 pub const E_JSON_LITERAL: u8 = 115;
 pub const E_LESS_THAN: u8 = 120;
 pub const E_LESS_OR_EQUAL: u8 = 125;
@@ -79,6 +80,7 @@ pub const E_STDERR: u8 = 233;
 pub const E_STDOUT: u8 = 235;
 pub const E_TRUNCATE: u8 = 237;
 pub const E_TUPLE: u8 = 239;
+pub const E_UNDELETE: u8 = 240;
 pub const E_UPDATE: u8 = 241;
 pub const E_VAR_GET: u8 = 243;
 pub const E_VAR_SET: u8 = 245;
@@ -113,6 +115,7 @@ pub enum MutateTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Expression {
     And(Box<Expression>, Box<Expression>),
+    ArrayIndex(Box<Expression>, Box<Expression>),
     ArrayLiteral(Vec<Expression>),
     AsValue(String, Box<Expression>),
     Between(Box<Expression>, Box<Expression>, Box<Expression>),
@@ -234,7 +237,7 @@ pub enum Mutation {
         condition: Option<Box<Expression>>,
         limit: Option<Box<Expression>>,
     },
-    IntoTable(Box<Expression>, Box<Expression>),
+    IntoNs(Box<Expression>, Box<Expression>),
     Overwrite {
         path: Box<Expression>,
         source: Box<Expression>,
@@ -243,6 +246,11 @@ pub enum Mutation {
     },
     Truncate {
         path: Box<Expression>,
+        limit: Option<Box<Expression>>,
+    },
+    Undelete {
+        path: Box<Expression>,
+        condition: Option<Box<Expression>>,
         limit: Option<Box<Expression>>,
     },
     Update {
@@ -275,6 +283,8 @@ pub fn decompile(expr: &Expression) -> String {
     match expr {
         And(a, b) =>
             format!("{} && {}", decompile(a), decompile(b)),
+        ArrayIndex(a, b) =>
+            format!("{}[{}]", decompile(a), decompile(b)),
         ArrayLiteral(items) =>
             format!("[{}]", items.iter().map(|i| decompile(i)).collect::<Vec<String>>().join(", ")),
         AsValue(name, expr) =>
@@ -370,7 +380,7 @@ pub fn decompile(expr: &Expression) -> String {
         Variable(name) => name.to_string(),
         Via(expr) => format!("via {}", decompile(expr)),
         While { condition, code } =>
-            format!("while {} do {}", decompile(condition), decompile(code)),
+            format!("while {} {}", decompile(condition), decompile(code)),
     }
 }
 
@@ -406,8 +416,8 @@ pub fn decompile_modification(expr: &Mutation) -> String {
             format!("append {} {}", decompile(path), decompile(source)),
         Mutation::Delete { path, condition, limit } =>
             format!("delete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
-        Mutation::IntoTable(a, b) =>
-            format!("{} into {}", decompile(a), decompile(b)),
+        Mutation::IntoNs(a, b) =>
+            format!("{} |> {}", decompile(a), decompile(b)),
         Mutation::Overwrite { path, source, condition, limit } =>
             format!("overwrite {} {}{}{}", decompile(path), decompile(source),
                     condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
@@ -415,6 +425,8 @@ pub fn decompile_modification(expr: &Mutation) -> String {
             ),
         Mutation::Truncate { path, limit } =>
             format!("truncate {}{}", decompile(path), decompile_limit(limit)),
+        Mutation::Undelete { path, condition, limit } =>
+            format!("undelete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
         Mutation::Update { path, source, condition, limit } =>
             format!("update {} {} where {}{}", decompile(path), decompile(source), decompile_opt(condition), decompile_opt(limit)),
     }

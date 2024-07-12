@@ -4,10 +4,11 @@
 
 use crate::tokens::Token;
 
-const COMPOUND_OPERATORS: [&str; 22] = [
+const COMPOUND_OPERATORS: [&str; 23] = [
     "&&", "**", "||", "::", "..", "==", ">>", "<<",
     "->", "<-", ">=", "<=", "=>",
     "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
+    "|>",
 ];
 
 const COMPOUND_SYMBOLS: [&str; 6] = [

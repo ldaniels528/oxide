@@ -14,7 +14,7 @@ use crate::expression::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
-use crate::expression::Mutation::IntoTable;
+use crate::expression::Mutation::IntoNs;
 use crate::machine::Machine;
 use crate::server::ColumnJs;
 use crate::typed_values::*;
@@ -25,6 +25,7 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
     use crate::expression::Expression::*;
     match expression {
         And(a, b) => encode(E_AND, vec![a, b]),
+        ArrayIndex(a, b) => encode(E_ARRAY_IDX, vec![a, b]),
         ArrayLiteral(items) => encode_vec(E_ARRAY_LIT, items),
         AsValue(name, expr) =>
             encode(E_AS_VALUE, vec![&Literal(StringValue(name.to_string())), expr]),
@@ -129,7 +130,7 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
         Append { path, source } => encode(E_APPEND, vec![path, source]),
         Delete { path, condition, limit } =>
             encode(E_DELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
-        IntoTable(a, b) => encode(E_INTO_TABLE, vec![a, b]),
+        IntoNs(a, b) => encode(E_INTO_NS, vec![a, b]),
         Overwrite { path, source, condition, limit } => {
             let mut args = vec![];
             args.push(path.deref().clone());
@@ -140,6 +141,8 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
         }
         Truncate { path, limit: new_size } =>
             encode(E_TRUNCATE, vec![path, &get_or_undef(new_size)]),
+        Undelete { path, condition, limit } =>
+            encode(E_UNDELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
         Update { path, source, condition, limit } => {
             let mut args: Vec<Expression> = vec![];
             args.push(path.deref().clone());
@@ -223,7 +226,7 @@ pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
         RowsAffectedType => assemble_bytes(T_ROWS_AFFECTED, &vec![]),
         StringType(size) => assemble_bytes(T_STRING, &assemble_usize(*size)),
         StructureType(columns) => assemble_bytes(T_STRUCT, &encode_columns(columns)),
-        TableType(columns) => assemble_bytes(T_TABLE, &encode_columns(columns)),
+        TableType(columns) => assemble_bytes(T_TABLE_VALUE, &encode_columns(columns)),
         UInt8Type => assemble_bytes(T_UINT8, &vec![]),
         UInt16Type => assemble_bytes(T_UINT16, &vec![]),
         UInt32Type => assemble_bytes(T_UINT32, &vec![]),
@@ -269,6 +272,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
     match buf.next_u8() {
         E_AND => Ok(And(decode_box(buf)?, decode_box(buf)?)),
         E_APPEND => Ok(Mutate(Mutation::Append { path: decode_box(buf)?, source: decode_box(buf)? })),
+        E_ARRAY_IDX => Ok(ArrayIndex(decode_box(buf)?, decode_box(buf)?)),
         E_ARRAY_LIT => Ok(ArrayLiteral(decode_array(buf)?)),
         E_AS_VALUE => Ok(AsValue(buf.next_string(), decode_box(buf)?)),
         E_BETWEEN => Ok(Between(decode_box(buf)?, decode_box(buf)?, decode_box(buf)?)),
@@ -315,7 +319,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_GREATER_THAN => Ok(GreaterThan(decode_box(buf)?, decode_box(buf)?)),
         E_IF => Ok(If { condition: decode_box(buf)?, a: decode_box(buf)?, b: decode_opt(buf)? }),
         E_INCLUDE => Ok(Include(decode_box(buf)?)),
-        E_INTO_TABLE => Ok(Mutate(Mutation::IntoTable(decode_box(buf)?, decode_box(buf)?))),
+        E_INTO_NS => Ok(Mutate(Mutation::IntoNs(decode_box(buf)?, decode_box(buf)?))),
         E_JSON_LITERAL => Ok(JSONLiteral(decode_json_object(buf)?)),
         E_LESS_OR_EQUAL => Ok(LessOrEqual(decode_box(buf)?, decode_box(buf)?)),
         E_LESS_THAN => Ok(LessThan(decode_box(buf)?, decode_box(buf)?)),
@@ -357,6 +361,12 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_SHIFT_RIGHT => Ok(ShiftRight(decode_box(buf)?, decode_box(buf)?)),
         E_TRUNCATE => Ok(Mutate(Mutation::Truncate { path: decode_box(buf)?, limit: decode_opt(buf)? })),
         E_TUPLE => Ok(TupleLiteral(decode_array(buf)?)),
+        E_UNDELETE =>
+            Ok(Mutate(Mutation::Undelete {
+                path: decode_box(buf)?,
+                condition: decode_opt(buf)?,
+                limit: decode_opt(buf)?,
+            })),
         E_UPDATE => disassemble_update(buf),
         E_VAR_GET =>
             match disassemble(buf)? {
@@ -491,7 +501,7 @@ fn decode_data_type(buf: &mut ByteBuffer) -> std::io::Result<DataType> {
         T_JSON_OBJECT => Ok(JSONObjectType),
         T_ROWS_AFFECTED => Ok(RowsAffectedType),
         T_STRING => Ok(StringType(buf.next_u32() as usize)),
-        T_TABLE => Ok(TableType(buf.next_columns())),
+        T_TABLE_VALUE => Ok(TableType(buf.next_columns())),
         T_UINT8 => Ok(UInt8Type),
         T_UINT16 => Ok(UInt16Type),
         T_UINT32 => Ok(UInt32Type),

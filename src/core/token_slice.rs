@@ -130,6 +130,33 @@ impl TokenSlice {
         self.tokens.is_empty()
     }
 
+    pub fn is_next(&self, f: fn(Token) -> bool) -> bool {
+        self.next().0.map_or(false, |t| f(t))
+    }
+
+    pub fn is_previous(&self, f: fn(Token) -> bool) -> bool {
+        self.previous().0.map_or(false, |t| f(t))
+    }
+
+    pub fn is_previous_adjacent(&self) -> bool {
+        if self.pos > 0 {
+            let tokens = &self.tokens;
+            let p1 = self.pos as usize;
+            let (t0, t1) = (tokens[p1 - 1].clone(), tokens[p1].clone());
+            t0.get_line_number() == t1.get_line_number() &&
+                t0.get_column_number() + t0.get_raw_value().len() == t1.get_column_number()
+        } else { false }
+    }
+
+    pub fn is_same_line_as_previous(&self) -> bool {
+        if self.pos > 0 {
+            let p1 = self.pos as usize;
+            let p0 = p1 - 1;
+            let tokens = &self.tokens;
+            tokens[p0].get_line_number() == tokens[p1].get_line_number()
+        } else { false }
+    }
+
     pub fn len(&self) -> usize { self.tokens.len() }
 
     /// Returns the option of a Token at the next position within the slice.
@@ -291,6 +318,41 @@ mod tests {
     fn test_is_empty() {
         let ts = TokenSlice::from_string("");
         assert!(ts.is_empty());
+    }
+
+    #[test]
+    fn test_is_previous_adjacent() {
+        let ts = TokenSlice::from_string("students[3]");
+        let (tok0, ts) = ts.next();
+        assert_eq!(tok0.map(|t| t.get_raw_value()), Some("students".to_string()));
+        assert!(ts.is_previous_adjacent());
+    }
+
+    #[test]
+    fn test_is_not_previous_adjacent() {
+        let ts = TokenSlice::from_string("students [3]");
+        let (tok0, ts) = ts.next();
+        assert_eq!(tok0.map(|t| t.get_raw_value()), Some("students".to_string()));
+        assert!(!ts.is_previous_adjacent());
+    }
+
+    #[test]
+    fn test_is_same_line_as_previous() {
+        let ts = TokenSlice::from_string("students[3]");
+        let (tok0, ts) = ts.next();
+        assert_eq!(tok0.map(|t| t.get_raw_value()), Some("students".to_string()));
+        assert!(ts.is_same_line_as_previous());
+    }
+
+    #[test]
+    fn test_is_not_same_line_as_previous() {
+        let ts = TokenSlice::from_string(r#"
+        items
+        [3]
+        "#);
+        let (tok0, ts) = ts.next();
+        assert_eq!(tok0.map(|t| t.get_raw_value()), Some("items".to_string()));
+        assert!(!ts.is_same_line_as_previous());
     }
 
     #[test]

@@ -85,7 +85,7 @@ impl RowCollection for ModelRowCollection {
 
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
 
-    fn overwrite(&mut self, id: usize, row: &Row) -> std::io::Result<TypedValue> {
+    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
         // resize the rows to prevent overflow
         if self.row_data.len() <= id {
             self.row_data.resize(id + 1, (RowMetadata::new(false), Row::empty(&self.columns)));
@@ -99,7 +99,7 @@ impl RowCollection for ModelRowCollection {
         Ok(TypedValue::Ack)
     }
 
-    fn overwrite_metadata(&mut self, id: usize, metadata: &RowMetadata) -> std::io::Result<TypedValue> {
+    fn overwrite_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
         let (_, row) = self.row_data[id].clone();
         self.row_data[id] = (metadata.clone(), row);
         Ok(TypedValue::Ack)

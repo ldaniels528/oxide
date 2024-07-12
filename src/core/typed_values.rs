@@ -41,9 +41,7 @@ const UUID_FORMAT: &str =
 /// Basic value unit
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
-    Undefined,
     Ack,
-    Null,
     Array(Vec<TypedValue>),
     BLOB(Vec<u8>),
     Boolean(bool),
@@ -65,7 +63,7 @@ pub enum TypedValue {
     RowsAffected(usize),
     StringValue(String),
     StructValue(RowJs),
-    TableRef(String),
+    TableNs(String),
     TableValue(ModelRowCollection),
     TupleValue(Vec<TypedValue>),
     UInt8Value(u8),
@@ -74,6 +72,8 @@ pub enum TypedValue {
     UInt64Value(u64),
     UInt128Value(u128),
     UUIDValue([u8; 16]),
+    Null,
+    Undefined,
 }
 
 impl TypedValue {
@@ -181,7 +181,7 @@ impl TypedValue {
             RowsAffected(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
             StructValue(item) => codec::encode_string(item.to_json_string().as_str()),
-            TableRef(path) => codec::encode_string(path),
+            TableNs(path) => codec::encode_string(path),
             TupleValue(items) => {
                 let mut bytes = vec![];
                 bytes.extend(items.len().to_be_bytes());
@@ -262,13 +262,15 @@ impl TypedValue {
     }
 
     pub fn is_compatible(&self, other: &TypedValue) -> bool {
-        match (self, other) {
-            (a, b) if a.is_boolean() && b.is_boolean() => true,
-            (a, b) if a.is_numeric() && b.is_numeric() => true,
-            (a, b) if a.is_string() && b.is_string() => true,
-            (a, b) => a.unwrap_value() == b.unwrap_value()
-        }
+        let (a, b) = (self, other);
+        a == b
+            || a.unwrap_value() == b.unwrap_value()
+            || a.is_boolean() && b.is_boolean()
+            || a.is_numeric() && b.is_numeric()
+            || a.is_string() && b.is_string()
     }
+
+    pub fn is_false(&self) -> bool { !self.is_true() }
 
     pub fn is_numeric(&self) -> bool {
         use TypedValue::*;
@@ -279,16 +281,16 @@ impl TypedValue {
             | UInt64Value(..) | UInt128Value(..))
     }
 
+    pub fn is_ok(&self) -> bool {
+        matches!(self, Ack | Boolean(true) | RowsAffected(_) | TableNs(_) | TableValue(_))
+    }
+
     pub fn is_string(&self) -> bool {
         matches!(self, StringValue(..))
     }
 
-    pub fn is_successful_ack(&self) -> bool {
-        match self {
-            Ack | Boolean(true) | TableRef(_) | TableValue(_) => true,
-            RowsAffected(n) if *n >= 0 => true,
-            _ => false
-        }
+    pub fn is_true(&self) -> bool {
+        matches!(self, Ack | Boolean(true))
     }
 
     fn millis_to_iso_date(millis: i64) -> Option<String> {
@@ -346,7 +348,7 @@ impl TypedValue {
             RowsAffected(_) => "RowsAffected",
             StringValue(_) => "String",
             StructValue(_) => "Struct",
-            TableRef(_) => "TablePtr",
+            TableNs(_) => "TablePtr",
             TableValue(_) => "Table",
             TupleValue(_) => "Tuple",
             UInt8Value(_) => "u8",
@@ -382,8 +384,8 @@ impl TypedValue {
             RowsAffected(_) => T_ROWS_AFFECTED,
             StringValue(_) => T_STRING,
             StructValue(_) => T_STRUCT,
-            TableRef(_) => T_TABLE_REF,
-            TableValue(_) => T_TABLE,
+            TableNs(_) => T_TABLE_NS,
+            TableValue(_) => T_TABLE_VALUE,
             TupleValue(_) => T_TUPLE,
             UInt8Value(_) => T_UINT8,
             UInt16Value(_) => T_UINT16,
@@ -429,7 +431,7 @@ impl TypedValue {
             RowsAffected(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
             StructValue(item) => serde_json::json!(item),
-            TableRef(path) => serde_json::json!(path),
+            TableNs(path) => serde_json::json!(path),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
                     .map(|r| r.to_row_js())
@@ -482,7 +484,7 @@ impl TypedValue {
             RowsAffected(number) => number.to_string(),
             StringValue(string) => string.into(),
             StructValue(item) => item.to_json_string(),
-            TableRef(path) => path.into(),
+            TableNs(path) => path.into(),
             TupleValue(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("({})", values.join(", "))
