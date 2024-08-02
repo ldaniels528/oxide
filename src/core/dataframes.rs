@@ -2,10 +2,7 @@
 // dataframes module
 ////////////////////////////////////////////////////////////////////
 
-use std::collections::HashMap;
 use std::ops::AddAssign;
-
-use shared_lib::fail;
 
 use crate::dataframe_config::DataFrameConfig;
 use crate::expression::Expression;
@@ -71,9 +68,9 @@ impl DataFrame {
         limit: TypedValue,
     ) -> std::io::Result<usize> {
         let mut deleted = 0;
-        for id in self.device.get_table_range_with_limit(limit)? {
+        for id in self.device.get_indices_with_limit(limit)? {
             // read an active row
-            if let Some(row) = self.read_one(id)? {
+            if let Some(row) = self.device.read_one(id)? {
                 // if the predicate matches the condition, delete the row.
                 if row.matches(machine, condition) {
                     deleted += self.delete(id)?;
@@ -86,8 +83,8 @@ impl DataFrame {
     /// performs a top-down fold operation
     pub fn fold_left<A>(&self, init: A, f: fn(A, Row) -> A) -> std::io::Result<A> {
         let mut result: A = init;
-        for id in self.device.get_table_range()? {
-            let (row, metadata) = self.read_row(id)?;
+        for id in self.device.get_indices()? {
+            let (row, metadata) = self.device.read_row(id)?;
             if metadata.is_allocated { result = f(result, row) }
         }
         Ok(result)
@@ -96,8 +93,8 @@ impl DataFrame {
     /// performs a bottom-up fold operation
     pub fn fold_right<A>(&self, init: A, f: fn(A, Row) -> A) -> std::io::Result<A> {
         let mut result: A = init;
-        for id in self.device.get_table_range()?.rev() {
-            let (row, metadata) = self.read_row(id)?;
+        for id in self.device.get_indices()?.rev() {
+            let (row, metadata) = self.device.read_row(id)?;
             if metadata.is_allocated { result = f(result, row) }
         }
         Ok(result)
@@ -105,8 +102,8 @@ impl DataFrame {
 
     /// returns true if all allocated rows satisfy the provided function
     pub fn for_all(&self, f: fn(&Row) -> bool) -> std::io::Result<bool> {
-        for id in self.device.get_table_range()? {
-            let (row, metadata) = self.read_row(id)?;
+        for id in self.device.get_indices()? {
+            let (row, metadata) = self.device.read_row(id)?;
             if metadata.is_allocated && !f(&row) { return Ok(false); }
         }
         Ok(true)
@@ -114,15 +111,17 @@ impl DataFrame {
 
     /// iterates through all allocated rows
     pub fn foreach(&self, f: fn(&Row) -> ()) -> std::io::Result<()> {
-        for id in self.device.get_table_range()? {
-            let (row, metadata) = self.read_row(id)?;
+        for id in self.device.get_indices()? {
+            let (row, metadata) = self.device.read_row(id)?;
             if metadata.is_allocated { f(&row) }
         }
         Ok(())
     }
 
     /// returns the columns that define the table structure
-    pub fn get_columns(&self) -> &Vec<TableColumn> { self.device.get_columns() }
+    pub fn get_columns(&self) -> &Vec<TableColumn> {
+        self.device.get_columns()
+    }
 
     /// returns the allocated sizes the table (in numbers of rows)
     pub fn len(&self) -> std::io::Result<usize> {
@@ -132,7 +131,7 @@ impl DataFrame {
     /// transforms the collection of rows into a collection of [A]
     pub fn map<A>(&self, f: fn(Row) -> A) -> std::io::Result<Vec<A>> {
         let mut items = Vec::new();
-        for id in self.device.get_table_range()? {
+        for id in self.device.get_indices()? {
             match self.read_then(id, f)? {
                 None => {}
                 Some(item) => items.push(item)
@@ -157,14 +156,14 @@ impl DataFrame {
         limit: TypedValue,
     ) -> std::io::Result<usize> {
         let mut overwritten = 0;
-        for id in self.device.get_table_range_with_limit(limit)? {
+        for id in self.device.get_indices_with_limit(limit)? {
             // read an active row
-            if let Some(row) = self.read_one(id)? {
+            if let Some(row) = self.device.read_one(id)? {
                 // if the predicate matches the condition, overwrite the row.
                 if row.matches(machine, condition) {
                     let (machine, my_fields) = machine.with_row(&row).evaluate_atoms(fields)?;
                     if let (_, TypedValue::Array(my_values)) = machine.evaluate_array(values)? {
-                        let new_row = Self::transform_row(row, my_fields, my_values)?;
+                        let new_row = row.transform(&my_fields, &my_values)?;
                         overwritten += self.overwrite(new_row)?;
                     }
                 }
@@ -195,18 +194,18 @@ impl DataFrame {
 
     /// reads a row by ID
     pub fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
-        self.device.read(id)
+        self.device.read_row(id)
     }
 
     /// reads a row and transforms it returning the [Option] of [A]
     pub fn read_then<A>(&self, id: usize, f: fn(Row) -> A) -> std::io::Result<Option<A>> {
-        let (row, metadata) = self.read_row(id)?;
+        let (row, metadata) = self.device.read_row(id)?;
         Ok(if metadata.is_allocated { Some(f(row)) } else { None })
     }
 
     /// reads a row and pushes it into the specified vector if active
     pub fn read_then_push(&self, id: usize, rows: &mut Vec<Row>) -> std::io::Result<()> {
-        let (row, metadata) = self.read_row(id)?;
+        let (row, metadata) = self.device.read_row(id)?;
         Ok(if metadata.is_allocated { rows.push(row) } else { () })
     }
 
@@ -218,9 +217,9 @@ impl DataFrame {
         limit: TypedValue,
     ) -> std::io::Result<Vec<Row>> {
         let mut out = vec![];
-        for id in self.device.get_table_range_with_limit(limit)? {
+        for id in self.device.get_indices_with_limit(limit)? {
             // read an active row
-            if let Some(row) = self.read_one(id)? {
+            if let Some(row) = self.device.read_one(id)? {
                 // if the predicate matches the condition, include the row.
                 if row.matches(machine, condition) { out.push(row); }
             }
@@ -258,9 +257,9 @@ impl DataFrame {
         limit: TypedValue,
     ) -> std::io::Result<usize> {
         let mut restored = 0;
-        for id in self.device.get_table_range_with_limit(limit)? {
+        for id in self.device.get_indices_with_limit(limit)? {
             // read a row with its metadata
-            let (row, metadata) = self.device.read(id)?;
+            let (row, metadata) = self.device.read_row(id)?;
             // if the row is inactive and the predicate matches the condition, restore the row.
             if !metadata.is_allocated && row.matches(machine, condition) {
                 if self.device.undelete_row(id)?.is_ok() {
@@ -273,23 +272,19 @@ impl DataFrame {
 
     /// updates a specified row by ID
     pub fn update(&mut self, row: Row) -> std::io::Result<usize> {
-        // retrieve the original row
-        let (orig_row, orig_rmd) = self.read_row(row.get_id())?;
+        // get the column names
+        let column_names = self.device.get_columns().iter()
+            .map(|c| c.get_name().to_string())
+            .collect::<Vec<String>>();
 
-        // if we retrieved an active row, construct a composite row
-        let new_row = if orig_rmd.is_allocated {
-            let fields = orig_row.get_fields().iter().zip(row.get_fields().iter()).map(|(a, b)| {
-                Field::new(match (&b.value, &a.value) {
-                    (b, _)  if *b != Undefined => b.clone(),
-                    (_, a)  if *a != Undefined => a.clone(),
-                    _ => Null
-                })
-            }).collect();
-            Row::new(row.get_id(), self.get_columns().clone(), fields)
-        } else { row };
+        // build the new row
+        let new_row = match self.device.read_one(row.get_id())? {
+            Some(orig_row) => orig_row.transform(&column_names, &row.get_values())?,
+            None => self.replace_undefined_with_null(row),
+        };
 
         // update the table
-        self.overwrite(self.replace_undefined_with_null(new_row))
+        self.overwrite(new_row)
     }
 
     /// updates rows that match the supplied criteria
@@ -302,15 +297,17 @@ impl DataFrame {
         limit: TypedValue,
     ) -> std::io::Result<usize> {
         let mut updated = 0;
-        for id in self.device.get_table_range_with_limit(limit)? {
+        for id in self.device.get_indices_with_limit(limit)? {
             // read an active row
-            if let Some(row) = self.read_one(id)? {
+            if let Some(row) = self.device.read_one(id)? {
                 // if the predicate matches the condition, update the row.
                 if row.matches(machine, condition) {
                     let (machine, field_names) = machine.with_row(&row).evaluate_atoms(fields)?;
                     if let (_, TypedValue::Array(field_values)) = machine.evaluate_array(values)? {
-                        let new_row = Self::transform_row(row.clone(), field_names, field_values)?;
-                        updated += self.update(new_row)?;
+                        let new_row = row.transform(&field_names, &field_values)?;
+                        if self.device.overwrite_row(id, new_row)?.is_ok() {
+                            updated += 1
+                        }
                     }
                 }
             }
@@ -324,33 +321,13 @@ impl DataFrame {
             if f.value == Null || f.value == Undefined { Field::with_default(c) } else { f.clone() }
         }).collect())
     }
-
-    pub fn transform_row(row: Row, field_names: Vec<String>, field_values: Vec<TypedValue>) -> std::io::Result<Row> {
-        if field_names.len() != field_values.len() {
-            return fail(format!("Data mismatch: columns ({}) vs values ({})", field_names.len(), field_values.len()));
-        }
-        let mapping = field_names.iter().zip(field_values.iter())
-            .fold(HashMap::new(), |mut m, (k, v)| {
-                m.insert(k.to_string(), v.clone());
-                m
-            });
-        let mut new_fields = vec![];
-        for (c, f) in row.get_columns().iter().zip(row.get_fields().iter()).collect::<Vec<(&TableColumn, &Field)>>() {
-            new_fields.push(match mapping.get(c.get_name()) {
-                Some(tv) => Field::new(tv.clone()),
-                None => f.clone()
-            });
-        }
-        let new_row = Row::new(row.get_id(), row.get_columns().clone(), new_fields);
-        Ok(new_row)
-    }
 }
 
 impl AddAssign for DataFrame {
     fn add_assign(&mut self, rhs: Self) {
         fn do_add(lhs: &mut DataFrame, rhs: DataFrame) -> std::io::Result<()> {
             for id in 0..rhs.len()? {
-                let (row, metadata) = rhs.read_row(id)?;
+                let (row, metadata) = rhs.device.read_row(id)?;
                 if metadata.is_allocated { lhs.append(row)?; }
             }
             Ok(())

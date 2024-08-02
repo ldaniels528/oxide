@@ -25,7 +25,6 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
     use crate::expression::Expression::*;
     match expression {
         And(a, b) => encode(E_AND, vec![a, b]),
-        ArrayIndex(a, b) => encode(E_ARRAY_IDX, vec![a, b]),
         ArrayLiteral(items) => encode_vec(E_ARRAY_LIT, items),
         AsValue(name, expr) =>
             encode(E_AS_VALUE, vec![&Literal(StringValue(name.to_string())), expr]),
@@ -43,6 +42,7 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         ColumnSet(columns) => encode_columns(columns),
         Contains(a, b) => encode(E_CONTAINS, vec![a, b]),
         Divide(a, b) => encode(E_DIVIDE, vec![a, b]),
+        ElementAt(a, b) => encode(E_ELEM_INDEX, vec![a, b]),
         Equal(a, b) => encode(E_EQUAL, vec![a, b]),
         Eval(a) => encode(E_EVAL, vec![a]),
         Factorial(a) => encode(E_FACTORIAL, vec![a]),
@@ -225,7 +225,7 @@ pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
         JSONObjectType => assemble_bytes(T_JSON_OBJECT, &vec![]),
         RowsAffectedType => assemble_bytes(T_ROWS_AFFECTED, &vec![]),
         StringType(size) => assemble_bytes(T_STRING, &assemble_usize(*size)),
-        StructureType(columns) => assemble_bytes(T_STRUCT, &encode_columns(columns)),
+        StructureType(columns) => assemble_bytes(T_STRUCTURE, &encode_columns(columns)),
         TableType(columns) => assemble_bytes(T_TABLE_VALUE, &encode_columns(columns)),
         UInt8Type => assemble_bytes(T_UINT8, &vec![]),
         UInt16Type => assemble_bytes(T_UINT16, &vec![]),
@@ -272,7 +272,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
     match buf.next_u8() {
         E_AND => Ok(And(decode_box(buf)?, decode_box(buf)?)),
         E_APPEND => Ok(Mutate(Mutation::Append { path: decode_box(buf)?, source: decode_box(buf)? })),
-        E_ARRAY_IDX => Ok(ArrayIndex(decode_box(buf)?, decode_box(buf)?)),
+        E_ELEM_INDEX => Ok(ElementAt(decode_box(buf)?, decode_box(buf)?)),
         E_ARRAY_LIT => Ok(ArrayLiteral(decode_array(buf)?)),
         E_AS_VALUE => Ok(AsValue(buf.next_string(), decode_box(buf)?)),
         E_BETWEEN => Ok(Between(decode_box(buf)?, decode_box(buf)?, decode_box(buf)?)),

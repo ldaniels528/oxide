@@ -155,7 +155,10 @@ pub fn tabulate_table(
     column_widths: Vec<usize>,
 ) -> Vec<String> {
     // create the separator
-    let total_width = column_widths.iter().sum::<usize>() + column_widths.len() - 1;
+    let total_width = match column_widths.iter().sum::<usize>() + column_widths.len() {
+        n if n > 0 => n - 1,
+        n => n
+    };
     let separator = format!("|{}|", "-".to_string().repeat(total_width));
 
     // produce formatted lines

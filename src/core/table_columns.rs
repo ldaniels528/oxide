@@ -64,7 +64,7 @@ impl TableColumn {
         Ok(physical_columns)
     }
 
-    pub fn get_name(&self) -> &String { &self.name }
+    pub fn get_name(&self) -> &str { self.name.as_str() }
 }
 
 // Unit tests

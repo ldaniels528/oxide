@@ -13,11 +13,12 @@ use crate::expression::MutateTarget::TableTarget;
 use crate::expression::Mutation::IntoNs;
 use crate::serialization::{assemble, disassemble_fully};
 use crate::server::ColumnJs;
+use crate::structure::Structure;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Function, Int64Value, StringValue};
+use crate::typed_values::TypedValue::{Function, Int64Value, StringValue, StructureValue};
 
 /// Represents the Oxide compiler
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -108,7 +109,7 @@ impl Compiler {
             (Some(Operator { text, .. }), ts) if text == "[" && ts.is_previous_adjacent() => {
                 let (index, ts) = self.compile_next(ts)?;
                 let ts = ts.expect("]")?;
-                let model = ArrayIndex(Box::new(expr), Box::new(index));
+                let model = ElementAt(Box::new(expr), Box::new(index));
                 if ts.has_more() {
                     self.push(model);
                     self.compile_next(ts)
@@ -149,6 +150,7 @@ impl Compiler {
                 "select" => self.parse_keyword_select(ts),
                 "stderr" => self.parse_expression_1a(ts, StdErr),
                 "stdout" => self.parse_expression_1a(ts, StdOut),
+                "struct" => self.parse_keyword_struct(ts),
                 "syscall" => self.parse_keyword_syscall(ts),
                 "table" => self.parse_keyword_table(ts),
                 "true" => Ok((TRUE, ts)),
@@ -408,6 +410,16 @@ impl Compiler {
         }), ts))
     }
 
+    /// Builds a language model from a 'struct' statement:
+    /// ex: struct(symbol: String(8), exchange: String(8), last_sale: f64)
+    fn parse_keyword_struct(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.clone())? {
+            Ok((Literal(StructureValue(Structure::from_logical_columns(&columns))), ts))
+        } else {
+            fail_near("Expected column definitions", &ts)
+        }
+    }
+
     /// Builds a language model from a SYSCALL statement:
     /// ex: syscall("ps", "aux")
     fn parse_keyword_syscall(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
@@ -545,7 +557,7 @@ impl Compiler {
                         "-" => self.parse_expression_2a(ts, op0, Minus),
                         "%" => self.parse_expression_2a(ts, op0, Modulo),
                         "×" | "*" => self.parse_expression_2a(ts, op0, Multiply),
-                        "|>" => self.parse_expression_2a(ts, op0, |a, b| Mutate(IntoNs(a, b))),
+                        "~>" => self.parse_expression_2a(ts, op0, |a, b| Mutate(IntoNs(a, b))),
                         "!=" => self.parse_expression_2a(ts, op0, NotEqual),
                         "||" => self.parse_expression_2a(ts, op0, Or),
                         "+" => self.parse_expression_2a(ts, op0, Plus),
@@ -890,7 +902,7 @@ mod tests {
     #[test]
     fn test_array_indexing() {
         let script = "[7, 5, 8, 2, 4, 1][3]";
-        let model = ArrayIndex(
+        let model = ElementAt(
             Box::new(ArrayLiteral(vec![
                 Literal(Int64Value(7)), Literal(Int64Value(5)), Literal(Int64Value(8)),
                 Literal(Int64Value(2)), Literal(Int64Value(4)), Literal(Int64Value(1)),
@@ -1443,7 +1455,7 @@ mod tests {
         let opcodes = Compiler::compile_script(r#"
         [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
          { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-         { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] |> ns("interpreter.into.stocks")
+         { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> ns("interpreter.into.stocks")
         "#).unwrap();
         assert_eq!(opcodes,
                    Mutate(IntoNs(

@@ -20,9 +20,8 @@ pub const NULL: Expression = Literal(TypedValue::Null);
 pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
 
 // constants
-pub const E_AND: u8 = 0;
-pub const E_APPEND: u8 = 2;
-pub const E_ARRAY_IDX: u8 = 4;
+pub const E_AND: u8 = 2;
+pub const E_APPEND: u8 = 4;
 pub const E_ARRAY_LIT: u8 = 6;
 pub const E_AS_VALUE: u8 = 10;
 pub const E_BETWEEN: u8 = 15;
@@ -39,6 +38,7 @@ pub const E_DECLARE_TABLE: u8 = 54;
 pub const E_DELETE: u8 = 56;
 pub const E_DIVIDE: u8 = 60;
 pub const E_DROP: u8 = 65;
+pub const E_ELEM_INDEX: u8 = 67;
 pub const E_EQUAL: u8 = 70;
 pub const E_EVAL: u8 = 75;
 pub const E_FACTORIAL: u8 = 80;
@@ -115,7 +115,6 @@ pub enum MutateTarget {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Expression {
     And(Box<Expression>, Box<Expression>),
-    ArrayIndex(Box<Expression>, Box<Expression>),
     ArrayLiteral(Vec<Expression>),
     AsValue(String, Box<Expression>),
     Between(Box<Expression>, Box<Expression>, Box<Expression>),
@@ -127,6 +126,7 @@ pub enum Expression {
     ColumnSet(Vec<ColumnJs>),
     Contains(Box<Expression>, Box<Expression>),
     Divide(Box<Expression>, Box<Expression>),
+    ElementAt(Box<Expression>, Box<Expression>),
     Equal(Box<Expression>, Box<Expression>),
     Eval(Box<Expression>),
     Factorial(Box<Expression>),
@@ -283,8 +283,6 @@ pub fn decompile(expr: &Expression) -> String {
     match expr {
         And(a, b) =>
             format!("{} && {}", decompile(a), decompile(b)),
-        ArrayIndex(a, b) =>
-            format!("{}[{}]", decompile(a), decompile(b)),
         ArrayLiteral(items) =>
             format!("[{}]", items.iter().map(|i| decompile(i)).collect::<Vec<String>>().join(", ")),
         AsValue(name, expr) =>
@@ -309,6 +307,8 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{} contains {}", decompile(a), decompile(b)),
         Divide(a, b) =>
             format!("{} / {}", decompile(a), decompile(b)),
+        ElementAt(a, b) =>
+            format!("{}[{}]", decompile(a), decompile(b)),
         Factorial(a) => format!("¡{}", decompile(a)),
         From(a) => format!("from {}", decompile(a)),
         Equal(a, b) =>
@@ -417,7 +417,7 @@ pub fn decompile_modification(expr: &Mutation) -> String {
         Mutation::Delete { path, condition, limit } =>
             format!("delete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
         Mutation::IntoNs(a, b) =>
-            format!("{} |> {}", decompile(a), decompile(b)),
+            format!("{} ~> {}", decompile(a), decompile(b)),
         Mutation::Overwrite { path, source, condition, limit } =>
             format!("overwrite {} {}{}{}", decompile(path), decompile(source),
                     condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
@@ -428,7 +428,8 @@ pub fn decompile_modification(expr: &Mutation) -> String {
         Mutation::Undelete { path, condition, limit } =>
             format!("undelete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
         Mutation::Update { path, source, condition, limit } =>
-            format!("update {} {} where {}{}", decompile(path), decompile(source), decompile_opt(condition), decompile_opt(limit)),
+            format!("update {} {} where {}{}", decompile(path), decompile(source), decompile_opt(condition),
+                    limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),),
     }
 }
 

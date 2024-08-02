@@ -38,6 +38,7 @@ use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::server::ColumnJs;
+use crate::structure::Structure;
 use crate::table_columns::TableColumn;
 use crate::tokens::Token::Atom;
 use crate::typed_values::TypedValue;
@@ -142,7 +143,6 @@ impl Machine {
         match expression {
             And(a, b) =>
                 self.expand2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
-            ArrayIndex(a, b) => self.evaluate_array_index(a, b),
             ArrayLiteral(items) => self.evaluate_array(items),
             AsValue(name, expr) => {
                 let (machine, tv) = self.evaluate(expr)?;
@@ -170,6 +170,7 @@ impl Machine {
             Contains(a, b) => self.evaluate_contains(a, b),
             Divide(a, b) =>
                 self.expand2(a, b, |aa, bb| aa / bb),
+            ElementAt(a, b) => self.evaluate_index_of_collection(a, b),
             Equal(a, b) =>
                 self.expand2(a, b, |aa, bb| Boolean(aa == bb)),
             Eval(a) => self.evaluate_eval(&a),
@@ -239,30 +240,47 @@ impl Machine {
         }
     }
 
-    pub fn evaluate_array_index(
+    /// Evaluates the index of a collection (array, string or table)
+    pub fn evaluate_index_of_collection(
         &self,
-        array_expr: &Expression,
+        collection_expr: &Expression,
         index_expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let machine = self.clone();
-        match machine.evaluate(array_expr) {
-            Ok((machine, Array(items))) => {
-                let (machine, value) = match machine.evaluate(index_expr) {
-                    Ok((machine, index)) => {
-                        let idx = index.assume_usize().unwrap_or(0);
-                        let value = if idx < items.len() { items[idx].clone() } else { Undefined };
-                        //println!("evaluate_array_index: value => {}", value);
-                        (machine, value)
-                    }
-                    Err(err) => (machine, ErrorValue(err.to_string()))
-                };
-                Ok((machine, value))
+        let (machine, index) = self.evaluate(index_expr)?;
+        let (machine, collection) = machine.evaluate(collection_expr)?;
+        let value = match collection {
+            Array(items) => {
+                let idx = index.assume_usize().unwrap_or(0);
+                if idx < items.len() { items[idx].clone() } else { ErrorValue(format!("Array element index is out of range ({} >= {})", idx, items.len())) }
             }
-            Ok((machine, other)) =>
-                Ok((machine, ErrorValue(format!("Type mismatch: array expected near {}", other)))),
-            Err(err) =>
-                Ok((machine, ErrorValue(err.to_string())))
-        }
+            StringValue(string) => {
+                let idx = index.assume_usize().unwrap_or(0);
+                if idx < string.len() { StringValue(string[idx..idx].to_string()) } else { ErrorValue(format!("String character index is out of range ({} >= {})", idx, string.len())) }
+            }
+            StructureValue(structure) => {
+                let idx = index.assume_usize().unwrap_or(0);
+                let values = structure.get_values();
+                if idx < values.len() { values[idx].clone() } else { ErrorValue(format!("Structure element index is out of range ({} >= {})", idx, values.len())) }
+            }
+            TableNs(path) => {
+                let id = index.assume_usize().unwrap_or(0);
+                let frc = FileRowCollection::open_path(path.as_str())?;
+                match frc.read_one(id)? {
+                    Some(row) => StructureValue(Structure::from_row(&row)),
+                    None => StructureValue(Structure::from_physical_columns(frc.get_columns().clone()))
+                }
+            }
+            TableValue(mrc) => {
+                let id = index.assume_usize().unwrap_or(0);
+                match mrc.read_one(id)? {
+                    Some(row) => StructureValue(Structure::from_row(&row)),
+                    None => StructureValue(Structure::from_physical_columns(mrc.get_columns().clone()))
+                }
+            }
+            other =>
+                ErrorValue(format!("Type mismatch: Table or Array expected near {}", other))
+        };
+        Ok((machine, value))
     }
 
     pub fn evaluate_infrastructure(
@@ -711,9 +729,15 @@ impl Machine {
         };
 
         // write the rows to the target
-        let mut writable = machine.expect_row_collection(table)?;
-        let inserted = machine.write_rows(&mut writable, rows)?;
-        Ok((machine, if inserted == 1 { Ack } else { RowsAffected(inserted) }))
+        let mut rc = machine.expect_row_collection(table)?;
+        let mut inserted = 0;
+        match rc.append_rows(rows) {
+            Ok(ErrorValue(message)) => return Ok((machine, ErrorValue(message))),
+            Ok(RowsAffected(n)) => inserted += n,
+            Ok(..) => {}
+            Err(err) => return Ok((machine, ErrorValue(err.to_string()))),
+        }
+        Ok((machine, RowsAffected(inserted)))
     }
 
     fn extract_rows_from_table_declaration(
@@ -742,14 +766,12 @@ impl Machine {
         source: &Expression,
         table: &Expression,
     ) -> std::io::Result<(Machine, Vec<Row>)> {
+        // determine the row collection
         let machine = self.clone();
-
-        // determine the writable target
-        let mut writable = machine.expect_row_collection(table)?;
+        let mut rc = machine.expect_row_collection(table)?;
 
         // retrieve rows from the source
-        let columns = writable.get_columns();
-        let rows = machine.expect_rows(source, columns)?;
+        let rows = machine.expect_rows(source, rc.get_columns())?;
         Ok((machine, rows))
     }
 
@@ -758,7 +780,7 @@ impl Machine {
         let result = match result {
             StringValue(path) => TableNs(path),
             TableNs(path) => TableNs(path),
-            x => Self::error_unexpected("Table reference", &x),
+            other => Self::error_unexpected("Table reference", &other),
         };
         Ok((machine, result))
     }
@@ -791,8 +813,7 @@ impl Machine {
             let rows = self.expect_rows(source, columns)?;
 
             // write the rows to the target
-            let inserted = self.write_rows(&mut writable, rows)?;
-            Ok((machine, RowsAffected(inserted)))
+            Ok((machine, writable.append_rows(rows)?))
         } else {
             Ok((machine, Self::error_expr("A queryable was expected".to_string(), source)))
         }
@@ -1186,17 +1207,6 @@ impl Machine {
         variables.insert(name.to_string(), value);
         Self::construct(self.stack.clone(), variables)
     }
-
-    fn write_rows(&self, writable: &mut Box<dyn RowCollection>, rows: Vec<Row>) -> std::io::Result<usize> {
-        let mut written = 0;
-        for row in rows {
-            let new_id = writable.len()?;
-            if writable.overwrite_row(new_id, row.with_row_id(new_id))?.is_ok() {
-                written += 1
-            }
-        }
-        Ok(written)
-    }
 }
 
 // Unit tests
@@ -1219,22 +1229,6 @@ mod tests {
 
         let (_, array) = Machine::new().evaluate_array(&models).unwrap();
         assert_eq!(array, Array(vec![Float64Value(3.25), Boolean(true), Boolean(false), Null, Undefined]));
-    }
-
-    #[test]
-    fn test_array_indexing() {
-        let model = ArrayIndex(
-            Box::new(ArrayLiteral(vec![
-                Literal(Int64Value(1)), Literal(Int64Value(4)), Literal(Int64Value(2)),
-                Literal(Int64Value(8)), Literal(Int64Value(5)), Literal(Int64Value(7)),
-            ])),
-            Box::new(Literal(Int64Value(5))),
-        );
-        assert_eq!(model.to_code(), "[1, 4, 2, 8, 5, 7][5]");
-
-        let machine = Machine::new();
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Int64Value(7))
     }
 
     #[test]
@@ -1339,6 +1333,75 @@ mod tests {
         let machine = Machine::new().with_variable("num", Int64Value(99));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("No".into()));
+    }
+
+    #[test]
+    fn test_index_of_array() {
+        // create the instruction model for "[1, 4, 2, 8, 5, 7][5]"
+        let model = ElementAt(
+            Box::new(ArrayLiteral(vec![
+                Literal(Int64Value(1)), Literal(Int64Value(4)), Literal(Int64Value(2)),
+                Literal(Int64Value(8)), Literal(Int64Value(5)), Literal(Int64Value(7)),
+            ])),
+            Box::new(Literal(Int64Value(5))),
+        );
+        assert_eq!(model.to_code(), "[1, 4, 2, 8, 5, 7][5]");
+
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, Int64Value(7))
+    }
+
+    #[test]
+    fn test_index_of_table_in_namespace() {
+        // create a table with test data
+        let ns_path = "machine.element_at.stocks";
+        let (mut df, phys_columns) = create_file_table(ns_path);
+        assert_eq!(1, df.append(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
+        assert_eq!(1, df.append(make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
+        assert_eq!(1, df.append(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
+        assert_eq!(1, df.append(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
+        assert_eq!(1, df.append(make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)).unwrap());
+
+        // create the instruction model 'ns("machine.element_at.stocks")[2]'
+        let model = ElementAt(
+            Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
+            Box::new(Literal(Int64Value(2))),
+        );
+        assert_eq!(model.to_code(), r#"ns("machine.element_at.stocks")[2]"#);
+
+        // evaluate the instruction
+        let (_, result) = Machine::new().evaluate(&model).unwrap();
+        assert_eq!(result, StructureValue(
+            Structure::from_row(&make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66))
+        ))
+    }
+
+    #[test]
+    fn test_index_of_table_in_variable() {
+        let phys_columns = make_table_columns();
+        let my_table = ModelRowCollection::from_rows(vec![
+            make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
+            make_quote(1, &phys_columns, "GAS", "NYSE", 0.2456),
+            make_quote(2, &phys_columns, "BASH", "NASDAQ", 13.11),
+            make_quote(3, &phys_columns, "OIL", "NYSE", 0.1442),
+            make_quote(4, &phys_columns, "VAPOR", "NYSE", 0.0289),
+        ]);
+
+        // create the instruction model "stocks[4]"
+        let model = ElementAt(
+            Box::new(Variable("stocks".to_string())),
+            Box::new(Literal(Int64Value(4))),
+        );
+        assert_eq!(model.to_code(), "stocks[4]");
+
+        // evaluate the instruction
+        let machine = Machine::new()
+            .with_variable("stocks", TableValue(my_table));
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, StructureValue(
+            Structure::from_row(&make_quote(4, &phys_columns, "VAPOR", "NYSE", 0.0289))
+        ))
     }
 
     #[test]
@@ -1813,6 +1876,7 @@ SOFTWARE.
     #[ignore]
     #[test]
     fn test_update_rows_in_memory() {
+        // build the update model
         let model = Mutate(Mutation::Update {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
@@ -1826,6 +1890,7 @@ SOFTWARE.
             ),
             limit: Some(Box::new(Literal(Int64Value(5)))),
         });
+        assert_eq!(model.to_code(), r#"update stocks via {exchange: "OTC_BB"} where exchange == "OTC" limit 5"#);
 
         // perform the update and verify
         let (mrc, phys_columns) = create_memory_table();

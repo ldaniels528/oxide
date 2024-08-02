@@ -98,16 +98,12 @@ impl RowCollection for ByteRowCollection {
         if self.watermark <= id {
             self.watermark = id + 1;
         }
-        Ok(TypedValue::Ack)
+        Ok(TypedValue::RowsAffected(1))
     }
 
-    fn overwrite_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
         self.row_data[id][0] = metadata.encode();
-        Ok(TypedValue::Ack)
-    }
-
-    fn read(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
-        Ok(Row::decode(&self.row_data[id], &self.columns))
+        Ok(TypedValue::RowsAffected(1))
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
@@ -125,10 +121,21 @@ impl RowCollection for ByteRowCollection {
         Ok(rows)
     }
 
+    fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
+        Ok(Row::decode(&self.row_data[id], &self.columns))
+    }
+
+    fn read_row_metadata(&mut self, id: usize) -> std::io::Result<RowMetadata> {
+        let metadata = if id < self.row_data.len() {
+            RowMetadata::decode(self.row_data[id][0])
+        } else { RowMetadata::new(false) };
+        Ok(metadata)
+    }
+
     fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
         self.row_data.resize(new_size, vec![]);
         self.watermark = new_size;
-        Ok(TypedValue::Ack)
+        Ok(TypedValue::RowsAffected(new_size))
     }
 }
 

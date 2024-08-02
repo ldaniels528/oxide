@@ -50,7 +50,7 @@ impl Cursor {
 
     /// Moves the current position to the end-of-file (EOF)
     pub fn bottom(&mut self) {
-        self.position = self.rc.len().unwrap()
+        self.position = self.rc.len().unwrap_or(0)
     }
 
     /// Folds all rows from the current position to the end-of-file (EOF)
@@ -73,7 +73,7 @@ impl Cursor {
 
     /// Attempts to retrieve the row that corresponds to the given position
     pub fn get(&mut self, pos: usize) -> std::io::Result<Option<Row>> {
-        let (row, rmd) = self.rc.read(pos)?;
+        let (row, rmd) = self.rc.read_row(pos)?;
         if rmd.is_allocated {
             let machine = Machine::new().with_row(&row);
             if row.matches(&machine, &self.condition) {
@@ -98,7 +98,7 @@ impl Cursor {
 
     /// Moves the current position to the middle-of-file
     pub fn middle(&mut self) {
-        self.position = self.rc.len().unwrap() / 2
+        self.position = self.rc.len().unwrap_or(0) / 2
     }
 
     /// Returns the next qualifying row or [None] if not found before the end-of-file (EOF)

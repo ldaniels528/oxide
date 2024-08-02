@@ -13,7 +13,8 @@ pub struct TableRenderer;
 
 impl TableRenderer {
     /// Transforms the [RowCollection] into a textual table
-    pub fn from_collection(rc: Box<dyn RowCollection>, columns: &Vec<TableColumn>) -> Vec<String> {
+    pub fn from_collection(rc: Box<dyn RowCollection>) -> Vec<String> {
+        let columns = rc.get_columns();
         let header_cells = Self::tabulate_header_cells(columns);
         let body_cells = Self::tabulate_body_cells_from_collection(rc);
         tabulate_cells(header_cells, body_cells)
@@ -64,7 +65,7 @@ mod tests {
     #[test]
     fn test_from_collection() {
         let (brc, columns) = create_collection();
-        let lines = TableRenderer::from_collection(Box::new(brc), &columns);
+        let lines = TableRenderer::from_collection(Box::new(brc));
         for line in &lines { println!("{}", line) }
         assert_eq!(lines, vec![
             "|-------------------------------|",

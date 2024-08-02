@@ -43,6 +43,10 @@ impl FileRowCollection {
         Ok(Self::new(columns, file))
     }
 
+    pub fn open_path(path: &str) -> std::io::Result<Self> {
+        Self::open(&Namespace::parse(path)?)
+    }
+
     /// convenience function to create, read or write a table file
     pub(crate) fn open_crw(ns: &Namespace) -> std::io::Result<File> {
         fs::create_dir_all(ns.get_root_path())?;
@@ -67,9 +71,10 @@ impl RowCollection for FileRowCollection {
     fn get_record_size(&self) -> usize { self.record_size }
 
     fn index_of(&self, item: &Row) -> Option<usize> {
-        for id in 0..self.len().unwrap() {
-            let (row, metadata) = self.read(id).unwrap();
-            if metadata.is_allocated && &row == item { return Some(id); }
+        for id in 0..self.len().unwrap_or(0) {
+            if let Ok((row, metadata)) = self.read_row(id) {
+                if metadata.is_allocated && &row == item { return Some(id); }
+            }
         }
         None
     }
@@ -81,20 +86,13 @@ impl RowCollection for FileRowCollection {
     fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
         let offset = self.to_row_offset(id);
         let _ = &self.file.write_at(&row.encode(), offset)?;
-        Ok(TypedValue::Ack)
+        Ok(TypedValue::RowsAffected(1))
     }
 
-    fn overwrite_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
         let offset = self.to_row_offset(id);
         let _ = &self.file.write_at(&[metadata.encode()], offset)?;
-        Ok(TypedValue::Ack)
-    }
-
-    fn read(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
-        let offset = (id * self.record_size) as u64;
-        let mut buffer: Vec<u8> = vec![0; self.record_size];
-        let _ = &self.file.read_at(&mut buffer, offset)?;
-        Ok(Row::decode(&buffer, &self.columns))
+        Ok(TypedValue::RowsAffected(1))
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
@@ -109,7 +107,7 @@ impl RowCollection for FileRowCollection {
     fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>> {
         let mut rows: Vec<Row> = Vec::with_capacity(index.len());
         for id in index {
-            let (row, metadata) = self.read(id)?;
+            let (row, metadata) = self.read_row(id)?;
             if metadata.is_allocated {
                 rows.push(row);
             }
@@ -117,11 +115,25 @@ impl RowCollection for FileRowCollection {
         Ok(rows)
     }
 
+    fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
+        let offset = self.compute_offset(id);
+        let mut buffer: Vec<u8> = vec![0; self.record_size];
+        let _ = &self.file.read_at(&mut buffer, offset)?;
+        Ok(Row::decode(&buffer, &self.columns))
+    }
+
+    fn read_row_metadata(&mut self, id: usize) -> std::io::Result<RowMetadata> {
+        let offset = self.compute_offset(id);
+        let mut buffer: Vec<u8> = vec![0; 1];
+        let _ = &self.file.read_at(&mut buffer, offset)?;
+        Ok(RowMetadata::decode(buffer[0]))
+    }
+
     fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
         let new_length = new_size as u64 * self.record_size as u64;
         // modify the file
         self.file.set_len(new_length)?;
-        Ok(TypedValue::Ack)
+        Ok(TypedValue::RowsAffected(new_size))
     }
 }
 

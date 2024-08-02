@@ -38,7 +38,7 @@ pub const T_INT128: u8 = 64;
 pub const T_JSON_OBJECT: u8 = 68;
 pub const T_ROWS_AFFECTED: u8 = 72;
 pub const T_STRING: u8 = 76;
-pub const T_STRUCT: u8 = 80;
+pub const T_STRUCTURE: u8 = 80;
 pub const T_TABLE_NS: u8 = 84;
 pub const T_TABLE_VALUE: u8 = 88;
 pub const T_TUPLE: u8 = 92;
@@ -134,7 +134,7 @@ impl DataType {
                 "JSON" => Ok(JSONObjectType),
                 "RowsAffected" => Ok(RowsAffectedType),
                 "String" => size_parameter(ts, |size| StringType(size)),
-                "struct" => column_parameters(ts, |columns| StructureType(columns)),
+                "Struct" => column_parameters(ts, |columns| StructureType(columns)),
                 "Table" => column_parameters(ts, |columns| TableType(columns)),
                 "u8" => Ok(UInt8Type),
                 "u16" => Ok(UInt16Type),
@@ -203,7 +203,7 @@ impl DataType {
             JSONObjectType => T_JSON_OBJECT,
             RowsAffectedType => T_ROWS_AFFECTED,
             StringType(..) => T_STRING,
-            StructureType(..) => T_STRUCT,
+            StructureType(..) => T_STRUCTURE,
             TableType(..) => T_TABLE_VALUE,
             UInt8Type => T_UINT8,
             UInt16Type => T_UINT16,
@@ -274,133 +274,133 @@ mod tests {
 
     #[test]
     fn test_blob() {
-        verify("BLOB(5566)", BLOBType(5566));
+        verify_type_construction("BLOB(5566)", BLOBType(5566));
     }
 
     #[test]
     fn test_boolean() {
-        verify("Boolean", BooleanType);
+        verify_type_construction("Boolean", BooleanType);
     }
 
     #[test]
     fn test_clob() {
-        verify("CLOB(3377)", CLOBType(3377));
+        verify_type_construction("CLOB(3377)", CLOBType(3377));
     }
 
     #[test]
     fn test_date() {
-        verify("Date", DateType);
+        verify_type_construction("Date", DateType);
     }
 
     #[test]
     fn test_enum() {
-        verify(
+        verify_type_construction(
             "Enum(A,B,C)",
             EnumType(vec!["A".to_owned(), "B".to_owned(), "C".to_owned()]));
     }
 
     #[test]
     fn test_f32() {
-        verify("f32", Float32Type);
+        verify_type_construction("f32", Float32Type);
     }
 
     #[test]
     fn test_f64() {
-        verify("f64", Float64Type);
+        verify_type_construction("f64", Float64Type);
     }
 
     #[test]
     fn test_fn() {
-        verify(
+        verify_type_construction(
             "fn(symbol: String(8), exchange: String(8), last_sale: f64)",
             FuncType(make_quote_columns()));
     }
 
     #[test]
     fn test_i8() {
-        verify("i8", Int8Type);
+        verify_type_construction("i8", Int8Type);
     }
 
     #[test]
     fn test_i16() {
-        verify("i16", Int16Type);
+        verify_type_construction("i16", Int16Type);
     }
 
     #[test]
     fn test_i32() {
-        verify("i32", Int32Type);
+        verify_type_construction("i32", Int32Type);
     }
 
     #[test]
     fn test_i64() {
-        verify("i64", Int64Type);
+        verify_type_construction("i64", Int64Type);
     }
 
     #[test]
     fn test_i128() {
-        verify("i128", Int128Type);
+        verify_type_construction("i128", Int128Type);
     }
 
     #[test]
     fn test_json_object() {
-        verify("JSON", JSONObjectType);
+        verify_type_construction("JSON", JSONObjectType);
     }
 
     #[test]
     fn test_rows_affected() {
-        verify("RowsAffected", RowsAffectedType);
+        verify_type_construction("RowsAffected", RowsAffectedType);
     }
 
     #[test]
     fn test_string() {
-        verify("String(10)", StringType(10));
+        verify_type_construction("String(10)", StringType(10));
     }
 
     #[test]
     fn test_struct() {
-        verify(
-            "struct(symbol: String(8), exchange: String(8), last_sale: f64)",
+        verify_type_construction(
+            "Struct(symbol: String(8), exchange: String(8), last_sale: f64)",
             StructureType(make_quote_columns()));
     }
 
     #[test]
     fn test_table() {
-        verify(
+        verify_type_construction(
             "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
             TableType(make_quote_columns()));
     }
 
     #[test]
     fn test_u8() {
-        verify("u8", UInt8Type);
+        verify_type_construction("u8", UInt8Type);
     }
 
     #[test]
     fn test_u16() {
-        verify("u16", UInt16Type);
+        verify_type_construction("u16", UInt16Type);
     }
 
     #[test]
     fn test_u32() {
-        verify("u32", UInt32Type);
+        verify_type_construction("u32", UInt32Type);
     }
 
     #[test]
     fn test_u64() {
-        verify("u64", UInt64Type);
+        verify_type_construction("u64", UInt64Type);
     }
 
     #[test]
     fn test_u128() {
-        verify("u128", UInt128Type);
+        verify_type_construction("u128", UInt128Type);
     }
 
     #[test]
     fn test_uuid() {
-        verify("UUID", UUIDType);
+        verify_type_construction("UUID", UUIDType);
     }
 
-    fn verify(type_decl: &str, data_type: DataType) {
+    fn verify_type_construction(type_decl: &str, data_type: DataType) {
         let dt: DataType = DataType::compile(type_decl)
             .expect("Failed to parse column type");
         assert_eq!(dt, data_type)

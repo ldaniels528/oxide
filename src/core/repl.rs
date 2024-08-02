@@ -175,7 +175,7 @@ pub async fn run(mut state: REPLState) -> std::io::Result<()> {
         match result {
             TypedValue::TableValue(mrc) => {
                 let lines =
-                    TableRenderer::from_collection(Box::new(mrc.clone()), &mrc.get_columns());
+                    TableRenderer::from_collection(Box::new(mrc.clone()));
                 for line in lines { stdout.write((line + "\n").as_bytes())?; }
             }
             z => {

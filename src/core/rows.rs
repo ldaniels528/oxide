@@ -9,7 +9,7 @@ use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
 
-use shared_lib::{FieldJs, RowJs};
+use shared_lib::{fail, FieldJs, RowJs};
 
 use crate::byte_buffer::ByteBuffer;
 use crate::codec;
@@ -20,6 +20,7 @@ use crate::row_metadata::RowMetadata;
 use crate::server::determine_column_value;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::Undefined;
 
 /// Represents a row of a table structure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -163,6 +164,10 @@ impl Row {
     /// returns the total record size (in bytes)
     pub fn get_record_size(&self) -> usize { Self::compute_record_size(&self.columns) }
 
+    pub fn get_values(&self) -> Vec<TypedValue> {
+        self.fields.iter().map(|f| f.value.clone()).collect()
+    }
+
     pub fn matches(&self, machine: &Machine, condition: &Option<Box<Expression>>) -> bool {
         if let Some(condition) = condition {
             let machine = machine.with_row(self);
@@ -190,6 +195,35 @@ impl Row {
     }
 
     fn to_row_offset(&self, id: usize) -> u64 { (id as u64) * (Self::compute_record_size(&self.columns) as u64) }
+
+    /// Creates a new [Row] from the supplied fields and values
+    pub fn transform(
+        &self,
+        field_names: &Vec<String>,
+        field_values: &Vec<TypedValue>
+    ) -> std::io::Result<Row> {
+        // field and value vectors must have the same length
+        if field_names.len() != field_values.len() {
+            return fail(format!("Data mismatch: columns ({}) vs values ({})", field_names.len(), field_values.len()));
+        }
+        // build a cache (mapping) of field names to values
+        let cache = field_names.iter().zip(field_values.iter())
+            .fold(HashMap::new(), |mut m, (k, v)| {
+                m.insert(k.to_string(), v.clone());
+                m
+            });
+        // build the new fields vector
+        let new_fields = self.get_columns().iter().zip(self.get_fields().iter())
+            .map(|(c, f)| match cache.get(c.get_name()) {
+                Some(Undefined) => f.clone(),
+                Some(tv) => Field::new(tv.clone()),
+                None => f.clone()
+            })
+            .collect::<Vec<Field>>();
+        // return the transformed row
+        let new_row = Row::new(self.get_id(), self.get_columns().clone(), new_fields);
+        Ok(new_row)
+    }
 
     /// Returns a [Vec] containing the values in order of the fields within the row.
     pub fn unwrap(&self) -> Vec<&TypedValue> {

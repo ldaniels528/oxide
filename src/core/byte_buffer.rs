@@ -4,7 +4,7 @@
 
 use std::ops::Index;
 
-use shared_lib::{fail, FieldJs, RowJs};
+use shared_lib::fail;
 
 use crate::codec;
 use crate::data_types::*;
@@ -13,8 +13,10 @@ use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::serialization::disassemble;
 use crate::server::ColumnJs;
+use crate::structure::Structure;
 use crate::table_columns::TableColumn;
 use crate::typed_values::*;
+use crate::typed_values::TypedValue::StructureValue;
 
 /// A JVM-inspired Byte Buffer utility (Big Endian)
 pub struct ByteBuffer {
@@ -236,7 +238,7 @@ impl ByteBuffer {
         }
     }
 
-    pub fn next_struct(&mut self) -> std::io::Result<RowJs> {
+    pub fn next_struct(&mut self) -> std::io::Result<Structure> {
         let columns = self.next_columns();
         self.next_struct_with_columns(&columns)
     }
@@ -244,12 +246,8 @@ impl ByteBuffer {
     pub fn next_struct_with_columns(
         &mut self,
         columns: &Vec<ColumnJs>,
-    ) -> std::io::Result<RowJs> {
-        let fields = columns.iter().map(|column| {
-            let value = TypedValue::Null.to_json(); // TODO decode the value
-            FieldJs::new(column.get_name(), value)
-        }).collect::<Vec<FieldJs>>();
-        Ok(RowJs::new(None, fields))
+    ) -> std::io::Result<Structure> {
+        Ok(Structure::construct(columns, self.next_array()?))
     }
 
     pub fn next_table(&mut self) -> std::io::Result<ModelRowCollection> {
@@ -302,8 +300,8 @@ impl ByteBuffer {
 
     pub fn next_uuid(&mut self) -> [u8; 16] {
         let mut uuid = [0u8; 16];
-        let bytes = self.next_bytes(16);
-        for i in 0..16 {
+        let bytes = self.next_bytes(uuid.len());
+        for i in 0..uuid.len() {
             uuid[i] = bytes[i]
         }
         uuid
@@ -334,7 +332,7 @@ impl ByteBuffer {
             T_JSON_OBJECT => Ok(JSONObjectValue(self.next_json()?)),
             T_ROWS_AFFECTED => Ok(RowsAffected(self.next_u32() as usize)),
             T_STRING => Ok(StringValue(self.next_string())),
-            T_STRUCT => Ok(StructValue(self.next_struct()?)),
+            T_STRUCTURE => Ok(StructureValue(self.next_struct()?)),
             T_TABLE_VALUE => Ok(TableValue(self.next_table()?)),
             T_TABLE_NS => Ok(TableNs(self.next_string())),
             T_TUPLE => Ok(TupleValue(self.next_array()?)),
@@ -446,8 +444,11 @@ impl ByteBuffer {
         self
     }
 
-    pub fn put_struct(&mut self, row: RowJs) -> &Self {
-        todo!()
+    pub fn put_struct(&mut self, structure: Structure) -> &Self {
+        let columns = ColumnJs::from_physical_columns(&structure.get_columns());
+        self.put_columns(&columns);
+        self.put_bytes(&structure.encode());
+        self
     }
 
     pub fn put_table(&mut self, mrc: ModelRowCollection) -> &Self {

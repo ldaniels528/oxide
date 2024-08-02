@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
+use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
+use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
 
 /// Row-model-vector-based RowCollection implementation
@@ -20,6 +22,14 @@ pub struct ModelRowCollection {
 }
 
 impl ModelRowCollection {
+    /// Creates a new [ModelRowCollection] from abstract columns
+    pub fn construct(columns: &Vec<ColumnJs>) -> ModelRowCollection {
+        match TableColumn::from_columns(columns) {
+            Ok(columns) => ModelRowCollection::new(columns, vec![]),
+            Err(err) => panic!("{}", err.to_string())
+        }
+    }
+
     /// Decodes a byte vector into a [ModelRowCollection]
     pub fn decode(columns: Vec<TableColumn>, bytes: Vec<u8>) -> Self {
         let record_size = Row::compute_record_size(&columns);
@@ -86,33 +96,27 @@ impl RowCollection for ModelRowCollection {
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
+        println!("mrc|overwrite {}", row);
         // resize the rows to prevent overflow
         if self.row_data.len() <= id {
             self.row_data.resize(id + 1, (RowMetadata::new(false), Row::empty(&self.columns)));
         }
 
         // set the block, update the watermark
-        self.row_data[id] = (RowMetadata::new(true), row.clone());
+        self.row_data[id] = (RowMetadata::new(true), row.with_row_id(id));
         if self.watermark <= id {
             self.watermark = id + 1;
         }
-        Ok(TypedValue::Ack)
+        for s in TableRenderer::from_collection(Box::new(self.clone())) {
+            println!("mrc|overwrite {}", s)
+        }
+        Ok(TypedValue::RowsAffected(1))
     }
 
-    fn overwrite_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
         let (_, row) = self.row_data[id].clone();
         self.row_data[id] = (metadata.clone(), row);
-        Ok(TypedValue::Ack)
-    }
-
-    fn read(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
-        let (metadata, row) =
-            if id < self.watermark {
-                self.row_data[id].clone()
-            } else {
-                (RowMetadata::new(false), Row::empty(&self.columns))
-            };
-        Ok((row, metadata))
+        Ok(TypedValue::RowsAffected(1))
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
@@ -127,10 +131,29 @@ impl RowCollection for ModelRowCollection {
         Ok(rows)
     }
 
+    fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
+        let (metadata, row) =
+            if id < self.watermark {
+                self.row_data[id].clone()
+            } else {
+                (RowMetadata::new(false), Row::empty(&self.columns))
+            };
+        Ok((row, metadata))
+    }
+
+    fn read_row_metadata(&mut self, id: usize) -> std::io::Result<RowMetadata> {
+        let metadata = if id < self.row_data.len() {
+            self.row_data[id].0.clone()
+        } else {
+            RowMetadata::new(false)
+        };
+        Ok(metadata)
+    }
+
     fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
         self.row_data.resize(new_size, (RowMetadata::new(true), Row::empty(&self.columns)));
         self.watermark = new_size;
-        Ok(TypedValue::Ack)
+        Ok(TypedValue::RowsAffected(new_size))
     }
 }
 

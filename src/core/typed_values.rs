@@ -28,6 +28,7 @@ use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::serialization::disassemble;
 use crate::server::ColumnJs;
+use crate::structure::Structure;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::*;
 
@@ -62,7 +63,7 @@ pub enum TypedValue {
     JSONObjectValue(Vec<(String, TypedValue)>),
     RowsAffected(usize),
     StringValue(String),
-    StructValue(RowJs),
+    StructureValue(Structure),
     TableNs(String),
     TableValue(ModelRowCollection),
     TupleValue(Vec<TypedValue>),
@@ -131,8 +132,8 @@ impl TypedValue {
             JSONObjectType => JSONObjectValue(todo!()),
             RowsAffectedType => RowsAffected(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
-            StructureType(columns) => StructValue(todo!()),
-            TableType(columns) => todo!(),
+            StructureType(columns) => StructureValue(Structure::from_logical_columns(columns)),
+            TableType(columns) => TableValue(ModelRowCollection::construct(columns)),
             UInt8Type => codec::decode_u8(buffer, offset, |b| UInt8Value(b)),
             UInt16Type => codec::decode_u8x2(buffer, offset, |b| UInt16Value(u16::from_be_bytes(b))),
             UInt32Type => codec::decode_u8x4(buffer, offset, |b| UInt32Value(u32::from_be_bytes(b))),
@@ -180,7 +181,7 @@ impl TypedValue {
             TableValue(rc) => rc.encode(),
             RowsAffected(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
-            StructValue(item) => codec::encode_string(item.to_json_string().as_str()),
+            StructureValue(structure) => codec::encode_string(structure.to_string().as_str()),
             TableNs(path) => codec::encode_string(path),
             TupleValue(items) => {
                 let mut bytes = vec![];
@@ -212,9 +213,9 @@ impl TypedValue {
     ) -> std::io::Result<TypedValue> {
         let tv = match data_type {
             AckType => Ack,
-            BLOBType(_) => BLOB(buffer.next_blob()),
+            BLOBType(..) => BLOB(buffer.next_blob()),
             BooleanType => Boolean(buffer.next_bool()),
-            CLOBType(_) => CLOB(buffer.next_clob()),
+            CLOBType(..) => CLOB(buffer.next_clob()),
             DateType => DateValue(buffer.next_i64()),
             EnumType(labels) => {
                 let index = buffer.next_u32();
@@ -234,8 +235,8 @@ impl TypedValue {
             Int128Type => Int128Value(buffer.next_i128()),
             JSONObjectType => JSONObjectValue(buffer.next_json()?),
             RowsAffectedType => RowsAffected(buffer.next_row_id()),
-            StringType(_) => StringValue(buffer.next_string()),
-            StructureType(columns) => StructValue(buffer.next_struct_with_columns(columns)?),
+            StringType(..) => StringValue(buffer.next_string()),
+            StructureType(columns) => StructureValue(buffer.next_struct_with_columns(columns)?),
             TableType(columns) => TableValue(buffer.next_table_with_columns(columns)?),
             UInt8Type => UInt8Value(buffer.next_u8()),
             UInt16Type => UInt16Value(buffer.next_u16()),
@@ -249,6 +250,8 @@ impl TypedValue {
 
     fn intercept_unknowns(a: &TypedValue, b: &TypedValue) -> Option<TypedValue> {
         match (a, b) {
+            (Ack, Boolean(v)) => Some(Boolean(*v)),
+            (Boolean(v), Ack) => Some(Boolean(*v)),
             (Undefined, _) => Some(Undefined),
             (_, Undefined) => Some(Undefined),
             (Null, _) => Some(Null),
@@ -282,7 +285,7 @@ impl TypedValue {
     }
 
     pub fn is_ok(&self) -> bool {
-        matches!(self, Ack | Boolean(true) | RowsAffected(_) | TableNs(_) | TableValue(_))
+        matches!(self, Ack | Boolean(true) | RowsAffected(..) | TableNs(..) | TableValue(..))
     }
 
     pub fn is_string(&self) -> bool {
@@ -308,7 +311,7 @@ impl TypedValue {
             serde_json::Value::Number(n) => n.as_f64().map(Float64Value).unwrap_or(Null),
             serde_json::Value::String(s) => StringValue(s),
             serde_json::Value::Array(a) => Array(a.iter().map(|v| Self::from_json(v.clone())).collect()),
-            serde_json::Value::Object(_) => todo!()
+            serde_json::Value::Object(..) => todo!()
         }
     }
 
@@ -331,32 +334,32 @@ impl TypedValue {
             Undefined => "Undefined",
             Null => "Null",
             Function { .. } => "Function",
-            Array(_) => "Array",
-            BLOB(_) => "BLOB",
-            Boolean(_) => "Boolean",
-            CLOB(_) => "CLOB",
-            DateValue(_) => "Date",
-            ErrorValue(_) => "Error",
-            JSONObjectValue(_) => "JSON",
-            Float32Value(_) => "f32",
-            Float64Value(_) => "f64",
-            Int8Value(_) => "i8",
-            Int16Value(_) => "i16",
-            Int32Value(_) => "i32",
-            Int64Value(_) => "i64",
-            Int128Value(_) => "i128",
-            RowsAffected(_) => "RowsAffected",
-            StringValue(_) => "String",
-            StructValue(_) => "Struct",
-            TableNs(_) => "TablePtr",
-            TableValue(_) => "Table",
-            TupleValue(_) => "Tuple",
-            UInt8Value(_) => "u8",
-            UInt16Value(_) => "u16",
-            UInt32Value(_) => "u32",
-            UInt64Value(_) => "u64",
-            UInt128Value(_) => "u128",
-            UUIDValue(_) => "UUID",
+            Array(..) => "Array",
+            BLOB(..) => "BLOB",
+            Boolean(..) => "Boolean",
+            CLOB(..) => "CLOB",
+            DateValue(..) => "Date",
+            ErrorValue(..) => "Error",
+            JSONObjectValue(..) => "JSON",
+            Float32Value(..) => "f32",
+            Float64Value(..) => "f64",
+            Int8Value(..) => "i8",
+            Int16Value(..) => "i16",
+            Int32Value(..) => "i32",
+            Int64Value(..) => "i64",
+            Int128Value(..) => "i128",
+            RowsAffected(..) => "RowsAffected",
+            StringValue(..) => "String",
+            StructureValue(..) => "Struct",
+            TableNs(..) => "TablePtr",
+            TableValue(..) => "Table",
+            TupleValue(..) => "Tuple",
+            UInt8Value(..) => "u8",
+            UInt16Value(..) => "u16",
+            UInt32Value(..) => "u32",
+            UInt64Value(..) => "u64",
+            UInt128Value(..) => "u128",
+            UUIDValue(..) => "UUID",
         };
         result.to_string()
     }
@@ -367,32 +370,32 @@ impl TypedValue {
             Undefined => T_UNDEFINED,
             Null => T_NULL,
             Function { .. } => T_FUNCTION,
-            Array(_) => T_ARRAY,
-            BLOB(_) => T_BLOB,
-            Boolean(_) => T_BOOLEAN,
-            CLOB(_) => T_CLOB,
-            DateValue(_) => T_DATE,
-            ErrorValue(_) => T_ERROR,
-            JSONObjectValue(_) => T_JSON_OBJECT,
-            Float32Value(_) => T_FLOAT32,
-            Float64Value(_) => T_FLOAT64,
-            Int8Value(_) => T_INT8,
-            Int16Value(_) => T_INT16,
-            Int32Value(_) => T_INT32,
-            Int64Value(_) => T_INT64,
-            Int128Value(_) => T_INT128,
-            RowsAffected(_) => T_ROWS_AFFECTED,
-            StringValue(_) => T_STRING,
-            StructValue(_) => T_STRUCT,
-            TableNs(_) => T_TABLE_NS,
-            TableValue(_) => T_TABLE_VALUE,
-            TupleValue(_) => T_TUPLE,
-            UInt8Value(_) => T_UINT8,
-            UInt16Value(_) => T_UINT16,
-            UInt32Value(_) => T_UINT32,
-            UInt64Value(_) => T_UINT64,
-            UInt128Value(_) => T_UINT128,
-            UUIDValue(_) => T_UUID,
+            Array(..) => T_ARRAY,
+            BLOB(..) => T_BLOB,
+            Boolean(..) => T_BOOLEAN,
+            CLOB(..) => T_CLOB,
+            DateValue(..) => T_DATE,
+            ErrorValue(..) => T_ERROR,
+            JSONObjectValue(..) => T_JSON_OBJECT,
+            Float32Value(..) => T_FLOAT32,
+            Float64Value(..) => T_FLOAT64,
+            Int8Value(..) => T_INT8,
+            Int16Value(..) => T_INT16,
+            Int32Value(..) => T_INT32,
+            Int64Value(..) => T_INT64,
+            Int128Value(..) => T_INT128,
+            RowsAffected(..) => T_ROWS_AFFECTED,
+            StringValue(..) => T_STRING,
+            StructureValue(..) => T_STRUCTURE,
+            TableNs(..) => T_TABLE_NS,
+            TableValue(..) => T_TABLE_VALUE,
+            TupleValue(..) => T_TUPLE,
+            UInt8Value(..) => T_UINT8,
+            UInt16Value(..) => T_UINT16,
+            UInt32Value(..) => T_UINT32,
+            UInt64Value(..) => T_UINT64,
+            UInt128Value(..) => T_UINT128,
+            UUIDValue(..) => T_UUID,
         }
     }
 
@@ -430,7 +433,7 @@ impl TypedValue {
             Null => serde_json::Value::Null,
             RowsAffected(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
-            StructValue(item) => serde_json::json!(item),
+            StructureValue(structure) => serde_json::json!(structure),
             TableNs(path) => serde_json::json!(path),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
@@ -483,7 +486,7 @@ impl TypedValue {
             Null => "null".into(),
             RowsAffected(number) => number.to_string(),
             StringValue(string) => string.into(),
-            StructValue(item) => item.to_json_string(),
+            StructureValue(structure) => structure.to_string(),
             TableNs(path) => path.into(),
             TupleValue(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
@@ -717,8 +720,8 @@ impl Add for TypedValue {
 
     fn add(self, rhs: Self) -> Self::Output {
         match (&self, &rhs) {
-            (Ack, Boolean(_)) => Boolean(true),
-            (Boolean(_), Ack) => Boolean(true),
+            (Ack, Boolean(..)) => Boolean(true),
+            (Boolean(..), Ack) => Boolean(true),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
             (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
             _ => Self::numeric_op_2f(&self, &rhs, |a, b| a + b).unwrap_or(Undefined)

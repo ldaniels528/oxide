@@ -55,6 +55,7 @@ mod row_metadata;
 mod rows;
 mod serialization;
 mod server;
+mod structure;
 mod table_columns;
 mod table_view;
 mod table_renderer;
@@ -66,6 +67,7 @@ mod tokenizer;
 mod tokens;
 mod typed_values;
 mod websockets;
+mod file_column_row_collection;
 
 /// Starts the Oxide server
 #[actix_web::main]
