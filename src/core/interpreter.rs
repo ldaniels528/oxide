@@ -49,11 +49,14 @@ impl Interpreter {
 mod tests {
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
+    use crate::row_collection::RowCollection;
+    use crate::rows::Row;
     use crate::structure::Structure;
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote, make_quote_columns, make_table_columns};
+    use crate::table_renderer::TableRenderer;
+    use crate::testdata::{make_quote, make_quote_columns, make_scan_quote, make_table_columns};
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::{Ack, ErrorValue, Float64Value, Int64Value, RowsAffected, StringValue, StructureValue, TableValue, Undefined};
+    use crate::typed_values::TypedValue::{Ack, Boolean, ErrorValue, Float64Value, Int64Value, RowsAffected, StringValue, StructureValue, TableValue, Undefined};
 
     #[test]
     fn test_array_indexing() {
@@ -76,6 +79,45 @@ mod tests {
         assert_eq!(interpreter.evaluate("x % 5").unwrap(), TypedValue::Int64Value(0));
         assert_eq!(interpreter.evaluate("x < 35").unwrap(), TypedValue::Boolean(false));
         assert_eq!(interpreter.evaluate("x >= 35").unwrap(), TypedValue::Boolean(true));
+    }
+
+    #[test]
+    fn test_compact_from_namespace() {
+        let phys_columns = make_table_columns();
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            [+] stocks := ns("interpreter.compact.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+            [+] delete from stocks where last_sale > 1.0
+            [+] from stocks
+        "#).unwrap();
+
+        let rc = result.to_table().unwrap();
+        assert_eq!(rc.read_active_rows().unwrap(), vec![
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
+            make_quote(5, &phys_columns, "BOOM", "NASDAQ", 0.0872),
+        ]);
+
+        let result = interpreter.evaluate(r#"
+            [+] compact stocks
+            [+] from stocks
+        "#).unwrap();
+        let rc = result.to_table().unwrap();
+        let rows = rc.read_active_rows().unwrap();
+        for s in TableRenderer::from_rows(rows.clone()) { println!("{}", s); }
+        assert_eq!(rows, vec![
+            make_quote(0, &phys_columns, "BOOM", "NASDAQ", 0.0872),
+            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
+            make_quote(2, &phys_columns, "GOTO", "OTC", 0.1428),
+        ]);
     }
 
     #[test]
@@ -105,9 +147,52 @@ mod tests {
             &make_quote_columns(), vec![
                 StringValue("ABC".to_string()),
                 StringValue("AMEX".to_string()),
-                Float64Value(11.11)
-            ]
+                Float64Value(11.11),
+            ],
         )));
+    }
+
+    #[test]
+    fn test_describe_table_structure() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            [+] stocks := ns("interpreter.struct.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            describe stocks
+        "#).unwrap();
+
+        // process the table result
+        // |-----------------------------------------------------|
+        // | name      | type      | default_value | is_nullable |
+        // |-----------------------------------------------------|
+        // | symbol    | String(8) | null          | true        |
+        // | exchange  | String(8) | null          | true        |
+        // | last_sale | f64       | null          | true        |
+        // |-----------------------------------------------------|
+        let mrc = result.to_table().unwrap();
+        let mrc_rows = mrc.read_active_rows().unwrap();
+        let mrc_columns = mrc.get_columns();
+        for s in TableRenderer::from_rows(mrc_rows.clone()) { println!("{}", s); }
+        assert_eq!(mrc_rows, vec![
+            Row::new(0, mrc_columns.clone(), vec![
+                StringValue("symbol".to_string()),
+                StringValue("String(8)".to_string()),
+                StringValue("null".to_string()),
+                Boolean(true),
+            ]),
+            Row::new(1, mrc_columns.clone(), vec![
+                StringValue("exchange".to_string()),
+                StringValue("String(8)".to_string()),
+                StringValue("null".to_string()),
+                Boolean(true),
+            ]),
+            Row::new(2, mrc_columns.clone(), vec![
+                StringValue("last_sale".to_string()),
+                StringValue("f64".to_string()),
+                StringValue("null".to_string()),
+                Boolean(true),
+            ]),
+        ]);
     }
 
     #[test]
@@ -252,8 +337,8 @@ mod tests {
         create table ns("interpreter.create.stocks") (
             symbol: String(8),
             exchange: String(8),
-            last_sale: f64)
-        "#).unwrap();
+            last_sale: f64
+        )"#).unwrap();
         assert_eq!(result, Ack)
     }
 
@@ -263,7 +348,7 @@ mod tests {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
 
-        // setup the interpreter
+        // set up the interpreter
         assert_eq!(Ack, interpreter.evaluate(r#"
             stocks := ns("interpreter.crud.stocks")
         "#).unwrap());
@@ -338,6 +423,43 @@ mod tests {
     }
 
     #[test]
+    fn test_scan_from_namespace() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            [+] stocks := ns("interpreter.scan.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
+                 { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
+            [+] delete from stocks where last_sale > 1.0
+            [+] scan stocks
+        "#).unwrap();
+
+        // |-----------------------------------------------|
+        // | symbol | exchange | last_sale | _id | _active |
+        // |-----------------------------------------------|
+        // | ABC    | AMEX     | 12.33     | 0   | false   |
+        // | UNO    | OTC      | 0.2456    | 1   | true    |
+        // | BIZ    | NYSE     | 9.775     | 2   | false   |
+        // | GOTO   | OTC      | 0.1442    | 3   | true    |
+        // | XYZ    | NYSE     | 0.0289    | 4   | true    |
+        // |-----------------------------------------------|
+        let mrc = result.to_table().unwrap();
+        let mrc_rows = mrc.read_active_rows().unwrap();
+        let scan_columns = mrc.get_columns();
+        for s in TableRenderer::from_rows(mrc_rows.clone()) { println!("{}", s); }
+        assert_eq!(mrc_rows, vec![
+            make_scan_quote(0, scan_columns, "ABC", "AMEX", 12.33, false),
+            make_scan_quote(1, scan_columns, "UNO", "OTC", 0.2456, true),
+            make_scan_quote(2, scan_columns, "BIZ", "NYSE", 9.775, false),
+            make_scan_quote(3, scan_columns, "GOTO", "OTC", 0.1442, true),
+            make_scan_quote(4, scan_columns, "XYZ", "NYSE", 0.0289, true),
+        ])
+    }
+
+    #[test]
     fn test_select_from_namespace() {
         // create a table with test data
         let columns = make_quote_columns();
@@ -376,7 +498,7 @@ mod tests {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
 
-        // setup the interpreter
+        // set up the interpreter
         let mut interpreter = Interpreter::new();
         assert_eq!(interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.select.stocks")

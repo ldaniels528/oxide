@@ -69,6 +69,15 @@ impl RowMetadata {
             (b2n(self.is_encrypted) << 5) |
             (b2n(self.is_replicated) << 4)) as u8
     }
+
+    pub fn with_allocated(&self, is_allocated: bool) -> Self {
+        Self {
+            is_allocated,
+            is_blob: self.is_blob,
+            is_encrypted: self.is_encrypted,
+            is_replicated: self.is_replicated,
+        }
+    }
 }
 
 // Unit tests

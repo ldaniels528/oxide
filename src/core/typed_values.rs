@@ -6,6 +6,7 @@ use std::{i32, io};
 use std::cmp::Ordering;
 use std::collections::Bound;
 use std::fmt::Display;
+use std::hash::{DefaultHasher, Hasher};
 use std::ops::*;
 
 use chrono::DateTime;
@@ -14,16 +15,20 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use shared_lib::RowJs;
+use shared_lib::{fail, RowJs};
 
 use crate::byte_buffer::ByteBuffer;
 use crate::cnv_error;
 use crate::codec;
+use crate::compiler::fail_value;
 use crate::data_types::*;
 use crate::data_types::DataType::*;
+use crate::dataframe_config::DataFrameConfig;
+use crate::dataframes::DataFrame;
 use crate::expression::Expression;
-use crate::fields::Field;
+use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
+use crate::namespaces::Namespace;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::serialization::disassemble;
@@ -364,6 +369,12 @@ impl TypedValue {
         result.to_string()
     }
 
+    pub fn hash_code(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        hasher.write(&self.encode());
+        hasher.finish()
+    }
+
     pub fn ordinal(&self) -> u8 {
         match *self {
             Ack => T_ACK,
@@ -450,6 +461,19 @@ impl TypedValue {
             UInt64Value(number) => serde_json::json!(number),
             UInt128Value(number) => serde_json::json!(number),
             UUIDValue(guid) => serde_json::json!(Uuid::from_bytes(*guid).to_string()),
+        }
+    }
+
+    pub fn to_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
+        match self {
+            TableValue(mrc) => Ok(Box::new(mrc.clone())),
+            TableNs(path) => {
+                let ns = Namespace::parse(path.as_str())?;
+                let frc = FileRowCollection::open(&ns)?;
+                Ok(Box::new(frc))
+            }
+            ErrorValue(message) => fail(message),
+            z => fail_value("Table", z)
         }
     }
 
@@ -627,6 +651,26 @@ impl TypedValue {
         }
     }
 
+    pub fn assume_u64(&self) -> Option<u64> {
+        match &self {
+            Ack => Some(1),
+            Float32Value(n) => Some(*n as u64),
+            Float64Value(n) => Some(*n as u64),
+            Int8Value(n) => Some(*n as u64),
+            Int16Value(n) => Some(*n as u64),
+            Int32Value(n) => Some(*n as u64),
+            Int64Value(n) => Some(*n as u64),
+            Int128Value(n) => Some(*n as u64),
+            UInt8Value(n) => Some(*n as u64),
+            UInt16Value(n) => Some(*n as u64),
+            UInt32Value(n) => Some(*n as u64),
+            UInt64Value(n) => Some(*n),
+            UInt128Value(n) => Some(*n as u64),
+            RowsAffected(n) => Some(*n as u64),
+            _ => None
+        }
+    }
+
     pub fn assume_usize(&self) -> Option<usize> {
         match &self {
             Ack => Some(1),
@@ -722,6 +766,8 @@ impl Add for TypedValue {
         match (&self, &rhs) {
             (Ack, Boolean(..)) => Boolean(true),
             (Boolean(..), Ack) => Boolean(true),
+            (Ack, RowsAffected(n)) => RowsAffected(*n),
+            (RowsAffected(n), Ack) => RowsAffected(*n),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
             (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
             _ => Self::numeric_op_2f(&self, &rhs, |a, b| a + b).unwrap_or(Undefined)

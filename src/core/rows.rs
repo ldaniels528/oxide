@@ -13,21 +13,22 @@ use shared_lib::{fail, FieldJs, RowJs};
 
 use crate::byte_buffer::ByteBuffer;
 use crate::codec;
+use crate::data_types::DataType;
 use crate::expression::Expression;
-use crate::fields::Field;
+use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
 use crate::row_metadata::RowMetadata;
 use crate::server::determine_column_value;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::Undefined;
+use crate::typed_values::TypedValue::{Null, Undefined};
 
 /// Represents a row of a table structure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Row {
     id: usize,
     columns: Vec<TableColumn>,
-    fields: Vec<Field>,
+    values: Vec<TypedValue>,
 }
 
 impl Row {
@@ -37,8 +38,8 @@ impl Row {
     ////////////////////////////////////////////////////////////////////
 
     /// Primary Constructor
-    pub fn new(id: usize, columns: Vec<TableColumn>, fields: Vec<Field>) -> Self {
-        Self { id, columns, fields }
+    pub fn new(id: usize, columns: Vec<TableColumn>, values: Vec<TypedValue>) -> Self {
+        Self { id, columns, values }
     }
 
     /// Decodes the supplied buffer returning a row and its metadata
@@ -49,10 +50,17 @@ impl Row {
         }
         let metadata = RowMetadata::from_bytes(buffer, 0);
         let id = codec::decode_row_id(buffer, 1);
-        let fields: Vec<Field> = columns.iter().map(|t| {
-            Field::decode(&t.data_type, &buffer, t.offset)
+        let values: Vec<TypedValue> = columns.iter().map(|t| {
+            Self::decode_value(&t.data_type, &buffer, t.offset)
         }).collect();
-        (Self::new(id, columns.clone(), fields), metadata)
+        (Self::new(id, columns.clone(), values), metadata)
+    }
+
+    pub fn decode_value(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> TypedValue {
+        let metadata = FieldMetadata::decode(buffer[offset]);
+        if metadata.is_active {
+            TypedValue::decode(&data_type, buffer, offset + 1)
+        } else { Null }
     }
 
     /// Decodes the supplied buffer returning a collection of rows.
@@ -67,7 +75,7 @@ impl Row {
 
     /// Returns an empty row.
     pub fn empty(columns: &Vec<TableColumn>) -> Self {
-        Self::new(0, columns.clone(), columns.iter().map(|_| Field::new(TypedValue::Null)).collect())
+        Self::new(0, columns.clone(), columns.iter().map(|_| Null).collect())
     }
 
     pub fn from_buffer(
@@ -81,20 +89,28 @@ impl Row {
         }
         let metadata = RowMetadata::decode(buffer.next_u8());
         let id = buffer.next_row_id();
-        let mut fields: Vec<Field> = vec![];
+        let mut values = vec![];
         for col in columns {
-            let field = Field::from_buffer(&col.data_type, buffer, col.offset)?;
-            fields.push(field);
+            let field = Self::from_buffer_to_value(&col.data_type, buffer, col.offset)?;
+            values.push(field);
         }
-        Ok((Self::new(id, columns.clone(), fields), metadata))
+        Ok((Self::new(id, columns.clone(), values), metadata))
+    }
+
+    pub fn from_buffer_to_value(data_type: &DataType, buffer: &mut ByteBuffer, offset: usize) -> std::io::Result<TypedValue> {
+        let metadata: FieldMetadata = FieldMetadata::decode(buffer[offset]);
+        let value: TypedValue = if metadata.is_active {
+            TypedValue::from_buffer(&data_type, buffer)?
+        } else { Null };
+        Ok(value)
     }
 
     pub fn from_row_js(columns: &Vec<TableColumn>, form: &RowJs) -> Self {
-        let mut fields = vec![];
+        let mut values = vec![];
         for tc in columns {
-            fields.push(Field::with_value(determine_column_value(form, tc.get_name())));
+            values.push(determine_column_value(form, tc.get_name()));
         }
-        Row::new(form.id.unwrap_or(0), columns.clone(), fields)
+        Row::new(form.id.unwrap_or(0), columns.clone(), values)
     }
 
     pub fn from_tuples(
@@ -108,15 +124,15 @@ impl Row {
             cache.insert(name.to_string(), value.clone());
         }
         // construct the fields
-        let mut fields = vec![];
+        let mut values = vec![];
         for c in columns {
             if let Some(value) = cache.get(c.get_name()) {
-                fields.push(Field::with_value(value.clone()));
+                values.push(value.clone());
             } else {
-                fields.push(Field::with_value(TypedValue::Undefined))
+                values.push(TypedValue::Undefined)
             }
         }
-        Row::new(id, columns.clone(), fields)
+        Row::new(id, columns.clone(), values)
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -136,36 +152,44 @@ impl Row {
         buf.push(RowMetadata::new(true).encode());
         buf.extend(codec::encode_row_id(self.id));
         // include the fields
-        let bb: Vec<u8> = self.fields.iter().zip(self.columns.iter())
-            .flat_map(|(f, t)| f.encode(t.max_physical_size))
+        let bb: Vec<u8> = self.values.iter().zip(self.columns.iter())
+            .flat_map(|(v, c)| Self::encode_value(v, &FieldMetadata::new(true), c.max_physical_size))
             .collect();
         buf.extend(bb);
         buf.resize(capacity, 0u8);
         buf
     }
 
-    pub fn find_field_by_name(&self, name: &str) -> Option<TypedValue> {
-        self.columns.iter().zip(self.fields.iter())
-            .find_map(|(c, f)| {
-                if c.get_name() == name { Some(f.value.clone()) } else { None }
-            })
+    pub fn encode_value(
+        value: &TypedValue,
+        metadata: &FieldMetadata,
+        capacity: usize,
+    ) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::with_capacity(capacity);
+        buf.push(metadata.encode());
+        buf.extend(value.encode());
+        buf.resize(capacity, 0u8);
+        buf
     }
 
-    pub fn get(&self, name: &str) -> TypedValue {
-        self.find_field_by_name(name).unwrap_or(TypedValue::Undefined)
+    pub fn find_value_by_name(&self, name: &str) -> Option<TypedValue> {
+        self.columns.iter().zip(self.values.iter())
+            .find_map(|(c, v)| {
+                if c.get_name() == name { Some(v.clone()) } else { None }
+            })
     }
 
     pub fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
 
-    pub fn get_fields(&self) -> &Vec<Field> { &self.fields }
+    pub fn get_values(&self) -> Vec<TypedValue> { self.values.clone() }
 
     pub fn get_id(&self) -> usize { self.id }
 
     /// returns the total record size (in bytes)
     pub fn get_record_size(&self) -> usize { Self::compute_record_size(&self.columns) }
 
-    pub fn get_values(&self) -> Vec<TypedValue> {
-        self.fields.iter().map(|f| f.value.clone()).collect()
+    pub fn get_value_by_name(&self, name: &str) -> TypedValue {
+        self.find_value_by_name(name).unwrap_or(Undefined)
     }
 
     pub fn matches(&self, machine: &Machine, condition: &Option<Box<Expression>>) -> bool {
@@ -183,15 +207,15 @@ impl Row {
     pub fn to_hash_map(&self) -> HashMap<String, TypedValue> {
         let mut mapping = HashMap::new();
         mapping.insert("_id".into(), TypedValue::RowsAffected(self.id));
-        for (field, column) in self.fields.iter().zip(&self.columns) {
-            mapping.insert(column.get_name().to_string(), field.value.clone());
+        for (value, column) in self.values.iter().zip(&self.columns) {
+            mapping.insert(column.get_name().to_string(), value.clone());
         }
         mapping
     }
 
     pub fn to_row_js(&self) -> shared_lib::RowJs {
-        shared_lib::RowJs::new(Some(self.get_id()), self.get_fields().iter().zip(self.get_columns())
-            .map(|(f, c)| FieldJs::new(c.get_name(), f.value.to_json())).collect())
+        RowJs::new(Some(self.get_id()), self.get_values().iter().zip(self.get_columns())
+            .map(|(v, c)| FieldJs::new(c.get_name(), v.to_json())).collect())
     }
 
     fn to_row_offset(&self, id: usize) -> u64 { (id as u64) * (Self::compute_record_size(&self.columns) as u64) }
@@ -200,7 +224,7 @@ impl Row {
     pub fn transform(
         &self,
         field_names: &Vec<String>,
-        field_values: &Vec<TypedValue>
+        field_values: &Vec<TypedValue>,
     ) -> std::io::Result<Row> {
         // field and value vectors must have the same length
         if field_names.len() != field_values.len() {
@@ -213,13 +237,13 @@ impl Row {
                 m
             });
         // build the new fields vector
-        let new_fields = self.get_columns().iter().zip(self.get_fields().iter())
+        let new_fields = self.get_columns().iter().zip(self.get_values().iter())
             .map(|(c, f)| match cache.get(c.get_name()) {
                 Some(Undefined) => f.clone(),
-                Some(tv) => Field::new(tv.clone()),
+                Some(tv) => tv.clone(),
                 None => f.clone()
             })
-            .collect::<Vec<Field>>();
+            .collect::<Vec<TypedValue>>();
         // return the transformed row
         let new_row = Row::new(self.get_id(), self.get_columns().clone(), new_fields);
         Ok(new_row)
@@ -228,31 +252,29 @@ impl Row {
     /// Returns a [Vec] containing the values in order of the fields within the row.
     pub fn unwrap(&self) -> Vec<&TypedValue> {
         let mut values = vec![];
-        for field in &self.fields {
-            values.push(&field.value);
-        }
+        for value in &self.values { values.push(value) }
         values
     }
 
     pub fn with_row_id(&self, id: usize) -> Self {
-        Self::new(id, self.columns.clone(), self.fields.clone())
+        Self::new(id, self.columns.clone(), self.values.clone())
     }
 }
 
 impl Display for Row {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let data = self.columns.iter().zip(self.fields.iter())
-            .map(|(c, f)| format!("{}: {}", c.get_name(), f.value.to_json().to_string()))
+        let data = self.columns.iter().zip(self.values.iter())
+            .map(|(c, v)| format!("{}: {}", c.get_name(), v.to_json().to_string()))
             .collect::<Vec<String>>().join(", ");
         write!(f, "Row {{ {} }}", data)
     }
 }
 
 impl Index<usize> for Row {
-    type Output = Field;
+    type Output = TypedValue;
 
     fn index(&self, id: usize) -> &Self::Output {
-        &self.fields[id]
+        &self.values[id]
     }
 }
 
@@ -260,7 +282,7 @@ impl Index<usize> for Row {
 macro_rules! row {
     ($id:expr, $columns:expr, $values:expr) => {
         crate::rows::Row::new($id, $columns.clone(), $values.iter()
-            .map(|v| crate::fields::Field::new(v.clone())).collect())
+            .map(|v| v.clone()).collect())
     }
 }
 
@@ -283,10 +305,10 @@ mod tests {
                 TableColumn::new("exchange", StringType(8), Null, 26),
                 TableColumn::new("last_sale", Float64Type, Null, 43),
             ],
-            fields: vec![
-                Field::new(StringValue("KING".into())),
-                Field::new(StringValue("YHWH".into())),
-                Field::new(Float64Value(78.35)),
+            values: vec![
+                StringValue("KING".into()),
+                StringValue("YHWH".into()),
+                Float64Value(78.35),
             ],
         });
     }
@@ -348,9 +370,9 @@ mod tests {
     fn test_fields_by_index() {
         let row = make_quote(213, &make_table_columns(), "YRU", "OTC", 88.44);
         assert_eq!(row.id, 213);
-        assert_eq!(row[0].value, StringValue("YRU".into()));
-        assert_eq!(row[1].value, StringValue("OTC".into()));
-        assert_eq!(row[2].value, Float64Value(88.44));
+        assert_eq!(row[0], StringValue("YRU".into()));
+        assert_eq!(row[1], StringValue("OTC".into()));
+        assert_eq!(row[2], Float64Value(88.44));
     }
 
     #[test]
@@ -358,21 +380,21 @@ mod tests {
         let row = row!(111, make_table_columns(), vec![
             StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
         ]);
-        assert_eq!(row.find_field_by_name("symbol"), Some(StringValue("GE".into())));
-        assert_eq!(row.find_field_by_name("exchange"), Some(StringValue("NYSE".into())));
-        assert_eq!(row.find_field_by_name("last_sale"), Some(Float64Value(48.88)));
-        assert_eq!(row.find_field_by_name("rating"), None);
+        assert_eq!(row.find_value_by_name("symbol"), Some(StringValue("GE".into())));
+        assert_eq!(row.find_value_by_name("exchange"), Some(StringValue("NYSE".into())));
+        assert_eq!(row.find_value_by_name("last_sale"), Some(Float64Value(48.88)));
+        assert_eq!(row.find_value_by_name("rating"), None);
     }
 
     #[test]
-    fn test_get_by_name() {
+    fn test_get_value_by_name() {
         let row = row!(111, make_table_columns(), vec![
             StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
         ]);
-        assert_eq!(row.get("symbol"), StringValue("GE".into()));
-        assert_eq!(row.get("exchange"), StringValue("NYSE".into()));
-        assert_eq!(row.get("last_sale"), Float64Value(48.88));
-        assert_eq!(row.get("rating"), Undefined);
+        assert_eq!(row.get_value_by_name("symbol"), StringValue("GE".into()));
+        assert_eq!(row.get_value_by_name("exchange"), StringValue("NYSE".into()));
+        assert_eq!(row.get_value_by_name("last_sale"), Float64Value(48.88));
+        assert_eq!(row.get_value_by_name("rating"), Undefined);
     }
 
     #[test]

@@ -41,7 +41,7 @@ mod dataframes;
 mod data_types;
 mod expression;
 mod field_metadata;
-mod fields;
+mod file_column_row_collection;
 mod file_row_collection;
 mod interpreter;
 mod machine;
@@ -67,7 +67,8 @@ mod tokenizer;
 mod tokens;
 mod typed_values;
 mod websockets;
-mod file_column_row_collection;
+mod hashindex;
+
 
 /// Starts the Oxide server
 #[actix_web::main]

@@ -128,6 +128,7 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
     use Mutation::*;
     match expression {
         Append { path, source } => encode(E_APPEND, vec![path, source]),
+        Compact { path } => encode(E_COMPACT, vec![path]),
         Delete { path, condition, limit } =>
             encode(E_DELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
         IntoNs(a, b) => encode(E_INTO_NS, vec![a, b]),
@@ -139,6 +140,7 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
             args.push(get_or_undef(limit));
             encode_vec(E_OVERWRITE, &args)
         }
+        Scan { path } => encode(E_SCAN, vec![path]),
         Truncate { path, limit: new_size } =>
             encode(E_TRUNCATE, vec![path, &get_or_undef(new_size)]),
         Undelete { path, condition, limit } =>
@@ -158,6 +160,7 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
 pub fn assemble_inquiry(expression: &Queryable) -> Vec<u8> {
     use Queryable::*;
     match expression {
+        Describe(a) => encode(E_DESCRIBE, vec![a]),
         Limit { from, limit } => encode(E_LIMIT, vec![from, limit]),
         Reverse(a) => encode(E_REVERSE, vec![a]),
         Select {
@@ -272,6 +275,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
     match buf.next_u8() {
         E_AND => Ok(And(decode_box(buf)?, decode_box(buf)?)),
         E_APPEND => Ok(Mutate(Mutation::Append { path: decode_box(buf)?, source: decode_box(buf)? })),
+        E_COMPACT => Ok(Mutate(Mutation::Compact { path: decode_box(buf)? })),
         E_ELEM_INDEX => Ok(ElementAt(decode_box(buf)?, decode_box(buf)?)),
         E_ARRAY_LIT => Ok(ArrayLiteral(decode_array(buf)?)),
         E_AS_VALUE => Ok(AsValue(buf.next_string(), decode_box(buf)?)),
@@ -348,6 +352,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_RANGE => Ok(Range(decode_box(buf)?, decode_box(buf)?)),
         E_RETURN => Ok(Return(decode_array(buf)?)),
         E_REVERSE => Ok(Inquire(Queryable::Reverse(decode_box(buf)?))),
+        E_SCAN => Ok(Mutate(Mutation::Scan { path: decode_box(buf)? })),
         E_SELECT => disassemble_select(buf),
         E_STDERR => Ok(StdErr(decode_box(buf)?)),
         E_STDOUT => Ok(StdErr(decode_box(buf)?)),

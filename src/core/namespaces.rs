@@ -35,7 +35,7 @@ impl Namespace {
         }
     }
 
-    fn oxide_home() -> String {
+    pub(crate) fn oxide_home() -> String {
         env::var("OXIDE_HOME").unwrap_or("./oxide_db".to_string())
     }
 
@@ -84,6 +84,10 @@ impl Namespace {
         builder.push_str(&*self.name);
         builder.push('/');
         builder
+    }
+
+    pub fn get_hash_index_file_path(&self, column_index: usize) -> String {
+        self.get_file_path(format!("{}", column_index).as_str())
     }
 
     pub fn get_table_file_path(&self) -> String {

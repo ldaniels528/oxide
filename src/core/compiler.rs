@@ -129,8 +129,10 @@ impl Compiler {
                 "[~]" => self.parse_expression_1a(ts, MustIgnoreAck),
                 "ack" => Ok((ACK, ts)),
                 "append" => self.parse_keyword_append(ts),
+                "compact" => self.parse_keyword_compact(ts),
                 "create" => self.parse_keyword_create(ts),
                 "delete" => self.parse_keyword_delete(ts),
+                "describe" => self.parse_keyword_describe(ts),
                 "drop" => self.parse_mutate_target(ts, |m| Perform(Infrastructure::Drop(m))),
                 "eval" => self.parse_expression_1a(ts, Eval),
                 "false" => Ok((FALSE, ts)),
@@ -147,6 +149,7 @@ impl Compiler {
                 "null" => Ok((NULL, ts)),
                 "overwrite" => self.parse_keyword_overwrite(ts),
                 "reverse" => self.parse_expression_1a(ts, |q| Inquire(Queryable::Reverse(q))),
+                "scan" => self.parse_keyword_scan(ts),
                 "select" => self.parse_keyword_select(ts),
                 "stderr" => self.parse_expression_1a(ts, StdErr),
                 "stdout" => self.parse_expression_1a(ts, StdOut),
@@ -248,6 +251,25 @@ impl Compiler {
         Ok((Mutate(Mutation::Append { path: Box::new(table), source: Box::new(source) }), ts))
     }
 
+    /// Removes deleted rows from a table
+    /// ex: compact stocks
+    fn parse_keyword_compact(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (table, ts) = self.compile_next(ts)?;
+        Ok((Mutate(Mutation::Compact { path: Box::new(table) }), ts))
+    }
+
+    fn parse_keyword_scan(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (table, ts) = self.compile_next(ts)?;
+        Ok((Mutate(Mutation::Scan { path: Box::new(table) }), ts))
+    }
+
+    /// Creates a database object (e.g., table or index)
     fn parse_keyword_create(
         &mut self,
         ts: TokenSlice,
@@ -312,6 +334,14 @@ impl Compiler {
         let (condition, ts) = self.next_keyword_expr("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
         Ok((Mutate(Mutation::Delete { path: Box::new(from), condition: condition.map(Box::new), limit: limit.map(Box::new) }), ts))
+    }
+
+    fn parse_keyword_describe(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (table, ts) = self.compile_next(ts)?;
+        Ok((Inquire(Queryable::Describe(Box::new(table))), ts))
     }
 
     /// Builds a language model from a function variant

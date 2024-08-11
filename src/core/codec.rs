@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::io;
+use std::io::Read;
 use std::mem::size_of;
 
 use uuid::Uuid;
@@ -16,11 +17,14 @@ pub fn decode_row_id(buffer: &Vec<u8>, offset: usize) -> usize {
 pub fn decode_string(buffer: &Vec<u8>, offset: usize, max_size: usize) -> String {
     let a: usize = offset + size_of::<usize>();
     let b: usize = a + max_size;
-    let data: &[u8] = &buffer[a..b];
-    let value = std::str::from_utf8(&*data).unwrap().chars()
-        .filter(|&c| c != '\0')
-        .collect();
-    value
+    let mut data: &[u8] = &buffer[a..b];
+    while data.len() > 0 && data[data.len() - 1] == 0 {
+        data = &data[0..(data.len() - 1)];
+    }
+    match std::str::from_utf8(&*data) {
+        Ok(string) => string.to_string(),
+        Err(err) => panic!("data: '{:?}' -> {}", data, err),
+    }
 }
 
 pub(crate) fn decode_u8<A>(buffer: &Vec<u8>, offset: usize, f: fn(u8) -> A) -> A {

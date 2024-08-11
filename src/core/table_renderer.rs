@@ -5,7 +5,9 @@
 use shared_lib::tabulate_cells;
 
 use crate::cursor::Cursor;
+use crate::model_row_collection::ModelRowCollection;
 use crate::row_collection::RowCollection;
+use crate::rows::Row;
 use crate::table_columns::TableColumn;
 
 /// Table renderer
@@ -27,6 +29,11 @@ impl TableRenderer {
         tabulate_cells(header_cells, body_cells)
     }
 
+    /// Transforms the [Vec<Row>] into a textual table
+    pub fn from_rows(rows: Vec<Row>) -> Vec<String> {
+        Self::from_collection(Box::new(ModelRowCollection::from_rows(rows)))
+    }
+
     fn tabulate_body_cells_from_collection(rc: Box<dyn RowCollection>) -> Vec<Vec<String>> {
         let mut cursor = Cursor::new(rc);
         Self::tabulate_body_cells_from_cursor(&mut cursor)
@@ -35,8 +42,8 @@ impl TableRenderer {
     fn tabulate_body_cells_from_cursor(cursor: &mut Cursor) -> Vec<Vec<String>> {
         let mut body_cells = vec![];
         while let Ok(Some(row)) = cursor.next() {
-            let column_text = row.get_fields().iter()
-                .map(|f| format!(" {} ", f.value.unwrap_value()))
+            let column_text = row.get_values().iter()
+                .map(|v| format!(" {} ", v.unwrap_value()))
                 .collect::<Vec<String>>();
             body_cells.push(column_text);
         }

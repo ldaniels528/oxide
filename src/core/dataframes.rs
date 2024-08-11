@@ -6,7 +6,6 @@ use std::ops::AddAssign;
 
 use crate::dataframe_config::DataFrameConfig;
 use crate::expression::Expression;
-use crate::fields::Field;
 use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
 use crate::namespaces::Namespace;
@@ -28,7 +27,7 @@ impl DataFrame {
     pub fn create(ns: Namespace, config: DataFrameConfig) -> std::io::Result<Self> {
         config.save(&ns)?;
         let table_columns = TableColumn::from_columns(config.get_columns())?;
-        let device = Box::new(FileRowCollection::create(ns.clone(), table_columns.clone())?);
+        let device = Box::new(FileRowCollection::create_table(&ns, table_columns.clone())?);
         Ok(Self::new(device))
     }
 
@@ -179,7 +178,7 @@ impl DataFrame {
 
     /// reads all rows
     pub fn read_all_rows(&self) -> std::io::Result<Vec<Row>> {
-        self.device.read_all_rows()
+        self.device.read_active_rows()
     }
 
     /// reads an active row by ID
@@ -189,7 +188,7 @@ impl DataFrame {
 
     /// reads a range of rows
     pub fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>> {
-        self.device.read_range(index)
+        self.device.read_range(index)?.read_active_rows()
     }
 
     /// reads a row by ID
@@ -317,8 +316,11 @@ impl DataFrame {
 
     fn replace_undefined_with_null(&self, row: Row) -> Row {
         let columns = self.get_columns().clone();
-        Row::new(row.get_id(), columns.clone(), columns.iter().zip(row.get_fields().iter()).map(|(c, f)| {
-            if f.value == Null || f.value == Undefined { Field::with_default(c) } else { f.clone() }
+        Row::new(row.get_id(), columns.clone(), columns.iter().zip(row.get_values().iter()).map(|(c, v)| {
+            match v {
+                Null | Undefined => c.default_value.clone(),
+                v => v.clone()
+            }
         }).collect())
     }
 }
@@ -507,7 +509,7 @@ mod tests {
         assert_eq!(df.append(make_quote(0, &make_table_columns(), "FLY", "AMEX", 51.11)).unwrap(), 1);
         assert_eq!(df.append(make_quote(0, &make_table_columns(), "FAR", "NYSE", 42.33)).unwrap(), 1);
         assert_eq!(df.append(make_quote(0, &make_table_columns(), "AWAY", "AMEX", 9.73)).unwrap(), 1);
-        assert_eq!(df.map(|row| row.get("last_sale")).unwrap(), vec![
+        assert_eq!(df.map(|row| row.get_value_by_name("last_sale")).unwrap(), vec![
             Float64Value(123.45), Float64Value(88.22), Float64Value(51.11),
             Float64Value(42.33), Float64Value(9.73),
         ])

@@ -22,7 +22,7 @@ pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
 // constants
 pub const E_AND: u8 = 2;
 pub const E_APPEND: u8 = 4;
-pub const E_ARRAY_LIT: u8 = 6;
+pub const E_ARRAY_LIT: u8 = 8;
 pub const E_AS_VALUE: u8 = 10;
 pub const E_BETWEEN: u8 = 15;
 pub const E_BETWIXT: u8 = 20;
@@ -30,12 +30,14 @@ pub const E_BITWISE_AND: u8 = 25;
 pub const E_BITWISE_OR: u8 = 30;
 pub const E_BITWISE_XOR: u8 = 33;
 pub const E_CODE_BLOCK: u8 = 35;
+pub const E_COMPACT: u8 = 37;
 pub const E_CONTAINS: u8 = 40;
 pub const E_CREATE_INDEX: u8 = 45;
 pub const E_CREATE_TABLE: u8 = 50;
 pub const E_DECLARE_INDEX: u8 = 52;
 pub const E_DECLARE_TABLE: u8 = 54;
 pub const E_DELETE: u8 = 56;
+pub const E_DESCRIBE: u8 = 58;
 pub const E_DIVIDE: u8 = 60;
 pub const E_DROP: u8 = 65;
 pub const E_ELEM_INDEX: u8 = 67;
@@ -72,6 +74,7 @@ pub const E_POW: u8 = 190;
 pub const E_RANGE: u8 = 195;
 pub const E_RETURN: u8 = 200;
 pub const E_REVERSE: u8 = 205;
+pub const E_SCAN: u8 = 207;
 pub const E_SELECT: u8 = 210;
 pub const E_SHIFT_LEFT: u8 = 225;
 pub const E_SHIFT_RIGHT: u8 = 230;
@@ -232,6 +235,9 @@ pub enum Mutation {
         path: Box<Expression>,
         source: Box<Expression>,
     },
+    Compact {
+        path: Box<Expression>,
+    },
     Delete {
         path: Box<Expression>,
         condition: Option<Box<Expression>>,
@@ -243,6 +249,9 @@ pub enum Mutation {
         source: Box<Expression>,
         condition: Option<Box<Expression>>,
         limit: Option<Box<Expression>>,
+    },
+    Scan {
+        path: Box<Expression>,
     },
     Truncate {
         path: Box<Expression>,
@@ -264,6 +273,7 @@ pub enum Mutation {
 /// Represents a queryable
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Queryable {
+    Describe(Box<Expression>),
     Limit { from: Box<Expression>, limit: Box<Expression> },
     Reverse(Box<Expression>),
     Select {
@@ -414,6 +424,8 @@ pub fn decompile_modification(expr: &Mutation) -> String {
     match expr {
         Mutation::Append { path, source } =>
             format!("append {} {}", decompile(path), decompile(source)),
+        Mutation::Compact { path } =>
+            format!("compact {}", decompile(path)),
         Mutation::Delete { path, condition, limit } =>
             format!("delete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
         Mutation::IntoNs(a, b) =>
@@ -423,18 +435,22 @@ pub fn decompile_modification(expr: &Mutation) -> String {
                     condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
                     limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
             ),
+        Mutation::Scan { path } =>
+            format!("scan {}", decompile(path)),
         Mutation::Truncate { path, limit } =>
             format!("truncate {}{}", decompile(path), decompile_limit(limit)),
         Mutation::Undelete { path, condition, limit } =>
             format!("undelete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
         Mutation::Update { path, source, condition, limit } =>
             format!("update {} {} where {}{}", decompile(path), decompile(source), decompile_opt(condition),
-                    limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),),
+                    limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()), ),
     }
 }
 
 pub fn decompile_queryable(expr: &Queryable) -> String {
     match expr {
+        Queryable::Describe(a) =>
+            format!("describe {}", decompile(a)),
         Queryable::Limit { from: a, limit: b } =>
             format!("{} limit {}", decompile(a), decompile(b)),
         Queryable::Where { from, condition } =>

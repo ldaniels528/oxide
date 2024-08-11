@@ -3,8 +3,8 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
+use crate::field_metadata::FieldMetadata;
 
-use crate::fields::Field;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
@@ -75,17 +75,28 @@ impl RowCollection for ByteRowCollection {
 
     fn get_record_size(&self) -> usize { self.record_size }
 
-    fn index_of(&self, item: &Row) -> Option<usize> {
-        let mut id = 0;
-        for buf in &self.row_data {
-            let (row, metadata) = Row::decode(buf, &self.columns);
-            if metadata.is_allocated && item == &row { return Some(id); }
-            id += 1
-        }
-        None
-    }
-
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
+
+    fn overwrite_field(
+        &mut self,
+        id: usize,
+        column_id: usize,
+        new_value: TypedValue,
+    ) -> std::io::Result<TypedValue> {
+        let column = &self.columns[column_id];
+        let offset = self.to_row_offset(id) + column.offset as u64;
+        let buffer = Row::encode_value(
+            &new_value,
+            &FieldMetadata::new(true),
+            column.max_physical_size
+        );
+        let mut encoded_row = self.row_data[id].clone();
+        let start = offset as usize;
+        let end = start + buffer.len();
+        encoded_row[start..end].copy_from_slice(buffer.as_slice());
+        self.row_data[id] = encoded_row;
+        Ok(TypedValue::RowsAffected(1))
+    }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
         // resize the rows to prevent overflow
@@ -109,23 +120,19 @@ impl RowCollection for ByteRowCollection {
     fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         let column = &self.columns[column_id];
         let buffer = self.row_data[id][column.offset..(column.offset + column.max_physical_size)].to_vec();
-        let field = Field::decode(&column.data_type, &buffer, 0);
-        Ok(field.value)
-    }
-
-    fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>> {
-        let rows = self.row_data[index].iter().flat_map(|b| {
-            let (row, meta) = Row::decode(b, &self.columns);
-            if meta.is_allocated { Some(row) } else { None }
-        }).collect();
-        Ok(rows)
+        let value = Row::decode_value(&column.data_type, &buffer, 0);
+        Ok(value)
     }
 
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
-        Ok(Row::decode(&self.row_data[id], &self.columns))
+        if id < self.row_data.len() {
+            Ok(Row::decode(&self.row_data[id], &self.columns))
+        } else {
+            Ok((Row::empty(&self.columns), RowMetadata::new(false)))
+        }
     }
 
-    fn read_row_metadata(&mut self, id: usize) -> std::io::Result<RowMetadata> {
+    fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
         let metadata = if id < self.row_data.len() {
             RowMetadata::decode(self.row_data[id][0])
         } else { RowMetadata::new(false) };
@@ -135,7 +142,7 @@ impl RowCollection for ByteRowCollection {
     fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
         self.row_data.resize(new_size, vec![]);
         self.watermark = new_size;
-        Ok(TypedValue::RowsAffected(new_size))
+        Ok(TypedValue::Ack)
     }
 }
 

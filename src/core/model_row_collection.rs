@@ -9,8 +9,8 @@ use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
-use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::RowsAffected;
 
 /// Row-model-vector-based RowCollection implementation
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -84,19 +84,30 @@ impl RowCollection for ModelRowCollection {
 
     fn get_record_size(&self) -> usize { self.record_size }
 
-    fn index_of(&self, item: &Row) -> Option<usize> {
-        let mut id = 0;
-        for (rmd, row) in &self.row_data {
-            if rmd.is_allocated && item == row { return Some(id); }
-            id += 1
-        }
-        None
-    }
-
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
 
+    fn overwrite_field(
+        &mut self,
+        id: usize,
+        column_id: usize,
+        new_value: TypedValue,
+    ) -> std::io::Result<TypedValue> {
+        let (meta, row) = &self.row_data[id];
+        let rows_affected = if meta.is_allocated {
+            let old_values = row.get_values();
+            let new_values = old_values.iter().zip(0..old_values.len())
+                .map(|(v, n)| {
+                    if n == column_id { new_value.clone() } else { v.clone() }
+                }).collect();
+            let new_row = Row::new(row.get_id(), row.get_columns().clone(), new_values);
+            self.row_data[id] = (meta.clone(), new_row);
+            1
+        } else { 0 };
+        Ok(RowsAffected(rows_affected))
+    }
+
     fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
-        println!("mrc|overwrite {}", row);
+        //println!("mrc|overwrite {}", row);
         // resize the rows to prevent overflow
         if self.row_data.len() <= id {
             self.row_data.resize(id + 1, (RowMetadata::new(false), Row::empty(&self.columns)));
@@ -107,9 +118,9 @@ impl RowCollection for ModelRowCollection {
         if self.watermark <= id {
             self.watermark = id + 1;
         }
-        for s in TableRenderer::from_collection(Box::new(self.clone())) {
-            println!("mrc|overwrite {}", s)
-        }
+        // for s in TableRenderer::from_collection(Box::new(self.clone())) {
+        //     println!("mrc|overwrite {}", s)
+        // }
         Ok(TypedValue::RowsAffected(1))
     }
 
@@ -120,15 +131,8 @@ impl RowCollection for ModelRowCollection {
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
-        let field = &self.row_data[id].1.get_fields()[column_id];
-        Ok(field.value.clone())
-    }
-
-    fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>> {
-        let rows = self.row_data[index].iter().flat_map(|(meta, row)| {
-            if meta.is_allocated { Some(row.clone()) } else { None }
-        }).collect();
-        Ok(rows)
+        let value = &self.row_data[id].1.get_values()[column_id];
+        Ok(value.clone())
     }
 
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
@@ -141,7 +145,7 @@ impl RowCollection for ModelRowCollection {
         Ok((row, metadata))
     }
 
-    fn read_row_metadata(&mut self, id: usize) -> std::io::Result<RowMetadata> {
+    fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
         let metadata = if id < self.row_data.len() {
             self.row_data[id].0.clone()
         } else {
@@ -153,7 +157,7 @@ impl RowCollection for ModelRowCollection {
     fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
         self.row_data.resize(new_size, (RowMetadata::new(true), Row::empty(&self.columns)));
         self.watermark = new_size;
-        Ok(TypedValue::RowsAffected(new_size))
+        Ok(TypedValue::Ack)
     }
 }
 

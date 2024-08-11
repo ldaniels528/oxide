@@ -29,7 +29,6 @@ use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::{ArrayLiteral, ColumnSet, From, Literal, Ns, Perform, Variable, Via};
 use crate::expression::Infrastructure::Declare;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
-use crate::fields::Field;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
@@ -79,15 +78,27 @@ impl Machine {
         }
     }
 
-    fn load_row_collection(path: String) -> std::io::Result<Box<dyn RowCollection>> {
-        let ns = Namespace::parse(path.as_str())?;
-        let frc = FileRowCollection::open(&ns)?;
-        Ok(Box::new(frc))
-    }
-
     /// creates a new empty state machine
     pub fn new() -> Self {
         Self::construct(Vec::new(), HashMap::new())
+    }
+
+    fn orchestrate_rc(
+        machine: Self,
+        table: TypedValue,
+        f: fn(Self, Box<dyn RowCollection>) -> std::io::Result<(Self, TypedValue)>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        use TypedValue::*;
+        match table {
+            TableValue(mrc) => f(machine, Box::new(mrc)),
+            TableNs(path) => {
+                let ns = Namespace::parse(path.as_str())?;
+                let frc = FileRowCollection::open(&ns)?;
+                f(machine, Box::new(frc))
+            }
+            x =>
+                Ok((machine, ErrorValue(format!("Type mismatch: expected an iterable near {}", x))))
+        }
     }
 
     fn orchestrate_io(
@@ -127,8 +138,8 @@ impl Machine {
         let my_fields = row.get_columns().iter()
             .map(|tc| Variable(tc.get_name().to_string()))
             .collect::<Vec<Expression>>();
-        let my_values = row.get_fields().iter()
-            .map(|f| Literal(f.value.clone()))
+        let my_values = row.get_values().iter()
+            .map(|v| Literal(v.clone()))
             .collect::<Vec<Expression>>();
         (my_fields, my_values)
     }
@@ -305,6 +316,7 @@ impl Machine {
     pub fn evaluate_inquiry(&self, expression: &Queryable) -> std::io::Result<(Self, TypedValue)> {
         use Queryable::*;
         match expression {
+            Describe(table) => self.perform_table_describe(table),
             Limit { from, limit } => {
                 let (machine, limit) = self.evaluate(limit)?;
                 machine.perform_table_row_query(from, &UNDEFINED, limit)
@@ -322,12 +334,16 @@ impl Machine {
         match expression {
             Append { path, source } =>
                 self.perform_table_row_append(path, source),
+            Compact { path } =>
+                self.perform_table_compact(path),
             Delete { path, condition, limit } =>
                 self.perform_table_row_delete(path, condition, limit),
             IntoNs(source, target) =>
                 self.perform_table_into(target, source),
             Overwrite { path, source, condition, limit } =>
                 self.perform_table_row_overwrite(path, source, condition, limit),
+            Scan { path } =>
+                self.perform_table_scan(path),
             Truncate { path, limit } =>
                 match limit {
                     None => self.perform_table_row_resize(path, Boolean(false)),
@@ -694,6 +710,15 @@ impl Machine {
         Ok((self.clone(), TableValue(ModelRowCollection::new(columns, vec![]))))
     }
 
+    fn perform_table_describe(
+        &self,
+        expression: &Box<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, result) = self.evaluate(expression)?;
+        let rc = result.to_table()?;
+        Ok((machine, rc.describe()?))
+    }
+
     fn perform_table_drop(&self, table: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (machine, table) = self.evaluate(table)?;
         match table {
@@ -720,7 +745,7 @@ impl Machine {
             Literal(TableNs(name)) => {
                 let ns = Namespace::parse(name.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
-                (machine, frc.read_all_rows()?)
+                (machine, frc.read_active_rows()?)
             }
             Perform(Declare(TableEntity { columns, from })) =>
                 machine.extract_rows_from_table_declaration(table, from, columns)?,
@@ -751,7 +776,7 @@ impl Machine {
         let ns = self.expect_namespace(table)?;
         let cfg = DataFrameConfig::new(columns.clone(), vec![], vec![]);
         cfg.save(&ns)?;
-        FileRowCollection::open_crw(&ns)?;
+        FileRowCollection::table_file_create(&ns)?;
         // decipher the "from" expression
         let columns = TableColumn::from_columns(columns)?;
         let results = match from {
@@ -773,6 +798,13 @@ impl Machine {
         // retrieve rows from the source
         let rows = machine.expect_rows(source, rc.get_columns())?;
         Ok((machine, rows))
+    }
+
+    fn perform_table_compact(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, tv_table) = self.evaluate(expr)?;
+        Self::orchestrate_rc(machine, tv_table, |machine, mut rc| {
+            Ok((machine, rc.compact()?))
+        })
     }
 
     fn perform_table_ns(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
@@ -895,7 +927,6 @@ impl Machine {
         Ok((machine, result))
     }
 
-
     fn perform_table_row_selection(
         &self,
         fields: &Vec<Expression>,
@@ -948,6 +979,14 @@ impl Machine {
         Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
             let modified = df.update_where(&machine, fields, values, condition, limit).ok().unwrap_or(0);
             Ok((machine, RowsAffected(modified)))
+        })
+    }
+
+    fn perform_table_scan(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, tv_table) = self.evaluate(expr)?;
+        Self::orchestrate_rc(machine, tv_table, |machine, mut rc| {
+            let mrc = ModelRowCollection::from_rows(rc.scan_all_rows()?);
+            Ok((machine, TableValue(mrc)))
         })
     }
 
@@ -1051,11 +1090,7 @@ impl Machine {
         table: &Expression,
     ) -> std::io::Result<Box<dyn RowCollection>> {
         let (_, v_table) = self.evaluate(table)?;
-        match v_table {
-            TableNs(path) => Self::load_row_collection(path),
-            TableValue(mrc) => Ok(Box::new(mrc)),
-            x => fail_unexpected("Table reference", &x)
-        }
+        v_table.to_table()
     }
 
     fn expect_rows(
@@ -1078,7 +1113,7 @@ impl Machine {
             TableNs(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
-                frc.read_all_rows()
+                frc.read_active_rows()
             }
             TableValue(mrc) => Ok(mrc.get_rows()),
             tv => fail_value("A queryable was expected".to_string(), &tv)
@@ -1196,9 +1231,9 @@ impl Machine {
     }
 
     pub fn with_row(&self, row: &Row) -> Self {
-        row.get_fields().iter().zip(row.get_columns().iter())
-            .fold(self.clone(), |machine, (f, c)| {
-                machine.with_variable(c.get_name(), f.value.clone())
+        row.get_values().iter().zip(row.get_columns().iter())
+            .fold(self.clone(), |machine, (v, c)| {
+                machine.with_variable(c.get_name(), v.clone())
             })
     }
 

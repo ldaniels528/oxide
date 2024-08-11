@@ -3,24 +3,18 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::{Debug, Formatter};
-use std::ops::Range;
 use std::os::unix::fs::FileExt;
 
-use shared_lib::fail;
-
-use crate::compiler::fail_unexpected;
 use crate::file_row_collection::FileRowCollection;
-use crate::model_row_collection::ModelRowCollection;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, TableValue};
 
 /// File-based Column-Embedded [RowCollection] implementation
 #[derive(Clone)]
-pub struct FileColumnRowCollection {
+pub struct FileEmbeddedRowCollection {
     frc: FileRowCollection,
     embedded_row_id: usize,
     embedded_column_id: usize,
@@ -28,7 +22,7 @@ pub struct FileColumnRowCollection {
     record_size: usize,
 }
 
-impl FileColumnRowCollection {
+impl FileEmbeddedRowCollection {
     ////////////////////////////////////////////////////////////////
     //  STATIC METHODS
     ////////////////////////////////////////////////////////////////
@@ -48,36 +42,24 @@ impl FileColumnRowCollection {
     ////////////////////////////////////////////////////////////////
 
     /// Retrieves the column-embedded table
-    pub fn get_embedded_table(&self) -> std::io::Result<ModelRowCollection> {
-        match self.frc.read_field(self.embedded_row_id, self.embedded_column_id) {
-            Ok(TableValue(mrc)) => Ok(mrc),
-            Ok(ErrorValue(message)) => fail(message),
-            Ok(other) => fail_unexpected("Table", &other),
-            Err(err) => fail(err.to_string())
-        }
+    pub fn get_embedded_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
+        self.frc.read_field(self.embedded_row_id, self.embedded_column_id)?.to_table()
     }
 }
 
-impl Debug for FileColumnRowCollection {
+impl Debug for FileEmbeddedRowCollection {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "FileColumnRowCollection({:?}, {}, {})", self.frc, self.embedded_row_id, self.embedded_column_id)
     }
 }
 
-impl RowCollection for FileColumnRowCollection {
+impl RowCollection for FileEmbeddedRowCollection {
     fn get_columns(&self) -> &Vec<TableColumn> {
         &self.columns
     }
 
     fn get_record_size(&self) -> usize {
         self.record_size
-    }
-
-    fn index_of(&self, item: &Row) -> Option<usize> {
-        match self.get_embedded_table() {
-            Ok(mrc) => mrc.index_of(item),
-            Err(_) => None
-        }
     }
 
     fn len(&self) -> std::io::Result<usize> {
@@ -88,6 +70,15 @@ impl RowCollection for FileColumnRowCollection {
         self.get_embedded_table()?.overwrite_row(id, row)
     }
 
+    fn overwrite_field(
+        &mut self,
+        id: usize,
+        column_id: usize,
+        new_value: TypedValue
+    ) -> std::io::Result<TypedValue> {
+        self.get_embedded_table()?.overwrite_field(id, column_id, new_value)
+    }
+
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
         self.get_embedded_table()?.overwrite_row_metadata(id, metadata)
     }
@@ -96,15 +87,11 @@ impl RowCollection for FileColumnRowCollection {
         self.get_embedded_table()?.read_field(id, column_id)
     }
 
-    fn read_range(&self, index: Range<usize>) -> std::io::Result<Vec<Row>> {
-        self.get_embedded_table()?.read_range(index)
-    }
-
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
         self.get_embedded_table()?.read_row(id)
     }
 
-    fn read_row_metadata(&mut self, id: usize) -> std::io::Result<RowMetadata> {
+    fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
         self.get_embedded_table()?.read_row_metadata(id)
     }
 
@@ -126,7 +113,7 @@ mod tests {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let ns = Namespace::new("file_row_collection", "get_columns", "stocks");
-        let frc = FileRowCollection::create(ns, phys_columns.clone()).unwrap();
+        let frc = FileRowCollection::create_table(&ns, phys_columns.clone()).unwrap();
         assert_eq!(frc.get_columns().clone(), phys_columns)
     }
 }

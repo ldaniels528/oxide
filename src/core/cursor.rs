@@ -230,7 +230,7 @@ mod tests {
         let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
         let results = cursor.fold_left(vec![], |mut agg, r| {
-            agg.push(r.get("exchange"));
+            agg.push(r.get_value_by_name("exchange"));
             agg
         });
         assert_eq!(results, vec![
@@ -246,7 +246,7 @@ mod tests {
         let mut cursor = Cursor::new(Box::new(brc));
         cursor.bottom();
         let results = cursor.fold_right(vec![], |r, mut agg| {
-            agg.push(r.get("exchange"));
+            agg.push(r.get_value_by_name("exchange"));
             agg
         });
         assert_eq!(results, vec![
@@ -260,7 +260,7 @@ mod tests {
     fn test_map_rows_in_cursor() {
         let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
-        let result = cursor.map(|r| r.get("symbol"));
+        let result = cursor.map(|r| r.get_value_by_name("symbol"));
         assert_eq!(result, vec![
             StringValue("ABC".to_string()), StringValue("UNO".to_string()),
             StringValue("BIZ".to_string()), StringValue("GOTO".to_string()),

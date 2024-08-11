@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::{cnv_error, RemoteCallRequest, RemoteCallResponse, RowJs};
 
-use crate::fields::Field;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
 use crate::row_collection::RowCollection;
@@ -94,7 +93,7 @@ impl REPLState {
         let mut listing = Vec::new();
         if let Ok(TypedValue::TableValue(mut mrc)) = self.interpreter.evaluate(HISTORY_TABLE_NAME) {
             for row in &mrc.get_rows() {
-                let input = row.get("input");
+                let input = row.get_value_by_name("input");
                 listing.push(format!("[{}] {}", &row.get_id(), input.unwrap_value()));
             }
         }
@@ -116,8 +115,8 @@ impl REPLState {
             .collect::<Vec<&str>>().join("; ");
         // create a new row
         let row = Row::new(id, columns, vec![
-            Field::new(TypedValue::RowsAffected(id)),
-            Field::new(TypedValue::StringValue(clean_input)),
+            TypedValue::RowsAffected(id),
+            TypedValue::StringValue(clean_input),
         ]);
         // write the row
         mrc.overwrite_row(id, row)?;

@@ -4,20 +4,26 @@
 
 use std::fmt::Debug;
 use std::fs::File;
-use std::ops::Range;
+use std::ops::{AddAssign, Range};
 use std::sync::Arc;
 
 use shared_lib::fail;
 
 use crate::byte_row_collection::ByteRowCollection;
-use crate::fields::Field;
+use crate::compiler::fail_value;
+use crate::data_types::DataType;
+use crate::data_types::DataType::{BooleanType, UInt64Type};
 use crate::file_row_collection::FileRowCollection;
+use crate::hashindex::HashingRowCollection;
 use crate::model_row_collection::ModelRowCollection;
+use crate::namespaces::Namespace;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
+use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
+use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, RowsAffected};
+use crate::typed_values::TypedValue::{Boolean, ErrorValue, RowsAffected, StringValue, TableValue, UInt64Value, Undefined};
 
 /// represents the underlying storage resource for the dataframe
 pub trait RowCollection: Debug {
@@ -48,8 +54,39 @@ pub trait RowCollection: Debug {
         (id * self.get_record_size()) as u64
     }
 
+    fn compact(&mut self) -> std::io::Result<TypedValue> {
+        let (mut affected, mut row_id, mut eof) = (RowsAffected(0), 0, self.len()?);
+        while row_id < eof {
+            // attempt to read the row metadata
+            if let Ok(metadata) = self.read_row_metadata(row_id) {
+                // if row is unallocated, replace it
+                if !metadata.is_allocated {
+                    if let Ok(Some((row, _, id))) = self
+                        .scan_reverse(eof, |(_, md)| md.is_allocated) {
+                        eof = id;
+                        let a = self.overwrite_row(row_id, row.with_row_id(row_id))?;
+                        let b = self.delete_row(id)?;
+                        affected = affected + (a + b)
+                    }
+                }
+            };
+            row_id += 1;
+        }
+        Ok(affected)
+    }
+
     /// Returns true, if the given item matches a [Row] found within it
     fn contains(&self, item: &Row) -> bool { self.index_of(item).is_some() }
+
+    fn create_hash_table(
+        &self,
+        key_column_index: usize,
+    ) -> std::io::Result<Box<dyn RowCollection>> {
+        let src_column = &self.get_columns()[key_column_index];
+        let hash_columns = <dyn RowCollection>::get_hash_table_columns(src_column)?;
+        let mrc = ModelRowCollection::new(hash_columns, vec![]);
+        Ok(Box::new(mrc))
+    }
 
     /// deletes an existing row by ID from the table
     fn delete_row(&mut self, id: usize) -> std::io::Result<TypedValue> {
@@ -70,6 +107,54 @@ pub trait RowCollection: Debug {
         Ok(RowsAffected(removals))
     }
 
+    /// Returns a table that describes the structure of the host table
+    fn describe(&self) -> std::io::Result<TypedValue> {
+        let columns = vec![
+            ColumnJs::new("name", "String(128)", None),
+            ColumnJs::new("type", "String(128)", None),
+            ColumnJs::new("default_value", "String(128)", None),
+            ColumnJs::new("is_nullable", "Boolean", None),
+        ];
+        let physical_columns = TableColumn::from_columns(&columns)?;
+        let mut mrc = ModelRowCollection::construct(&columns);
+        for column in self.get_columns() {
+            mrc.append_row(Row::new(0, physical_columns.clone(), vec![
+                StringValue(column.get_name().to_string()),
+                StringValue(column.data_type.to_column_type()),
+                StringValue(column.default_value.unwrap_value()),
+                Boolean(true),
+            ]))?;
+        }
+        Ok(TableValue(mrc))
+    }
+
+    fn find_row(
+        &self,
+        search_column_index: usize,
+        search_column_value: &TypedValue,
+    ) -> std::io::Result<Option<Row>> {
+        self.find_next(search_column_index, search_column_value, 0)
+    }
+
+    fn find_next(
+        &self,
+        search_column_index: usize,
+        search_column_value: &TypedValue,
+        initial_offset: usize,
+    ) -> std::io::Result<Option<Row>> {
+        let (mut row_id, eof) = (initial_offset, self.len()?);
+        while row_id < eof {
+            if let Some(row) = self.read_one(row_id)? {
+                let value = row[search_column_index].clone();
+                if *search_column_value == value {
+                    return Ok(Some(row));
+                }
+            }
+            row_id += 1;
+        }
+        Ok(None)
+    }
+
     /// Evaluates a callback function for each active row in the table
     fn fold_left(
         &self,
@@ -81,9 +166,7 @@ pub trait RowCollection: Debug {
                 let mut result = initial;
                 for id in 0..eof {
                     if let Ok((row, metadata)) = self.read_row(id) {
-                        if metadata.is_allocated {
-                            result = callback(result, row)
-                        }
+                        if metadata.is_allocated { result = callback(result, row) }
                     }
                 }
                 result
@@ -156,10 +239,19 @@ pub trait RowCollection: Debug {
     fn get_record_size(&self) -> usize;
 
     /// Returns true, if the given item matches a [Row] found within it
-    fn index_of(&self, item: &Row) -> Option<usize>;
+    fn index_of(&self, item: &Row) -> Option<usize> {
+        for id in 0..self.len().unwrap_or(0) {
+            if let Ok((row, metadata)) = self.read_row(id) {
+                if metadata.is_allocated && &row == item { return Some(id); }
+            }
+        }
+        None
+    }
 
     /// returns the number of active rows in the table
     fn len(&self) -> std::io::Result<usize>;
+
+    fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> std::io::Result<TypedValue>;
 
     /// replaces the specified row by ID
     fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue>;
@@ -188,8 +280,14 @@ pub trait RowCollection: Debug {
         Ok(RowsAffected(affected_count))
     }
 
-    fn read_all_rows(&self) -> std::io::Result<Vec<Row>> {
-        self.read_range(0..self.len()?)
+    /// reads all active rows from the table
+    fn read_active_rows(&self) -> std::io::Result<Vec<Row>> {
+        let (mut row_id, eof, mut rows) = (0, self.len()?, vec![]);
+        while row_id < eof {
+            if let Ok(Some(row)) = self.read_one(row_id) { rows.push(row) }
+            row_id += 1;
+        }
+        Ok(rows)
     }
 
     /// reads a field by column position from an active row by ID
@@ -202,13 +300,22 @@ pub trait RowCollection: Debug {
     }
 
     /// reads a span/range of rows
-    fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>>;
+    fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Box<dyn RowCollection>> {
+        let mut rows = Vec::with_capacity(index.len());
+        for id in index {
+            let (row, metadata) = self.read_row(id)?;
+            if metadata.is_allocated {
+                rows.push((metadata, row));
+            }
+        }
+        Ok(Box::new(ModelRowCollection::new(self.get_columns().clone(), rows)))
+    }
 
     /// reads a row by ID
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)>;
 
     /// reads the metadata of a specified row by ID
-    fn read_row_metadata(&mut self, id: usize) -> std::io::Result<RowMetadata>;
+    fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata>;
 
     /// resizes (shrink or grow) the table
     fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue>;
@@ -234,6 +341,78 @@ pub trait RowCollection: Debug {
             ErrorValue(message) => fail(message),
             z => fail(format!("Expected table value near {}", z.unwrap_value()))
         }
+    }
+
+    fn scan_all_rows(&self) -> std::io::Result<Vec<Row>> {
+        match self.scan_range(self.get_indices()?) {
+            Ok(TableValue(mrc)) => Ok(mrc.get_rows()),
+            Ok(z) => fail_value("Table", &z),
+            Err(err) => Err(err)
+        }
+    }
+
+    fn scan_forward(
+        &self,
+        start_index: usize,
+        f: fn((&Row, &RowMetadata)) -> bool,
+    ) -> std::io::Result<Option<(Row, RowMetadata, usize)>> {
+        let (mut row_id, eof) = (start_index, self.len()?);
+        while row_id < eof {
+            // attempt to read the row with its metadata
+            if let Ok((row, metadata)) = self.read_row(row_id) {
+                // if it's a match, return it
+                if metadata.is_allocated && f((&row, &metadata)) {
+                    return Ok(Some((row, metadata, row_id)));
+                }
+            }
+            row_id += 1;
+        }
+        Ok(None)
+    }
+
+    fn scan_range(&self, range: std::ops::Range<usize>) -> std::io::Result<TypedValue> {
+        // create the augmented columns
+        let mut columns = self.get_columns().clone();
+        let record_size = self.get_record_size();
+        columns.push(TableColumn::new("_id", UInt64Type, Undefined, record_size));
+        columns.push(TableColumn::new("_active", BooleanType, Undefined, 8 + record_size));
+
+        // gather the row data
+        let mut row_data = vec![];
+        let (mut row_id, eof) = (range.start, range.end);
+        while row_id < eof {
+            // read the row with its metadata
+            let (row, meta) = self.read_row(row_id)?;
+            // augment the values with the extras
+            let mut values = row.get_values();
+            values.push(UInt64Value(row_id as u64));
+            values.push(Boolean(meta.is_allocated));
+            // build a new row
+            let row = Row::new(row_id, columns.clone(), values);
+            let meta = meta.with_allocated(true);
+            row_data.push((meta, row));
+            row_id += 1
+        }
+        Ok(TableValue(ModelRowCollection::new(columns, row_data)))
+    }
+
+    fn scan_reverse(
+        &self,
+        start_index: usize,
+        f: fn((&Row, &RowMetadata)) -> bool,
+    ) -> std::io::Result<Option<(Row, RowMetadata, usize)>> {
+        let (mut row_id, mut done) = (start_index, false);
+        while !done {
+            // attempt to read the row with its metadata
+            if let Ok((row, metadata)) = self.read_row(row_id) {
+                // if it's a match, return it
+                if metadata.is_allocated && f((&row, &metadata)) {
+                    return Ok(Some((row, metadata, row_id)));
+                }
+            }
+            if row_id > 0 { row_id -= 1; } else { done = true }
+        }
+        Ok(None)
     }
 
     fn to_row_offset(&self, id: usize) -> u64 { (id * self.get_record_size()) as u64 }
@@ -269,13 +448,13 @@ pub trait RowCollection: Debug {
                 // if it is deleted, then use the incoming row
                 let row: Row = if !rmd0.is_allocated { row.with_row_id(id) } else {
                     // otherwise, construct a new composite row
-                    Row::new(id, cols1.clone(), row0.get_fields().iter().zip(row.get_fields().iter())
+                    Row::new(id, cols1.clone(), row0.get_values().iter().zip(row.get_values().iter())
                         .map(|(field0, field1)| {
-                            Field::new(match (field0.value.clone(), field1.value.clone()) {
+                            match (field0.clone(), field1.clone()) {
                                 (a, TypedValue::Undefined) => a,
                                 (_, b) => b
-                            })
-                        }).collect::<Vec<Field>>())
+                            }
+                        }).collect::<Vec<TypedValue>>())
                 };
                 self.overwrite_row(id, row)
             }
@@ -308,8 +487,20 @@ impl dyn RowCollection {
     }
 
     /// creates a new [RowCollection] from a file.
-    pub fn from_file(columns: Vec<TableColumn>, file: File) -> impl RowCollection {
-        FileRowCollection::new(columns, Arc::new(file))
+    pub fn from_file(
+        columns: Vec<TableColumn>,
+        file: File,
+        file_path: &str,
+    ) -> impl RowCollection {
+        FileRowCollection::new(columns, Arc::new(file), file_path)
+    }
+
+    /// Generates the columns for the index base on the source column
+    pub(crate) fn get_hash_table_columns(src_column: &TableColumn) -> std::io::Result<Vec<TableColumn>> {
+        TableColumn::from_columns(&vec![
+            ColumnJs::new("__row_id__", DataType::UInt64Type.to_column_type(), Some("null".into())),
+            ColumnJs::new(src_column.get_name(), src_column.data_type.to_column_type(), Some(src_column.default_value.unwrap_value())),
+        ])
     }
 }
 
@@ -323,10 +514,12 @@ mod tests {
 
     use shared_lib::cnv_error;
 
+    use crate::hashindex::HashingRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::row;
-    use crate::testdata::{make_dataframe, make_quote, make_quote_columns, make_table_columns, make_table_file};
+    use crate::table_renderer::TableRenderer;
+    use crate::testdata::{make_dataframe, make_quote, make_quote_columns, make_scan_quote, make_table_columns, make_table_file};
     use crate::typed_values::TypedValue::{Float64Value, StringValue};
 
     use super::*;
@@ -351,9 +544,9 @@ mod tests {
 
     #[test]
     fn test_from_file() {
-        let (file, columns, _) =
+        let (path, file, columns, _) =
             make_table_file("rows", "append_row", "stocks", make_quote_columns());
-        let mut rc = <dyn RowCollection>::from_file(columns.clone(), file);
+        let mut rc = <dyn RowCollection>::from_file(columns.clone(), file, path.as_str());
         rc.overwrite_row(0, make_quote(0, &columns, "BEAM", "NYSE", 78.35)).unwrap();
 
         // read and verify the row
@@ -431,7 +624,7 @@ mod tests {
             assert_eq!(RowsAffected(1), rc.delete_row(4).unwrap());
 
             // retrieve the entire range of rows
-            let rows = rc.read_all_rows().unwrap();
+            let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
                 make_quote(1, &columns, "ATT", "NYSE", 98.44),
                 make_quote(3, &columns, "X", "NASDAQ", 33.33),
@@ -458,7 +651,7 @@ mod tests {
             }).unwrap());
 
             // retrieve the entire range of rows
-            let rows = rc.read_all_rows().unwrap();
+            let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
                 make_quote(1, &columns, "ATT", "NYSE", 98.44),
                 make_quote(3, &columns, "X", "NASDAQ", 33.33),
@@ -467,6 +660,96 @@ mod tests {
 
         // test the variants
         verify_variants("delete_rows", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_describe_table() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write a row
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+
+            // describe the table
+            let mrc = rc.describe().unwrap().to_table().unwrap();
+            let mrc_columns = mrc.get_columns().clone();
+            let mrc_rows = mrc.read_active_rows().unwrap();
+
+            for s in TableRenderer::from_collection(rc) {
+                println!("{}", s)
+            }
+            for s in TableRenderer::from_collection(mrc) {
+                println!("{}", s)
+            }
+
+            assert_eq!(mrc_rows, vec![
+                Row::new(0, mrc_columns.clone(), vec![
+                    StringValue("symbol".to_string()),
+                    StringValue("String(8)".to_string()),
+                    StringValue("null".to_string()),
+                    Boolean(true),
+                ]),
+                Row::new(1, mrc_columns.clone(), vec![
+                    StringValue("exchange".to_string()),
+                    StringValue("String(8)".to_string()),
+                    StringValue("null".to_string()),
+                    Boolean(true),
+                ]),
+                Row::new(2, mrc_columns.clone(), vec![
+                    StringValue("last_sale".to_string()),
+                    StringValue("f64".to_string()),
+                    StringValue("null".to_string()),
+                    Boolean(true),
+                ]),
+            ]);
+        }
+
+        // test the variants
+        verify_variants("describe", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_find() {
+        use TypedValue::*;
+
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)).unwrap());
+
+            // resize and verify
+            assert_eq!(
+                Some(make_quote(3, &columns, "X", "NASDAQ", 33.33)),
+                rc.find_row(0, &StringValue("X".into())).unwrap()
+            );
+        }
+
+        // test the variants
+        verify_variants("find", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_find_next() {
+        use TypedValue::*;
+
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)).unwrap());
+
+            // resize and verify
+            assert_eq!(
+                Some(make_quote(3, &columns, "X", "NASDAQ", 33.33)),
+                rc.find_next(0, &StringValue("X".into()), 0).unwrap()
+            );
+        }
+
+        // test the variants
+        verify_variants("find_next", make_table_columns(), test_variant);
     }
 
     #[test]
@@ -483,7 +766,7 @@ mod tests {
 
             // resize and verify
             assert_eq!(Float64Value(152.99759999999998),
-                       rc.fold_left(Float64Value(0.), |agg, row| agg + row.get("last_sale")));
+                       rc.fold_left(Float64Value(0.), |agg, row| agg + row.get_value_by_name("last_sale")));
         }
 
         // test the variants
@@ -502,13 +785,37 @@ mod tests {
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)).unwrap());
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)).unwrap());
 
-            // resize and verify
+            // fold and verify
             assert_eq!(Float64Value(347.00239999999997),
-                       rc.fold_right(Float64Value(500.), |agg, row| agg - row.get("last_sale")));
+                       rc.fold_right(Float64Value(500.), |agg, row| agg - row.get_value_by_name("last_sale")));
         }
 
         // test the variants
         verify_variants("fold_right", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_overwrite_field() {
+        use TypedValue::*;
+
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "BAT", "AMEX", 1.66)).unwrap());
+
+            // overwrite the field at (0, 0)
+            assert_eq!(RowsAffected(1), rc.overwrite_field(0, 1, StringValue("AMEX".to_string())).unwrap());
+
+            // verify the row
+            assert_eq!(rc.read_one(0).unwrap(), Some(
+                make_quote(0, &columns, "GE", "AMEX", 21.22)
+            ));
+        }
+
+        // test the variants
+        verify_variants("overwrite_field", make_table_columns(), test_variant);
     }
 
     #[test]
@@ -522,7 +829,7 @@ mod tests {
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)).unwrap());
 
             // retrieve the entire range of rows
-            let rows = rc.read_all_rows().unwrap();
+            let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
                 make_quote(0, &columns, "GE", "NYSE", 21.22),
                 make_quote(1, &columns, "ATT", "NYSE", 98.44),
@@ -536,7 +843,7 @@ mod tests {
                        rc.update_row(2, make_quote(2, &columns, "H.Q", "OTC_BB", 0.0001)).unwrap());
 
             // retrieve the entire range of rows
-            let rows = rc.read_all_rows().unwrap();
+            let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
                 make_quote(0, &columns, "GE", "NYSE", 21.22),
                 make_quote(1, &columns, "ATT", "NYSE", 98.44),
@@ -562,7 +869,7 @@ mod tests {
             ]).unwrap());
 
             // verify the initial state
-            let rows = rc.read_all_rows().unwrap();
+            let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
                 make_quote(0, &columns, "GE", "NYSE", 21.22),
                 make_quote(1, &columns, "ATT", "NYSE", 98.44),
@@ -571,10 +878,10 @@ mod tests {
             ]);
 
             // delete a row
-            assert_eq!(RowsAffected(1), rc.overwrite_row_metadata(2, RowMetadata::new(false)).unwrap());
+            assert_eq!(RowsAffected(1), rc.delete_row(2).unwrap());
 
             // verify the current state
-            let rows = rc.read_all_rows().unwrap();
+            let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
                 make_quote(0, &columns, "GE", "NYSE", 21.22),
                 make_quote(1, &columns, "ATT", "NYSE", 98.44),
@@ -594,7 +901,7 @@ mod tests {
             assert_eq!(6, rc.len().unwrap());
 
             // resize and verify
-            let _ = rc.resize(0).unwrap();
+            assert_eq!(TypedValue::Ack, rc.resize(0).unwrap());
             assert_eq!(rc.len().unwrap(), 0);
         }
 
@@ -621,6 +928,51 @@ mod tests {
     }
 
     #[test]
+    fn test_resize_compact() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(RowsAffected(4), rc.append_rows(vec![
+                make_quote(0, &columns, "GE", "NYSE", 21.22),
+                make_quote(0, &columns, "ATT", "NYSE", 98.44),
+                make_quote(0, &columns, "H", "OTC_BB", 0.0076),
+                make_quote(0, &columns, "GG", "NASDAQ", 33.33),
+            ]).unwrap());
+
+            // verify the initial state
+            assert_eq!(rc.read_active_rows().unwrap(), vec![
+                make_quote(0, &columns, "GE", "NYSE", 21.22),
+                make_quote(1, &columns, "ATT", "NYSE", 98.44),
+                make_quote(2, &columns, "H", "OTC_BB", 0.0076),
+                make_quote(3, &columns, "GG", "NASDAQ", 33.33),
+            ]);
+
+            // delete a row
+            assert_eq!(RowsAffected(1), rc.delete_row(1).unwrap());
+            assert_eq!(RowsAffected(1), rc.delete_row(3).unwrap());
+
+            // verify the current state
+            let rows = rc.read_active_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(0, &columns, "GE", "NYSE", 21.22),
+                make_quote(2, &columns, "H", "OTC_BB", 0.0076),
+            ]);
+
+            // compact the table
+            assert_eq!(RowsAffected(2), rc.compact().unwrap());
+
+            // verify the final state
+            let rows = rc.read_active_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(0, &columns, "GE", "NYSE", 21.22),
+                make_quote(1, &columns, "H", "OTC_BB", 0.0076),
+            ]);
+        }
+
+        // test the variants
+        verify_variants("compact", make_table_columns(), test_variant);
+    }
+
+    #[test]
     fn test_reverse() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             let columns = make_quote_columns();
@@ -633,7 +985,8 @@ mod tests {
 
             // produce the reverse order
             let rrc = rc.reverse().unwrap();
-            assert_eq!(rrc.read_all_rows().unwrap(), vec![
+            let rows = rrc.read_active_rows().unwrap();
+            assert_eq!(rows, vec![
                 make_quote(0, &phys_columns, "XYZ", "NYSE", 0.0289),
                 make_quote(1, &phys_columns, "GOTO", "OTC", 0.1442),
                 make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
@@ -644,6 +997,39 @@ mod tests {
 
         // test the variants
         verify_variants("reverse", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_scan() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            let columns = make_quote_columns();
+            let phys_columns = TableColumn::from_columns(&columns).unwrap();
+            rc.append_row(make_quote(0, &phys_columns, "ABC", "AMEX", 12.33)).unwrap();
+            rc.append_row(make_quote(1, &phys_columns, "TED", "OTC", 0.2456)).unwrap();
+            rc.append_row(make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775)).unwrap();
+            rc.append_row(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442)).unwrap();
+            rc.append_row(make_quote(4, &phys_columns, "XYZ", "NASDAQ", 0.0289)).unwrap();
+
+            // delete some rows
+            for id in [0, 2, 4] {
+                assert_eq!(RowsAffected(1), rc.delete_row(id).unwrap());
+            }
+
+            // produce the scan
+            let rows = rc.scan_all_rows().unwrap();
+            let scan_columns = rows[0].get_columns();
+            for s in TableRenderer::from_rows(rows.clone()) { println!("{}", s); }
+            assert_eq!(rows, vec![
+                make_scan_quote(0, scan_columns, "ABC", "AMEX", 12.33, false),
+                make_scan_quote(1, scan_columns, "TED", "OTC", 0.2456, true),
+                make_scan_quote(2, scan_columns, "BIZ", "NYSE", 9.775, false),
+                make_scan_quote(3, scan_columns, "GOTO", "OTC", 0.1442, true),
+                make_scan_quote(4, scan_columns, "XYZ", "NASDAQ", 0.0289, false),
+            ])
+        }
+
+        // test the variants
+        verify_variants("scan", make_table_columns(), test_variant);
     }
 
     #[ignore]
@@ -704,18 +1090,30 @@ mod tests {
     }
 
     fn verify_variants(name: &str, columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
+        println!("file_variant:");
         verify_file_variant(name, columns.clone(), test_variant);
-        verify_memory_variant(columns.clone(), test_variant);
+        println!("hashing_variant:");
+        verify_hashing_variant(name, columns.clone(), test_variant);
+        println!("byte_array_variant:");
+        verify_byte_array_variant(columns.clone(), test_variant);
+        println!("model_variant:");
         verify_model_variant(columns, test_variant);
     }
 
     fn verify_file_variant(name: &str, columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
         let ns = Namespace::new("file_row_collection", name, "stocks");
-        let frc = FileRowCollection::create(ns, columns.clone()).unwrap();
+        let frc = FileRowCollection::create_table(&ns, columns.clone()).unwrap();
         test_variant("Disk", Box::new(frc), columns.clone());
     }
 
-    fn verify_memory_variant(columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
+    fn verify_hashing_variant(name: &str, columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
+        let ns = Namespace::new("hashing_row_collection", name, "stocks");
+        let frc = FileRowCollection::create_table(&ns, columns.clone()).unwrap();
+        let hrc = HashingRowCollection::create(0, 1000, Box::new(frc)).unwrap();
+        test_variant("Hashing", Box::new(hrc), columns.clone());
+    }
+
+    fn verify_byte_array_variant(columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
         let brc = ByteRowCollection::new(columns.clone(), vec![]);
         test_variant("Bytes", Box::new(brc), columns);
     }
