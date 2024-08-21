@@ -3,7 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::{Debug, Formatter};
-use std::os::unix::fs::FileExt;
+use crate::field_metadata::FieldMetadata;
 
 use crate::file_row_collection::FileRowCollection;
 use crate::row_collection::RowCollection;
@@ -11,6 +11,7 @@ use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::ErrorValue;
 
 /// File-based Column-Embedded [RowCollection] implementation
 #[derive(Clone)]
@@ -43,7 +44,7 @@ impl FileEmbeddedRowCollection {
 
     /// Retrieves the column-embedded table
     pub fn get_embedded_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
-        self.frc.read_field(self.embedded_row_id, self.embedded_column_id)?.to_table()
+        self.frc.read_field(self.embedded_row_id, self.embedded_column_id).to_table()
     }
 }
 
@@ -66,25 +67,53 @@ impl RowCollection for FileEmbeddedRowCollection {
         self.get_embedded_table()?.len()
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
-        self.get_embedded_table()?.overwrite_row(id, row)
+    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
+        match self.get_embedded_table() {
+            Ok(mut table) => table.overwrite_row(id, row),
+            Err(err) => ErrorValue(err.to_string())
+        }
     }
 
     fn overwrite_field(
         &mut self,
         id: usize,
         column_id: usize,
-        new_value: TypedValue
-    ) -> std::io::Result<TypedValue> {
-        self.get_embedded_table()?.overwrite_field(id, column_id, new_value)
+        new_value: TypedValue,
+    ) -> TypedValue {
+        self.get_embedded_table()
+            .map(|mut t| t.overwrite_field(id, column_id, new_value))
+            .unwrap_or_else(|err| ErrorValue(err.to_string()))
     }
 
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
-        self.get_embedded_table()?.overwrite_row_metadata(id, metadata)
+    fn overwrite_field_metadata(
+        &mut self,
+        id: usize,
+        column_id: usize,
+        metadata: FieldMetadata
+    ) -> TypedValue {
+        self.get_embedded_table()
+            .map(|mut t| t.overwrite_field_metadata(id, column_id, metadata))
+            .unwrap_or_else(|err| ErrorValue(err.to_string()))
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
-        self.get_embedded_table()?.read_field(id, column_id)
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
+        self.get_embedded_table().map(|mut t| t.overwrite_row_metadata(id, metadata))
+            .unwrap_or_else(|err| ErrorValue(err.to_string()))
+    }
+
+    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
+        match self.get_embedded_table() {
+            Ok(rc) => rc.read_field(id, column_id),
+            Err(err) => ErrorValue(err.to_string())
+        }
+    }
+
+    fn read_field_metadata(
+        &self,
+        id: usize,
+        column_id: usize,
+    ) -> std::io::Result<FieldMetadata> {
+        self.get_embedded_table()?.read_field_metadata(id, column_id)
     }
 
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {

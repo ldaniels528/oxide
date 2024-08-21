@@ -49,7 +49,6 @@ impl Interpreter {
 mod tests {
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::row_collection::RowCollection;
     use crate::rows::Row;
     use crate::structure::Structure;
     use crate::table_columns::TableColumn;
@@ -127,7 +126,7 @@ mod tests {
             stock := struct(symbol: String(8), exchange: String(8), last_sale: f64)
             stock
         "#).unwrap();
-        assert_eq!(result, StructureValue(Structure::from_logical_columns(&make_quote_columns())));
+        assert_eq!(result, StructureValue(Structure::from_logical_columns(&make_quote_columns()).unwrap()));
     }
 
     #[test]
@@ -143,13 +142,13 @@ mod tests {
                  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
             stocks[0]
         "#).unwrap();
-        assert_eq!(result, StructureValue(Structure::construct(
+        assert_eq!(result, StructureValue(Structure::from_logical_columns_and_values(
             &make_quote_columns(), vec![
                 StringValue("ABC".to_string()),
                 StringValue("AMEX".to_string()),
                 Float64Value(11.11),
             ],
-        )));
+        ).unwrap()));
     }
 
     #[test]
@@ -275,7 +274,7 @@ mod tests {
     fn test_include_file_valid() {
         let phys_columns = make_table_columns();
         verify_results(r#"
-        include "./demoes/language/include_file.ox"
+            include "./demoes/language/include_file.ox"
         "#, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 12.49),
             make_quote(1, &phys_columns, "BOOM", "NYSE", 56.88),
@@ -325,7 +324,7 @@ mod tests {
             symbol: String(8),
             exchange: String(8),
             last_sale: f64
-        )"#, TableValue(ModelRowCollection::new(
+        )"#, TableValue(ModelRowCollection::with_rows(
             make_table_columns(), vec![],
         )))
     }
@@ -585,6 +584,13 @@ mod tests {
     }
 
     #[test]
+    fn test_type_of() {
+        verify_results(r#"
+            type_of(1234)
+        "#, StringValue("i64".to_string()));
+    }
+
+    #[test]
     fn write_to_stderr() {
         verify_results(r#"
             stderr "Goodbye Cruel World"
@@ -607,6 +613,15 @@ mod tests {
                 x := x + 1
         "#).unwrap());
         assert_eq!(Int64Value(5), interpreter.evaluate("x").unwrap());
+    }
+
+    #[test]
+    fn test_www_get() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            www get "http://www.yahoo.com"
+        "#).unwrap();
+        assert_eq!(result.unwrap_value().as_str(), "OK\r\n");
     }
 
     fn verify_results(code: &str, expected: TypedValue) {

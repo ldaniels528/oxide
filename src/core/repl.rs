@@ -2,7 +2,7 @@
 // REPL module
 ////////////////////////////////////////////////////////////////////
 
-use std::io::{BufRead, BufReader, Read, stdout, Write};
+use std::io::{BufRead, BufReader, stdout, Write};
 use std::sync::{Arc, Mutex};
 
 use chrono::Local;
@@ -80,7 +80,7 @@ impl REPLState {
 
     /// creates a new history table
     fn create_history_table() -> std::io::Result<ModelRowCollection> {
-        Ok(ModelRowCollection::new(
+        Ok(ModelRowCollection::with_rows(
             TableColumn::from_columns(&vec![
                 ColumnJs::new("pid", "i64", None),
                 ColumnJs::new("input", "String(65536)", None),
@@ -91,8 +91,8 @@ impl REPLState {
     /// return the REPL input history
     pub fn get_history(&mut self) -> Vec<String> {
         let mut listing = Vec::new();
-        if let Ok(TypedValue::TableValue(mut mrc)) = self.interpreter.evaluate(HISTORY_TABLE_NAME) {
-            for row in &mrc.get_rows() {
+        if let Ok(TypedValue::TableValue(mrc)) = self.interpreter.evaluate(HISTORY_TABLE_NAME) {
+            for row in mrc.get_rows() {
                 let input = row.get_value_by_name("input");
                 listing.push(format!("[{}] {}", &row.get_id(), input.unwrap_value()));
             }
@@ -119,7 +119,7 @@ impl REPLState {
             TypedValue::StringValue(clean_input),
         ]);
         // write the row
-        mrc.overwrite_row(id, row)?;
+        let _ = mrc.overwrite_row(id, row);
         // replace the history table in memory
         self.interpreter.with_variable(HISTORY_TABLE_NAME, TypedValue::TableValue(mrc));
         self.counter += 1;

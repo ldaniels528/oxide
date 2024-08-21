@@ -38,7 +38,7 @@ impl DataframeActor {
     }
 
     fn delete_row(&mut self, ns: Namespace, id: usize) -> std::io::Result<usize> {
-        self.get_or_load_dataframe(ns)?.delete(id)
+        Ok(self.get_or_load_dataframe(ns)?.delete(id))
     }
 
     fn get_columns(&mut self, ns: Namespace) -> std::io::Result<&Vec<TableColumn>> {

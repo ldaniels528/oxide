@@ -2,6 +2,7 @@
 // compiler module
 ////////////////////////////////////////////////////////////////////
 
+use log::info;
 use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
@@ -157,12 +158,14 @@ impl Compiler {
                 "syscall" => self.parse_keyword_syscall(ts),
                 "table" => self.parse_keyword_table(ts),
                 "true" => Ok((TRUE, ts)),
+                "type_of" => self.parse_expression_1a(ts, TypeOf),
                 "undefined" => Ok((UNDEFINED, ts)),
                 "undelete" => self.parse_keyword_undelete(ts),
                 "update" => self.parse_keyword_update(ts),
                 "via" => self.parse_expression_1a(ts, Via),
                 "where" => fail_near("`from` is expected before `where`: from stocks where last_sale < 1.0", &ts),
                 "while" => self.parse_keyword_while(ts),
+                "www" => self.parse_keyword_www(ts),
                 name => self.expect_function_call_or_variable(name, ts)
             }
         } else { fail("Unexpected end of input") }
@@ -444,7 +447,7 @@ impl Compiler {
     /// ex: struct(symbol: String(8), exchange: String(8), last_sale: f64)
     fn parse_keyword_struct(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (ColumnSet(columns), ts) = self.expect_parameters(ts.clone())? {
-            Ok((Literal(StructureValue(Structure::from_logical_columns(&columns))), ts))
+            Ok((Literal(StructureValue(Structure::from_logical_columns(&columns)?)), ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }
@@ -518,6 +521,37 @@ impl Compiler {
             condition: Box::new(condition),
             code: Box::new(code),
         }, ts))
+    }
+
+    /// Parses a worldwide-web (www) expression
+    /// ex: www get "http://localhost:9000/quotes/AAPL/NYSE"
+    /// ex: www post "http://localhost:9000/quotes" from stocks with headers {
+    ///         "Content-Type": "application/json"
+    ///     }
+    fn parse_keyword_www(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        if let (Some(Atom { text: method, .. }), ts) = ts.next() {
+            info!("method: {}", method);
+            let (url, ts) = self.compile_next(ts)?;
+            info!("url: {}", url);
+            let body = if let Ok((From(body), _)) = self.compile_next(ts.clone()) {
+                info!("body: {}", body);
+                Some(body)
+            } else { None };
+
+            // let mut ts = ts;
+            // while ts.is("with") {
+            //     ts = ts.next().1;
+            // }
+
+            Ok((Www {
+                method: Box::new(Literal(StringValue(method))),
+                url: Box::new(url),
+                body,
+                headers: None,
+            }, ts))
+        } else {
+            fail_near("an HTTP method was expected; delete, get, patch, post or put", &ts)
+        }
     }
 
     /// Parses a mutate-target expression.
@@ -1709,6 +1743,14 @@ mod tests {
     }
 
     #[test]
+    fn test_type_of() {
+        let model = Compiler::compile_script(r#"
+        type_of("cat")
+        "#).unwrap();
+        assert_eq!(model, TypeOf(Box::new(Literal(StringValue("cat".into())))));
+    }
+
+    #[test]
     fn test_update() {
         let opcodes = Compiler::compile_script(r#"
         update stocks
@@ -1769,5 +1811,18 @@ mod tests {
             },
             Variable("x".into()),
         ]));
+    }
+
+    #[test]
+    fn test_www_get() {
+        let model = Compiler::compile_script(r#"
+            www get "http://localhost:9000/quotes/AAPL/NYSE"
+        "#).unwrap();
+        assert_eq!(model, Www {
+            method: Box::new(Literal(StringValue("get".to_string()))),
+            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AAPL/NYSE".to_string()))),
+            body: None,
+            headers: None,
+        });
     }
 }

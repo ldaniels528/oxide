@@ -49,14 +49,12 @@ impl DataFrame {
 
     /// appends a new row to the table
     pub fn append(&mut self, row: Row) -> std::io::Result<usize> {
-        self.device.append_row(row)
-            .map(|v| v.assume_usize().unwrap_or(0))
+        Ok(self.device.append_row(row).assume_usize().unwrap_or(0))
     }
 
     /// deletes an existing row by ID from the table
-    pub fn delete(&mut self, id: usize) -> std::io::Result<usize> {
-        self.device.delete_row(id)
-            .map(|v| v.assume_usize().unwrap_or(0))
+    pub fn delete(&mut self, id: usize) -> usize {
+        self.device.delete_row(id).assume_usize().unwrap_or(0)
     }
 
     /// deletes rows from the table based on a condition
@@ -72,7 +70,7 @@ impl DataFrame {
             if let Some(row) = self.device.read_one(id)? {
                 // if the predicate matches the condition, delete the row.
                 if row.matches(machine, condition) {
-                    deleted += self.delete(id)?;
+                    deleted += self.delete(id);
                 }
             }
         }
@@ -141,8 +139,7 @@ impl DataFrame {
 
     /// overwrites a specified row by ID
     pub fn overwrite(&mut self, row: Row) -> std::io::Result<usize> {
-        self.device.overwrite_row(row.get_id(), row)
-            .map(|v| v.assume_usize().unwrap_or(0))
+        Ok(self.device.overwrite_row(row.get_id(), row).assume_usize().unwrap_or(0))
     }
 
     /// overwrites rows that match the supplied criteria
@@ -173,7 +170,7 @@ impl DataFrame {
 
     /// reads the specified field value from the specified row ID
     pub fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
-        self.device.read_field(id, column_id)
+        Ok(self.device.read_field(id, column_id))
     }
 
     /// reads all rows
@@ -188,7 +185,7 @@ impl DataFrame {
 
     /// reads a range of rows
     pub fn read_range(&self, index: std::ops::Range<usize>) -> std::io::Result<Vec<Row>> {
-        self.device.read_range(index)?.read_active_rows()
+        self.device.read_range(index)
     }
 
     /// reads a row by ID
@@ -244,7 +241,7 @@ impl DataFrame {
 
     /// restores a deleted row to an active state
     pub fn undelete(&mut self, id: usize) -> std::io::Result<usize> {
-        self.device.undelete_row(id)
+        Ok(self.device.undelete_row(id))
             .map(|v| v.assume_usize().unwrap_or(0))
     }
 
@@ -261,7 +258,7 @@ impl DataFrame {
             let (row, metadata) = self.device.read_row(id)?;
             // if the row is inactive and the predicate matches the condition, restore the row.
             if !metadata.is_allocated && row.matches(machine, condition) {
-                if self.device.undelete_row(id)?.is_ok() {
+                if self.device.undelete_row(id).is_ok() {
                     restored += 1
                 }
             }
@@ -304,7 +301,7 @@ impl DataFrame {
                     let (machine, field_names) = machine.with_row(&row).evaluate_atoms(fields)?;
                     if let (_, TypedValue::Array(field_values)) = machine.evaluate_array(values)? {
                         let new_row = row.transform(&field_names, &field_values)?;
-                        if self.device.overwrite_row(id, new_row)?.is_ok() {
+                        if self.device.overwrite_row(id, new_row).is_ok() {
                             updated += 1
                         }
                     }
@@ -425,7 +422,7 @@ mod tests {
         df.append(make_quote(2, &phys_columns, "TRES", "AMEX", 55.44)).unwrap();
 
         // delete the middle row
-        assert_eq!(df.delete(1).unwrap(), 1);
+        assert_eq!(df.delete(1), 1);
 
         // verify the rows
         let rows = df.read_all_rows().unwrap();
@@ -639,7 +636,7 @@ mod tests {
         assert_eq!(1, df.append(make_quote(2, &phys_columns, "TRES", "AMEX", 55.44)).unwrap());
 
         // delete the middle row
-        assert_eq!(df.delete(1).unwrap(), 1);
+        assert_eq!(df.delete(1), 1);
 
         // define the verification rows
         let row_0 = row!(0, phys_columns, vec![

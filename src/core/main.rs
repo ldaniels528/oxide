@@ -7,27 +7,15 @@ use std::fs::File;
 use std::io::Read;
 use std::string::ToString;
 
-use actix::{Actor, Addr};
-use actix_session::Session;
-use actix_session::storage::CookieSessionStore;
-use actix_web::{HttpRequest, HttpResponse, Responder, web};
-use actix_web::cookie::Key;
-use actix_web_actors::ws;
-use log::{error, info, LevelFilter};
+use actix_web::web;
+use log::{info, LevelFilter};
 
 use rest_server::*;
-use shared_lib::{cnv_error, fail, get_host_and_port, RowJs};
-use shared_lib::{RemoteCallRequest, RemoteCallResponse};
+use shared_lib::{cnv_error, get_host_and_port};
 
-use crate::dataframe_actor::DataframeActor;
-use crate::dataframe_config::DataFrameConfig;
 use crate::interpreter::Interpreter;
-use crate::namespaces::Namespace;
 use crate::repl::REPLState;
 use crate::rest_server::SharedState;
-use crate::rows::Row;
-use crate::server::SystemInfoJs;
-use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
 
 mod byte_buffer;
@@ -67,7 +55,6 @@ mod tokenizer;
 mod tokens;
 mod typed_values;
 mod websockets;
-mod hashindex;
 
 
 /// Starts the Oxide server

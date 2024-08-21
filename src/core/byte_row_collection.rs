@@ -10,6 +10,7 @@ use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::Undefined;
 
 /// Byte-vector-based RowCollection implementation
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -22,7 +23,7 @@ pub struct ByteRowCollection {
 
 impl ByteRowCollection {
     /// Returns true, if the given item matches a [Row] found within it
-    pub fn contains(&self, item: &Row) -> bool { self.index_of(item).is_some() }
+    pub fn contains(&self, item: &Row) -> bool { self.index_of(item) != Undefined }
 
     /// Decodes a byte vector into a [ByteRowCollection]
     pub fn decode(columns: Vec<TableColumn>, bytes: Vec<u8>) -> Self {
@@ -82,9 +83,9 @@ impl RowCollection for ByteRowCollection {
         id: usize,
         column_id: usize,
         new_value: TypedValue,
-    ) -> std::io::Result<TypedValue> {
+    ) -> TypedValue {
         let column = &self.columns[column_id];
-        let offset = self.to_row_offset(id) + column.offset as u64;
+        let offset = self.convert_rowid_to_offset(id) + column.offset as u64;
         let buffer = Row::encode_value(
             &new_value,
             &FieldMetadata::new(true),
@@ -95,10 +96,21 @@ impl RowCollection for ByteRowCollection {
         let end = start + buffer.len();
         encoded_row[start..end].copy_from_slice(buffer.as_slice());
         self.row_data[id] = encoded_row;
-        Ok(TypedValue::RowsAffected(1))
+        TypedValue::RowsAffected(1)
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
+    fn overwrite_field_metadata(
+        &mut self,
+        id: usize,
+        column_id: usize,
+        metadata: FieldMetadata
+    ) -> TypedValue {
+        let column = &self.columns[column_id];
+        self.row_data[id][column.offset] = metadata.encode();
+        TypedValue::RowsAffected(1)
+    }
+
+    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
         // resize the rows to prevent overflow
         if self.row_data.len() <= id {
             self.row_data.resize(id + 1, vec![]);
@@ -109,19 +121,29 @@ impl RowCollection for ByteRowCollection {
         if self.watermark <= id {
             self.watermark = id + 1;
         }
-        Ok(TypedValue::RowsAffected(1))
+        TypedValue::RowsAffected(1)
     }
 
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
         self.row_data[id][0] = metadata.encode();
-        Ok(TypedValue::RowsAffected(1))
+        TypedValue::RowsAffected(1)
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
+    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
         let column = &self.columns[column_id];
         let buffer = self.row_data[id][column.offset..(column.offset + column.max_physical_size)].to_vec();
-        let value = Row::decode_value(&column.data_type, &buffer, 0);
-        Ok(value)
+        Row::decode_value(&column.data_type, &buffer, 0)
+    }
+
+    fn read_field_metadata(
+        &self,
+        id: usize,
+        column_id: usize,
+    ) -> std::io::Result<FieldMetadata> {
+        let column = &self.columns[column_id];
+        let code = self.row_data[id][column.offset];
+        let meta = FieldMetadata::decode(code);
+        Ok(meta)
     }
 
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
@@ -153,6 +175,7 @@ mod tests {
     use crate::row_collection::RowCollection;
     use crate::table_columns::TableColumn;
     use crate::testdata::{make_quote, make_quote_columns};
+    use crate::typed_values::TypedValue::UInt64Value;
 
     #[test]
     fn test_contains() {
@@ -184,7 +207,7 @@ mod tests {
     fn test_index_of() {
         let (brc, phys_columns) = create_data_set();
         let row = make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289);
-        assert_eq!(brc.index_of(&row), Some(4));
+        assert_eq!(brc.index_of(&row), UInt64Value(4));
     }
 
     fn create_data_set() -> (ByteRowCollection, Vec<TableColumn>) {

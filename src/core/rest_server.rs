@@ -2,19 +2,16 @@
 // REST server module
 ////////////////////////////////////////////////////////////////////
 
-use std::env;
 use std::error::Error;
 
 use actix::{Actor, Addr};
 use actix_session::Session;
-use actix_session::storage::CookieSessionStore;
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
-use actix_web::cookie::Key;
 use actix_web_actors::ws;
-use log::{error, info, LevelFilter};
+use log::{error, info};
 use serde_json::Value;
 
-use shared_lib::{fail, get_host_and_port, RemoteCallRequest, RemoteCallResponse, RowJs};
+use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse, RowJs};
 
 use crate::{append_row, create_table_from_config, delete_row, get_columns, overwrite_row, read_range, read_row, update_row};
 use crate::dataframe_actor::DataframeActor;
@@ -69,11 +66,11 @@ macro_rules! web_routes {
 }
 
 fn get_session(session: &Session) -> Result<Interpreter, Box<dyn Error>> {
-    if let Some(mut state) = session.get::<Interpreter>("state")? {
+    if let Some(state) = session.get::<Interpreter>("state")? {
         info!("read session: {:?}", state);
         Ok(state)
     } else {
-        let mut state = Interpreter::new();
+        let state = Interpreter::new();
         info!("create session: {:?}", state);
         session.insert("state", state.clone())?;
         Ok(state)
@@ -134,8 +131,8 @@ pub async fn handle_config_get(path: web::Path<(String, String, String)>) -> imp
 /// handler function for creating a configuration by namespace (database, schema, name)
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_config_post(req: HttpRequest,
-                            data: web::Json<DataFrameConfig>,
-                            path: web::Path<(String, String, String)>) -> impl Responder {
+                                data: web::Json<DataFrameConfig>,
+                                path: web::Path<(String, String, String)>) -> impl Responder {
     async fn intern(req: HttpRequest,
                     data: web::Json<DataFrameConfig>,
                     path: web::Path<(String, String, String)>) -> std::io::Result<usize> {
@@ -154,7 +151,7 @@ pub async fn handle_config_post(req: HttpRequest,
 /// handler function for deleting an existing row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_delete(req: HttpRequest,
-                           path: web::Path<(String, String, String, usize)>) -> impl Responder {
+                               path: web::Path<(String, String, String, usize)>) -> impl Responder {
     match delete_row_by_id(req, path).await {
         Ok(outcome) => HttpResponse::Ok().json(outcome),
         Err(err) => {
@@ -167,7 +164,7 @@ pub async fn handle_row_delete(req: HttpRequest,
 /// handler function for row by namespace (database, schema, name) and row ID
 // ex: http://localhost:8080/dataframes/create/quotes/0
 pub async fn handle_row_get(req: HttpRequest,
-                        path: web::Path<(String, String, String, usize)>) -> impl Responder {
+                            path: web::Path<(String, String, String, usize)>) -> impl Responder {
     match get_row_by_id(req, path).await {
         Ok(Some(row)) => HttpResponse::Ok().json(row.to_row_js()),
         Ok(None) => HttpResponse::Ok().json(serde_json::json!({})),
@@ -181,8 +178,8 @@ pub async fn handle_row_get(req: HttpRequest,
 /// handler function for appending a new/existing row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_post(req: HttpRequest,
-                         data: web::Json<RowJs>,
-                         path: web::Path<(String, String, String, usize)>) -> impl Responder {
+                             data: web::Json<RowJs>,
+                             path: web::Path<(String, String, String, usize)>) -> impl Responder {
     match append_row(req, data, path).await {
         Ok(outcome) => HttpResponse::Ok().json(outcome),
         Err(err) => {
@@ -195,8 +192,8 @@ pub async fn handle_row_post(req: HttpRequest,
 /// handler function for overwriting an existing row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_put(req: HttpRequest,
-                        data: web::Json<RowJs>,
-                        path: web::Path<(String, String, String, usize)>) -> impl Responder {
+                            data: web::Json<RowJs>,
+                            path: web::Path<(String, String, String, usize)>) -> impl Responder {
     match overwrite_row_by_id(req, data, path).await {
         Ok(outcome) => HttpResponse::Ok().json(outcome),
         Err(err) => {
@@ -209,8 +206,8 @@ pub async fn handle_row_put(req: HttpRequest,
 /// handler function for overwriting an existing row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_patch(req: HttpRequest,
-                          data: web::Json<RowJs>,
-                          path: web::Path<(String, String, String, usize)>) -> impl Responder {
+                              data: web::Json<RowJs>,
+                              path: web::Path<(String, String, String, usize)>) -> impl Responder {
     match update_row_by_id(req, data, path).await {
         Ok(outcome) => HttpResponse::Ok().json(outcome),
         Err(err) => {
@@ -223,7 +220,7 @@ pub async fn handle_row_patch(req: HttpRequest,
 /// handler function for row by namespace (database, schema, name) and row range
 // ex: http://localhost:8080/dataframes/create/quotes/0/2
 pub async fn handle_row_range_get(req: HttpRequest,
-                              path: web::Path<(String, String, String, usize, usize)>) -> impl Responder {
+                                  path: web::Path<(String, String, String, usize, usize)>) -> impl Responder {
     match get_range_by_id(req, path).await {
         Ok(rows) => HttpResponse::Ok().json(rows.iter()
             .map(|row| row.to_row_js()).collect::<Vec<RowJs>>()),
@@ -332,8 +329,6 @@ mod tests {
     #[actix::test]
     async fn test_dataframe_config_lifecycle() {
         // set up the sessions
-        let secret_key = Key::generate();
-        let cookie_store = CookieSessionStore::default();
         let mut app = test::init_service(web_routes!(SharedState::new())).await;
 
         // send a POST with the config

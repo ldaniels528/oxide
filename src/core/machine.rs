@@ -5,41 +5,34 @@
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
-use std::io::{ErrorKind, Read};
+use std::io::Read;
 use std::ops::Deref;
 use std::process::Output;
-use std::ptr::null;
-use std::sync::Arc;
 
-use actix_web::web::to;
-use crossterm::terminal::window_size;
-use log::{error, info, warn};
+use log::{error, info};
 use serde::{Deserialize, Serialize};
+use tokio::runtime::Runtime;
 
-use shared_lib::{cnv_error, fail};
+use shared_lib::fail;
 
-use crate::{row, serialization};
-use crate::compiler::{fail_expr, fail_near, fail_unexpected, fail_unhandled_expr, fail_value};
+use crate::compiler::{fail_expr, fail_unexpected, fail_value};
 use crate::compiler::Compiler;
 use crate::cursor::Cursor;
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::dataframes::DataFrame;
-use crate::expression::{Expression, Infrastructure, Mutation, Queryable, TRUE, UNDEFINED};
+use crate::expression::{Expression, Infrastructure, Mutation, Queryable, UNDEFINED};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::{ArrayLiteral, ColumnSet, From, Literal, Ns, Perform, Variable, Via};
 use crate::expression::Infrastructure::Declare;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::file_row_collection::FileRowCollection;
-use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::row_collection::RowCollection;
-use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::structure::Structure;
 use crate::table_columns::TableColumn;
-use crate::tokens::Token::Atom;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
@@ -244,10 +237,13 @@ impl Machine {
             StdOut(a) => self.write_to_console(a),
             SystemCall(args) => self.execute_system_call(args),
             TupleLiteral(values) => self.evaluate_array(values),
+            TypeOf(a) => self.execute_type_of(a),
             Variable(name) => Ok((self.clone(), self.get(&name).unwrap_or(Undefined))),
             Via(src) => self.perform_table_row_query(src, &UNDEFINED, Undefined),
             While { condition, code } =>
                 self.evaluate_while(condition, code),
+            Www { method, url, body, headers } =>
+                self.evaluate_www(method, url, body, headers),
         }
     }
 
@@ -278,14 +274,14 @@ impl Machine {
                 let frc = FileRowCollection::open_path(path.as_str())?;
                 match frc.read_one(id)? {
                     Some(row) => StructureValue(Structure::from_row(&row)),
-                    None => StructureValue(Structure::from_physical_columns(frc.get_columns().clone()))
+                    None => StructureValue(Structure::new(frc.get_columns().clone()))
                 }
             }
             TableValue(mrc) => {
                 let id = index.assume_usize().unwrap_or(0);
                 match mrc.read_one(id)? {
                     Some(row) => StructureValue(Structure::from_row(&row)),
-                    None => StructureValue(Structure::from_physical_columns(mrc.get_columns().clone()))
+                    None => StructureValue(Structure::new(mrc.get_columns().clone()))
                 }
             }
             other =>
@@ -412,7 +408,7 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, a) = self.evaluate(a)?;
         let (machine, b) = machine.evaluate(b)?;
-        Ok((machine, TypedValue::Boolean(a.contains(&b))))
+        Ok((machine, a.contains(&b)))
     }
 
     fn evaluate_directive_die(
@@ -587,13 +583,18 @@ impl Machine {
         Ok((machine, neg_result))
     }
 
-    fn write_to_console(
+    /// evaluates the specified [Expression]; returning an option of a [TypedValue] result.
+    pub fn evaluate_opt(
         &self,
-        expr: &Box<Expression>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, result) = self.evaluate(expr)?;
-        print!("{}", result.unwrap_value());
-        Ok((machine, TypedValue::Ack))
+        opt_of_expr: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Self, Option<TypedValue>)> {
+        Ok(match opt_of_expr {
+            Some(expr) => {
+                let (ms, tv) = self.evaluate(&expr)?;
+                (ms, Some(tv))
+            }
+            None => (self.clone(), None)
+        })
     }
 
     fn execute_system_call(
@@ -622,6 +623,13 @@ impl Machine {
         }
     }
 
+    fn execute_type_of(&self,
+                       expression: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, value) = self.evaluate(expression)?;
+        Ok((ms, StringValue(value.get_type_name())))
+    }
+
     fn evaluate_while(
         &self,
         condition: &Expression,
@@ -640,6 +648,60 @@ impl Machine {
             }
         }
         Ok((machine, outcome))
+    }
+
+    fn evaluate_www(
+        &self,
+        method: &Expression,
+        url: &Expression,
+        body: &Option<Box<Expression>>,
+        headers: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, method) = self.evaluate(method)?;
+        let (ms, url) = ms.evaluate(url)?;
+        let (ms, body) = ms.evaluate_opt(body)?;
+        let (ms, headers) = ms.evaluate_opt(headers)?;
+        let promise = ms.http_call(
+            method.unwrap_value(),
+            url.unwrap_value(),
+            body.map(|e| e.unwrap_value()));
+        Runtime::new()?.block_on(promise)
+    }
+
+    async fn http_call(
+        &self,
+        method: String,
+        url: String,
+        body: Option<String>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let ms = self.clone();
+        let result = match reqwest::get(url).await {
+            Ok(response) => {
+                if response.status().is_success() {
+                    match response.text().await {
+                        Ok(body) => StringValue(body),
+                        Err(err) =>
+                            ErrorValue(format!("Error reading response body: {}", err)),
+                    }
+                } else {
+                    ErrorValue(format!("Request failed with status: {}", response.status()))
+                }
+            }
+            Err(err) => ErrorValue(format!("Error making request: {}", err)),
+        };
+
+        Ok((ms, result))
+    }
+
+    pub fn install_platform_functions(&self) -> Self {
+        let mut m = self.clone();
+        // m.variables.insert("type_of".to_string(), Function {
+        //     params: vec![
+        //         ColumnJs::new("item", "", )
+        //     ],
+        //     code: Box::new(()),
+        // });
+        m
     }
 
     fn perform_table_create_index(
@@ -707,7 +769,7 @@ impl Machine {
         from: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let columns = TableColumn::from_columns(columns)?;
-        Ok((self.clone(), TableValue(ModelRowCollection::new(columns, vec![]))))
+        Ok((self.clone(), TableValue(ModelRowCollection::with_rows(columns, vec![]))))
     }
 
     fn perform_table_describe(
@@ -716,7 +778,7 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, result) = self.evaluate(expression)?;
         let rc = result.to_table()?;
-        Ok((machine, rc.describe()?))
+        Ok((machine, rc.describe()))
     }
 
     fn perform_table_drop(&self, table: &Expression) -> std::io::Result<(Self, TypedValue)> {
@@ -754,13 +816,12 @@ impl Machine {
         };
 
         // write the rows to the target
-        let mut rc = machine.expect_row_collection(table)?;
         let mut inserted = 0;
+        let mut rc = machine.expect_row_collection(table)?;
         match rc.append_rows(rows) {
-            Ok(ErrorValue(message)) => return Ok((machine, ErrorValue(message))),
-            Ok(RowsAffected(n)) => inserted += n,
-            Ok(..) => {}
-            Err(err) => return Ok((machine, ErrorValue(err.to_string()))),
+            ErrorValue(message) => return Ok((machine, ErrorValue(message))),
+            RowsAffected(n) => inserted += n,
+            _ => {}
         }
         Ok((machine, RowsAffected(inserted)))
     }
@@ -793,7 +854,7 @@ impl Machine {
     ) -> std::io::Result<(Machine, Vec<Row>)> {
         // determine the row collection
         let machine = self.clone();
-        let mut rc = machine.expect_row_collection(table)?;
+        let rc = machine.expect_row_collection(table)?;
 
         // retrieve rows from the source
         let rows = machine.expect_rows(source, rc.get_columns())?;
@@ -803,7 +864,7 @@ impl Machine {
     fn perform_table_compact(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (machine, tv_table) = self.evaluate(expr)?;
         Self::orchestrate_rc(machine, tv_table, |machine, mut rc| {
-            Ok((machine, rc.compact()?))
+            Ok((machine, rc.compact()))
         })
     }
 
@@ -845,7 +906,7 @@ impl Machine {
             let rows = self.expect_rows(source, columns)?;
 
             // write the rows to the target
-            Ok((machine, writable.append_rows(rows)?))
+            Ok((machine, writable.append_rows(rows)))
         } else {
             Ok((machine, Self::error_expr("A queryable was expected".to_string(), source)))
         }
@@ -984,8 +1045,8 @@ impl Machine {
 
     fn perform_table_scan(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (machine, tv_table) = self.evaluate(expr)?;
-        Self::orchestrate_rc(machine, tv_table, |machine, mut rc| {
-            let mrc = ModelRowCollection::from_rows(rc.scan_all_rows()?);
+        Self::orchestrate_rc(machine, tv_table, |machine, rc| {
+            let mrc = ModelRowCollection::from_rows(rc.examine_rows()?);
             Ok((machine, TableValue(mrc)))
         })
     }
@@ -1133,7 +1194,7 @@ impl Machine {
         table: &Expression,
         source: &Expression,
     ) -> std::io::Result<(Vec<Expression>, Vec<Expression>)> {
-        let mut writable = self.expect_row_collection(table)?;
+        let writable = self.expect_row_collection(table)?;
         let (fields, values) = {
             if let Via(my_source) = source {
                 if let (_, JSONObjectValue(tuples)) = self.evaluate(&my_source)? {
@@ -1241,6 +1302,15 @@ impl Machine {
         let mut variables = self.variables.clone();
         variables.insert(name.to_string(), value);
         Self::construct(self.stack.clone(), variables)
+    }
+
+    fn write_to_console(
+        &self,
+        expr: &Box<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (machine, result) = self.evaluate(expr)?;
+        print!("{}", result.unwrap_value());
+        Ok((machine, TypedValue::Ack))
     }
 }
 
@@ -1467,7 +1537,7 @@ mod tests {
         let machine = Machine::new();
 
         // drop table if exists ns("machine.index.stocks")
-        let (machine, result) = machine.evaluate(&Perform(Infrastructure::Drop(TableTarget {
+        let (machine, _) = machine.evaluate(&Perform(Infrastructure::Drop(TableTarget {
             path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
         }))).unwrap();
 
@@ -1513,8 +1583,8 @@ mod tests {
         }));
 
         let machine = Machine::new();
-        let (machine, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, TypedValue::TableValue(ModelRowCollection::new(
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, TypedValue::TableValue(ModelRowCollection::with_rows(
             make_table_columns(), vec![],
         )))
     }
@@ -1524,7 +1594,7 @@ mod tests {
         // create a table with test data
         let ns_path = "machine.drop.stocks";
         let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
-        let (df, phys_columns) = create_file_table(ns_path);
+        create_file_table(ns_path);
 
         let model = Perform(Infrastructure::Drop(TableTarget { path: Box::new(ns) }));
         assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
@@ -1636,7 +1706,6 @@ mod tests {
     fn test_delete_rows_from_namespace() {
         // create a table with test data
         let ns_path = "machine.delete.stocks";
-        let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
         let (df, phys_columns) = create_file_table(ns_path);
 
         // delete some rows
@@ -1660,7 +1729,6 @@ mod tests {
     fn test_undelete_rows_from_namespace() {
         // create a table with test data
         let ns_path = "machine.undelete.stocks";
-        let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
         let (df, phys_columns) = create_file_table(ns_path);
 
         // delete some rows
@@ -1701,7 +1769,6 @@ mod tests {
     fn test_append_namespace() {
         // create a table with test data
         let ns_path = "machine.append.stocks";
-        let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
         let (df, phys_columns) = create_file_table(ns_path);
 
         // insert some rows
@@ -1747,7 +1814,6 @@ mod tests {
         assert_eq!(model.to_code(), r#"overwrite ns("machine.overwrite.stocks") via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99} where symbol == "BOOM""#);
 
         // create a table with test data
-        let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
         let (df, phys_columns) = create_file_table(ns_path);
 
         // overwrite some rows
@@ -1806,7 +1872,7 @@ mod tests {
                 make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
                 make_quote(4, &phys_columns, "VAPOR", "NYSE", 0.0289),
             ])));
-        let (machine, value) = machine.evaluate(&model).unwrap();
+        let (_, value) = machine.evaluate(&model).unwrap();
         assert_eq!(value, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(4, &phys_columns, "VAPOR", "NYSE", 0.0289),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
@@ -1819,7 +1885,7 @@ mod tests {
     #[test]
     fn test_select_from_namespace() {
         // create a table with test data
-        let (df, phys_columns) =
+        let (_, phys_columns) =
             create_file_table("machine.select.stocks");
 
         // execute the query
@@ -1882,8 +1948,7 @@ mod tests {
             Literal(StringValue("cat".into())),
             Literal(StringValue("LICENSE".into())),
         ]);
-        let machine = Machine::new();
-        let (machine, result) = machine.evaluate(&model).unwrap();
+        let (_, result) = Machine::new().evaluate(&model).unwrap();
         assert_eq!(result, StringValue(r#"MIT License
 
 Copyright (c) 2024 Lawrence Daniels
@@ -1906,6 +1971,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 "#.into()))
+    }
+
+    #[test]
+    fn test_type_of() {
+        let model = TypeOf(Box::new(Literal(StringValue("cat".into()))));
+        let (_, result) = Machine::new().evaluate(&model).unwrap();
+        assert_eq!(result, StringValue("String".to_string()));
     }
 
     #[ignore]
@@ -1935,7 +2007,7 @@ SOFTWARE.
 
         // retrieve and verify all rows
         let model = From(Box::new(Variable("stocks".into())));
-        let (machine, result) = machine.evaluate(&model).unwrap();
+        let (machine, _) = machine.evaluate(&model).unwrap();
         assert_eq!(machine.get("stocks").unwrap(), TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "OTC_BB", 0.2456),
@@ -1949,7 +2021,6 @@ SOFTWARE.
     fn test_update_rows_in_namespace() {
         // create a table with test data
         let ns_path = "machine.update.stocks";
-        let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
         let (df, phys_columns) = create_file_table(ns_path);
 
         // create the instruction model
@@ -1989,7 +2060,7 @@ SOFTWARE.
             limit: Some(Box::new(Literal(Int64Value(0)))),
         });
 
-        let (mrc, phys_columns) = create_memory_table();
+        let (mrc, _) = create_memory_table();
         let machine = Machine::new().with_variable("stocks", TableValue(mrc));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, RowsAffected(1))
@@ -2021,8 +2092,21 @@ SOFTWARE.
         assert_eq!(model.to_code(), "while num < 5 num := num + 1");
 
         let machine = Machine::new().with_variable("num", Int64Value(0));
-        let (machine, result) = machine.evaluate(&model).unwrap();
+        let (machine, _) = machine.evaluate(&model).unwrap();
         assert_eq!(machine.get("num"), Some(Int64Value(5)))
+    }
+
+    #[test]
+    fn test_www_get() {
+        let model = Www {
+            method: Box::new(Literal(StringValue("get".to_string()))),
+            url: Box::new(Literal(StringValue("http://www.yahoo.com".to_string()))),
+            body: None,
+            headers: None,
+        };
+        let machine = Machine::new();
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, StringValue("OK\r\n".into()));
     }
 
     fn create_memory_table() -> (ModelRowCollection, Vec<TableColumn>) {

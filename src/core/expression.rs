@@ -83,13 +83,15 @@ pub const E_STDERR: u8 = 233;
 pub const E_STDOUT: u8 = 235;
 pub const E_TRUNCATE: u8 = 237;
 pub const E_TUPLE: u8 = 239;
-pub const E_UNDELETE: u8 = 240;
-pub const E_UPDATE: u8 = 241;
-pub const E_VAR_GET: u8 = 243;
-pub const E_VAR_SET: u8 = 245;
-pub const E_VIA: u8 = 247;
+pub const E_TYPE_OF: u8 = 241;
+pub const E_UNDELETE: u8 = 243;
+pub const E_UPDATE: u8 = 245;
+pub const E_VAR_GET: u8 = 247;
+pub const E_VAR_SET: u8 = 249;
+pub const E_VIA: u8 = 250;
 pub const E_WHERE: u8 = 251;
-pub const E_WHILE: u8 = 255;
+pub const E_WHILE: u8 = 253;
+pub const E_WWW: u8 = 255;
 
 /// Represents a Creation Entity
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -173,11 +175,18 @@ pub enum Expression {
     StdOut(Box<Expression>),
     SystemCall(Vec<Expression>),
     TupleLiteral(Vec<Expression>),
+    TypeOf(Box<Expression>),
     Variable(String),
     Via(Box<Expression>),
     While {
         condition: Box<Expression>,
         code: Box<Expression>,
+    },
+    Www {
+        method: Box<Expression>,
+        url: Box<Expression>,
+        body: Option<Box<Expression>>,
+        headers: Option<Box<Expression>>,
     },
 }
 
@@ -387,10 +396,13 @@ pub fn decompile(expr: &Expression) -> String {
             format!("system({})", decompile_list(args)),
         TupleLiteral(items) =>
             format!("({})", decompile_list(items)),
+        TypeOf(a) => format!("type_of {}", decompile(a)),
         Variable(name) => name.to_string(),
         Via(expr) => format!("via {}", decompile(expr)),
         While { condition, code } =>
             format!("while {} {}", decompile(condition), decompile(code)),
+        Www { method, url, body, headers } =>
+            format!("www {} {}{}{}", method, decompile(url), decompile_opt(body), decompile_opt(headers)),
     }
 }
 

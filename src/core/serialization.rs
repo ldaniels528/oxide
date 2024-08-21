@@ -14,7 +14,6 @@ use crate::expression::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
-use crate::expression::Mutation::IntoNs;
 use crate::machine::Machine;
 use crate::server::ColumnJs;
 use crate::typed_values::*;
@@ -92,10 +91,13 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
             encode(E_SYSTEM_CALL, my_args)
         }
         TupleLiteral(values) => encode_vec(E_TUPLE, values),
+        TypeOf(a) => encode(E_TYPE_OF, vec![a]),
         Variable(name) => encode(E_VAR_GET, vec![&Literal(StringValue(name.into()))]),
         Via(src) => encode(E_VIA, vec![src]),
         While { condition, code } =>
             encode(E_WHILE, vec![condition, code]),
+        Www { method, url, body, headers } =>
+            encode(E_WWW, vec![method, url, &get_or_undef(body), &get_or_undef(headers)]),
     }
 }
 
@@ -366,6 +368,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_SHIFT_RIGHT => Ok(ShiftRight(decode_box(buf)?, decode_box(buf)?)),
         E_TRUNCATE => Ok(Mutate(Mutation::Truncate { path: decode_box(buf)?, limit: decode_opt(buf)? })),
         E_TUPLE => Ok(TupleLiteral(decode_array(buf)?)),
+        E_TYPE_OF => Ok(TypeOf(decode_box(buf)?)),
         E_UNDELETE =>
             Ok(Mutate(Mutation::Undelete {
                 path: decode_box(buf)?,
@@ -382,6 +385,12 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_BITWISE_XOR => Ok(BitwiseXor(decode_box(buf)?, decode_box(buf)?)),
         E_WHERE => Ok(Inquire(Queryable::Where { from: decode_box(buf)?, condition: decode_box(buf)? })),
         E_WHILE => Ok(While { condition: decode_box(buf)?, code: decode_box(buf)? }),
+        E_WWW => Ok(Www {
+            method: decode_box(buf)?,
+            url: decode_box(buf)?,
+            body: decode_opt(buf)?,
+            headers: decode_opt(buf)?,
+        }),
         z => fail(format!("Invalid expression code {}", z))
     }
 }
@@ -632,10 +641,8 @@ pub fn sub(machine: Machine) -> std::io::Result<Machine> {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::typed_values::TypedValue::{Float64Value, Int32Value, Int64Value};
-    use crate::typed_values::TypedValue::*;
 
     use super::*;
 

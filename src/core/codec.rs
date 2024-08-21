@@ -2,8 +2,6 @@
 // codec module - responsible for encoding/decoding bytes
 ////////////////////////////////////////////////////////////////////
 
-use std::io;
-use std::io::Read;
 use std::mem::size_of;
 
 use uuid::Uuid;
@@ -59,9 +57,9 @@ pub(crate) fn decode_u8x16<A>(buffer: &Vec<u8>, offset: usize, f: fn([u8; 16]) -
     f(scratch)
 }
 
-pub(crate) fn decode_uuid(uuid_str: &str) -> io::Result<[u8; 16]> {
+pub(crate) fn decode_uuid(uuid_str: &str) -> std::io::Result<[u8; 16]> {
     Ok(*Uuid::parse_str(uuid_str)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?.as_bytes())
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?.as_bytes())
 }
 
 pub fn encode_chars(chars: Vec<char>) -> Vec<u8> {

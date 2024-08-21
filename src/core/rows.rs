@@ -17,11 +17,13 @@ use crate::data_types::DataType;
 use crate::expression::Expression;
 use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
+use crate::model_row_collection::ModelRowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::server::determine_column_value;
+use crate::structure::Structure;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Null, Undefined};
+use crate::typed_values::TypedValue::{Null, UInt64Value, Undefined};
 
 /// Represents a row of a table structure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -41,6 +43,10 @@ impl Row {
     pub fn new(id: usize, columns: Vec<TableColumn>, values: Vec<TypedValue>) -> Self {
         Self { id, columns, values }
     }
+
+    ////////////////////////////////////////////////////////////////////
+    //      Static Methods
+    ////////////////////////////////////////////////////////////////////
 
     /// Decodes the supplied buffer returning a row and its metadata
     pub fn decode(buffer: &Vec<u8>, columns: &Vec<TableColumn>) -> (Self, RowMetadata) {
@@ -172,6 +178,15 @@ impl Row {
         buf
     }
 
+    pub fn filter_by_keys(&self, keys: Vec<String>) -> Self {
+        let new_values = self.columns.iter()
+            .map(|c| match c.get_name() {
+                name if name == "__row_id__" => UInt64Value(self.id as u64),
+                name => self.get(name)
+            }).collect();
+        self.with_values(new_values)
+    }
+
     pub fn find_value_by_name(&self, name: &str) -> Option<TypedValue> {
         self.columns.iter().zip(self.values.iter())
             .find_map(|(c, v)| {
@@ -179,7 +194,18 @@ impl Row {
             })
     }
 
+    pub fn get(&self, name: &str) -> TypedValue {
+        self.columns.iter().zip(self.values.iter())
+            .find(|(c, _)| c.get_name() == name)
+            .map(|(_, v)| v.clone())
+            .unwrap_or(Undefined)
+    }
+
     pub fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
+
+    fn get_row_offset(&self, id: usize) -> u64 {
+        (id as u64) * (Self::compute_record_size(&self.columns) as u64)
+    }
 
     pub fn get_values(&self) -> Vec<TypedValue> { self.values.clone() }
 
@@ -218,7 +244,20 @@ impl Row {
             .map(|(v, c)| FieldJs::new(c.get_name(), v.to_json())).collect())
     }
 
-    fn to_row_offset(&self, id: usize) -> u64 { (id as u64) * (Self::compute_record_size(&self.columns) as u64) }
+    pub fn to_string(&self) -> String {
+        let mapping = self.columns.iter().zip(self.values.iter())
+            .map(|(c, v)| format!("\"{}\": {}", c.get_name(), v.to_json().to_string()))
+            .collect::<Vec<String>>();
+        format!("{{ {} }}", mapping.join(", "))
+    }
+
+    pub fn to_struct(&self) -> Structure {
+        Structure::from_physical_columns_and_values(self.columns.clone(), self.values.clone())
+    }
+
+    pub fn to_table(&self) -> ModelRowCollection {
+        ModelRowCollection::from_rows(vec![self.clone()])
+    }
 
     /// Creates a new [Row] from the supplied fields and values
     pub fn transform(
@@ -258,6 +297,10 @@ impl Row {
 
     pub fn with_row_id(&self, id: usize) -> Self {
         Self::new(id, self.columns.clone(), self.values.clone())
+    }
+
+    pub fn with_values(&self, values: Vec<TypedValue>) -> Self {
+        Self::new(self.id, self.columns.clone(), values)
     }
 }
 
@@ -414,7 +457,7 @@ mod tests {
         let row = row!(111, make_table_columns(), vec![
             StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
         ]);
-        assert_eq!(row.to_row_offset(2), 2 * row.get_record_size() as u64);
+        assert_eq!(row.get_row_offset(2), 2 * row.get_record_size() as u64);
     }
 
     #[test]

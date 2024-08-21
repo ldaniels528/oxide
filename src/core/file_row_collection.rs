@@ -9,8 +9,6 @@ use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
-
 use crate::dataframe_config::DataFrameConfig;
 use crate::field_metadata::FieldMetadata;
 use crate::namespaces::Namespace;
@@ -19,6 +17,7 @@ use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::ErrorValue;
 
 /// File-based RowCollection implementation
 #[derive(Clone)]
@@ -37,26 +36,7 @@ impl FileRowCollection {
         Ok(Self::new(columns, file, path.as_str()))
     }
 
-    /// Convenience function to create and/or open a hash-index file
-    pub fn create_hash_index_file(
-        path: &str,
-        key_column_index: usize,
-    ) -> std::io::Result<File> {
-        // determine the base_path and full_path
-        let (base_path, full_path) =
-            Self::get_hash_index_filename(path, key_column_index);
-
-        // ensure the base directory exists
-        fs::create_dir_all(base_path)?;
-
-        // create and/or open the file
-        OpenOptions::new().truncate(true).create(true).read(true).write(true).open(full_path)
-    }
-
-    pub fn get_hash_index_filename(
-        path: &str,
-        key_column_index: usize,
-    ) -> (String, String) {
+    pub fn get_related_filename(path: &str, extension: &str) -> (String, String) {
         let (oxide_home, untitled) = (Namespace::oxide_home(), "untitled");
         let raw_file_path = Path::new(path);
 
@@ -68,8 +48,8 @@ impl FileRowCollection {
             .map(|p| p.to_str().unwrap_or(untitled))
             .unwrap_or(untitled);
         let index_filename = match table_filename.find(".") {
-            Some(n) => format!("{}.{}", &table_filename[0..n], key_column_index),
-            None => format!("{}.{}", untitled, key_column_index)
+            Some(n) => format!("{}.{}", &table_filename[0..n], extension),
+            None => format!("{}.{}", untitled, extension)
         };
         let full_path = format!("{}/{}", base_path, index_filename);
         (base_path.to_string(), full_path)
@@ -121,15 +101,22 @@ impl Debug for FileRowCollection {
 }
 
 impl RowCollection for FileRowCollection {
-    fn create_hash_table(
+    fn create_related_structure(
         &self,
-        key_column_index: usize,
+        columns: Vec<TableColumn>,
+        extension: &str,
     ) -> std::io::Result<Box<dyn RowCollection>> {
-        let src_column = &self.get_columns()[key_column_index];
-        let index_columns = <dyn RowCollection>::get_hash_table_columns(src_column)?;
+        // determine the base_path and full_path
         let path = self.path.as_str();
-        let hash_file = Self::create_hash_index_file(path, key_column_index)?;
-        let frc = Self::new(index_columns, Arc::new(hash_file), path);
+        let (base_path, full_path) =
+            Self::get_related_filename(path, extension);
+
+        // ensure the parent (base) directory exists
+        fs::create_dir_all(base_path)?;
+
+        // create and/or open the file
+        let file = OpenOptions::new().truncate(true).create(true).read(true).write(true).open(full_path)?;
+        let frc = Self::new(columns, Arc::new(file), path);
         Ok(Box::new(frc))
     }
 
@@ -146,48 +133,86 @@ impl RowCollection for FileRowCollection {
         id: usize,
         column_id: usize,
         new_value: TypedValue,
-    ) -> std::io::Result<TypedValue> {
+    ) -> TypedValue {
         let column = &self.columns[column_id];
-        let offset = self.to_row_offset(id) + column.offset as u64;
+        let offset = self.convert_rowid_to_offset(id) + column.offset as u64;
         let buffer = Row::encode_value(
             &new_value,
             &FieldMetadata::new(true),
-            column.max_physical_size
+            column.max_physical_size,
         );
-        let _ = &self.file.write_at(&buffer, offset)?;
-        Ok(TypedValue::RowsAffected(1))
+        match &self.file.write_at(&buffer, offset) {
+            Ok(_) => TypedValue::RowsAffected(1),
+            Err(err) => ErrorValue(err.to_string())
+        }
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<TypedValue> {
-        let offset = self.to_row_offset(id);
-        let _ = &self.file.write_at(&row.encode(), offset)?;
-        Ok(TypedValue::RowsAffected(1))
-    }
-
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<TypedValue> {
-        let offset = self.to_row_offset(id);
-        let _ = &self.file.write_at(&[metadata.encode()], offset)?;
-        Ok(TypedValue::RowsAffected(1))
-    }
-
-    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
+    fn overwrite_field_metadata(
+        &mut self,
+        id: usize,
+        column_id: usize,
+        metadata: FieldMetadata,
+    ) -> TypedValue {
+        let row_offset = self.convert_rowid_to_offset(id);
         let column = &self.columns[column_id];
-        let row_offset = self.to_row_offset(id);
+        let column_offset = column.offset as u64;
+        let offset = row_offset + column_offset;
+        match &self.file.write_at(&[metadata.encode()], offset) {
+            Ok(_) => TypedValue::RowsAffected(1),
+            Err(err) => ErrorValue(err.to_string())
+        }
+    }
+
+    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
+        let offset = self.convert_rowid_to_offset(id);
+        match &self.file.write_at(&row.encode(), offset) {
+            Ok(_) => TypedValue::RowsAffected(1),
+            Err(err) => ErrorValue(err.to_string())
+        }
+    }
+
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
+        let offset = self.convert_rowid_to_offset(id);
+        match &self.file.write_at(&[metadata.encode()], offset) {
+            Ok(_) => TypedValue::RowsAffected(1),
+            Err(err) => ErrorValue(err.to_string())
+        }
+    }
+
+    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
+        let column = &self.columns[column_id];
+        let row_offset = self.convert_rowid_to_offset(id);
         let mut buffer: Vec<u8> = vec![0; column.max_physical_size];
-        let _ = &self.file.read_at(&mut buffer, row_offset + column.offset as u64)?;
-        let value = Row::decode_value(&column.data_type, &buffer, 0);
-        Ok(value)
+        match &self.file.read_at(&mut buffer, row_offset + column.offset as u64) {
+            Ok(_) => {}
+            Err(err) => return ErrorValue(err.to_string())
+        }
+        Row::decode_value(&column.data_type, &buffer, 0)
+    }
+
+    fn read_field_metadata(
+        &self,
+        id: usize,
+        column_id: usize,
+    ) -> std::io::Result<FieldMetadata> {
+        let column = &self.columns[column_id];
+        let row_offset = self.convert_rowid_to_offset(id);
+        let offset = row_offset + column.offset as u64;
+        let mut buffer: Vec<u8> = vec![0u8; 1];
+        let _ = &self.file.read_at(&mut buffer, offset)?;
+        let meta = FieldMetadata::decode(buffer[0]);
+        Ok(meta)
     }
 
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
-        let offset = self.compute_offset(id);
+        let offset = self.convert_rowid_to_offset(id);
         let mut buffer: Vec<u8> = vec![0; self.record_size];
         let _ = self.file.read_at(&mut buffer, offset)?;
         Ok(Row::decode(&buffer, &self.columns))
     }
 
     fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
-        let offset = self.compute_offset(id);
+        let offset = self.convert_rowid_to_offset(id);
         let mut buffer: Vec<u8> = vec![0; 1];
         let _ = self.file.read_at(&mut buffer, offset)?;
         Ok(RowMetadata::decode(buffer[0]))

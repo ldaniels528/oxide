@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn test_from_collection() {
-        let (brc, columns) = create_collection();
+        let (brc, _) = create_collection();
         let lines = TableRenderer::from_collection(Box::new(brc));
         for line in &lines { println!("{}", line) }
         assert_eq!(lines, vec![

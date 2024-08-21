@@ -23,9 +23,7 @@ use crate::codec;
 use crate::compiler::fail_value;
 use crate::data_types::*;
 use crate::data_types::DataType::*;
-use crate::dataframe_config::DataFrameConfig;
-use crate::dataframes::DataFrame;
-use crate::expression::Expression;
+use crate::expression::{ACK, Expression};
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -34,7 +32,6 @@ use crate::rows::Row;
 use crate::serialization::disassemble;
 use crate::server::ColumnJs;
 use crate::structure::Structure;
-use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue::*;
 
 const ISO_DATE_FORMAT: &str =
@@ -86,27 +83,26 @@ impl TypedValue {
     /// returns true, if:
     /// 1. the host value is an array, and the item value is found within it,
     /// 2. the host value is a table, and the item value matches a row found within it,
-    pub fn contains(&self, value: &TypedValue) -> bool {
+    pub fn contains(&self, value: &TypedValue) -> TypedValue {
         match &self {
-            Array(items) => items.contains(value),
-            JSONObjectValue(items) => {
+            Array(items) => Boolean(items.contains(value)),
+            JSONObjectValue(items) =>
                 match value {
                     StringValue(name) => {
                         for (s, _) in items {
-                            if name == s { return true; }
+                            if name == s { return Boolean(true); }
                         }
-                        false
+                        Boolean(false)
                     }
-                    _ => false
-                }
-            }
+                    _ => Boolean(false)
+                },
             TableValue(mrc) =>
                 match value {
                     JSONObjectValue(tuples) =>
                         mrc.contains(&Row::from_tuples(0, mrc.get_columns(), tuples)),
-                    _ => false
+                    _ => Boolean(false)
                 }
-            _ => false
+            _ => Boolean(false)
         }
     }
 
@@ -126,18 +122,22 @@ impl TypedValue {
             Float32Type => codec::decode_u8x4(buffer, offset, |b| Float32Value(f32::from_be_bytes(b))),
             Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
             FuncType(columns) => Function {
-                params: vec![],
-                code: Box::new(todo!()),
+                params: columns.clone(),
+                code: Box::new(ACK), // TODO investigate
             },
             Int8Type => codec::decode_u8(buffer, offset, |b| Int8Value(b.to_i8().unwrap())),
             Int16Type => codec::decode_u8x2(buffer, offset, |b| Int16Value(i16::from_be_bytes(b))),
             Int32Type => codec::decode_u8x4(buffer, offset, |b| Int32Value(i32::from_be_bytes(b))),
             Int64Type => codec::decode_u8x8(buffer, offset, |b| Int64Value(i64::from_be_bytes(b))),
             Int128Type => codec::decode_u8x16(buffer, offset, |b| Int128Value(i128::from_be_bytes(b))),
-            JSONObjectType => JSONObjectValue(todo!()),
+            JSONObjectType => JSONObjectValue(vec![]), // TODO implement me
             RowsAffectedType => RowsAffected(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
-            StructureType(columns) => StructureValue(Structure::from_logical_columns(columns)),
+            StructureType(columns) =>
+                match Structure::from_logical_columns(columns) {
+                    Ok(structure) => StructureValue(structure),
+                    Err(err) => ErrorValue(err.to_string())
+                }
             TableType(columns) => TableValue(ModelRowCollection::construct(columns)),
             UInt8Type => codec::decode_u8(buffer, offset, |b| UInt8Value(b)),
             UInt16Type => codec::decode_u8x2(buffer, offset, |b| UInt16Value(u16::from_be_bytes(b))),
@@ -770,6 +770,22 @@ impl Add for TypedValue {
             (RowsAffected(n), Ack) => RowsAffected(*n),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
             (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
+            (TableValue(a), TableValue(b)) => {
+                match ModelRowCollection::combine(a.get_columns().clone(), vec![a, b]) {
+                    Ok(mrc) => TableValue(mrc),
+                    Err(err) => ErrorValue(err.to_string())
+                }
+            }
+            (TableValue(a), StructureValue(b)) => {
+                let mut mrc = match ModelRowCollection::from_table(Box::new(a)) {
+                    Ok(mrc) => mrc,
+                    Err(err) => return ErrorValue(err.to_string())
+                };
+                match mrc.append_row(b.to_row()) {
+                    ErrorValue(s) => ErrorValue(s),
+                    _ => TableValue(mrc),
+                }
+            }
             _ => Self::numeric_op_2f(&self, &rhs, |a, b| a + b).unwrap_or(Undefined)
         }
     }
@@ -882,10 +898,16 @@ impl PartialOrd for TypedValue {
             (DateValue(a), DateValue(b)) => a.partial_cmp(b),
             (Float32Value(a), Float32Value(b)) => a.partial_cmp(b),
             (Float64Value(a), Float64Value(b)) => a.partial_cmp(b),
-            (UInt8Value(a), UInt8Value(b)) => a.partial_cmp(b),
+            (Int8Value(a), Int8Value(b)) => a.partial_cmp(b),
             (Int16Value(a), Int16Value(b)) => a.partial_cmp(b),
             (Int32Value(a), Int32Value(b)) => a.partial_cmp(b),
             (Int64Value(a), Int64Value(b)) => a.partial_cmp(b),
+            (Int128Value(a), Int128Value(b)) => a.partial_cmp(b),
+            (UInt8Value(a), UInt8Value(b)) => a.partial_cmp(b),
+            (UInt16Value(a), UInt16Value(b)) => a.partial_cmp(b),
+            (UInt32Value(a), UInt32Value(b)) => a.partial_cmp(b),
+            (UInt64Value(a), UInt64Value(b)) => a.partial_cmp(b),
+            (UInt128Value(a), UInt128Value(b)) => a.partial_cmp(b),
             (RowsAffected(a), RowsAffected(b)) => a.partial_cmp(b),
             (StringValue(a), StringValue(b)) => a.partial_cmp(b),
             (UUIDValue(a), UUIDValue(b)) => a.partial_cmp(b),

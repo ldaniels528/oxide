@@ -16,7 +16,6 @@ use crate::server::ColumnJs;
 use crate::structure::Structure;
 use crate::table_columns::TableColumn;
 use crate::typed_values::*;
-use crate::typed_values::TypedValue::StructureValue;
 
 /// A JVM-inspired Byte Buffer utility (Big Endian)
 pub struct ByteBuffer {
@@ -247,7 +246,7 @@ impl ByteBuffer {
         &mut self,
         columns: &Vec<ColumnJs>,
     ) -> std::io::Result<Structure> {
-        Ok(Structure::construct(columns, self.next_array()?))
+        Structure::from_logical_columns_and_values(columns, self.next_array()?)
     }
 
     pub fn next_table(&mut self) -> std::io::Result<ModelRowCollection> {
@@ -539,7 +538,7 @@ mod tests {
 
     #[test]
     fn test_len() {
-        let mut buffer = ByteBuffer::wrap(vec![
+        let buffer = ByteBuffer::wrap(vec![
             0xBA, 0xBE, 0xFA, 0xCE, 0xD0, 0xCA, 0xFE, 0x00,
         ]);
         assert_eq!(buffer.len(), 8)
