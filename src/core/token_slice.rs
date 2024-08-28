@@ -41,7 +41,7 @@ impl TokenSlice {
     pub fn capture(&self, start: &str, end: &str, delim: Option<&str>) -> (Vec<Token>, Self) {
         let inputs = &self.tokens;
         let mut pos = self.pos;
-        let mut tokens = vec![];
+        let mut tokens = Vec::new();
         if inputs[pos as usize].get_raw_value() == start {
             pos += 1;
             while (pos < inputs.len() as isize) && inputs[pos as usize].get_raw_value() != end {

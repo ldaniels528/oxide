@@ -31,6 +31,7 @@ mod expression;
 mod field_metadata;
 mod file_column_row_collection;
 mod file_row_collection;
+mod hash_table_row_collection;
 mod interpreter;
 mod machine;
 mod model_row_collection;
@@ -84,7 +85,7 @@ async fn main() -> std::io::Result<()> {
         // script: execute a script file?
         // ex: ./target/debug/oxide -script ./test.ox
         [_, cmd, path] if cmd == "-s" || cmd == "-script" => {
-            run_script(path)?;
+            run_script(path).await?;
             Ok(())
         }
         // default: start the REPL
@@ -93,7 +94,7 @@ async fn main() -> std::io::Result<()> {
     }
 }
 
-fn run_script(script_path: &str) -> std::io::Result<TypedValue> {
+async fn run_script(script_path: &str) -> std::io::Result<TypedValue> {
     // read the script file contents into the string
     let mut file = File::open(script_path)?;
     let mut script_code = String::new();
@@ -101,7 +102,7 @@ fn run_script(script_path: &str) -> std::io::Result<TypedValue> {
 
     // execute the script code
     let mut interpreter = Interpreter::new();
-    interpreter.evaluate(script_code.as_str())
+    interpreter.evaluate_async(script_code.as_str()).await
 }
 
 async fn start_server(args: Vec<String>) -> std::io::Result<()> {

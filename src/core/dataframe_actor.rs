@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::namespaces::Namespace;
+use crate::row_collection::RowCollection;
+use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 
@@ -70,7 +72,7 @@ impl DataframeActor {
 
     fn read_fully(&mut self, ns: Namespace) -> std::io::Result<Vec<Row>> {
         let df = self.get_or_load_dataframe(ns)?;
-        let mut rows = vec![];
+        let mut rows = Vec::new();
         for id in 0..df.len()? {
             df.read_then_push(id, &mut rows)?
         }
@@ -79,7 +81,7 @@ impl DataframeActor {
 
     fn read_range(&mut self, ns: Namespace, range: Range<usize>) -> std::io::Result<Vec<Row>> {
         let df = self.get_or_load_dataframe(ns)?;
-        let mut rows = vec![];
+        let mut rows = Vec::new();
         for id in range {
             df.read_then_push(id, &mut rows)?
         }
@@ -90,6 +92,10 @@ impl DataframeActor {
         self.get_or_load_dataframe(ns)?.read_row(id).map(|(row, meta)| {
             if meta.is_allocated { Some(row) } else { None }
         })
+    }
+
+    fn read_row_metadata(&mut self, ns: Namespace, id: usize) -> std::io::Result<RowMetadata> {
+        self.get_or_load_dataframe(ns)?.read_row_metadata(id)
     }
 
     fn update_row(&mut self, ns: Namespace, row: Row) -> std::io::Result<usize> {
@@ -122,6 +128,8 @@ impl Handler<IORequest> for DataframeActor {
                 handle_result(self.read_range(ns, range)),
             IORequest::ReadRow { ns, id } =>
                 handle_result(self.read_row(ns, id)),
+            IORequest::ReadRowMetadata { ns, id } =>
+                handle_result(self.read_row_metadata(ns, id)),
             IORequest::OverwriteRow { ns, row } =>
                 handle_result(self.overwrite_row(ns, row)),
             IORequest::UpdateRow { ns, row } =>
@@ -151,6 +159,7 @@ pub enum IORequest {
     GetNamespaces,
     ReadFully { ns: Namespace },
     ReadRow { ns: Namespace, id: usize },
+    ReadRowMetadata { ns: Namespace, id: usize },
     ReadRange { ns: Namespace, range: Range<usize> },
     OverwriteRow { ns: Namespace, row: Row },
     UpdateRow { ns: Namespace, row: Row },
@@ -174,7 +183,7 @@ macro_rules! create_table {
     ($actor:expr, $ns:expr, $columns:expr) => {
         $actor.send(crate::dataframe_actor::IORequest::CreateTable {
             ns: $ns.clone(),
-            cfg: DataFrameConfig::new($columns, vec![], vec![])
+            cfg: DataFrameConfig::new($columns, Vec::new(), Vec::new())
         }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
@@ -254,6 +263,15 @@ macro_rules! read_row {
 }
 
 #[macro_export]
+macro_rules! read_row_metadata {
+    ($actor:expr, $ns:expr, $id:expr) => {
+        $actor.send(crate::dataframe_actor::IORequest::ReadRowMetadata { ns: $ns.clone(), id: $id }).await
+            .map(|s|serde_json::from_str::<RowMetadata>(&s).unwrap())
+            .map_err(|e|crate::cnv_error!(e))
+    }
+}
+
+#[macro_export]
 macro_rules! update_row {
     ($actor:expr, $ns:expr, $row:expr) => {
         $actor.send(crate::dataframe_actor::IORequest::UpdateRow { ns: $ns.clone(), row: $row }).await
@@ -301,7 +319,7 @@ mod tests {
         assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
 
         // append a new row to the table
-        assert_eq!(1, append_row!(actor, ns, row!(0, table_columns, vec![
+        assert_eq!(0, append_row!(actor, ns, row!(0, table_columns, vec![
             StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(11.88),
         ])).unwrap());
 
@@ -321,7 +339,7 @@ mod tests {
         assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
 
         // append a new row to the table
-        assert_eq!(1, append_row!(actor, ns, row!(111, table_columns, vec![
+        assert_eq!(0, append_row!(actor, ns, row!(111, table_columns, vec![
             StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(22.88),
         ])).unwrap());
 
@@ -383,12 +401,12 @@ mod tests {
         assert_eq!(1, create_table!(actor, ns1, make_quote_columns()).unwrap());
 
         // append a new row to the table
-        assert_eq!(1, append_row!(actor, ns0, row!(111, make_table_columns(), vec![
+        assert_eq!(0, append_row!(actor, ns0, row!(111, make_table_columns(), vec![
             StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
         ])).unwrap());
 
         // append a new row to the table
-        assert_eq!(1, append_row!(actor, ns1, row!(112, make_table_columns(), vec![
+        assert_eq!(0, append_row!(actor, ns1, row!(112, make_table_columns(), vec![
             StringValue("IBM".into()), StringValue("NYSE".into()), Float64Value(122.88),
         ])).unwrap());
 

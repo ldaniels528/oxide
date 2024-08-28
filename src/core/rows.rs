@@ -95,7 +95,7 @@ impl Row {
         }
         let metadata = RowMetadata::decode(buffer.next_u8());
         let id = buffer.next_row_id();
-        let mut values = vec![];
+        let mut values = Vec::new();
         for col in columns {
             let field = Self::from_buffer_to_value(&col.data_type, buffer, col.offset)?;
             values.push(field);
@@ -112,7 +112,7 @@ impl Row {
     }
 
     pub fn from_row_js(columns: &Vec<TableColumn>, form: &RowJs) -> Self {
-        let mut values = vec![];
+        let mut values = Vec::new();
         for tc in columns {
             values.push(determine_column_value(form, tc.get_name()));
         }
@@ -130,7 +130,7 @@ impl Row {
             cache.insert(name.to_string(), value.clone());
         }
         // construct the fields
-        let mut values = vec![];
+        let mut values = Vec::new();
         for c in columns {
             if let Some(value) = cache.get(c.get_name()) {
                 values.push(value.clone());
@@ -290,7 +290,7 @@ impl Row {
 
     /// Returns a [Vec] containing the values in order of the fields within the row.
     pub fn unwrap(&self) -> Vec<&TypedValue> {
-        let mut values = vec![];
+        let mut values = Vec::new();
         for value in &self.values { values.push(value) }
         values
     }

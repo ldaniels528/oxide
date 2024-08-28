@@ -3,8 +3,8 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::{Debug, Formatter};
-use crate::field_metadata::FieldMetadata;
 
+use crate::field_metadata::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
@@ -68,10 +68,9 @@ impl RowCollection for FileEmbeddedRowCollection {
     }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
-        match self.get_embedded_table() {
-            Ok(mut table) => table.overwrite_row(id, row),
-            Err(err) => ErrorValue(err.to_string())
-        }
+        self.get_embedded_table()
+            .map(|mut rc| rc.overwrite_row(id, row))
+            .unwrap_or_else(|err| ErrorValue(err.to_string()))
     }
 
     fn overwrite_field(
@@ -89,7 +88,7 @@ impl RowCollection for FileEmbeddedRowCollection {
         &mut self,
         id: usize,
         column_id: usize,
-        metadata: FieldMetadata
+        metadata: FieldMetadata,
     ) -> TypedValue {
         self.get_embedded_table()
             .map(|mut t| t.overwrite_field_metadata(id, column_id, metadata))
@@ -97,15 +96,15 @@ impl RowCollection for FileEmbeddedRowCollection {
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
-        self.get_embedded_table().map(|mut t| t.overwrite_row_metadata(id, metadata))
+        self.get_embedded_table()
+            .map(|mut t| t.overwrite_row_metadata(id, metadata))
             .unwrap_or_else(|err| ErrorValue(err.to_string()))
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
-        match self.get_embedded_table() {
-            Ok(rc) => rc.read_field(id, column_id),
-            Err(err) => ErrorValue(err.to_string())
-        }
+        self.get_embedded_table()
+            .map(|rc| rc.read_field(id, column_id))
+            .unwrap_or_else(|err| ErrorValue(err.to_string()))
     }
 
     fn read_field_metadata(
@@ -124,8 +123,10 @@ impl RowCollection for FileEmbeddedRowCollection {
         self.get_embedded_table()?.read_row_metadata(id)
     }
 
-    fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
-        self.get_embedded_table()?.resize(new_size)
+    fn resize(&mut self, new_size: usize) -> TypedValue {
+        self.get_embedded_table()
+            .map(|mut rc| rc.resize(new_size))
+            .unwrap_or_else(|err| ErrorValue(err.to_string()))
     }
 }
 

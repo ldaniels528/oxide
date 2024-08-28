@@ -89,7 +89,7 @@ impl Cursor {
 
     /// Transforms all rows from the current position to the end-of-file (EOF)
     pub fn map<A>(&mut self, f: fn(Row) -> A) -> Vec<A> {
-        let mut values = vec![];
+        let mut values = Vec::new();
         while let Ok(Some(row)) = self.next() {
             values.push(f(row))
         }
@@ -147,7 +147,7 @@ impl Cursor {
 
     /// Returns the previous qualifying row or [None] if not found before the top-of-file
     pub fn take(&mut self, limit: usize) -> std::io::Result<Vec<Row>> {
-        let mut rows = vec![];
+        let mut rows = Vec::new();
         let mut done = false;
         while !done && rows.len() < limit {
             if let Ok(Some(row)) = self.next() {
@@ -229,7 +229,7 @@ mod tests {
     fn test_fold_left() {
         let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
-        let results = cursor.fold_left(vec![], |mut agg, r| {
+        let results = cursor.fold_left(Vec::new(), |mut agg, r| {
             agg.push(r.get_value_by_name("exchange"));
             agg
         });
@@ -245,7 +245,7 @@ mod tests {
         let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
         cursor.bottom();
-        let results = cursor.fold_right(vec![], |r, mut agg| {
+        let results = cursor.fold_right(Vec::new(), |r, mut agg| {
             agg.push(r.get_value_by_name("exchange"));
             agg
         });

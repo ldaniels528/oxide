@@ -35,7 +35,7 @@ impl ModelRowCollection {
     /// Creates a new [ModelRowCollection] from abstract columns
     pub fn construct(columns: &Vec<ColumnJs>) -> ModelRowCollection {
         match TableColumn::from_columns(columns) {
-            Ok(columns) => ModelRowCollection::with_rows(columns, vec![]),
+            Ok(columns) => ModelRowCollection::with_rows(columns, Vec::new()),
             Err(err) => panic!("{}", err.to_string())
         }
     }
@@ -51,7 +51,7 @@ impl ModelRowCollection {
 
     /// Encodes the [ModelRowCollection] into a byte vector
     pub fn encode(&self) -> Vec<u8> {
-        let mut bytes = vec![];
+        let mut bytes = Vec::new();
         for (row, rmd) in &self.row_data {
             if rmd.is_allocated { bytes.extend(row.encode()) }
         }
@@ -62,7 +62,7 @@ impl ModelRowCollection {
     pub fn from_rows(rows: Vec<Row>) -> ModelRowCollection {
         let columns = rows.first()
             .map(|row| row.get_columns().clone())
-            .unwrap_or(vec![]);
+            .unwrap_or(Vec::new());
         let row_data = rows.iter()
             .map(|r| (r.clone(), RowMetadata::new(true)))
             .collect();
@@ -82,7 +82,7 @@ impl ModelRowCollection {
 
     /// Returns all active rows
     pub fn get_rows(&self) -> Vec<Row> {
-        let mut rows = vec![];
+        let mut rows = Vec::new();
         for (row, rmd) in &self.row_data {
             if rmd.is_allocated { rows.push(row.clone()) }
         }
@@ -95,7 +95,7 @@ impl ModelRowCollection {
             record_size: Row::compute_record_size(&columns),
             watermark: 0,
             columns,
-            row_data: vec![],
+            row_data: Vec::new(),
         }
     }
 
@@ -114,6 +114,13 @@ impl RowCollection for ModelRowCollection {
     fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
 
     fn get_record_size(&self) -> usize { self.record_size }
+
+    fn iter(&self) -> Box<dyn Iterator<Item=Row> + '_> {
+        let my_iter = self.row_data.iter()
+            .filter(|(_, meta)| meta.is_allocated)
+            .map(|(row, _)| row.clone());
+        Box::new(my_iter)
+    }
 
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
 
@@ -209,10 +216,10 @@ impl RowCollection for ModelRowCollection {
         Ok(metadata)
     }
 
-    fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
+    fn resize(&mut self, new_size: usize) -> TypedValue {
         self.row_data.resize(new_size, (Row::empty(&self.columns), RowMetadata::new(true)));
         self.watermark = new_size;
-        Ok(TypedValue::Ack)
+        TypedValue::Ack
     }
 }
 

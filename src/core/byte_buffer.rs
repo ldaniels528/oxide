@@ -74,7 +74,7 @@ impl ByteBuffer {
     /// returns a 64-bit typed-value array
     pub fn next_array(&mut self) -> std::io::Result<Vec<TypedValue>> {
         let length = self.next_u32();
-        let mut array = vec![];
+        let mut array = Vec::new();
         for _ in 0..length {
             array.push(self.next_value()?);
         }
@@ -118,7 +118,7 @@ impl ByteBuffer {
 
     pub fn next_columns(&mut self) -> Vec<ColumnJs> {
         let length = self.next_u16();
-        let mut columns = vec![];
+        let mut columns = Vec::new();
         for _ in 0..length {
             columns.push(self.next_column());
         }
@@ -176,7 +176,7 @@ impl ByteBuffer {
 
     pub fn next_json(&mut self) -> std::io::Result<Vec<(String, TypedValue)>> {
         let length = self.next_u64();
-        let mut list = vec![];
+        let mut list = Vec::new();
         for _ in 0..length {
             let name = self.next_string();
             let value = self.next_value()?;
@@ -203,7 +203,7 @@ impl ByteBuffer {
     ) -> std::io::Result<Vec<Row>> {
         let t_columns = TableColumn::from_columns(columns)?;
         let n_rows = self.next_u64();
-        let mut rows = vec![];
+        let mut rows = Vec::new();
         for _ in 0..n_rows {
             let (row, rmd) = Row::from_buffer(&t_columns, self)?;
             if rmd.is_allocated {
@@ -223,7 +223,7 @@ impl ByteBuffer {
     /// returns a 32-bit string array
     pub fn next_string_array(&mut self) -> Vec<String> {
         let length = self.next_u64();
-        let mut array = vec![];
+        let mut array = Vec::new();
         for _ in 0..length {
             array.push(self.next_string());
         }
@@ -300,9 +300,7 @@ impl ByteBuffer {
     pub fn next_uuid(&mut self) -> [u8; 16] {
         let mut uuid = [0u8; 16];
         let bytes = self.next_bytes(uuid.len());
-        for i in 0..uuid.len() {
-            uuid[i] = bytes[i]
-        }
+        for i in 0..uuid.len() { uuid[i] = bytes[i] }
         uuid
     }
 
@@ -417,7 +415,7 @@ impl ByteBuffer {
     }
 
     pub fn put_rows(&mut self, rows: Vec<Row>) -> &Self {
-        let t_columns: Vec<TableColumn> = if rows.len() == 0 { vec![] } else {
+        let t_columns: Vec<TableColumn> = if rows.len() == 0 { Vec::new() } else {
             rows[0].get_columns().clone()
         };
         let columns = ColumnJs::from_physical_columns(&t_columns);
@@ -437,7 +435,7 @@ impl ByteBuffer {
     }
 
     pub fn put_string_opt(&mut self, string: &Option<String>) -> &Self {
-        let bytes: Vec<u8> = string.clone().map(|s| s.bytes().collect()).unwrap_or(vec![]);
+        let bytes: Vec<u8> = string.clone().map(|s| s.bytes().collect()).unwrap_or(Vec::new());
         self.put_u64(bytes.len() as u64);
         self.put_bytes(&bytes);
         self

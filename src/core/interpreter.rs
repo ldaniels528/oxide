@@ -32,9 +32,17 @@ impl Interpreter {
     ////////////////////////////////////////////////////////////////
 
     /// Executes the supplied source code returning the result of the evaluation
-    pub fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
+    pub(crate) fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
         let opcode = Compiler::compile_script(source_code)?;
         let (machine, result) = self.machine.evaluate(&opcode)?;
+        self.machine = machine;
+        Ok(result)
+    }
+
+    /// Executes the supplied source code returning the result of the evaluation
+    pub async fn evaluate_async(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
+        let opcode = Compiler::compile_script(source_code)?;
+        let (machine, result) = self.machine.evaluate_async(&opcode).await?;
         self.machine = machine;
         Ok(result)
     }
@@ -47,6 +55,11 @@ impl Interpreter {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use regex::Regex;
+    use serde_json::json;
+
+    use shared_lib::{FieldJs, RowJs};
+
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
     use crate::rows::Row;
@@ -55,16 +68,16 @@ mod tests {
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote, make_quote_columns, make_scan_quote, make_table_columns};
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::{Ack, Boolean, ErrorValue, Float64Value, Int64Value, RowsAffected, StringValue, StructureValue, TableValue, Undefined};
+    use crate::typed_values::TypedValue::{Ack, Array, Boolean, ErrorValue, Float64Value, Int64Value, JSONObjectValue, Null, RowsAffected, StringValue, StructureValue, TableValue, Undefined};
 
-    #[test]
-    fn test_array_indexing() {
+    #[actix::test]
+    async fn test_array_indexing() {
         let mut interpreter = Interpreter::new();
         assert_eq!(interpreter.evaluate("[0, 1, 3, 5][3]").unwrap(), Int64Value(5))
     }
 
-    #[test]
-    fn test_basic_state_retention() {
+    #[actix::test]
+    async fn test_basic_state_retention() {
         let mut interpreter = Interpreter::new();
         assert_eq!(interpreter.evaluate("x := 5").unwrap(), TypedValue::Ack);
         assert_eq!(interpreter.evaluate("x¡").unwrap(), TypedValue::Float64Value(120.));
@@ -80,8 +93,8 @@ mod tests {
         assert_eq!(interpreter.evaluate("x >= 35").unwrap(), TypedValue::Boolean(true));
     }
 
-    #[test]
-    fn test_compact_from_namespace() {
+    #[actix::test]
+    async fn test_compact_from_namespace() {
         let phys_columns = make_table_columns();
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
@@ -119,8 +132,8 @@ mod tests {
         ]);
     }
 
-    #[test]
-    fn test_create_structure_from_scratch() {
+    #[actix::test]
+    async fn test_create_structure_from_scratch() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             stock := struct(symbol: String(8), exchange: String(8), last_sale: f64)
@@ -129,8 +142,8 @@ mod tests {
         assert_eq!(result, StructureValue(Structure::from_logical_columns(&make_quote_columns()).unwrap()));
     }
 
-    #[test]
-    fn test_create_structure_from_table() {
+    #[actix::test]
+    async fn test_create_structure_from_table() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.struct.stocks")
@@ -151,8 +164,30 @@ mod tests {
         ).unwrap()));
     }
 
-    #[test]
-    fn test_describe_table_structure() {
+    #[actix::test]
+    async fn test_table_to_csv() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            [+] stocks := ns("interpreter.csv.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+            csv(from stocks)
+        "#).unwrap();
+        assert_eq!(result, TypedValue::Array(vec![
+            StringValue(r#""ABC","AMEX",11.11"#.to_string()),
+            StringValue(r#""UNO","OTC",0.2456"#.to_string()),
+            StringValue(r#""BIZ","NYSE",23.66"#.to_string()),
+            StringValue(r#""GOTO","OTC",0.1428"#.to_string()),
+            StringValue(r#""BOOM","NASDAQ",0.0872"#.to_string()),
+        ]));
+    }
+
+    #[actix::test]
+    async fn test_describe_table_structure() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.struct.stocks")
@@ -194,35 +229,35 @@ mod tests {
         ]);
     }
 
-    #[test]
-    fn test_directive_must_be_true() {
+    #[actix::test]
+    async fn test_directive_must_be_true() {
         verify_results("[+] x := 67", TypedValue::Ack);
     }
 
-    #[test]
-    fn test_directive_must_be_false() {
+    #[actix::test]
+    async fn test_directive_must_be_false() {
         verify_results(r#"
             [+] x := 67
             [-] x < 67
         "#, TypedValue::Boolean(false));
     }
 
-    #[test]
-    fn test_directive_die() {
+    #[actix::test]
+    async fn test_directive_die() {
         verify_results(r#"
             [!] "Kaboom!!!"
         "#, TypedValue::ErrorValue("Kaboom!!!".to_string()));
     }
 
-    #[test]
-    fn test_eval_valid() {
+    #[actix::test]
+    async fn test_eval_valid() {
         verify_results(r#"
             eval "2 ** 4"
         "#, TypedValue::Int64Value(16))
     }
 
-    #[test]
-    fn test_eval_invalid() {
+    #[actix::test]
+    async fn test_eval_invalid() {
         let mut interpreter = Interpreter::new();
         let value = interpreter.evaluate(r#"
             eval 123
@@ -230,8 +265,122 @@ mod tests {
         assert_eq!(value, TypedValue::ErrorValue("Type mismatch - expected String, got i64".into()))
     }
 
-    #[test]
-    fn test_if_when_result_is_defined() {
+    #[actix::test]
+    async fn test_http_workflow() {
+        let number_regex = Regex::new(r"^\d+$").unwrap();
+        let mut interpreter = Interpreter::new();
+
+        // setup a listener on port 8833
+        let _ = interpreter.evaluate_async(r#"
+            SERVE 8833
+        "#).await.unwrap();
+
+        // append a new row
+        let row_id = interpreter.evaluate_async(r#"
+            POST "http://localhost:8833/machine/www/stocks/0" FROM {
+                fields:[
+                    { name: "symbol", value: "ABC" },
+                    { name: "exchange", value: "AMEX" },
+                    { name: "last_sale", value: 11.77 }
+                ]
+            }"#).await.unwrap();
+        println!("POST (row_id) {:?}", row_id);
+        assert!(number_regex.is_match(row_id.unwrap_value().as_str()));
+
+        // fetch the previously created row
+        let row = interpreter.evaluate_async(format!(r#"
+            GET "http://localhost:8833/machine/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        println!("GET {:?}", row);
+        let row_js: RowJs = serde_json::from_str(row.unwrap_value().as_str()).unwrap();
+        assert_eq!(
+            row_js,
+            RowJs::new(row_js.get_id(), vec![
+                FieldJs::new("symbol", json!("ABC")),
+                FieldJs::new("exchange", json!("AMEX")),
+                FieldJs::new("last_sale", json!(11.77)),
+            ])
+        );
+
+        // replace the previously created row
+        let result = interpreter.evaluate_async(r#"
+            PUT "http://localhost:8833/machine/www/stocks/:id" FROM {
+                fields:[
+                    { name: "symbol", value: "ABC" },
+                    { name: "exchange", value: "AMEX" },
+                    { name: "last_sale", value: 11.79 }
+                ]
+            }"#
+            .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
+            .as_str()).await.unwrap();
+        println!("PUT {:?}", result);
+        assert!(number_regex.is_match(row_id.unwrap_value().as_str()));
+
+        // re-fetch the previously updated row
+        let row = interpreter.evaluate_async(format!(r#"
+            GET "http://localhost:8833/machine/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        println!("GET {:?}", row);
+        let row_js: RowJs = serde_json::from_str(row.unwrap_value().as_str()).unwrap();
+        assert_eq!(
+            row_js,
+            RowJs::new(row_js.get_id(), vec![
+                FieldJs::new("symbol", json!("ABC")),
+                FieldJs::new("exchange", json!("AMEX")),
+                FieldJs::new("last_sale", json!(11.79)),
+            ])
+        );
+
+        // update the previously created row
+        let result = interpreter.evaluate_async(r#"
+            PATCH "http://localhost:8833/machine/www/stocks/:id" FROM {
+                fields:[
+                    { name: "last_sale", value: 11.81 }
+                ]
+            }"#
+            .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
+            .as_str()).await.unwrap();
+        println!("PATCH {:?}", result);
+        assert!(number_regex.is_match(row_id.unwrap_value().as_str()));
+
+        // re-fetch the previously updated row
+        let row = interpreter.evaluate_async(format!(r#"
+            GET "http://localhost:8833/machine/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        println!("GET {:?}", row);
+        let row_js: RowJs = serde_json::from_str(row.unwrap_value().as_str()).unwrap();
+        assert_eq!(
+            row_js,
+            RowJs::new(row_js.get_id(), vec![
+                FieldJs::new("symbol", json!("ABC")),
+                FieldJs::new("exchange", json!("AMEX")),
+                FieldJs::new("last_sale", json!(11.81)),
+            ])
+        );
+
+        // fetch the headers for the previously updated row
+        let result = interpreter.evaluate_async(format!(r#"
+            HEAD "http://localhost:8833/machine/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        println!("HEAD {:?}", result);
+
+        // delete the previously updated row
+        let result = interpreter.evaluate_async(format!(r#"
+            DELETE "http://localhost:8833/machine/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        println!("DELETE {:?}", result);
+        assert_eq!(result.unwrap_value().as_str(), r#"1"#);
+
+        // verify the deleted row is empty
+        let row = interpreter.evaluate_async(format!(r#"
+            GET "http://localhost:8833/machine/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        assert_eq!(row.unwrap_value().as_str(), r#"{}"#);
+        println!("GET {:?}", row);
+    }
+
+    #[actix::test]
+    async fn test_if_when_result_is_defined() {
         let mut interpreter = Interpreter::new();
         let value = interpreter.evaluate(r#"
             x := 7
@@ -240,8 +389,8 @@ mod tests {
         assert_eq!(value, StringValue("Yes".to_string()));
     }
 
-    #[test]
-    fn test_if_when_result_is_undefined() {
+    #[actix::test]
+    async fn test_if_when_result_is_undefined() {
         let mut interpreter = Interpreter::new();
         let value = interpreter.evaluate(r#"
             x := 4
@@ -250,8 +399,8 @@ mod tests {
         assert_eq!(value, Undefined);
     }
 
-    #[test]
-    fn test_if_else_expression() {
+    #[actix::test]
+    async fn test_if_else_expression() {
         let mut interpreter = Interpreter::new();
         let value = interpreter.evaluate(r#"
             x := 4
@@ -262,16 +411,16 @@ mod tests {
         assert_eq!(value, StringValue("Maybe".to_string()));
     }
 
-    #[test]
-    fn test_if_function() {
+    #[actix::test]
+    async fn test_if_function() {
         verify_results(r#"
             x := 4
             iff(x > 5, "Yes", iff(x < 5, "Maybe", "No"))
         "#, StringValue("Maybe".to_string()));
     }
 
-    #[test]
-    fn test_include_file_valid() {
+    #[actix::test]
+    async fn test_include_file_valid() {
         let phys_columns = make_table_columns();
         verify_results(r#"
             include "./demoes/language/include_file.ox"
@@ -282,8 +431,8 @@ mod tests {
         ])));
     }
 
-    #[test]
-    fn test_include_file_invalid() {
+    #[actix::test]
+    async fn test_include_file_invalid() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
         include 123
@@ -293,8 +442,52 @@ mod tests {
         )
     }
 
-    #[test]
-    fn test_lambda_functions() {
+    #[actix::test]
+    async fn test_json_literal() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            {
+              columns: [{
+                  name: "symbol",
+                  column_type: "String(8)",
+                  default_value: null
+                }, {
+                  name: "exchange",
+                  column_type: "String(8)",
+                  default_value: null
+                }, {
+                  name: "last_sale",
+                  column_type: "f64",
+                  default_value: null
+                }],
+              indices: [],
+              partitions: []
+            }
+        "#).unwrap();
+        assert_eq!(result, JSONObjectValue(vec![
+            ("columns".to_string(), Array(vec![
+                JSONObjectValue(vec![
+                    ("name".to_string(), StringValue("symbol".to_string())),
+                    ("column_type".to_string(), StringValue("String(8)".to_string())),
+                    ("default_value".to_string(), Null),
+                ]),
+                JSONObjectValue(vec![
+                    ("name".to_string(), StringValue("exchange".to_string())),
+                    ("column_type".to_string(), StringValue("String(8)".to_string())),
+                    ("default_value".to_string(), Null)]),
+                JSONObjectValue(vec![
+                    ("name".to_string(), StringValue("last_sale".to_string())),
+                    ("column_type".to_string(), StringValue("f64".to_string())),
+                    ("default_value".to_string(), Null),
+                ]),
+            ])),
+            ("indices".to_string(), Array(vec![])),
+            ("partitions".to_string(), Array(vec![])),
+        ]));
+    }
+
+    #[actix::test]
+    async fn test_lambda_functions() {
         let mut interpreter = Interpreter::new();
         assert_eq!(Ack, interpreter.evaluate(r#"
         product := fn (a, b) => a * b
@@ -305,8 +498,8 @@ mod tests {
         "#).unwrap())
     }
 
-    #[test]
-    fn test_named_functions() {
+    #[actix::test]
+    async fn test_named_functions() {
         let mut interpreter = Interpreter::new();
         assert_eq!(Ack, interpreter.evaluate(r#"
         fn product(a, b) => a * b
@@ -317,20 +510,20 @@ mod tests {
         "#).unwrap())
     }
 
-    #[test]
-    fn test_create_ephemeral_table() {
+    #[actix::test]
+    async fn test_create_ephemeral_table() {
         verify_results(r#"
         table(
             symbol: String(8),
             exchange: String(8),
             last_sale: f64
         )"#, TableValue(ModelRowCollection::with_rows(
-            make_table_columns(), vec![],
+            make_table_columns(), Vec::new(),
         )))
     }
 
-    #[test]
-    fn test_create_durable_table() {
+    #[actix::test]
+    async fn test_create_durable_table() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
         create table ns("interpreter.create.stocks") (
@@ -341,8 +534,8 @@ mod tests {
         assert_eq!(result, Ack)
     }
 
-    #[test]
-    fn test_crud_in_namespace() {
+    #[actix::test]
+    async fn test_crud_in_namespace() {
         let mut interpreter = Interpreter::new();
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
@@ -421,8 +614,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_scan_from_namespace() {
+    #[actix::test]
+    async fn test_scan_from_namespace() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.scan.stocks")
@@ -458,8 +651,8 @@ mod tests {
         ])
     }
 
-    #[test]
-    fn test_select_from_namespace() {
+    #[actix::test]
+    async fn test_select_from_namespace() {
         // create a table with test data
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
@@ -467,7 +660,7 @@ mod tests {
         // append some rows
         let mut interpreter = Interpreter::new();
         assert_eq!(RowsAffected(5), interpreter.evaluate(r#"
-            stocks := ns("interpreter.select.stocks")
+            stocks := ns("interpreter.select1.stocks")
             table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             append stocks from [
                 { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
@@ -491,8 +684,8 @@ mod tests {
         ])));
     }
 
-    #[test]
-    fn test_select_from_variable() {
+    #[actix::test]
+    async fn test_select_from_variable() {
         // create a table with test data
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
@@ -520,8 +713,8 @@ mod tests {
         ])));
     }
 
-    #[test]
-    fn test_reverse_from_namespace() {
+    #[actix::test]
+    async fn test_reverse_from_namespace() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.reverse.stocks")
@@ -539,8 +732,8 @@ mod tests {
         ])));
     }
 
-    #[test]
-    fn test_reverse_from_variable() {
+    #[actix::test]
+    async fn test_reverse_from_variable() {
         let phys_columns = make_table_columns();
         let mut interpreter = Interpreter::new();
         interpreter.with_variable("stocks", TableValue(
@@ -564,8 +757,8 @@ mod tests {
         ])));
     }
 
-    #[test]
-    fn test_processing_pipeline() {
+    #[actix::test]
+    async fn test_processing_pipeline() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.pipeline.stocks")
@@ -583,29 +776,29 @@ mod tests {
         ])));
     }
 
-    #[test]
-    fn test_type_of() {
+    #[actix::test]
+    async fn test_type_of() {
         verify_results(r#"
             type_of(1234)
         "#, StringValue("i64".to_string()));
     }
 
-    #[test]
-    fn write_to_stderr() {
+    #[actix::test]
+    async fn write_to_stderr() {
         verify_results(r#"
             stderr "Goodbye Cruel World"
         "#, Ack);
     }
 
-    #[test]
-    fn write_to_stdout() {
+    #[actix::test]
+    async fn write_to_stdout() {
         verify_results(r#"
             stdout "Hello World"
         "#, Ack);
     }
 
-    #[test]
-    fn test_while_loop() {
+    #[actix::test]
+    async fn test_while_loop() {
         let mut interpreter = Interpreter::new();
         assert_eq!(Ack, interpreter.evaluate("x := 0").unwrap());
         assert_eq!(Ack, interpreter.evaluate(r#"
@@ -613,15 +806,6 @@ mod tests {
                 x := x + 1
         "#).unwrap());
         assert_eq!(Int64Value(5), interpreter.evaluate("x").unwrap());
-    }
-
-    #[test]
-    fn test_www_get() {
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate(r#"
-            www get "http://www.yahoo.com"
-        "#).unwrap();
-        assert_eq!(result.unwrap_value().as_str(), "OK\r\n");
     }
 
     fn verify_results(code: &str, expected: TypedValue) {

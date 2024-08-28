@@ -84,14 +84,16 @@ impl REPLState {
             TableColumn::from_columns(&vec![
                 ColumnJs::new("pid", "i64", None),
                 ColumnJs::new("input", "String(65536)", None),
-            ])?, vec![],
+            ])?, Vec::new(),
         ))
     }
 
     /// return the REPL input history
-    pub fn get_history(&mut self) -> Vec<String> {
+    pub async fn get_history(&mut self) -> Vec<String> {
         let mut listing = Vec::new();
-        if let Ok(TypedValue::TableValue(mrc)) = self.interpreter.evaluate(HISTORY_TABLE_NAME) {
+        let outcome = self.interpreter
+            .evaluate_async(HISTORY_TABLE_NAME).await;
+        if let Ok(TypedValue::TableValue(mrc)) = outcome {
             for row in mrc.get_rows() {
                 let input = row.get_value_by_name("input");
                 listing.push(format!("[{}] {}", &row.get_id(), input.unwrap_value()));
@@ -101,9 +103,9 @@ impl REPLState {
     }
 
     /// stores the user input to history
-    pub fn put_history(&mut self, input: &str) -> std::io::Result<()> {
+    pub async fn put_history(&mut self, input: &str) -> std::io::Result<()> {
         // get or create the history table
-        let mut mrc = match self.interpreter.evaluate(HISTORY_TABLE_NAME) {
+        let mut mrc = match self.interpreter.evaluate_async(HISTORY_TABLE_NAME).await {
             Ok(TypedValue::TableValue(mrc)) => mrc,
             _ => Self::create_history_table()?
         };
@@ -203,10 +205,10 @@ fn read_lines() -> std::io::Result<String> {
 
 /// Processes user input against a local Oxide instance or a remote Oxide peer
 pub async fn process_statement(state: &mut REPLState, user_input: &str) -> std::io::Result<TypedValue> {
-    state.put_history(user_input)?;
+    state.put_history(user_input).await?;
     match &state.connection {
         REPLConnection::LocalConnection =>
-            state.interpreter.evaluate(user_input),
+            state.interpreter.evaluate_async(user_input).await,
         REPLConnection::RemoteConnection { host, port } => {
             let body = serde_json::to_string(&RemoteCallRequest::new(user_input.to_string()))?;
             let response = reqwest::Client::new()
@@ -273,14 +275,14 @@ mod tests {
         })
     }
 
-    #[test]
-    fn test_get_put_history() {
+    #[actix::test]
+    async fn test_get_put_history() {
         let mut r: REPLState = REPLState::new();
-        r.put_history("abc".into()).unwrap();
-        r.put_history("123".into()).unwrap();
-        r.put_history("iii".into()).unwrap();
+        r.put_history("abc".into()).await.unwrap();
+        r.put_history("123".into()).await.unwrap();
+        r.put_history("iii".into()).await.unwrap();
 
-        let h = r.get_history();
+        let h = r.get_history().await;
         assert_eq!(h, vec!["[0] abc", "[1] 123", "[2] iii"])
     }
 

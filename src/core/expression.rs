@@ -38,6 +38,7 @@ pub const E_DECLARE_INDEX: u8 = 52;
 pub const E_DECLARE_TABLE: u8 = 54;
 pub const E_DELETE: u8 = 56;
 pub const E_DESCRIBE: u8 = 58;
+pub const E_CSV: u8 = 59;
 pub const E_DIVIDE: u8 = 60;
 pub const E_DROP: u8 = 65;
 pub const E_ELEM_INDEX: u8 = 67;
@@ -48,6 +49,7 @@ pub const E_FROM: u8 = 85;
 pub const E_FUNCTION: u8 = 87;
 pub const E_GREATER_THAN: u8 = 90;
 pub const E_GREATER_OR_EQUAL: u8 = 95;
+pub const E_HTTP: u8 = 97;
 pub const E_IF: u8 = 100;
 pub const E_INCLUDE: u8 = 105;
 pub const E_INTO_NS: u8 = 110;
@@ -76,6 +78,7 @@ pub const E_RETURN: u8 = 200;
 pub const E_REVERSE: u8 = 205;
 pub const E_SCAN: u8 = 207;
 pub const E_SELECT: u8 = 210;
+pub const E_SERVE: u8 = 215;
 pub const E_SHIFT_LEFT: u8 = 225;
 pub const E_SHIFT_RIGHT: u8 = 230;
 pub const E_SYSTEM_CALL: u8 = 231;
@@ -90,8 +93,7 @@ pub const E_VAR_GET: u8 = 247;
 pub const E_VAR_SET: u8 = 249;
 pub const E_VIA: u8 = 250;
 pub const E_WHERE: u8 = 251;
-pub const E_WHILE: u8 = 253;
-pub const E_WWW: u8 = 255;
+pub const E_WHILE: u8 = 255;
 
 /// Represents a Creation Entity
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -130,6 +132,7 @@ pub enum Expression {
     CodeBlock(Vec<Expression>),
     ColumnSet(Vec<ColumnJs>),
     Contains(Box<Expression>, Box<Expression>),
+    CSV(Box<Expression>),
     Divide(Box<Expression>, Box<Expression>),
     ElementAt(Box<Expression>, Box<Expression>),
     Equal(Box<Expression>, Box<Expression>),
@@ -139,6 +142,13 @@ pub enum Expression {
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     GreaterOrEqual(Box<Expression>, Box<Expression>),
     GreaterThan(Box<Expression>, Box<Expression>),
+    HTTP {
+        method: Box<Expression>,
+        url: Box<Expression>,
+        body: Option<Box<Expression>>,
+        headers: Option<Box<Expression>>,
+        multipart: Option<Box<Expression>>,
+    },
     If {
         condition: Box<Expression>,
         a: Box<Expression>,
@@ -168,6 +178,7 @@ pub enum Expression {
     Pow(Box<Expression>, Box<Expression>),
     Range(Box<Expression>, Box<Expression>),
     Return(Vec<Expression>),
+    SERVE(Box<Expression>),
     SetVariable(String, Box<Expression>),
     ShiftLeft(Box<Expression>, Box<Expression>),
     ShiftRight(Box<Expression>, Box<Expression>),
@@ -181,12 +192,6 @@ pub enum Expression {
     While {
         condition: Box<Expression>,
         code: Box<Expression>,
-    },
-    Www {
-        method: Box<Expression>,
-        url: Box<Expression>,
-        body: Option<Box<Expression>>,
-        headers: Option<Box<Expression>>,
     },
 }
 
@@ -324,6 +329,7 @@ pub fn decompile(expr: &Expression) -> String {
                 .collect::<Vec<String>>().join(", ")),
         Contains(a, b) =>
             format!("{} contains {}", decompile(a), decompile(b)),
+        CSV(a) => decompile(a),
         Divide(a, b) =>
             format!("{} / {}", decompile(a), decompile(b)),
         ElementAt(a, b) =>
@@ -384,6 +390,7 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{}..{}", decompile(a), decompile(b)),
         Return(items) =>
             format!("return {}", decompile_list(items)),
+        SERVE(a) => format!("SERVE {}", decompile(a)),
         SetVariable(name, value) =>
             format!("{} := {}", name, decompile(value)),
         ShiftLeft(a, b) =>
@@ -401,8 +408,8 @@ pub fn decompile(expr: &Expression) -> String {
         Via(expr) => format!("via {}", decompile(expr)),
         While { condition, code } =>
             format!("while {} {}", decompile(condition), decompile(code)),
-        Www { method, url, body, headers } =>
-            format!("www {} {}{}{}", method, decompile(url), decompile_opt(body), decompile_opt(headers)),
+        HTTP { method, url, body, headers, multipart } =>
+            format!("{} {}{}{}{}", method, decompile(url), decompile_opt(body), decompile_opt(headers), decompile_opt(multipart)),
     }
 }
 

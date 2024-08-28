@@ -62,7 +62,7 @@ impl Template {
             // does the token match our pattern?
             s if ts.is(s) => self.capture_params(ts),
             // is it optional?
-            _  if self.is_optional => return Ok((vec![], ts)),
+            _  if self.is_optional => return Ok((Vec::new(), ts)),
             // it's required... fail.
             x =>
                 Err(io::Error::new(
@@ -74,7 +74,7 @@ impl Template {
 
     fn capture_params(&self, ts: TokenSlice) -> io::Result<(Vec<(String, Token)>, TokenSlice)> {
         let mut ts_z = ts.clone();
-        let mut params = vec![];
+        let mut params = Vec::new();
         // capture the parent if named
         if let Some(name) = &self.name {
             if let (Some(parent_token), ts) = ts_z.next() {
@@ -125,23 +125,23 @@ mod tests {
         let tpl = Template::build("hello")
             .with_name("greeting")
             .with_is_optional(true)
-            .with_children(vec![]);
+            .with_children(Vec::new());
         assert_eq!(tpl, Template {
             pattern: "hello".into(),
             name: Some("greeting".into()),
             is_optional: true,
-            children: Some(vec![]),
+            children: Some(Vec::new()),
         });
     }
 
     #[test]
     fn test_new_instance() {
-        let tpl = Template::new("hello".into(), Some("greeting".into()), true, Some(vec![]));
+        let tpl = Template::new("hello".into(), Some("greeting".into()), true, Some(Vec::new()));
         assert_eq!(tpl, Template {
             pattern: "hello".into(),
             name: Some("greeting".into()),
             is_optional: true,
-            children: Some(vec![]),
+            children: Some(Vec::new()),
         });
     }
 

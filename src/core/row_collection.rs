@@ -11,7 +11,6 @@ use shared_lib::fail;
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::compiler::fail_value;
-use crate::data_types::DataType;
 use crate::data_types::DataType::{BooleanType, UInt64Type};
 use crate::field_metadata::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
@@ -28,7 +27,10 @@ pub trait RowCollection: Debug {
     /// Appends the given row to the end of the table
     fn append_row(&mut self, row: Row) -> TypedValue {
         match self.len() {
-            Ok(id) => self.overwrite_row(id, row.with_row_id(id)),
+            Ok(id) => {
+                let _ = self.overwrite_row(id, row.with_row_id(id));
+                RowsAffected(id)
+            }
             Err(err) => ErrorValue(err.to_string())
         }
     }
@@ -43,7 +45,7 @@ pub trait RowCollection: Debug {
             };
             match self.overwrite_row(row_id, row.with_row_id(row_id)) {
                 ErrorValue(message) => return ErrorValue(message),
-                RowsAffected(n) => affected_count += n,
+                RowsAffected(_) => affected_count += 1,
                 _ => {}
             }
         }
@@ -121,7 +123,7 @@ pub trait RowCollection: Debug {
         columns: Vec<TableColumn>,
         _extension: &str,
     ) -> std::io::Result<Box<dyn RowCollection>> {
-        Ok(Box::new(ModelRowCollection::with_rows(columns, vec![])))
+        Ok(Box::new(ModelRowCollection::with_rows(columns, Vec::new())))
     }
 
     /// deletes an existing row by ID from the table
@@ -182,7 +184,7 @@ pub trait RowCollection: Debug {
         columns.push(TableColumn::new("_active", BooleanType, Undefined, 8 + record_size));
 
         // gather the row data
-        let mut row_data = vec![];
+        let mut row_data = Vec::new();
         for row_id in range {
             // read the row with its metadata
             let (row, meta) = match self.read_row(row_id) {
@@ -427,6 +429,22 @@ pub trait RowCollection: Debug {
         }
     }
 
+    /// Returns an iterator of all active rows
+    fn iter(&self) -> Box<dyn Iterator<Item=Row> + '_> {
+        let mut row_id = 0;
+        let iter = std::iter::from_fn(move || {
+            match self.find_next(row_id, |_| true) {
+                Ok(Some(row)) => {
+                    row_id = row.get_id() + 1;
+                    Some(row)
+                }
+                Ok(None) => None,
+                Err(_) => None
+            }
+        });
+        Box::new(iter)
+    }
+
     /// returns the number of active rows in the table
     fn len(&self) -> std::io::Result<usize>;
 
@@ -490,7 +508,7 @@ pub trait RowCollection: Debug {
 
     /// reads all active rows from the table
     fn read_active_rows(&self) -> std::io::Result<Vec<Row>> {
-        let mut rows = vec![];
+        let mut rows = Vec::new();
         for row_id in self.get_indices()? {
             if let Ok(Some(row)) = self.read_one(row_id) { rows.push(row) }
         }
@@ -531,12 +549,12 @@ pub trait RowCollection: Debug {
     fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata>;
 
     /// resizes (shrink or grow) the table
-    fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue>;
+    fn resize(&mut self, new_size: usize) -> TypedValue;
 
     /// returns a reverse-order copy of the table
     fn reverse(&self) -> std::io::Result<Box<dyn RowCollection>> {
         use TypedValue::{ErrorValue, TableValue};
-        let mrc = ModelRowCollection::with_rows(self.get_columns().clone(), vec![]);
+        let mrc = ModelRowCollection::with_rows(self.get_columns().clone(), Vec::new());
         let result = self.fold_right(TableValue(mrc), |tv, row| {
             match tv {
                 ErrorValue(message) => ErrorValue(message),
@@ -733,14 +751,6 @@ impl dyn RowCollection {
     ) -> impl RowCollection {
         FileRowCollection::new(columns, Arc::new(file), file_path)
     }
-
-    /// Generates the columns for the index base on the source column
-    pub(crate) fn get_hash_key_columns(src_column: &TableColumn) -> std::io::Result<Vec<TableColumn>> {
-        TableColumn::from_columns(&vec![
-            ColumnJs::new("__row_id__", DataType::UInt64Type.to_column_type(), Some("null".into())),
-            ColumnJs::new(src_column.get_name(), src_column.data_type.to_column_type(), Some(src_column.default_value.unwrap_value())),
-        ])
-    }
 }
 
 // Unit tests
@@ -748,17 +758,17 @@ impl dyn RowCollection {
 mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use log::info;
     use rand::{Rng, RngCore, thread_rng};
 
     use shared_lib::cnv_error;
 
+    use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::row;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote, make_quote_columns, make_scan_quote, make_table_columns, make_table_file};
-    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
+    use crate::typed_values::TypedValue::{Ack, Float64Value, Null, StringValue};
 
     use super::*;
 
@@ -767,10 +777,10 @@ mod tests {
         // determine the record size of the row
         let columns = make_table_columns();
         let row = make_quote(0, &columns, "RICE", "NYSE", 78.78);
-        let mut rc = <dyn RowCollection>::from_bytes(columns.clone(), vec![]);
+        let mut rc = <dyn RowCollection>::from_bytes(columns.clone(), Vec::new());
 
         // create a new row
-        assert_eq!(rc.overwrite_row(row.get_id(), row), TypedValue::RowsAffected(1));
+        assert_eq!(rc.overwrite_row(row.get_id(), row), RowsAffected(1));
 
         // read and verify the row
         let (row, rmd) = rc.read_row(0).unwrap();
@@ -828,7 +838,7 @@ mod tests {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a new row
             let row = make_quote(2, &columns, "AMD", "NYSE", 88.78);
-            assert_eq!(rc.overwrite_row(row.get_id(), row.clone()), TypedValue::RowsAffected(1));
+            assert_eq!(rc.overwrite_row(row.get_id(), row.clone()), RowsAffected(1));
 
             // read and verify the row
             let (new_row, meta) = rc.read_row(row.get_id()).unwrap();
@@ -845,7 +855,7 @@ mod tests {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a new row
             let row = make_quote(2, &columns, "BOX", "AMEX", 777.9311);
-            assert_eq!(rc.overwrite_row(row.get_id(), row.clone()), TypedValue::RowsAffected(1));
+            assert_eq!(rc.overwrite_row(row.get_id(), row.clone()), RowsAffected(1));
 
             // read and verify the row metadata
             let meta = rc.read_row_metadata(row.get_id()).unwrap();
@@ -860,7 +870,7 @@ mod tests {
     fn test_write_then_read_field() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write two rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "INTC", "NYSE", 66.77)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "INTC", "NYSE", 66.77)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(1, &columns, "AMD", "NASDAQ", 77.66)));
 
             // read the first column of the first row
@@ -898,7 +908,7 @@ mod tests {
         let mrc_ab = TableValue(mrc_a) + TableValue(mrc_b);
         let rows = match mrc_ab {
             TableValue(mrc) => mrc.get_rows(),
-            _ => vec![]
+            _ => Vec::new()
         };
 
         // verify the results
@@ -957,11 +967,11 @@ mod tests {
     fn test_delete_row() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(1, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(2, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(3, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(4, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(2, &columns, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(3, &columns, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(4, &columns, "OXIDE", "OSS", 0.00)));
 
             // delete even rows
             assert_eq!(RowsAffected(1), rc.delete_row(0));
@@ -984,11 +994,11 @@ mod tests {
     fn test_delete_rows() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(1, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(2, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(3, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(4, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(2, &columns, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(3, &columns, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(4, &columns, "OXIDE", "OSS", 0.00)));
 
             // delete even rows
             assert_eq!(RowsAffected(3), rc.delete_rows(|row, meta| {
@@ -1011,7 +1021,7 @@ mod tests {
     fn test_describe_table() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a row
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
 
             // describe the table
             let mrc = rc.describe().to_table().unwrap();
@@ -1055,11 +1065,11 @@ mod tests {
     fn test_find() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
 
             // resize and verify
             assert_eq!(
@@ -1076,11 +1086,11 @@ mod tests {
     fn test_find_next() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
 
             // resize and verify
             assert_eq!(
@@ -1097,11 +1107,11 @@ mod tests {
     fn test_fold_left() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
 
             // resize and verify
             assert_eq!(Float64Value(152.99759999999998),
@@ -1116,11 +1126,11 @@ mod tests {
     fn test_fold_right() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
 
             // fold and verify
             assert_eq!(Float64Value(347.00239999999997),
@@ -1132,13 +1142,37 @@ mod tests {
     }
 
     #[test]
+    fn test_iterator() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "A", "NYSE", 100.74)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "B", "NYSE", 50.19)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "C", "AMEX", 35.11)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "D", "NASDAQ", 16.45)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "E", "NYSE", 0.26)));
+
+            // use an iterator
+            let mut total = Float64Value(0.);
+            for row in rc.iter() {
+                total = total + row[2].clone();
+            }
+
+            // fold and verify
+            assert_eq!(total, Float64Value(202.75));
+        }
+
+        // test the variants
+        verify_variants("iterator", make_table_columns(), test_variant);
+    }
+
+    #[test]
     fn test_overwrite_field() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "BAT", "AMEX", 1.66)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "BAT", "AMEX", 1.66)));
 
             // overwrite the field at (0, 0)
             assert_eq!(RowsAffected(1), rc.overwrite_field(0, 1, StringValue("AMEX".to_string())));
@@ -1190,11 +1224,11 @@ mod tests {
     fn test_update_row() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
 
             // retrieve the entire range of rows
             let rows = rc.read_active_rows().unwrap();
@@ -1267,7 +1301,7 @@ mod tests {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             let columns = make_quote_columns();
             let phys_columns = TableColumn::from_columns(&columns).unwrap();
-            assert_eq!(RowsAffected(1), rc.push_row(make_quote(0, &phys_columns, "BILL", "AMEX", 12.33)));
+            assert_eq!(RowsAffected(0), rc.push_row(make_quote(0, &phys_columns, "BILL", "AMEX", 12.33)));
             assert_eq!(RowsAffected(1), rc.push_row(make_quote(1, &phys_columns, "TED", "NYSE", 56.2456)));
             assert_eq!(
                 rc.pop_row(),
@@ -1314,7 +1348,7 @@ mod tests {
             assert_eq!(6, rc.len().unwrap());
 
             // resize and verify
-            assert_eq!(TypedValue::Ack, rc.resize(0).unwrap());
+            assert_eq!(TypedValue::Ack, rc.resize(0));
             assert_eq!(rc.len().unwrap(), 0);
         }
 
@@ -1325,14 +1359,14 @@ mod tests {
     #[test]
     fn test_resize_grow() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
-            rc.resize(0).unwrap();
+            assert_eq!(Ack, rc.resize(0));
 
             // insert some rows and verify the size
             assert_eq!(RowsAffected(1), rc.overwrite_row(5, make_quote(0, &columns, "DUMMY", "OTC_BB", 0.0001)));
             assert!(rc.len().unwrap() >= 6);
 
             // resize and verify
-            let _ = rc.resize(50).unwrap();
+            let _ = rc.resize(50);
             assert!(rc.len().unwrap() >= 50);
         }
 
@@ -1490,11 +1524,11 @@ mod tests {
     fn test_scan_next() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
 
             // resize and verify
             assert_eq!(
@@ -1544,7 +1578,6 @@ mod tests {
         verify_variants("scan_reverse", make_table_columns(), test_variant);
     }
 
-    #[ignore]
     #[test]
     fn test_performance() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
@@ -1577,7 +1610,7 @@ mod tests {
         let elapsed_time = end_time - start_time;
         let elapsed_time_sec = elapsed_time as f64 / 1000.;
         let rpm = total as f64 / elapsed_time as f64;
-        info!("{} wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+        println!("{} wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
                  label, total, elapsed_time, elapsed_time_sec, rpm);
         Ok(())
     }
@@ -1596,7 +1629,7 @@ mod tests {
         let elapsed_time = end_time - start_time;
         let elapsed_time_sec = elapsed_time as f64 / 1000.;
         let rpm = total as f64 / elapsed_time as f64;
-        info!("{} read {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+        println!("{} read {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
                  label, total, elapsed_time, elapsed_time_sec, rpm);
         Ok(())
     }
@@ -1607,11 +1640,13 @@ mod tests {
         println!("byte_array_variant:");
         verify_byte_array_variant(columns.clone(), test_variant);
         println!("model_variant:");
-        verify_model_variant(columns, test_variant);
+        verify_model_variant(columns.clone(), test_variant);
+        println!("hash_table_variant:");
+        verify_hash_table_variant(name, columns, test_variant);
     }
 
     fn verify_byte_array_variant(columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
-        let brc = ByteRowCollection::new(columns.clone(), vec![]);
+        let brc = ByteRowCollection::new(columns.clone(), Vec::new());
         test_variant("Bytes", Box::new(brc), columns);
     }
 
@@ -1621,8 +1656,15 @@ mod tests {
         test_variant("Disk", Box::new(frc), columns.clone());
     }
 
+    fn verify_hash_table_variant(name: &str, columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
+        let ns = Namespace::new("hashing_row_collection", name, "stocks");
+        let frc = FileRowCollection::create_table(&ns, columns.clone()).unwrap();
+        let hrc = HashTableRowCollection::new(0, Box::new(frc)).unwrap();
+        test_variant("HashTable", Box::new(hrc), columns.clone());
+    }
+
     fn verify_model_variant(columns: Vec<TableColumn>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<TableColumn>) -> ()) {
-        let mrc = ModelRowCollection::with_rows(columns.clone(), vec![]);
+        let mrc = ModelRowCollection::with_rows(columns.clone(), Vec::new());
         test_variant("Model", Box::new(mrc), columns);
     }
 }

@@ -2,7 +2,6 @@
 // compiler module
 ////////////////////////////////////////////////////////////////////
 
-use log::info;
 use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
@@ -56,7 +55,7 @@ impl Compiler {
     /// creates a new [Compiler] instance
     pub fn new() -> Self {
         Compiler {
-            stack: vec![],
+            stack: Vec::new(),
         }
     }
 
@@ -67,7 +66,7 @@ impl Compiler {
     /// compiles the entire [TokenSlice] into an [Expression]
     pub fn compile(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         // consume the entire iterator
-        let mut opcodes = vec![];
+        let mut opcodes = Vec::new();
         let mut ts = ts;
         while ts.has_more() {
             let (expr, tts) = self.compile_next(ts)?;
@@ -122,51 +121,60 @@ impl Compiler {
     }
 
     fn parse_atom(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        if let (Some(Atom { text, .. }), ts) = ts.next() {
+        if let (Some(Atom { text, .. }), nts) = ts.next() {
             match text.as_str() {
-                "[!]" => self.parse_expression_1a(ts, MustDie),
-                "[+]" => self.parse_expression_1a(ts, MustAck),
-                "[-]" => self.parse_expression_1a(ts, MustNotAck),
-                "[~]" => self.parse_expression_1a(ts, MustIgnoreAck),
-                "ack" => Ok((ACK, ts)),
-                "append" => self.parse_keyword_append(ts),
-                "compact" => self.parse_keyword_compact(ts),
-                "create" => self.parse_keyword_create(ts),
-                "delete" => self.parse_keyword_delete(ts),
-                "describe" => self.parse_keyword_describe(ts),
-                "drop" => self.parse_mutate_target(ts, |m| Perform(Infrastructure::Drop(m))),
-                "eval" => self.parse_expression_1a(ts, Eval),
-                "false" => Ok((FALSE, ts)),
-                "fn" => self.parse_keyword_fn(ts),
+                "[!]" => self.parse_expression_1a(nts, MustDie),
+                "[+]" => self.parse_expression_1a(nts, MustAck),
+                "[-]" => self.parse_expression_1a(nts, MustNotAck),
+                "[~]" => self.parse_expression_1a(nts, MustIgnoreAck),
+                "ack" => Ok((ACK, nts)),
+                "append" => self.parse_keyword_append(nts),
+                "compact" => self.parse_keyword_compact(nts),
+                "create" => self.parse_keyword_create(nts),
+                "csv" => self.parse_expression_1a(nts, CSV),
+                "delete" => self.parse_keyword_delete(nts),
+                "DELETE" => self.parse_keyword_http(ts),
+                "describe" => self.parse_keyword_describe(nts),
+                "drop" => self.parse_mutate_target(nts, |m| Perform(Infrastructure::Drop(m))),
+                "eval" => self.parse_expression_1a(nts, Eval),
+                "false" => Ok((FALSE, nts)),
+                "fn" => self.parse_keyword_fn(nts),
                 "from" => {
-                    let (from, ts) = self.parse_expression_1a(ts, From)?;
+                    let (from, ts) = self.parse_expression_1a(nts, From)?;
                     self.parse_queryable(from, ts)
                 }
-                "include" => self.parse_expression_1a(ts, Include),
-                "if" => self.parse_keyword_if(ts),
-                "iff" => self.parse_keyword_iff(ts),
-                "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &ts),
-                "ns" => self.parse_expression_1a(ts, Ns),
-                "null" => Ok((NULL, ts)),
-                "overwrite" => self.parse_keyword_overwrite(ts),
-                "reverse" => self.parse_expression_1a(ts, |q| Inquire(Queryable::Reverse(q))),
-                "scan" => self.parse_keyword_scan(ts),
-                "select" => self.parse_keyword_select(ts),
-                "stderr" => self.parse_expression_1a(ts, StdErr),
-                "stdout" => self.parse_expression_1a(ts, StdOut),
-                "struct" => self.parse_keyword_struct(ts),
-                "syscall" => self.parse_keyword_syscall(ts),
-                "table" => self.parse_keyword_table(ts),
-                "true" => Ok((TRUE, ts)),
-                "type_of" => self.parse_expression_1a(ts, TypeOf),
-                "undefined" => Ok((UNDEFINED, ts)),
-                "undelete" => self.parse_keyword_undelete(ts),
-                "update" => self.parse_keyword_update(ts),
-                "via" => self.parse_expression_1a(ts, Via),
-                "where" => fail_near("`from` is expected before `where`: from stocks where last_sale < 1.0", &ts),
-                "while" => self.parse_keyword_while(ts),
-                "www" => self.parse_keyword_www(ts),
-                name => self.expect_function_call_or_variable(name, ts)
+                "GET" => self.parse_keyword_http(ts),
+                "HEAD" => self.parse_keyword_http(ts),
+                "HTTP" => self.parse_keyword_http(nts),
+                "include" => self.parse_expression_1a(nts, Include),
+                "if" => self.parse_keyword_if(nts),
+                "iff" => self.parse_keyword_iff(nts),
+                "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &nts),
+                "ns" => self.parse_expression_1a(nts, Ns),
+                "null" => Ok((NULL, nts)),
+                "overwrite" => self.parse_keyword_overwrite(nts),
+                "PATCH" => self.parse_keyword_http(ts),
+                "POST" => self.parse_keyword_http(ts),
+                "PUT" => self.parse_keyword_http(ts),
+                "reverse" => self.parse_expression_1a(nts, |q| Inquire(Queryable::Reverse(q))),
+                "scan" => self.parse_keyword_scan(nts),
+                "select" => self.parse_keyword_select(nts),
+                "SERVE" => self.parse_expression_1a(nts, SERVE),
+                "stderr" => self.parse_expression_1a(nts, StdErr),
+                "stdout" => self.parse_expression_1a(nts, StdOut),
+                "struct" => self.parse_keyword_struct(nts),
+                "syscall" => self.parse_keyword_syscall(nts),
+                "table" => self.parse_keyword_table(nts),
+                "true" => Ok((TRUE, nts)),
+                "type_of" => self.parse_expression_1a(nts, TypeOf),
+                "undefined" => Ok((UNDEFINED, nts)),
+                "undelete" => self.parse_keyword_undelete(nts),
+                "update" => self.parse_keyword_update(nts),
+                "UPLOAD" => self.parse_keyword_http(ts),
+                "via" => self.parse_expression_1a(nts, Via),
+                "where" => fail_near("`from` is expected before `where`: from stocks where last_sale < 1.0", &nts),
+                "while" => self.parse_keyword_while(nts),
+                name => self.expect_function_call_or_variable(name, nts)
             }
         } else { fail("Unexpected end of input") }
     }
@@ -366,6 +374,55 @@ impl Compiler {
         }
     }
 
+    /// Parses an HTTP expression
+    /// ex: HTTP GET "http://localhost:9000/quotes/AAPL/NYSE"
+    /// ex: POST "http://localhost:8080/machine/append/stocks" FROM stocks HEADERS {
+    ///         `Content-Type`: "application/json"
+    ///     }
+    fn parse_keyword_http(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        if let (Some(Atom { text: method, .. }), ts) = ts.next() {
+            // get the URL
+            let (url, ts) = self.compile_next(ts)?;
+            // is there a "FROM" clause?
+            // ex: PUT "http://localhost:9000/quotes" FROM stocks
+            let (body, ts) = match ts.next() {
+                (Some(Atom { text: s, .. }), ts) if s == "FROM" => {
+                    let (expr, ts) = self.compile_next(ts)?;
+                    (Some(Box::new(expr)), ts)
+                }
+                _ => (None, ts)
+            };
+            // is there a "HEADERS" clause?
+            // ex: POST "http://localhost:9000/quotes" HEADERS {
+            //         `Content-Type`: "application/json"
+            //     }
+            let (headers, ts) = match ts.next() {
+                (Some(Atom { text: s, .. }), ts) if s == "HEADERS" => {
+                    let (expr, ts) = self.compile_next(ts)?;
+                    (Some(Box::new(expr)), ts)
+                }
+                _ => (None, ts)
+            };
+            // is there a "MULTIPART" clause?
+            // ex: POST "http://localhost:9000/quotes" MULTIPART {
+            //         file: "./stocks.csv"
+            //     }
+            let (multipart, ts) = match ts.next() {
+                (Some(Atom { text: s, .. }), ts) if s == "MULTIPART" => {
+                    let (expr, ts) = self.compile_next(ts)?;
+                    (Some(Box::new(expr)), ts)
+                }
+                _ => (None, ts)
+            };
+            // return the HTTP expression
+            let method = Box::new(Literal(StringValue(method.to_ascii_uppercase())));
+            let url = Box::new(url);
+            Ok((HTTP { method, url, body, headers, multipart }, ts))
+        } else {
+            fail_near("HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT", &ts)
+        }
+    }
+
     /// Builds a language model from an if expression
     /// ex: if (x > 5) x else 5
     fn parse_keyword_if(
@@ -523,37 +580,6 @@ impl Compiler {
         }, ts))
     }
 
-    /// Parses a worldwide-web (www) expression
-    /// ex: www get "http://localhost:9000/quotes/AAPL/NYSE"
-    /// ex: www post "http://localhost:9000/quotes" from stocks with headers {
-    ///         "Content-Type": "application/json"
-    ///     }
-    fn parse_keyword_www(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        if let (Some(Atom { text: method, .. }), ts) = ts.next() {
-            info!("method: {}", method);
-            let (url, ts) = self.compile_next(ts)?;
-            info!("url: {}", url);
-            let body = if let Ok((From(body), _)) = self.compile_next(ts.clone()) {
-                info!("body: {}", body);
-                Some(body)
-            } else { None };
-
-            // let mut ts = ts;
-            // while ts.is("with") {
-            //     ts = ts.next().1;
-            // }
-
-            Ok((Www {
-                method: Box::new(Literal(StringValue(method))),
-                url: Box::new(url),
-                body,
-                headers: None,
-            }, ts))
-        } else {
-            fail_near("an HTTP method was expected; delete, get, patch, post or put", &ts)
-        }
-    }
-
     /// Parses a mutate-target expression.
     /// ex: drop table ns('finance.securities.stocks')
     /// ex: drop index ns('finance.securities.stocks')
@@ -664,7 +690,7 @@ impl Compiler {
         ts: TokenSlice,
     ) -> std::io::Result<(Vec<Expression>, TokenSlice)> {
         // parse: ("abc", "123", ..)
-        let mut args = vec![];
+        let mut args = Vec::new();
         let mut ts = ts.expect("(")?;
         while ts.isnt(")") {
             let (expr, ats) = self.compile_next(ts)?;
@@ -680,7 +706,7 @@ impl Compiler {
         ts: TokenSlice,
     ) -> std::io::Result<(Vec<String>, TokenSlice)> {
         // parse: ("abc", "123", ..)
-        let mut args = vec![];
+        let mut args = Vec::new();
         let mut ts = ts.expect("(")?;
         while ts.isnt(")") {
             if let (Variable(name), ats) = self.compile_next(ts.clone())? {
@@ -695,7 +721,7 @@ impl Compiler {
 
     fn expect_curly_brackets(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let mut ts = ts;
-        let mut kvps = vec![];
+        let mut kvps = Vec::new();
         while ts.isnt("}") {
             match self.compile_next(ts)? {
                 (AsValue(name, expr), ats) => {
@@ -751,7 +777,7 @@ impl Compiler {
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        let mut columns = vec![];
+        let mut columns = Vec::new();
         let mut ts = ts.expect("(")?;
         let mut is_done = ts.is(")");
         while !is_done {
@@ -807,7 +833,7 @@ impl Compiler {
     fn expect_square_brackets(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (innards, ts) = ts.scan_to(|t| t.get_raw_value() == "]");
         let mut innards = TokenSlice::new(innards.to_vec());
-        let mut items = vec![];
+        let mut items = Vec::new();
         while innards.has_more() {
             let (expr, its) = self.compile_next(innards)?;
             items.push(expr);
@@ -864,7 +890,7 @@ impl Compiler {
 
     /// parse an expression list from the [TokenSlice] (e.g. ['x', ',', 'y', ',', 'z'])
     fn next_expression_list(&mut self, ts: TokenSlice) -> std::io::Result<(Option<Vec<Expression>>, TokenSlice)> {
-        let mut items = vec![];
+        let mut items = Vec::new();
         // get the first item
         let (item, mut ts) = self.compile_next(ts)?;
         items.push(item);
@@ -1298,7 +1324,7 @@ mod tests {
     }
 
     #[test]
-    fn test_to_byte_code() {
+    fn test_compile_to_byte_code() {
         // compile script to byte code
         let byte_code = Compiler::compile_to_byte_code(r#"
         {w:'abc', x:1.0, y:2, z:[1, 2, 3]}
@@ -1458,6 +1484,124 @@ mod tests {
     }
 
     #[test]
+    fn test_http_delete() {
+        let model = Compiler::compile_script(r#"
+            DELETE "http://localhost:9000/comments?id=675af"
+        "#).unwrap();
+        assert_eq!(model, HTTP {
+            method: Box::new(Literal(StringValue("DELETE".to_string()))),
+            url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
+            body: None,
+            headers: None,
+            multipart: None,
+        });
+    }
+
+    #[test]
+    fn test_http_get() {
+        let model = Compiler::compile_script(r#"
+            GET "http://localhost:9000/comments?id=675af"
+        "#).unwrap();
+        assert_eq!(model, HTTP {
+            method: Box::new(Literal(StringValue("GET".to_string()))),
+            url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
+            body: None,
+            headers: None,
+            multipart: None,
+        });
+    }
+
+    #[test]
+    fn test_http_head() {
+        let model = Compiler::compile_script(r#"
+            HEAD "http://localhost:9000/quotes/AMD/NYSE"
+        "#).unwrap();
+        assert_eq!(model, HTTP {
+            method: Box::new(Literal(StringValue("HEAD".to_string()))),
+            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".to_string()))),
+            body: None,
+            headers: None,
+            multipart: None,
+        });
+    }
+
+    #[test]
+    fn test_http_patch() {
+        let model = Compiler::compile_script(r#"
+            PATCH "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE"
+        "#).unwrap();
+        assert_eq!(model, HTTP {
+            method: Box::new(Literal(StringValue("PATCH".to_string()))),
+            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".to_string()))),
+            body: None,
+            headers: None,
+            multipart: None,
+        });
+    }
+
+    #[test]
+    fn test_http_post() {
+        let model = Compiler::compile_script(r#"
+            POST "http://localhost:9000/quotes/AMD/NASDAQ"
+        "#).unwrap();
+        assert_eq!(model, HTTP {
+            method: Box::new(Literal(StringValue("POST".to_string()))),
+            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
+            body: None,
+            headers: None,
+            multipart: None,
+        });
+    }
+
+    #[test]
+    fn test_http_post_with_body() {
+        let model = Compiler::compile_script(r#"
+            POST "http://localhost:8080/machine/www/stocks" FROM (
+                "Hello World"
+            )
+        "#).unwrap();
+        assert_eq!(model, HTTP {
+            method: Box::new(Literal(StringValue("POST".to_string()))),
+            url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
+            body: Some(Box::new(Literal(StringValue("Hello World".to_string())))),
+            headers: None,
+            multipart: None,
+        });
+    }
+
+    #[test]
+    fn test_http_post_with_multipart() {
+        let model = Compiler::compile_script(r#"
+            POST "http://localhost:8080/machine/www/stocks" MULTIPART ({
+                file: "./demoes/language/include_file.ox"
+            })
+        "#).unwrap();
+        assert_eq!(model, HTTP {
+            method: Box::new(Literal(StringValue("POST".to_string()))),
+            url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
+            body: None,
+            headers: None,
+            multipart: Some(Box::new(JSONLiteral(vec![
+                ("file".to_string(), Literal(StringValue("./demoes/language/include_file.ox".to_string()))),
+            ]))),
+        });
+    }
+
+    #[test]
+    fn test_http_put() {
+        let model = Compiler::compile_script(r#"
+            PUT "http://localhost:9000/quotes/AMD/NASDAQ"
+        "#).unwrap();
+        assert_eq!(model, HTTP {
+            method: Box::new(Literal(StringValue("PUT".to_string()))),
+            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
+            body: None,
+            headers: None,
+            multipart: None,
+        });
+    }
+
+    #[test]
     fn test_undelete() {
         let opcodes = Compiler::compile_script(r#"
         undelete from stocks
@@ -1519,7 +1663,8 @@ mod tests {
         let opcodes = Compiler::compile_script(r#"
         [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
          { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-         { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> ns("interpreter.into.stocks")
+         { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
+                ~> ns("interpreter.into.stocks")
         "#).unwrap();
         assert_eq!(opcodes,
                    Mutate(IntoNs(
@@ -1811,18 +1956,5 @@ mod tests {
             },
             Variable("x".into()),
         ]));
-    }
-
-    #[test]
-    fn test_www_get() {
-        let model = Compiler::compile_script(r#"
-            www get "http://localhost:9000/quotes/AAPL/NYSE"
-        "#).unwrap();
-        assert_eq!(model, Www {
-            method: Box::new(Literal(StringValue("get".to_string()))),
-            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AAPL/NYSE".to_string()))),
-            body: None,
-            headers: None,
-        });
     }
 }

@@ -13,11 +13,12 @@ use serde_json::Value;
 
 use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse, RowJs};
 
-use crate::{append_row, create_table_from_config, delete_row, get_columns, overwrite_row, read_range, read_row, update_row};
+use crate::{append_row, create_table_from_config, delete_row, get_columns, overwrite_row, read_range, read_row, read_row_metadata, update_row};
 use crate::dataframe_actor::DataframeActor;
 use crate::dataframe_config::DataFrameConfig;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
+use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::server::SystemInfoJs;
 use crate::table_columns::TableColumn;
@@ -47,6 +48,7 @@ macro_rules! web_routes {
             .route("/{database}/{schema}/{name}/{a}/{b}", web::get().to(handle_row_range_get))
             .route("/{database}/{schema}/{name}/{id}", web::delete().to(handle_row_delete))
             .route("/{database}/{schema}/{name}/{id}", web::get().to(handle_row_get))
+            .route("/{database}/{schema}/{name}/{id}", web::head().to(handle_row_head))
             .route("/{database}/{schema}/{name}/{id}", web::patch().to(handle_row_patch))
             .route("/{database}/{schema}/{name}/{id}", web::post().to(handle_row_post))
             .route("/{database}/{schema}/{name}/{id}", web::put().to(handle_row_put))
@@ -175,7 +177,20 @@ pub async fn handle_row_get(req: HttpRequest,
     }
 }
 
-/// handler function for appending a new/existing row by namespace (database, schema, name) and offset
+/// handler function for row metadata by namespace (database, schema, name) and row ID
+// ex: http://localhost:8080/dataframes/create/quotes/0
+pub async fn handle_row_head(req: HttpRequest,
+                             path: web::Path<(String, String, String, usize)>) -> impl Responder {
+    match get_row_metadata_by_id(req, path).await {
+        Ok(meta) => HttpResponse::Ok().json(meta),
+        Err(err) => {
+            error!("error {}", err.to_string());
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+/// handler function for appending a new row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_post(req: HttpRequest,
                              data: web::Json<RowJs>,
@@ -189,7 +204,7 @@ pub async fn handle_row_post(req: HttpRequest,
     }
 }
 
-/// handler function for overwriting an existing row by namespace (database, schema, name) and offset
+/// handler function for replacing an existing row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_put(req: HttpRequest,
                             data: web::Json<RowJs>,
@@ -203,7 +218,7 @@ pub async fn handle_row_put(req: HttpRequest,
     }
 }
 
-/// handler function for overwriting an existing row by namespace (database, schema, name) and offset
+/// handler function for patching an existing row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_patch(req: HttpRequest,
                               data: web::Json<RowJs>,
@@ -232,17 +247,20 @@ pub async fn handle_row_range_get(req: HttpRequest,
 }
 
 /// handler function for executing remote procedure calls
-pub async fn handle_rpc_post(session: Session, data: web::Json<RemoteCallRequest>) -> impl Responder {
-    fn intern(session: Session, data: web::Json<RemoteCallRequest>) -> std::io::Result<Value> {
-        let mut state = get_session(&session).unwrap();
-        info!("state0 {:?}", state);
-        let result = state.evaluate(data.0.get_code())?;
-        info!("state1 {:?}", state);
-        Ok(result.to_json())
-    }
-    match intern(session, data) {
-        Ok(result) => HttpResponse::Ok().json(RemoteCallResponse::success(result)),
-        Err(err) => HttpResponse::Ok().json(RemoteCallResponse::fail(err.to_string())),
+pub async fn handle_rpc_post(
+    session: Session,
+    data: web::Json<RemoteCallRequest>,
+) -> impl Responder {
+    let mut interpreter = match get_session(&session) {
+        Ok(the_interpreter) => the_interpreter,
+        Err(err) =>
+            return HttpResponse::Ok().json(RemoteCallResponse::fail(err.to_string())),
+    };
+    match interpreter.evaluate_async(data.0.get_code()).await {
+        Ok(result) =>
+            HttpResponse::Ok().json(RemoteCallResponse::success(result.to_json())),
+        Err(err) =>
+            HttpResponse::Ok().json(RemoteCallResponse::fail(err.to_string())),
     }
 }
 
@@ -293,6 +311,13 @@ async fn get_row_by_id(req: HttpRequest,
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.clone();
     read_row!(actor, ns, id)
+}
+
+async fn get_row_metadata_by_id(req: HttpRequest,
+                                path: web::Path<(String, String, String, usize)>) -> std::io::Result<RowMetadata> {
+    let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
+    let actor = get_shared_state(&req)?.actor.clone();
+    read_row_metadata!(actor, ns, id)
 }
 
 async fn overwrite_row_by_id(req: HttpRequest,

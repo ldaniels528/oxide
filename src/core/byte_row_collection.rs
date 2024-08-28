@@ -3,8 +3,8 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
-use crate::field_metadata::FieldMetadata;
 
+use crate::field_metadata::FieldMetadata;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
@@ -36,23 +36,23 @@ impl ByteRowCollection {
 
     /// Encodes the [ByteRowCollection] into a byte vector
     pub fn encode(&self) -> Vec<u8> {
-        let mut bytes = vec![];
+        let mut bytes = Vec::new();
         for row in &self.row_data { bytes.extend(row) }
         bytes
     }
 
     /// Creates a new [ByteRowCollection] from the specified rows
     pub fn from_rows(rows: Vec<Row>) -> Self {
-        let mut encoded_rows = vec![];
+        let mut encoded_rows = Vec::new();
         let columns = rows.first()
             .map(|row| row.get_columns().clone())
-            .unwrap_or(vec![]);
+            .unwrap_or(Vec::new());
         for row in rows { encoded_rows.push(row.encode()) }
         Self::new(columns, encoded_rows)
     }
 
     pub fn get_rows(&self) -> Vec<Row> {
-        let mut rows = vec![];
+        let mut rows = Vec::new();
         for buf in &self.row_data {
             let (row, rmd) = Row::decode(buf, &self.columns);
             if rmd.is_allocated { rows.push(row) }
@@ -89,7 +89,7 @@ impl RowCollection for ByteRowCollection {
         let buffer = Row::encode_value(
             &new_value,
             &FieldMetadata::new(true),
-            column.max_physical_size
+            column.max_physical_size,
         );
         let mut encoded_row = self.row_data[id].clone();
         let start = offset as usize;
@@ -103,7 +103,7 @@ impl RowCollection for ByteRowCollection {
         &mut self,
         id: usize,
         column_id: usize,
-        metadata: FieldMetadata
+        metadata: FieldMetadata,
     ) -> TypedValue {
         let column = &self.columns[column_id];
         self.row_data[id][column.offset] = metadata.encode();
@@ -113,7 +113,7 @@ impl RowCollection for ByteRowCollection {
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
         // resize the rows to prevent overflow
         if self.row_data.len() <= id {
-            self.row_data.resize(id + 1, vec![]);
+            self.row_data.resize(id + 1, Vec::new());
         }
 
         // set the block, update the watermark
@@ -161,10 +161,10 @@ impl RowCollection for ByteRowCollection {
         Ok(metadata)
     }
 
-    fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
-        self.row_data.resize(new_size, vec![]);
+    fn resize(&mut self, new_size: usize) -> TypedValue {
+        self.row_data.resize(new_size, Vec::new());
         self.watermark = new_size;
-        Ok(TypedValue::Ack)
+        TypedValue::Ack
     }
 }
 

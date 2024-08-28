@@ -40,7 +40,7 @@ mod tests {
             r#"| "ABC"  | "AMEX"   | 11.77     |"#.to_string(),
             r#"| "BIZ"  | "NYSE"   | 23.66     |"#.to_string(),
             r#"| "BOOM" | "NASDAQ" | 56.87     |"#.to_string(),
-            "|-------------------------------|".to_string()
+            "|-------------------------------|".to_string(),
         ])
     }
 }

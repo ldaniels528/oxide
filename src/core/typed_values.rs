@@ -12,6 +12,7 @@ use std::ops::*;
 use chrono::DateTime;
 use num_traits::ToPrimitive;
 use regex::Regex;
+use reqwest::Response;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -53,10 +54,7 @@ pub enum TypedValue {
     ErrorValue(String),
     Float32Value(f32),
     Float64Value(f64),
-    Function {
-        params: Vec<ColumnJs>,
-        code: Box<Expression>,
-    },
+    Function { params: Vec<ColumnJs>, code: Box<Expression> },
     Int8Value(i8),
     Int16Value(i16),
     Int32Value(i32),
@@ -110,9 +108,9 @@ impl TypedValue {
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
         match data_type {
             AckType => Ack,
-            BLOBType(_size) => BLOB(vec![]),
+            BLOBType(_size) => BLOB(Vec::new()),
             BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
-            CLOBType(_size) => CLOB(vec![]),
+            CLOBType(_size) => CLOB(Vec::new()),
             DateType => codec::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
             EnumType(labels) => {
                 let index = codec::decode_u8x4(buffer, offset, |b| i32::from_be_bytes(b));
@@ -130,7 +128,7 @@ impl TypedValue {
             Int32Type => codec::decode_u8x4(buffer, offset, |b| Int32Value(i32::from_be_bytes(b))),
             Int64Type => codec::decode_u8x8(buffer, offset, |b| Int64Value(i64::from_be_bytes(b))),
             Int128Type => codec::decode_u8x16(buffer, offset, |b| Int128Value(i128::from_be_bytes(b))),
-            JSONObjectType => JSONObjectValue(vec![]), // TODO implement me
+            JSONObjectType => JSONObjectValue(Vec::new()), // TODO implement me
             RowsAffectedType => RowsAffected(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
             StructureType(columns) =>
@@ -156,7 +154,7 @@ impl TypedValue {
         match value {
             Ack | Null | Undefined => [0u8; 0].to_vec(),
             Array(items) => {
-                let mut bytes = vec![];
+                let mut bytes = Vec::new();
                 bytes.extend(items.len().to_be_bytes());
                 for item in items { bytes.extend(item.encode()); }
                 bytes
@@ -176,7 +174,7 @@ impl TypedValue {
             Int64Value(number) => number.to_be_bytes().to_vec(),
             Int128Value(number) => number.to_be_bytes().to_vec(),
             JSONObjectValue(pairs) => {
-                let mut bytes = vec![];
+                let mut bytes = Vec::new();
                 for (name, value) in pairs {
                     bytes.extend(name.bytes().collect::<Vec<u8>>());
                     bytes.extend(Self::encode_value(value))
@@ -189,7 +187,7 @@ impl TypedValue {
             StructureValue(structure) => codec::encode_string(structure.to_string().as_str()),
             TableNs(path) => codec::encode_string(path),
             TupleValue(items) => {
-                let mut bytes = vec![];
+                let mut bytes = Vec::new();
                 bytes.extend(items.len().to_be_bytes());
                 for item in items { bytes.extend(item.encode()); }
                 bytes
@@ -204,7 +202,7 @@ impl TypedValue {
     }
 
     fn encode_function(params: &Vec<ColumnJs>, code: &Expression) -> Vec<u8> {
-        let mut bytes = vec![];
+        let mut bytes = Vec::new();
         bytes.extend(params.len().to_be_bytes());
         for param in params { bytes.extend(param.encode()); }
         bytes.extend(code.encode());
@@ -251,6 +249,38 @@ impl TypedValue {
             UUIDType => UUIDValue(buffer.next_uuid()),
         };
         Ok(tv)
+    }
+
+    pub async fn from_response(response: Response) -> Self {
+        if response.status().is_success() {
+            match response.text().await {
+                Ok(body) => StringValue(body),
+                Err(err) => ErrorValue(format!("Error reading response body: {}", err)),
+            }
+        } else {
+            ErrorValue(format!("Request failed with status: {}", response.status()))
+        }
+    }
+
+    pub fn get_raw_value(&self) -> String {
+        match self {
+            Array(items) => {
+                let values: Vec<String> = items.iter().map(|v| v.get_raw_value()).collect();
+                format!("[{}]", values.join(", "))
+            }
+            JSONObjectValue(pairs) => {
+                let values: Vec<String> = pairs.iter()
+                    .map(|(k, v)| format!("\"{}\":{}", k, v.get_raw_value()))
+                    .collect();
+                format!("{{{}}}", values.join(", "))
+            }
+            StringValue(s) => format!("\"{s}\""),
+            TupleValue(items) => {
+                let values: Vec<String> = items.iter().map(|v| v.get_raw_value()).collect();
+                format!("({})", values.join(", "))
+            }
+            z => z.unwrap_value()
+        }
     }
 
     fn intercept_unknowns(a: &TypedValue, b: &TypedValue) -> Option<TypedValue> {
@@ -493,12 +523,6 @@ impl TypedValue {
                 format!("(({}) => {})",
                         params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
                         code.to_code()),
-            JSONObjectValue(pairs) => {
-                let values: Vec<String> = pairs.iter()
-                    .map(|(k, v)| format!("{}:{}", k, v.unwrap_value()))
-                    .collect();
-                format!("{{{}}}", values.join(", "))
-            }
             Float32Value(number) => number.to_string(),
             Float64Value(number) => number.to_string(),
             Int8Value(number) => number.to_string(),
@@ -506,6 +530,12 @@ impl TypedValue {
             Int32Value(number) => number.to_string(),
             Int64Value(number) => number.to_string(),
             Int128Value(number) => number.to_string(),
+            JSONObjectValue(pairs) => {
+                let values: Vec<String> = pairs.iter()
+                    .map(|(k, v)| format!("{}:{}", k, v.unwrap_value()))
+                    .collect();
+                format!("{{{}}}", values.join(", "))
+            }
             TableValue(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
             Null => "null".into(),
             RowsAffected(number) => number.to_string(),
@@ -593,7 +623,7 @@ impl TypedValue {
     }
 
     pub fn range(&self, rhs: &Self) -> Option<Self> {
-        let mut values = vec![];
+        let mut values = Vec::new();
         for n in self.assume_i64()?..rhs.assume_i64()? { values.push(Int64Value(n)) }
         Some(Array(values))
     }
@@ -765,10 +795,26 @@ impl Add for TypedValue {
     fn add(self, rhs: Self) -> Self::Output {
         match (&self, &rhs) {
             (Ack, Boolean(..)) => Boolean(true),
-            (Boolean(..), Ack) => Boolean(true),
             (Ack, RowsAffected(n)) => RowsAffected(*n),
-            (RowsAffected(n), Ack) => RowsAffected(*n),
+            (Boolean(..), Ack) => Boolean(true),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
+            (ErrorValue(a), ErrorValue(b)) => ErrorValue(format!("{a}\n{b}")),
+            (ErrorValue(a), _) => ErrorValue(a.to_string()),
+            (_, ErrorValue(b)) => ErrorValue(b.to_string()),
+            (Float32Value(a), Float32Value(b)) => Float32Value(*a + *b),
+            (Float64Value(a), Float64Value(b)) => Float64Value(*a + *b),
+            (Int128Value(a), Int128Value(b)) => Int128Value(*a + *b),
+            (Int64Value(a), Int64Value(b)) => Int64Value(*a + *b),
+            (Int32Value(a), Int32Value(b)) => Int32Value(*a + *b),
+            (Int16Value(a), Int16Value(b)) => Int16Value(*a + *b),
+            (Int8Value(a), Int8Value(b)) => Int8Value(*a + *b),
+            (UInt128Value(a), UInt128Value(b)) => UInt128Value(*a + *b),
+            (UInt64Value(a), UInt64Value(b)) => UInt64Value(*a + *b),
+            (UInt32Value(a), UInt32Value(b)) => UInt32Value(*a + *b),
+            (UInt16Value(a), UInt16Value(b)) => UInt16Value(*a + *b),
+            (UInt8Value(a), UInt8Value(b)) => UInt8Value(*a + *b),
+            (RowsAffected(n), Ack) => RowsAffected(*n),
+            (RowsAffected(a), RowsAffected(b)) => RowsAffected(*a + *b),
             (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
             (TableValue(a), TableValue(b)) => {
                 match ModelRowCollection::combine(a.get_columns().clone(), vec![a, b]) {
@@ -786,6 +832,7 @@ impl Add for TypedValue {
                     _ => TableValue(mrc),
                 }
             }
+            // (a, b) => ErrorValue(format!("Type mismatch: cannot perform {} + {}", a.unwrap_value(), b.unwrap_value()))
             _ => Self::numeric_op_2f(&self, &rhs, |a, b| a + b).unwrap_or(Undefined)
         }
     }

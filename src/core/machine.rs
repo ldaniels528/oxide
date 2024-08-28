@@ -2,14 +2,16 @@
 // state machine module
 ////////////////////////////////////////////////////////////////////
 
+use std::{fs, thread};
 use std::collections::HashMap;
-use std::fs;
 use std::fs::File;
 use std::io::Read;
 use std::ops::Deref;
 use std::process::Output;
 
 use log::{error, info};
+use reqwest::{Client, RequestBuilder};
+use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 
@@ -22,12 +24,13 @@ use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::dataframes::DataFrame;
 use crate::expression::{Expression, Infrastructure, Mutation, Queryable, UNDEFINED};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-use crate::expression::Expression::{ArrayLiteral, ColumnSet, From, Literal, Ns, Perform, Variable, Via};
+use crate::expression::Expression::{ArrayLiteral, AsValue, ColumnSet, From, HTTP, Literal, Ns, Perform, SERVE, SetVariable, Variable, Via};
 use crate::expression::Infrastructure::Declare;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
+use crate::rest_server::SharedState;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::server::ColumnJs;
@@ -35,6 +38,7 @@ use crate::structure::Structure;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use crate::web_routes;
 
 /// represents an Oxide executable instruction (opcode)
 pub type OpCode = fn(Machine) -> std::io::Result<Machine>;
@@ -52,9 +56,27 @@ impl Machine {
     // static methods
     ////////////////////////////////////////////////////////////////
 
+    /// creates a new empty state machine
+    pub fn new() -> Self {
+        Self::construct(Vec::new(), HashMap::new())
+    }
+
     /// creates a new state machine
-    pub fn construct(stack: Vec<TypedValue>, variables: HashMap<String, TypedValue>) -> Self {
+    fn construct(stack: Vec<TypedValue>, variables: HashMap<String, TypedValue>) -> Self {
         Self { stack, variables }
+    }
+
+    fn enrich_request(
+        builder: RequestBuilder,
+        body_opt: Option<String>,
+    ) -> RequestBuilder {
+        let builder = builder
+            .header("Content-Type", "application/json");
+        let builder = match body_opt {
+            Some(body) => builder.body(body),
+            None => builder
+        };
+        builder
     }
 
     fn expand(machine: Self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
@@ -71,9 +93,23 @@ impl Machine {
         }
     }
 
-    /// creates a new empty state machine
-    pub fn new() -> Self {
-        Self::construct(Vec::new(), HashMap::new())
+    fn extract_string_tuples(value: TypedValue) -> std::io::Result<Vec<(String, String)>> {
+        Self::extract_value_tuples(value)
+            .map(|values| values.iter()
+                .map(|(k, v)| (k.to_string(), v.unwrap_value()))
+                .collect())
+    }
+
+    fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
+        match value {
+            JSONObjectValue(values) => {
+                Ok(values.iter()
+                    .map(|(k, v)| (k.to_string(), v.clone()))
+                    .collect()
+                )
+            }
+            z => return fail_value("Type mismatch", &z),
+        }
     }
 
     fn orchestrate_rc(
@@ -141,8 +177,76 @@ impl Machine {
     // instance methods
     ////////////////////////////////////////////////////////////////
 
+    pub fn convert_to_csv(
+        &self,
+        expression: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match self.evaluate(expression)? {
+            (ms, TableValue(mrc)) => {
+                let mut csv_lines = Vec::new();
+                for row in mrc.iter() {
+                    let line = row.get_values().iter()
+                        .map(|v| v.get_raw_value())
+                        .collect::<Vec<String>>()
+                        .join(",");
+                    csv_lines.push(StringValue(line))
+                }
+                Ok((ms, Array(csv_lines)))
+            }
+            (_, z) => fail_value("Cannot convert to CSV", &z)
+        }
+    }
+
+    /// asynchronously evaluates the specified [Expression]; returning a [TypedValue] result.
+    pub async fn evaluate_async(
+        &self,
+        expression: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match expression {
+            AsValue(name, expr) => {
+                let (machine, tv) = self.evaluate_async_recurse(expr).await?;
+                Ok((machine.with_variable(name, tv.clone()), tv))
+            }
+            HTTP { method, url, body, headers, multipart } =>
+                self.evaluate_http(method, url, body, headers, multipart).await,
+            SERVE(a) => {
+                use actix_web::web;
+                use crate::rest_server::*;
+                let (_ms, port) = self.evaluate(a)?;
+                thread::spawn(move || {
+                    let port = port.assume_usize()
+                        .expect("port: an integer value was expected");
+                    let server = actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
+                        .bind(format!("{}:{}", "0.0.0.0", port))
+                        .expect(format!("Can not bind to port {port}").as_str())
+                        .run();
+                    Runtime::new()
+                        .expect("Failed to create a Runtime instance")
+                        .block_on(server)
+                        .expect(format!("Failed while blocking on port {port}").as_str());
+                });
+                Ok((self.clone(), Ack))
+            }
+            SetVariable(name, expr) => {
+                let (machine, value) = self.evaluate_async_recurse(expr).await?;
+                Ok((machine.set(name, value), Ack))
+            }
+            other => self.evaluate(other)
+        }
+    }
+
+    pub async fn evaluate_async_recurse(
+        &self,
+        expression: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        self.evaluate(expression)
+    }
+
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
-    pub fn evaluate(&self, expression: &Expression) -> std::io::Result<(Self, TypedValue)> {
+    pub fn evaluate(
+        &self,
+        expression: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
         use crate::expression::Expression::*;
         match expression {
             And(a, b) =>
@@ -172,6 +276,7 @@ impl Machine {
                 Ok((machine, Array(values)))
             }
             Contains(a, b) => self.evaluate_contains(a, b),
+            CSV(a) => self.convert_to_csv(a),
             Divide(a, b) =>
                 self.expand2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.evaluate_index_of_collection(a, b),
@@ -186,6 +291,8 @@ impl Machine {
                 self.expand2(a, b, |aa, bb| Boolean(aa > bb)),
             GreaterOrEqual(a, b) =>
                 self.expand2(a, b, |aa, bb| Boolean(aa >= bb)),
+            HTTP { .. } =>
+                Ok((self.clone(), ErrorValue("HTTP is only supported in an async context".to_string()))),
             If { condition, a, b } =>
                 self.evaluate_if_then_else(condition, a, b),
             Include(path) => self.evaluate_include(path),
@@ -225,6 +332,8 @@ impl Machine {
                 let (machine, result) = self.evaluate_array(a)?;
                 Ok((machine, result))
             }
+            SERVE(..) =>
+                Ok((self.clone(), ErrorValue("SERVE is only supported in an async context".to_string()))),
             SetVariable(name, expr) => {
                 let (machine, value) = self.evaluate(expr)?;
                 Ok((machine.set(name, value), Ack))
@@ -242,8 +351,6 @@ impl Machine {
             Via(src) => self.perform_table_row_query(src, &UNDEFINED, Undefined),
             While { condition, code } =>
                 self.evaluate_while(condition, code),
-            Www { method, url, body, headers } =>
-                self.evaluate_www(method, url, body, headers),
         }
     }
 
@@ -372,7 +479,7 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, results) = ops.iter()
-            .fold((self.clone(), vec![]),
+            .fold((self.clone(), Vec::new()),
                   |(machine, mut array), op| match machine.evaluate(op) {
                       Ok((machine, tv)) => {
                           array.push(tv);
@@ -389,7 +496,7 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> std::io::Result<(Self, Vec<String>)> {
         let (machine, results) = ops.iter()
-            .fold((self.clone(), vec![]),
+            .fold((self.clone(), Vec::new()),
                   |(machine, mut array), op| match op {
                       Variable(name) => {
                           array.push(name.to_string());
@@ -549,7 +656,7 @@ impl Machine {
         &self,
         items: &Vec<(String, Expression)>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let mut elems = vec![];
+        let mut elems = Vec::new();
         for (name, expr) in items {
             let (_, value) = self.evaluate(expr)?;
             elems.push((name.to_string(), value))
@@ -650,58 +757,130 @@ impl Machine {
         Ok((machine, outcome))
     }
 
-    fn evaluate_www(
+    async fn evaluate_http(
         &self,
         method: &Expression,
         url: &Expression,
         body: &Option<Box<Expression>>,
         headers: &Option<Box<Expression>>,
+        multipart: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let (ms, method) = self.evaluate(method)?;
         let (ms, url) = ms.evaluate(url)?;
         let (ms, body) = ms.evaluate_opt(body)?;
         let (ms, headers) = ms.evaluate_opt(headers)?;
-        let promise = ms.http_call(
+        let (ms, multipart) = ms.evaluate_opt(multipart)?;
+        ms.http_method_call(
             method.unwrap_value(),
             url.unwrap_value(),
-            body.map(|e| e.unwrap_value()));
-        Runtime::new()?.block_on(promise)
+            body.map(|tv| tv.get_raw_value()),
+            match headers {
+                Some(v) => Self::extract_string_tuples(v)?,
+                None => Vec::new()
+            },
+            match multipart {
+                Some(JSONObjectValue(values)) => {
+                    Some(values.iter().fold(Form::new(), |form, (name, value)| {
+                        form.part(name.clone(), Part::text(value.unwrap_value()))
+                    }))
+                }
+                Some(z) => return fail_value("Type mismatch", &z),
+                None => None
+            },
+        ).await
     }
 
-    async fn http_call(
+    async fn http_method_call(
         &self,
         method: String,
         url: String,
         body: Option<String>,
+        headers: Vec<(String, String)>,
+        multipart: Option<Form>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let ms = self.clone();
-        let result = match reqwest::get(url).await {
-            Ok(response) => {
-                if response.status().is_success() {
-                    match response.text().await {
-                        Ok(body) => StringValue(body),
-                        Err(err) =>
-                            ErrorValue(format!("Error reading response body: {}", err)),
-                    }
-                } else {
-                    ErrorValue(format!("Request failed with status: {}", response.status()))
-                }
-            }
-            Err(err) => ErrorValue(format!("Error making request: {}", err)),
-        };
-
-        Ok((ms, result))
+        match method.to_ascii_uppercase().as_str() {
+            "DELETE" => self.http_delete(url.as_str(), headers, body).await,
+            "GET" => self.http_get(url.as_str(), headers, body).await,
+            "HEAD" => self.http_head(url.as_str(), headers, body).await,
+            "PATCH" => self.http_patch(url.as_str(), headers, body).await,
+            "POST" => self.http_post(url.as_str(), headers, body, multipart).await,
+            "PUT" => self.http_put(url.as_str(), headers, body).await,
+            method => Ok((self.clone(), ErrorValue(format!("Invalid HTTP method '{method}'"))))
+        }
     }
 
-    pub fn install_platform_functions(&self) -> Self {
-        let mut m = self.clone();
-        // m.variables.insert("type_of".to_string(), Function {
-        //     params: vec![
-        //         ColumnJs::new("item", "", )
-        //     ],
-        //     code: Box::new(()),
-        // });
-        m
+    async fn http_api_call(
+        request: RequestBuilder,
+        headers: Vec<(String, String)>,
+        body_opt: Option<String>,
+    ) -> TypedValue {
+        let request = Self::enrich_request(request, body_opt);
+        let request = headers.iter().fold(request, |request, (k, v)| {
+            request.header(k, v)
+        });
+        match request.send().await {
+            Ok(response) => TypedValue::from_response(response).await,
+            Err(err) => ErrorValue(format!("Error making request: {}", err)),
+        }
+    }
+
+    async fn http_delete(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body_opt: Option<String>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        Ok((self.clone(), Self::http_api_call(Client::new().delete(url), headers, body_opt).await))
+    }
+
+    async fn http_get(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body_opt: Option<String>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        Ok((self.clone(), Self::http_api_call(Client::new().get(url), headers, body_opt).await))
+    }
+
+    async fn http_head(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body_opt: Option<String>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        Ok((self.clone(), Self::http_api_call(Client::new().head(url), headers, body_opt).await))
+    }
+
+    async fn http_patch(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body_opt: Option<String>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        Ok((self.clone(), Self::http_api_call(Client::new().patch(url), headers, body_opt).await))
+    }
+
+    async fn http_post(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body_opt: Option<String>,
+        form_opt: Option<Form>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let request = match form_opt {
+            Some(form) => Client::new().post(url).multipart(form),
+            None => Client::new().post(url),
+        };
+        Ok((self.clone(), Self::http_api_call(request, headers, body_opt).await))
+    }
+
+    async fn http_put(
+        &self,
+        url: &str,
+        headers: Vec<(String, String)>,
+        body_opt: Option<String>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        Ok((self.clone(), Self::http_api_call(Client::new().put(url), headers, body_opt).await))
     }
 
     fn perform_table_create_index(
@@ -728,8 +907,8 @@ impl Machine {
                 config.save(&ns)?;
                 Ok((machine, Ack))
             }
-            x =>
-                Ok((machine, ErrorValue(format!("Type mismatch: expected an iterable near {}", x))))
+            z =>
+                Ok((machine, ErrorValue(format!("Type mismatch: expected an iterable near {}", z))))
         }
     }
 
@@ -746,7 +925,7 @@ impl Machine {
                 Ok((machine, ErrorValue("Memory collections do not 'create' keyword".to_string()))),
             TableNs(path) => {
                 let ns = Namespace::parse(path.as_str())?;
-                let config = DataFrameConfig::new(columns.clone(), vec![], vec![]);
+                let config = DataFrameConfig::new(columns.clone(), Vec::new(), Vec::new());
                 DataFrame::create(ns, config)?;
                 Ok((machine, Ack))
             }
@@ -769,7 +948,7 @@ impl Machine {
         from: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let columns = TableColumn::from_columns(columns)?;
-        Ok((self.clone(), TableValue(ModelRowCollection::with_rows(columns, vec![]))))
+        Ok((self.clone(), TableValue(ModelRowCollection::with_rows(columns, Vec::new()))))
     }
 
     fn perform_table_describe(
@@ -835,14 +1014,14 @@ impl Machine {
         let machine = self.clone();
         // create the config and an empty data file
         let ns = self.expect_namespace(table)?;
-        let cfg = DataFrameConfig::new(columns.clone(), vec![], vec![]);
+        let cfg = DataFrameConfig::new(columns.clone(), Vec::new(), Vec::new());
         cfg.save(&ns)?;
         FileRowCollection::table_file_create(&ns)?;
         // decipher the "from" expression
         let columns = TableColumn::from_columns(columns)?;
         let results = match from {
             Some(expr) => machine.expect_rows(expr.deref(), &columns)?,
-            None => vec![]
+            None => Vec::new()
         };
         Ok((machine, results))
     }
@@ -884,7 +1063,7 @@ impl Machine {
         limit: TypedValue,
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, table) = self.evaluate(table)?;
-        Self::orchestrate_io(machine, table, &vec![], &vec![], &None, limit, |machine, df, _fields, _values, condition, limit| {
+        Self::orchestrate_io(machine, table, &Vec::new(), &Vec::new(), &None, limit, |machine, df, _fields, _values, condition, limit| {
             let limit = limit.assume_usize().unwrap_or(0);
             let new_size = df.resize(limit)?;
             Ok((machine, RowsAffected(new_size)))
@@ -920,7 +1099,7 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, limit) = Self::expand(self.clone(), limit)?;
         let (machine, result) = machine.evaluate(from)?;
-        Self::orchestrate_io(machine, result, &vec![], &vec![], condition, limit, |machine, df, _fields, _values, condition, limit| {
+        Self::orchestrate_io(machine, result, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _fields, _values, condition, limit| {
             let deleted = df.delete_where(&machine, &condition, limit).ok().unwrap_or(0);
             Ok((machine, RowsAffected(deleted)))
         })
@@ -1003,7 +1182,7 @@ impl Machine {
             None => machine.evaluate_array(fields),
             Some(source) => {
                 let (machine, table) = machine.evaluate(source)?;
-                Self::orchestrate_io(machine, table, &vec![], &vec![], condition, limit, |machine, df, _, _, condition, limit| {
+                Self::orchestrate_io(machine, table, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _, _, condition, limit| {
                     let rows = df.read_where(&machine, condition, limit)?;
                     Ok((machine, TableValue(ModelRowCollection::from_rows(rows))))
                 })
@@ -1019,7 +1198,7 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, limit) = Self::expand(self.clone(), limit)?;
         let (machine, result) = machine.evaluate(from)?;
-        Self::orchestrate_io(machine, result, &vec![], &vec![], condition, limit, |machine, df, _fields, _values, condition, limit| {
+        Self::orchestrate_io(machine, result, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _fields, _values, condition, limit| {
             match df.undelete_where(&machine, &condition, limit) {
                 Ok(restored) => Ok((machine, RowsAffected(restored))),
                 Err(err) => Ok((machine, ErrorValue(err.to_string()))),
@@ -1054,9 +1233,10 @@ impl Machine {
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
     pub fn evaluate_scope(&self, ops: &Vec<Expression>) -> std::io::Result<(Self, TypedValue)> {
         Ok(ops.iter().fold((self.clone(), Undefined),
-                           |(machine, _), op| match machine.evaluate(op) {
-                               Ok((machine, tv)) => (machine, tv),
-                               Err(err) => panic!("{}", err.to_string())
+                           |(m, _), op| match m.evaluate(op) {
+                               Ok((m, ErrorValue(msg))) => (m, ErrorValue(msg)),
+                               Ok((m, tv)) => (m, tv),
+                               Err(err) => (m, ErrorValue(err.to_string()))
                            }))
     }
 
@@ -1162,7 +1342,7 @@ impl Machine {
         let (_, source) = self.evaluate(source)?;
         match source {
             Array(items) => {
-                let mut rows = vec![];
+                let mut rows = Vec::new();
                 for tuples in items {
                     if let JSONObjectValue(tuples) = tuples {
                         rows.push(Row::from_tuples(0, columns, &tuples))
@@ -1460,17 +1640,27 @@ mod tests {
     #[test]
     fn test_index_of_table_in_namespace() {
         // create a table with test data
-        let ns_path = "machine.element_at.stocks";
-        let (mut df, phys_columns) = create_file_table(ns_path);
-        assert_eq!(1, df.append(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
-        assert_eq!(1, df.append(make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
-        assert_eq!(1, df.append(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
-        assert_eq!(1, df.append(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
-        assert_eq!(1, df.append(make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)).unwrap());
+        let ns = Namespace::new("machine", "element_at", "stocks");
+        let phys_columns = make_table_columns();
+        let value_tuples = vec![
+            ("ABC", "AMEX", 11.77), ("UNO", "OTC", 0.2456),
+            ("BIZ", "NYSE", 23.66), ("GOTO", "OTC", 0.1428),
+            ("BOOM", "NASDAQ", 56.87),
+        ];
+        let rows = value_tuples.iter()
+            .map(|(symbol, exchange, last_sale)| {
+                Row::new(0, phys_columns.clone(), vec![
+                    StringValue(symbol.to_string()),
+                    StringValue(exchange.to_string()),
+                    Float64Value(*last_sale),
+                ])
+            }).collect();
+        let mut frc = FileRowCollection::create_table(&ns, phys_columns.clone()).unwrap();
+        assert_eq!(RowsAffected(5), frc.append_rows(rows));
 
         // create the instruction model 'ns("machine.element_at.stocks")[2]'
         let model = ElementAt(
-            Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
+            Box::new(Ns(Box::new(Literal(StringValue(ns.into()))))),
             Box::new(Literal(Int64Value(2))),
         );
         assert_eq!(model.to_code(), r#"ns("machine.element_at.stocks")[2]"#);
@@ -1585,7 +1775,7 @@ mod tests {
         let machine = Machine::new();
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, TypedValue::TableValue(ModelRowCollection::with_rows(
-            make_table_columns(), vec![],
+            make_table_columns(), Vec::new(),
         )))
     }
 
@@ -1594,7 +1784,7 @@ mod tests {
         // create a table with test data
         let ns_path = "machine.drop.stocks";
         let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
-        create_file_table(ns_path);
+        create_dataframe(ns_path);
 
         let model = Perform(Infrastructure::Drop(TableTarget { path: Box::new(ns) }));
         assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
@@ -1706,7 +1896,7 @@ mod tests {
     fn test_delete_rows_from_namespace() {
         // create a table with test data
         let ns_path = "machine.delete.stocks";
-        let (df, phys_columns) = create_file_table(ns_path);
+        let (df, phys_columns) = create_dataframe(ns_path);
 
         // delete some rows
         let machine = Machine::new();
@@ -1718,7 +1908,7 @@ mod tests {
         assert_eq!(result, RowsAffected(3));
 
         // verify the remaining rows
-        let rows = df.read_all_rows().unwrap();
+        let rows = df.read_active_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
@@ -1729,7 +1919,7 @@ mod tests {
     fn test_undelete_rows_from_namespace() {
         // create a table with test data
         let ns_path = "machine.undelete.stocks";
-        let (df, phys_columns) = create_file_table(ns_path);
+        let (df, phys_columns) = create_dataframe(ns_path);
 
         // delete some rows
         let machine = Machine::new();
@@ -1741,7 +1931,7 @@ mod tests {
         assert_eq!(result, RowsAffected(3));
 
         // verify the remaining rows
-        let rows = df.read_all_rows().unwrap();
+        let rows = df.read_active_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
             make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
@@ -1755,7 +1945,7 @@ mod tests {
         assert_eq!(result, RowsAffected(3));
 
         // verify the remaining rows
-        let rows = df.read_all_rows().unwrap();
+        let rows = df.read_active_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -1769,7 +1959,7 @@ mod tests {
     fn test_append_namespace() {
         // create a table with test data
         let ns_path = "machine.append.stocks";
-        let (df, phys_columns) = create_file_table(ns_path);
+        let (df, phys_columns) = create_dataframe(ns_path);
 
         // insert some rows
         let machine = Machine::new();
@@ -1784,7 +1974,7 @@ mod tests {
         assert_eq!(result, RowsAffected(1));
 
         // verify the remaining rows
-        let rows = df.read_all_rows().unwrap();
+        let rows = df.read_active_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -1814,7 +2004,7 @@ mod tests {
         assert_eq!(model.to_code(), r#"overwrite ns("machine.overwrite.stocks") via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99} where symbol == "BOOM""#);
 
         // create a table with test data
-        let (df, phys_columns) = create_file_table(ns_path);
+        let (df, phys_columns) = create_dataframe(ns_path);
 
         // overwrite some rows
         let machine = Machine::new();
@@ -1822,7 +2012,7 @@ mod tests {
         assert_eq!(result, RowsAffected(1));
 
         // verify the remaining rows
-        let rows = df.read_all_rows().unwrap();
+        let rows = df.read_active_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -1886,7 +2076,7 @@ mod tests {
     fn test_select_from_namespace() {
         // create a table with test data
         let (_, phys_columns) =
-            create_file_table("machine.select.stocks");
+            create_dataframe("machine.select.stocks");
 
         // execute the query
         let machine = Machine::new();
@@ -2021,7 +2211,7 @@ SOFTWARE.
     fn test_update_rows_in_namespace() {
         // create a table with test data
         let ns_path = "machine.update.stocks";
-        let (df, phys_columns) = create_file_table(ns_path);
+        let (df, phys_columns) = create_dataframe(ns_path);
 
         // create the instruction model
         let model = Mutate(Mutation::Update {
@@ -2043,7 +2233,7 @@ SOFTWARE.
         assert_eq!(delta, RowsAffected(2));
 
         // verify the rows
-        let rows = df.read_all_rows().unwrap();
+        let rows = df.read_active_rows().unwrap();
         assert_eq!(rows, vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
             make_quote(1, &phys_columns, "UNO", "OTC_BB", 0.2456),
@@ -2096,19 +2286,6 @@ SOFTWARE.
         assert_eq!(machine.get("num"), Some(Int64Value(5)))
     }
 
-    #[test]
-    fn test_www_get() {
-        let model = Www {
-            method: Box::new(Literal(StringValue("get".to_string()))),
-            url: Box::new(Literal(StringValue("http://www.yahoo.com".to_string()))),
-            body: None,
-            headers: None,
-        };
-        let machine = Machine::new();
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, StringValue("OK\r\n".into()));
-    }
-
     fn create_memory_table() -> (ModelRowCollection, Vec<TableColumn>) {
         let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
         let mrc = ModelRowCollection::from_rows(vec![
@@ -2120,7 +2297,7 @@ SOFTWARE.
         (mrc, phys_columns)
     }
 
-    fn create_file_table(namespace: &str) -> (DataFrame, Vec<TableColumn>) {
+    fn create_dataframe(namespace: &str) -> (DataFrame, Vec<TableColumn>) {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let ns = Namespace::parse(namespace).unwrap();
@@ -2130,11 +2307,11 @@ SOFTWARE.
         }
 
         let mut df = make_dataframe_ns(ns, columns.clone()).unwrap();
-        assert_eq!(1, df.append(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
+        assert_eq!(0, df.append(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)).unwrap());
         assert_eq!(1, df.append(make_quote(1, &phys_columns, "UNO", "OTC", 0.2456)).unwrap());
-        assert_eq!(1, df.append(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
-        assert_eq!(1, df.append(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
-        assert_eq!(1, df.append(make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)).unwrap());
+        assert_eq!(2, df.append(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)).unwrap());
+        assert_eq!(3, df.append(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)).unwrap());
+        assert_eq!(4, df.append(make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)).unwrap());
         (df, phys_columns)
     }
 }

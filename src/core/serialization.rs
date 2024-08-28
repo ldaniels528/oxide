@@ -40,6 +40,7 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         CodeBlock(ops) => encode_vec(E_CODE_BLOCK, ops),
         ColumnSet(columns) => encode_columns(columns),
         Contains(a, b) => encode(E_CONTAINS, vec![a, b]),
+        CSV(a) => encode(E_CSV, vec![a]),
         Divide(a, b) => encode(E_DIVIDE, vec![a, b]),
         ElementAt(a, b) => encode(E_ELEM_INDEX, vec![a, b]),
         Equal(a, b) => encode(E_EQUAL, vec![a, b]),
@@ -79,6 +80,7 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         Pow(a, b) => encode(E_POW, vec![a, b]),
         Range(a, b) => encode(E_RANGE, vec![a, b]),
         Return(a) => encode_vec(E_RETURN, a),
+        SERVE(a) => encode(E_SERVE, vec![a]),
         SetVariable(name, expr) =>
             encode(E_VAR_SET, vec![&Literal(StringValue(name.into())), expr]),
         ShiftLeft(a, b) => encode(E_SHIFT_LEFT, vec![a, b]),
@@ -86,7 +88,7 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         StdErr(a) => encode(E_STDERR, vec![a]),
         StdOut(a) => encode(E_STDOUT, vec![a]),
         SystemCall(args) => {
-            let mut my_args = vec![];
+            let mut my_args = Vec::new();
             for arg in args { my_args.push(arg) }
             encode(E_SYSTEM_CALL, my_args)
         }
@@ -96,8 +98,8 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         Via(src) => encode(E_VIA, vec![src]),
         While { condition, code } =>
             encode(E_WHILE, vec![condition, code]),
-        Www { method, url, body, headers } =>
-            encode(E_WWW, vec![method, url, &get_or_undef(body), &get_or_undef(headers)]),
+        HTTP { method, url, body, headers, multipart } =>
+            encode(E_HTTP, vec![method, url, &get_or_undef(body), &get_or_undef(headers), &get_or_undef(multipart)]),
     }
 }
 
@@ -114,7 +116,7 @@ pub fn assemble_infrastructure(expression: &Infrastructure) -> Vec<u8> {
         Create { path, entity: TableEntity { columns, from } } =>
             encode(E_CREATE_TABLE, vec![path, &ColumnSet(columns.clone()), &get_or_undef(from)]),
         Declare(IndexEntity { columns }) => {
-            let mut args = vec![];
+            let mut args = Vec::new();
             args.extend(columns);
             encode(E_DECLARE_INDEX, args)
         }
@@ -135,7 +137,7 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
             encode(E_DELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
         IntoNs(a, b) => encode(E_INTO_NS, vec![a, b]),
         Overwrite { path, source, condition, limit } => {
-            let mut args = vec![];
+            let mut args = Vec::new();
             args.push(path.deref().clone());
             args.push(source.deref().clone());
             args.push(get_or_undef(condition));
@@ -148,7 +150,7 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
         Undelete { path, condition, limit } =>
             encode(E_UNDELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
         Update { path, source, condition, limit } => {
-            let mut args: Vec<Expression> = vec![];
+            let mut args: Vec<Expression> = Vec::new();
             args.push(path.deref().clone());
             args.push(source.deref().clone());
             args.push(get_or_undef(condition));
@@ -212,33 +214,41 @@ fn assemble_select(
 /// decodes the typed value based on the supplied data type and buffer
 pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
     match data_type {
-        AckType => assemble_bytes(T_ACK, &vec![]),
+        AckType => assemble_bytes(T_ACK, &Vec::new()),
         BLOBType(size) => assemble_bytes(T_BLOB, &assemble_usize(*size)),
-        BooleanType => assemble_bytes(T_BOOLEAN, &vec![]),
+        BooleanType => assemble_bytes(T_BOOLEAN, &Vec::new()),
         CLOBType(size) => assemble_bytes(T_CLOB, &assemble_usize(*size)),
-        DateType => assemble_bytes(T_DATE, &vec![]),
+        DateType => assemble_bytes(T_DATE, &Vec::new()),
         EnumType(labels) => assemble_strings(T_ENUM, &labels),
         ErrorType => assemble_bytes(T_STRING, &assemble_usize(256)),
-        Float32Type => assemble_bytes(T_FLOAT32, &vec![]),
-        Float64Type => assemble_bytes(T_FLOAT64, &vec![]),
+        Float32Type => assemble_bytes(T_FLOAT32, &Vec::new()),
+        Float64Type => assemble_bytes(T_FLOAT64, &Vec::new()),
         FuncType(columns) => assemble_bytes(T_FUNCTION, &encode_columns(columns)),
-        Int8Type => assemble_bytes(T_INT8, &vec![]),
-        Int16Type => assemble_bytes(T_INT16, &vec![]),
-        Int32Type => assemble_bytes(T_INT32, &vec![]),
-        Int64Type => assemble_bytes(T_INT64, &vec![]),
-        Int128Type => assemble_bytes(T_INT128, &vec![]),
-        JSONObjectType => assemble_bytes(T_JSON_OBJECT, &vec![]),
-        RowsAffectedType => assemble_bytes(T_ROWS_AFFECTED, &vec![]),
+        Int8Type => assemble_bytes(T_INT8, &Vec::new()),
+        Int16Type => assemble_bytes(T_INT16, &Vec::new()),
+        Int32Type => assemble_bytes(T_INT32, &Vec::new()),
+        Int64Type => assemble_bytes(T_INT64, &Vec::new()),
+        Int128Type => assemble_bytes(T_INT128, &Vec::new()),
+        JSONObjectType => assemble_bytes(T_JSON_OBJECT, &Vec::new()),
+        RowsAffectedType => assemble_bytes(T_ROWS_AFFECTED, &Vec::new()),
         StringType(size) => assemble_bytes(T_STRING, &assemble_usize(*size)),
         StructureType(columns) => assemble_bytes(T_STRUCTURE, &encode_columns(columns)),
         TableType(columns) => assemble_bytes(T_TABLE_VALUE, &encode_columns(columns)),
-        UInt8Type => assemble_bytes(T_UINT8, &vec![]),
-        UInt16Type => assemble_bytes(T_UINT16, &vec![]),
-        UInt32Type => assemble_bytes(T_UINT32, &vec![]),
-        UInt64Type => assemble_bytes(T_UINT64, &vec![]),
-        UInt128Type => assemble_bytes(T_UINT128, &vec![]),
-        UUIDType => assemble_bytes(T_UUID, &vec![]),
+        UInt8Type => assemble_bytes(T_UINT8, &Vec::new()),
+        UInt16Type => assemble_bytes(T_UINT16, &Vec::new()),
+        UInt32Type => assemble_bytes(T_UINT32, &Vec::new()),
+        UInt64Type => assemble_bytes(T_UINT64, &Vec::new()),
+        UInt128Type => assemble_bytes(T_UINT128, &Vec::new()),
+        UUIDType => assemble_bytes(T_UUID, &Vec::new()),
     }
+}
+
+fn assemble_u32(value: u32) -> Vec<u8> {
+    u32::to_be_bytes(value).to_vec()
+}
+
+fn assemble_u64(value: u64) -> Vec<u8> {
+    u64::to_be_bytes(value).to_vec()
 }
 
 fn assemble_usize(value: usize) -> Vec<u8> {
@@ -278,6 +288,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_AND => Ok(And(decode_box(buf)?, decode_box(buf)?)),
         E_APPEND => Ok(Mutate(Mutation::Append { path: decode_box(buf)?, source: decode_box(buf)? })),
         E_COMPACT => Ok(Mutate(Mutation::Compact { path: decode_box(buf)? })),
+        E_CSV => Ok(CSV(decode_box(buf)?)),
         E_ELEM_INDEX => Ok(ElementAt(decode_box(buf)?, decode_box(buf)?)),
         E_ARRAY_LIT => Ok(ArrayLiteral(decode_array(buf)?)),
         E_AS_VALUE => Ok(AsValue(buf.next_string(), decode_box(buf)?)),
@@ -323,6 +334,13 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_FROM => Ok(From(decode_box(buf)?)),
         E_GREATER_OR_EQUAL => Ok(GreaterOrEqual(decode_box(buf)?, decode_box(buf)?)),
         E_GREATER_THAN => Ok(GreaterThan(decode_box(buf)?, decode_box(buf)?)),
+        E_HTTP => Ok(HTTP {
+            method: decode_box(buf)?,
+            url: decode_box(buf)?,
+            body: decode_opt(buf)?,
+            headers: decode_opt(buf)?,
+            multipart: decode_opt(buf)?,
+        }),
         E_IF => Ok(If { condition: decode_box(buf)?, a: decode_box(buf)?, b: decode_opt(buf)? }),
         E_INCLUDE => Ok(Include(decode_box(buf)?)),
         E_INTO_NS => Ok(Mutate(Mutation::IntoNs(decode_box(buf)?, decode_box(buf)?))),
@@ -385,18 +403,12 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_BITWISE_XOR => Ok(BitwiseXor(decode_box(buf)?, decode_box(buf)?)),
         E_WHERE => Ok(Inquire(Queryable::Where { from: decode_box(buf)?, condition: decode_box(buf)? })),
         E_WHILE => Ok(While { condition: decode_box(buf)?, code: decode_box(buf)? }),
-        E_WWW => Ok(Www {
-            method: decode_box(buf)?,
-            url: decode_box(buf)?,
-            body: decode_opt(buf)?,
-            headers: decode_opt(buf)?,
-        }),
         z => fail(format!("Invalid expression code {}", z))
     }
 }
 
 pub fn disassemble_fully(byte_code: &Vec<u8>) -> std::io::Result<Expression> {
-    let mut models = vec![];
+    let mut models = Vec::new();
     let mut buf = ByteBuffer::wrap(byte_code.clone());
     while buf.has_next() {
         models.push(disassemble(&mut buf)?);
@@ -430,7 +442,7 @@ fn disassemble_update(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
 
 fn decode_array(buf: &mut ByteBuffer) -> std::io::Result<Vec<Expression>> {
     let count = buf.next_u64();
-    let mut array = vec![];
+    let mut array = Vec::new();
     for _ in 0..count {
         let expr = disassemble(buf)?;
         array.push(expr);
@@ -454,7 +466,7 @@ fn decode_box(buf: &mut ByteBuffer) -> std::io::Result<Box<Expression>> {
 
 fn decode_json_object(buf: &mut ByteBuffer) -> std::io::Result<Vec<(String, Expression)>> {
     let count = buf.next_u64() / 2;
-    let mut tuples = vec![];
+    let mut tuples = Vec::new();
     for _ in 0..count {
         match disassemble(buf)? {
             Literal(StringValue(k)) => {
@@ -546,21 +558,21 @@ fn encode(id: u8, args: Vec<&Expression>) -> Vec<u8> {
 }
 
 fn encode_array(ops: &Vec<Expression>) -> Vec<u8> {
-    let mut byte_code = vec![];
+    let mut byte_code = Vec::new();
     byte_code.extend((ops.len() as u64).to_be_bytes());
     byte_code.extend(ops.iter().flat_map(assemble).collect::<Vec<u8>>());
     byte_code
 }
 
 fn encode_opt_as_array(opt: &Option<Box<Expression>>) -> Vec<u8> {
-    let ops = if opt.is_none() { vec![] } else {
+    let ops = if opt.is_none() { Vec::new() } else {
         vec![opt.clone().unwrap().deref().clone()]
     };
     encode_array(&ops)
 }
 
 fn encode_array_opt(ops_opt: &Option<Vec<Expression>>) -> Vec<u8> {
-    let ops = ops_opt.clone().unwrap_or(vec![]);
+    let ops = ops_opt.clone().unwrap_or(Vec::new());
     encode_array(&ops)
 }
 

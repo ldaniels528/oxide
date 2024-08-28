@@ -52,7 +52,7 @@ impl Structure {
         Ok(Structure {
             columns: TableColumn::from_columns(columns)?,
             values,
-            variables: HashMap::new()
+            variables: HashMap::new(),
         })
     }
 
@@ -73,7 +73,7 @@ impl Structure {
 
     /// Encodes the [Structure] into a byte vector
     pub fn encode(&self) -> Vec<u8> {
-        let mut encode_values = vec![];
+        let mut encode_values = Vec::new();
         encode_values.push(UInt16Value(self.values.len() as u16));
         encode_values.extend(self.values.clone());
         encode_values.iter().flat_map(|v| v.encode()).collect()
@@ -106,7 +106,7 @@ impl Structure {
     }
 
     pub fn with_rows(&self, rows: Vec<Row>) -> ModelRowCollection {
-        let mut my_rows = vec![];
+        let mut my_rows = Vec::new();
         my_rows.push(self.to_row());
         my_rows.extend(rows);
         let my_rows = my_rows.iter()
@@ -242,8 +242,7 @@ mod tests {
                 0, 3,
                 0, 0, 0, 0, 0, 0, 0, 3, b'E', b'D', b'F',
                 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E',
-                64, 38, 56, 81, 235, 133, 30, 184
+                64, 38, 56, 81, 235, 133, 30, 184,
             ])
     }
-
 }

@@ -32,7 +32,7 @@ impl ColumnJs {
 
     pub fn encode(&self) -> Vec<u8> {
         let default_value = self.default_value.clone().unwrap_or("".to_string());
-        let mut buf: Vec<u8> = vec![];
+        let mut buf: Vec<u8> = Vec::new();
         buf.push(self.name.len() as u8);
         buf.extend(self.name.bytes());
         buf.push(self.column_type.len() as u8);

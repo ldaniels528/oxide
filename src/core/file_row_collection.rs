@@ -218,10 +218,12 @@ impl RowCollection for FileRowCollection {
         Ok(RowMetadata::decode(buffer[0]))
     }
 
-    fn resize(&mut self, new_size: usize) -> std::io::Result<TypedValue> {
+    fn resize(&mut self, new_size: usize) -> TypedValue {
         let new_length = new_size as u64 * self.record_size as u64;
-        self.file.set_len(new_length)?;
-        Ok(TypedValue::Ack)
+        match self.file.set_len(new_length) {
+            Ok(..) => TypedValue::Ack,
+            Err(err) => ErrorValue(err.to_string())
+        }
     }
 }
 

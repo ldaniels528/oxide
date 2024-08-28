@@ -22,7 +22,6 @@ pub struct TableColumn {
 }
 
 impl TableColumn {
-
     pub fn validate_compatibility(cs0: &Vec<TableColumn>, cs1: &Vec<TableColumn>) -> TypedValue {
         match (cs0, cs1) {
             (a, b) if a.len() != b.len() =>
@@ -30,7 +29,6 @@ impl TableColumn {
             _ =>
                 TypedValue::Ack
         }
-
     }
 
     pub fn new(name: impl Into<String>,

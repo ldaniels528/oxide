@@ -40,7 +40,7 @@ impl TableRenderer {
     }
 
     fn tabulate_body_cells_from_cursor(cursor: &mut Cursor) -> Vec<Vec<String>> {
-        let mut body_cells = vec![];
+        let mut body_cells = Vec::new();
         while let Ok(Some(row)) = cursor.next() {
             let column_text = row.get_values().iter()
                 .map(|v| format!(" {} ", v.unwrap_value()))
@@ -51,7 +51,7 @@ impl TableRenderer {
     }
 
     fn tabulate_header_cells(columns: &Vec<TableColumn>) -> Vec<Vec<String>> {
-        let mut header_cells = vec![];
+        let mut header_cells = Vec::new();
         let headers = columns.iter()
             .map(|c| format!(" {} ", c.get_name()))
             .collect::<Vec<String>>();

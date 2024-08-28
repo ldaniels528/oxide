@@ -9,13 +9,15 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
 
-use crate::compiler::{Compiler, fail_near};
+use crate::compiler::{Compiler, fail_expr, fail_near};
 use crate::data_types::DataType::*;
+use crate::expression::Expression;
 use crate::expression::Expression::{ColumnSet, Literal};
 use crate::server::ColumnJs;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::Atom;
+use crate::typed_values::TypedValue;
 
 pub const T_UNDEFINED: u8 = 0;
 pub const T_ACK: u8 = 0;
@@ -86,10 +88,17 @@ impl DataType {
 
         fn column_parameters(ts: TokenSlice, f: fn(Vec<ColumnJs>) -> DataType) -> io::Result<DataType> {
             let mut compiler = Compiler::new();
-            if let (ColumnSet(params), ts) = compiler.expect_parameters(ts)? {
+            if let (ColumnSet(params), _) = compiler.expect_parameters(ts)? {
                 //assert!(ts.is_empty());
                 Ok(f(params))
             } else { fail("parameters are expected for this type") }
+        }
+
+        fn extract_params<A>(expr: &Expression, f: fn(&TypedValue) -> A) -> std::io::Result<A> {
+            match expr {
+                Literal(value) => Ok(f(value)),
+                _ => fail_expr("a numeric value was expected", &expr)
+            }
         }
 
         fn size_parameter(ts: TokenSlice, f: fn(usize) -> DataType) -> io::Result<DataType> {
@@ -110,7 +119,7 @@ impl DataType {
 
         fn string_parameters(ts: TokenSlice, f: fn(Vec<String>) -> DataType) -> io::Result<DataType> {
             let mut compiler = Compiler::new();
-            let (args, ts) = compiler.expect_atom_arguments(ts)?;
+            let (args, _) = compiler.expect_atom_arguments(ts)?;
             Ok(f(args))
         }
 

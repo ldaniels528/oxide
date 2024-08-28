@@ -109,7 +109,7 @@ pub fn tabulate_cells(
     body_cells: Vec<Vec<String>>,
 ) -> Vec<String> {
     // create a combined vector of cells (header and body)
-    let mut cells = vec![];
+    let mut cells = Vec::new();
     cells.extend(header_cells.clone());
     cells.extend(body_cells.clone());
 
@@ -127,9 +127,9 @@ pub fn tabulate_cells(
 }
 
 pub fn tabulate_body_cells_from_rows(rows: &Vec<RowJs>) -> Vec<Vec<String>> {
-    let mut body_cells = vec![];
+    let mut body_cells = Vec::new();
     for row in rows {
-        let mut row_vec = vec![];
+        let mut row_vec = Vec::new();
         for field in row.get_fields() {
             row_vec.push(format!(" {} ", field.get_value()))
         }
@@ -139,12 +139,12 @@ pub fn tabulate_body_cells_from_rows(rows: &Vec<RowJs>) -> Vec<Vec<String>> {
 }
 
 pub fn tabulate_header_cells(rows: &Vec<RowJs>) -> Vec<Vec<String>> {
-    let mut headers = vec![];
+    let mut headers = Vec::new();
     for field in rows[0].get_fields() {
         headers.push(format!(" {} ", field.get_name()))
     }
 
-    let mut header_cells = vec![];
+    let mut header_cells = Vec::new();
     header_cells.push(headers);
     header_cells
 }
@@ -162,7 +162,7 @@ pub fn tabulate_table(
     let separator = format!("|{}|", "-".to_string().repeat(total_width));
 
     // produce formatted lines
-    let mut lines = vec![];
+    let mut lines = Vec::new();
     lines.push(separator.clone());
     lines.extend(tabulate_lines(&header_cells, &column_widths));
     lines.push(separator.clone());
@@ -178,7 +178,7 @@ pub fn tabulate_cell(s: &String, width: usize) -> String {
 }
 
 pub fn tabulate_lines(cells: &Vec<Vec<String>>, column_widths: &Vec<usize>) -> Vec<String> {
-    let mut lines = vec![];
+    let mut lines = Vec::new();
     for cell in cells {
         let sheet = cell.iter().zip(column_widths.iter())
             .map(|(s, u)| tabulate_cell(s, *u))
@@ -189,7 +189,7 @@ pub fn tabulate_lines(cells: &Vec<Vec<String>>, column_widths: &Vec<usize>) -> V
 }
 
 pub fn tabulate_maximums(a: &Vec<usize>, b: &Vec<usize>) -> Vec<usize> {
-    let mut c = vec![];
+    let mut c = Vec::new();
     for i in 0..a.len() { c.push(max(a[i], b[i])) }
     c
 }
@@ -235,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_commandline_arguments() {
-        assert_eq!(get_host_and_port(vec![]).unwrap(),
+        assert_eq!(get_host_and_port(Vec::new()).unwrap(),
                    ("127.0.0.1".to_string(), "8080".to_string()));
 
         assert_eq!(get_host_and_port(vec!["my_app".into(), "3333".into()]).unwrap(),

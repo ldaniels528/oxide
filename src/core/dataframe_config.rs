@@ -20,7 +20,7 @@ pub struct DataFrameConfig {
 impl DataFrameConfig {
     /// instantiates a new dataframe configuration.
     pub fn build(columns: Vec<ColumnJs>) -> Self {
-        DataFrameConfig { columns, indices: vec![], partitions: vec![] }
+        DataFrameConfig { columns, indices: Vec::new(), partitions: Vec::new() }
     }
 
     /// instantiates a new dataframe configuration.
@@ -63,7 +63,7 @@ pub struct HashIndexConfig {
 
 impl HashIndexConfig {
     /// Creates a new Hash-Index configuration
-    pub fn new(indexed_column_names: Vec<String>, is_unique: bool,) -> Self {
+    pub fn new(indexed_column_names: Vec<String>, is_unique: bool) -> Self {
         HashIndexConfig { indexed_column_names, is_unique }
     }
 
@@ -102,8 +102,8 @@ mod tests {
                 ColumnJs::new("exchange", "String(10)", None),
                 ColumnJs::new("last_sale", "f64", Some("0.00".into())),
             ],
-            indices: vec![],
-            partitions: vec![],
+            indices: Vec::new(),
+            partitions: Vec::new(),
         });
         Ok(())
     }
