@@ -31,7 +31,7 @@ impl ColumnJs {
     }
 
     pub fn encode(&self) -> Vec<u8> {
-        let default_value = self.default_value.clone().unwrap_or("".to_string());
+        let default_value = self.default_value.to_owned().unwrap_or("".to_string());
         let mut buf: Vec<u8> = Vec::new();
         buf.push(self.name.len() as u8);
         buf.extend(self.name.bytes());
@@ -175,7 +175,7 @@ mod tests {
             FieldJs::new("exchange", serde_json::json!("NYSE")),
             FieldJs::new("last_sale", serde_json::json!(37.65)),
         ];
-        let row_js = RowJs::new(Some(123), fields_js.clone());
+        let row_js = RowJs::new(Some(123), fields_js.to_owned());
         // verify the accessors
         assert_eq!(row_js.get_id(), Some(123));
         assert_eq!(row_js.get_fields(), &vec![
@@ -189,7 +189,7 @@ mod tests {
         assert_eq!(determine_column_value(&row_js, "exchange"), StringValue("NYSE".into()));
         assert_eq!(determine_column_value(&row_js, "last_sale"), Float64Value(37.65));
         // cross-convert and verify
-        assert_eq!(row.to_row_js(), row_js.clone());
+        assert_eq!(row.to_row_js(), row_js.to_owned());
         assert_eq!(Row::from_row_js(&columns, &row_js), row);
     }
 }

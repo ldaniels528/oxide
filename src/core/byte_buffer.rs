@@ -81,6 +81,10 @@ impl ByteBuffer {
         Ok(array)
     }
 
+    pub fn next_backdoor_fn(&mut self) -> BackDoorFunction {
+        BackDoorFunction::decode(self.next_u8())
+    }
+
     /// returns a 64-bit byte array
     pub fn next_blob(&mut self) -> Vec<u8> {
         let length = self.next_u64() as usize;
@@ -326,12 +330,12 @@ impl ByteBuffer {
             T_INT32 => Ok(Int32Value(self.next_i32())),
             T_INT64 => Ok(Int64Value(self.next_i64())),
             T_INT128 => Ok(Int128Value(self.next_i128())),
-            T_JSON_OBJECT => Ok(JSONObjectValue(self.next_json()?)),
+            T_JSON_OBJECT => Ok(JSONValue(self.next_json()?)),
             T_ROWS_AFFECTED => Ok(RowsAffected(self.next_u32() as usize)),
             T_STRING => Ok(StringValue(self.next_string())),
             T_STRUCTURE => Ok(StructureValue(self.next_struct()?)),
             T_TABLE_VALUE => Ok(TableValue(self.next_table()?)),
-            T_TABLE_NS => Ok(TableNs(self.next_string())),
+            T_NAMESPACE => Ok(NamespaceValue(self.next_string())),
             T_TUPLE => Ok(TupleValue(self.next_array()?)),
             T_UINT8 => Ok(UInt8Value(self.next_u8())),
             T_UINT16 => Ok(UInt16Value(self.next_u16())),
@@ -416,7 +420,7 @@ impl ByteBuffer {
 
     pub fn put_rows(&mut self, rows: Vec<Row>) -> &Self {
         let t_columns: Vec<TableColumn> = if rows.len() == 0 { Vec::new() } else {
-            rows[0].get_columns().clone()
+            rows[0].get_columns().to_owned()
         };
         let columns = ColumnJs::from_physical_columns(&t_columns);
         self.put_columns(&columns);
@@ -435,7 +439,7 @@ impl ByteBuffer {
     }
 
     pub fn put_string_opt(&mut self, string: &Option<String>) -> &Self {
-        let bytes: Vec<u8> = string.clone().map(|s| s.bytes().collect()).unwrap_or(Vec::new());
+        let bytes: Vec<u8> = string.to_owned().map(|s| s.bytes().collect()).unwrap_or(Vec::new());
         self.put_u64(bytes.len() as u64);
         self.put_bytes(&bytes);
         self

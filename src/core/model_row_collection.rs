@@ -61,17 +61,17 @@ impl ModelRowCollection {
     /// Creates a new [ModelRowCollection] prefilled with the given rows.
     pub fn from_rows(rows: Vec<Row>) -> ModelRowCollection {
         let columns = rows.first()
-            .map(|row| row.get_columns().clone())
+            .map(|row| row.get_columns().to_owned())
             .unwrap_or(Vec::new());
         let row_data = rows.iter()
-            .map(|r| (r.clone(), RowMetadata::new(true)))
+            .map(|r| (r.to_owned(), RowMetadata::new(true)))
             .collect();
         Self::with_rows(columns, row_data)
     }
 
     /// Creates a new [ModelRowCollection] prefilled with all rows from the given table.
     pub fn from_table(table: Box<&dyn RowCollection>) -> std::io::Result<ModelRowCollection> {
-        let mut mrc = ModelRowCollection::new(table.get_columns().clone());
+        let mut mrc = ModelRowCollection::new(table.get_columns().to_owned());
         for row_id in table.get_indices()? {
             if let Some(row) = table.read_one(row_id)? {
                 let _ = mrc.append_row(row);
@@ -84,7 +84,7 @@ impl ModelRowCollection {
     pub fn get_rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
         for (row, rmd) in &self.row_data {
-            if rmd.is_allocated { rows.push(row.clone()) }
+            if rmd.is_allocated { rows.push(row.to_owned()) }
         }
         rows
     }
@@ -118,7 +118,7 @@ impl RowCollection for ModelRowCollection {
     fn iter(&self) -> Box<dyn Iterator<Item=Row> + '_> {
         let my_iter = self.row_data.iter()
             .filter(|(_, meta)| meta.is_allocated)
-            .map(|(row, _)| row.clone());
+            .map(|(row, _)| row.to_owned());
         Box::new(my_iter)
     }
 
@@ -135,10 +135,10 @@ impl RowCollection for ModelRowCollection {
             let old_values = row.get_values();
             let new_values = old_values.iter().zip(0..old_values.len())
                 .map(|(v, n)| {
-                    if n == column_id { new_value.clone() } else { v.clone() }
+                    if n == column_id { new_value.to_owned() } else { v.to_owned() }
                 }).collect();
-            let new_row = Row::new(row.get_id(), row.get_columns().clone(), new_values);
-            self.row_data[id] = (new_row, meta.clone());
+            let new_row = Row::new(row.get_id(), row.get_columns().to_owned(), new_values);
+            self.row_data[id] = (new_row, meta.to_owned());
             1
         } else { 0 };
         RowsAffected(rows_affected)
@@ -152,7 +152,7 @@ impl RowCollection for ModelRowCollection {
     ) -> TypedValue {
         // get the old and new values
         let (row, rmd) = &self.row_data[id];
-        let old_value = row[column_id].clone();
+        let old_value = row[column_id].to_owned();
         let new_value = if metadata.is_active { old_value } else { Null };
 
         // build a new row
@@ -161,7 +161,7 @@ impl RowCollection for ModelRowCollection {
         let new_row = row.with_values(new_values);
 
         // update the row to reflect enabling/disabling a field
-        self.row_data[id] = (new_row, rmd.clone());
+        self.row_data[id] = (new_row, rmd.to_owned());
         RowsAffected(1)
     }
 
@@ -178,13 +178,13 @@ impl RowCollection for ModelRowCollection {
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
-        let (row, _) = self.row_data[id].clone();
-        self.row_data[id] = (row, metadata.clone());
+        let (row, _) = self.row_data[id].to_owned();
+        self.row_data[id] = (row, metadata.to_owned());
         RowsAffected(1)
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
-        self.row_data[id].0.get_values()[column_id].clone()
+        self.row_data[id].0.get_values()[column_id].to_owned()
     }
 
     fn read_field_metadata(
@@ -200,7 +200,7 @@ impl RowCollection for ModelRowCollection {
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
         let (metadata, row) =
             if id < self.watermark {
-                self.row_data[id].clone()
+                self.row_data[id].to_owned()
             } else {
                 (Row::empty(&self.columns), RowMetadata::new(false))
             };
@@ -209,7 +209,7 @@ impl RowCollection for ModelRowCollection {
 
     fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
         let metadata = if id < self.row_data.len() {
-            self.row_data[id].1.clone()
+            self.row_data[id].1.to_owned()
         } else {
             RowMetadata::new(false)
         };

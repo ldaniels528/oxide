@@ -64,7 +64,7 @@ impl Structure {
     }
 
     pub fn from_row(row: &Row) -> Structure {
-        Self::from_physical_columns_and_values(row.get_columns().clone(), row.get_values())
+        Self::from_physical_columns_and_values(row.get_columns().to_owned(), row.get_values())
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -75,27 +75,27 @@ impl Structure {
     pub fn encode(&self) -> Vec<u8> {
         let mut encode_values = Vec::new();
         encode_values.push(UInt16Value(self.values.len() as u16));
-        encode_values.extend(self.values.clone());
+        encode_values.extend(self.values.to_owned());
         encode_values.iter().flat_map(|v| v.encode()).collect()
     }
 
     pub fn get(&self, name: &str) -> TypedValue {
         self.columns.iter().zip(self.values.iter())
             .find(|(c, _)| c.get_name() == name)
-            .map(|(_, v)| v.clone())
+            .map(|(_, v)| v.to_owned())
             .unwrap_or(Undefined)
     }
 
     pub fn get_columns(&self) -> Vec<TableColumn> {
-        self.columns.clone()
+        self.columns.to_owned()
     }
 
     pub fn get_values(&self) -> Vec<TypedValue> {
-        self.values.clone()
+        self.values.to_owned()
     }
 
     pub fn to_row(&self) -> Row {
-        Row::new(0, self.columns.clone(), self.values.clone())
+        Row::new(0, self.columns.to_owned(), self.values.to_owned())
     }
 
     pub fn to_string(&self) -> String {
@@ -203,7 +203,7 @@ mod tests {
     fn test_with_rows() {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let structure = Structure::from_physical_columns_and_values(phys_columns.clone(), vec![
+        let structure = Structure::from_physical_columns_and_values(phys_columns.to_owned(), vec![
             StringValue("ICE".to_string()),
             StringValue("NASDAQ".to_string()),
             Float64Value(22.11),

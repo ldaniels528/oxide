@@ -45,7 +45,7 @@ impl HashTableRowCollection {
         keys_columns: &Vec<TableColumn>,
         new_value: &TypedValue,
     ) -> Row {
-        Row::new(keys_row_id, keys_columns.clone(), vec![
+        Row::new(keys_row_id, keys_columns.to_owned(), vec![
             UInt64Value(data_row_id as u64),
             new_value.to_owned(),
         ])
@@ -132,11 +132,11 @@ impl HashTableRowCollection {
                         let key_b = &row_b[self.key_column_index];
                         if key_a != key_b {
                             collisions.extend(vec![
-                                key_a.clone(), key_b.clone(),
+                                key_a.to_owned(), key_b.to_owned(),
                             ])
                         }
                     }
-                    Ok(None) => collisions.push(key_a.clone()),
+                    Ok(None) => collisions.push(key_a.to_owned()),
                     Err(err) => return ErrorValue(err.to_string())
                 }
             }
@@ -226,7 +226,7 @@ impl HashTableRowCollection {
     /// (Re)builds the hash key table
     pub fn rebuild(&mut self) -> TypedValue {
         let keys_columns = self.keys_table.get_columns();
-        let mut keys_table = match self.create_related_structure(keys_columns.clone(), self.key_column_index.to_string().as_str()) {
+        let mut keys_table = match self.create_related_structure(keys_columns.to_owned(), self.key_column_index.to_string().as_str()) {
             Ok(table) => table,
             Err(err) => return ErrorValue(err.to_string())
         };
@@ -365,7 +365,7 @@ impl RowCollection for HashTableRowCollection {
     }
 
     fn update_row(&mut self, id: usize, row: Row) -> TypedValue {
-        let new_value = row[self.key_column_index].clone();
+        let new_value = row[self.key_column_index].to_owned();
         let old_value = self.read_field(id, self.key_column_index);
         match old_value {
             ErrorValue(msg) => ErrorValue(msg),
@@ -395,7 +395,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_append_then_query_hash_table() {
+    fn test_append_then_find_row_by_key() {
         // create a table and write some rows to it
         let ns = Namespace::new("hash_key", "create", "stocks");
         let columns = make_table_columns();
@@ -412,13 +412,13 @@ mod tests {
         // |-------------------------------|
         // | ABC    | NASDAQ   | 5.04      |
         // |-------------------------------|
-        assert_eq!(result, Some(Row::new(7, columns.clone(), vec![
+        assert_eq!(result, Some(Row::new(7, columns.to_owned(), vec![
             symbol, exchange, last_sale,
         ])));
     }
 
     #[test]
-    fn test_append_modify_then_query_hash_key() {
+    fn test_append_modify_then_find_row_by_key() {
         // create a table and write some rows to it
         let ns = Namespace::new("hash_key", "append_modify", "stocks");
         let columns = make_table_columns();
@@ -429,7 +429,7 @@ mod tests {
         let mut hkrc = build_hash_key_table_with_samples(&ns, 0, 1000, 100);
         assert_eq!(
             hkrc.find_row_by_key(&symbol).unwrap(),
-            Some(Row::new(2, columns.clone(), vec![
+            Some(Row::new(2, columns.to_owned(), vec![
                 symbol, exchange, last_sale,
             ]))
         );
@@ -437,7 +437,7 @@ mod tests {
         // overwrite 'CRT' with 'CRT.Q' in the hash index
         assert_eq!(
             RowsAffected(1),
-            hkrc.overwrite_row(2, Row::new(2, columns.clone(), vec![
+            hkrc.overwrite_row(2, Row::new(2, columns.to_owned(), vec![
                 StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Float64Value(1.2598),
             ])));
 
@@ -449,7 +449,7 @@ mod tests {
         // |-------------------------------|
         assert_eq!(
             hkrc.find_row_by_key(&StringValue("CRT.Q".into())).unwrap(),
-            Some(Row::new(2, columns.clone(), vec![
+            Some(Row::new(2, columns.to_owned(), vec![
                 StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Float64Value(1.2598),
             ])));
 
@@ -471,9 +471,9 @@ mod tests {
         for n in 0..max_count {
             let q = StockQuote::generate_quote();
             let id = n as usize;
-            let (outcome, msec) = measure_time(|| stocks.overwrite_row(id, Row::new(id, columns.clone(), vec![
-                StringValue(q.symbol.clone()),
-                StringValue(q.exchange.clone()),
+            let (outcome, msec) = measure_time(|| stocks.overwrite_row(id, Row::new(id, columns.to_owned(), vec![
+                StringValue(q.symbol.to_owned()),
+                StringValue(q.exchange.to_owned()),
                 Float64Value(q.last_sale),
             ])));
             timings.push(msec);
@@ -493,21 +493,29 @@ mod tests {
         println!("[{:.4} msec] read_field({}, {}) -> {}", msec, rand_row_id, column_id, symbol.unwrap_value());
 
         let (row_b, msec_b) = measure_time(|| stocks.find_row_by_key(&symbol).unwrap());
-        println!("[{:.4} msec] find_row_by_key({}) -> {:?}", msec_b, symbol.unwrap_value(), row_b.clone().map(|r| r.to_string()));
+        println!("[{:.4} msec] find_row_by_key({}) -> {:?}", msec_b, symbol.unwrap_value(), row_b.to_owned().map(|r| r.to_string()));
 
         let (row_b, msec_b) = measure_time(|| stocks.find_row_by_key(&symbol).unwrap());
-        println!("[{:.4} msec] find_row_by_key({}) -> {:?}", msec_b, symbol.unwrap_value(), row_b.clone().map(|r| r.to_string()));
+        println!("[{:.4} msec] find_row_by_key({}) -> {:?}", msec_b, symbol.unwrap_value(), row_b.to_owned().map(|r| r.to_string()));
 
         let (row_b, msec_b) = measure_time(|| stocks.find_row_by_key(&symbol).unwrap());
-        println!("[{:.4} msec] find_row_by_key({}) -> {:?}", msec_b, symbol.unwrap_value(), row_b.clone().map(|r| r.to_string()));
+        println!("[{:.4} msec] find_row_by_key({}) -> {:?}", msec_b, symbol.unwrap_value(), row_b.to_owned().map(|r| r.to_string()));
 
         let (row_a, msec_a) = measure_time(|| stocks.data_table.scan_first(column_id, &symbol).unwrap());
-        println!("[{:.4} msec] find_row({}, {}) -> {:?}", msec_a, column_id, symbol.unwrap_value(), row_a.clone().map(|r| r.to_string()));
+        println!("[{:.4} msec] find_row({}, {}) -> {:?}", msec_a, column_id, symbol.unwrap_value(), row_a.to_owned().map(|r| r.to_string()));
+
+        // Insert-into-index timings (msec) - avg: 0.0225, min: 0.0124, max: 0.4536
+        // [0.0017 msec] read_field(24999, 0) -> UWYH
+        // [0.0370 msec] find_row_by_key(UWYH) -> Some("{ \"symbol\": \"UWYH\", \"exchange\": \"AMEX\", \"last_sale\": 30.419820155298005 }")
+        // [0.0129 msec] find_row_by_key(UWYH) -> Some("{ \"symbol\": \"UWYH\", \"exchange\": \"AMEX\", \"last_sale\": 30.419820155298005 }")
+        // [0.0127 msec] find_row_by_key(UWYH) -> Some("{ \"symbol\": \"UWYH\", \"exchange\": \"AMEX\", \"last_sale\": 30.419820155298005 }")
+        // [47.8739 msec] find_row(0, UWYH) -> Some("{ \"symbol\": \"UWYH\", \"exchange\": \"AMEX\", \"last_sale\": 30.419820155298005 }")
+        // [331.6797 msec] audit_collisions (0) -> []
 
         // perform an audit of the hash
         let collisions = match measure_time(|| stocks.audit()) {
             (TypedValue::Array(collisions), msec) => {
-                println!("[{:.4} msec] audit_collisions ({}) -> {}", msec, collisions.len(), TypedValue::Array(collisions.clone()));
+                println!("[{:.4} msec] audit_collisions ({}) -> {}", msec, collisions.len(), TypedValue::Array(collisions.to_owned()));
                 collisions
             }
             (other, _) => {
@@ -552,7 +560,7 @@ mod tests {
     ) -> HashTableRowCollection {
         // create a table and write some rows to it
         let columns = make_table_columns();
-        let frc = FileRowCollection::create_table(&ns, columns.clone()).unwrap();
+        let frc = FileRowCollection::create_table(&ns, columns.to_owned()).unwrap();
         let mut hkrc = HashTableRowCollection::create_with_options(column_index, bucket_count, bucket_depth, Box::new(frc)).unwrap();
         //assert_eq!(RowsAffected(9), hkrc.rebuild());
         hkrc
@@ -566,7 +574,7 @@ mod tests {
     ) -> HashTableRowCollection {
         // create a table and write some rows to it
         let columns = make_table_columns();
-        let mut frc = FileRowCollection::create_table(&ns, columns.clone()).unwrap();
+        let mut frc = FileRowCollection::create_table(&ns, columns.to_owned()).unwrap();
         let quote_data = vec![
             ("ACT", "AMEX", 0.0021), ("ATT", "NYSE", 98.44), ("CRT", "OTC_BB", 1.2582),
             ("GE", "NYSE", 21.22), ("H", "OTC_BB", 0.0076), ("T", "NYSE", 43.167),
@@ -574,7 +582,7 @@ mod tests {
         ];
         let rows = quote_data.iter()
             .map(|(symbol, exchange, last_sale)| {
-                Row::new(0, columns.clone(), vec![
+                Row::new(0, columns.to_owned(), vec![
                     StringValue(symbol.to_string()),
                     StringValue(exchange.to_string()),
                     Float64Value(*last_sale),

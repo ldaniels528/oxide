@@ -45,7 +45,7 @@ impl TokenSlice {
         if inputs[pos as usize].get_raw_value() == start {
             pos += 1;
             while (pos < inputs.len() as isize) && inputs[pos as usize].get_raw_value() != end {
-                tokens.push(inputs[pos as usize].clone());
+                tokens.push(inputs[pos as usize].to_owned());
                 pos += 1;
                 match delim {
                     Some(_delim) if pos < inputs.len() as isize && inputs[pos as usize].get_raw_value() == _delim => pos += 1,
@@ -58,7 +58,7 @@ impl TokenSlice {
 
     /// Creates a new Token Slice via a vector of tokens.
     pub fn copy(&self, pos: isize) -> Self {
-        Self { tokens: self.tokens.clone(), pos }
+        Self { tokens: self.tokens.to_owned(), pos }
     }
 
     pub fn exists(&self, f: fn(&Token) -> bool) -> bool {
@@ -80,7 +80,7 @@ impl TokenSlice {
 
     pub fn fold<A>(&self, init: A, f: fn(&A, &TokenSlice) -> (A, TokenSlice)) -> A {
         let mut result = init;
-        let mut a_ts = self.clone();
+        let mut a_ts = self.to_owned();
         while a_ts.has_more() {
             let (result1, ts1) = f(&result, &a_ts);
             result = result1;
@@ -142,7 +142,7 @@ impl TokenSlice {
         if self.pos > 0 {
             let tokens = &self.tokens;
             let p1 = self.pos as usize;
-            let (t0, t1) = (tokens[p1 - 1].clone(), tokens[p1].clone());
+            let (t0, t1) = (tokens[p1 - 1].to_owned(), tokens[p1].to_owned());
             t0.get_line_number() == t1.get_line_number() &&
                 t0.get_column_number() + t0.get_raw_value().len() == t1.get_column_number()
         } else { false }
@@ -163,9 +163,9 @@ impl TokenSlice {
     pub fn next(&self) -> (Option<Token>, Self) {
         let n = self.pos;
         if n < self.tokens.len() as isize {
-            return (Some(self[n as usize].clone()), self.copy(n + 1));
+            return (Some(self[n as usize].to_owned()), self.copy(n + 1));
         }
-        (None, self.clone())
+        (None, self.to_owned())
     }
 
     pub fn peek(&self) -> Option<&Token> {
@@ -178,9 +178,9 @@ impl TokenSlice {
     pub fn previous(&self) -> (Option<Token>, Self) {
         let n = self.pos - 1;
         if n >= 0 {
-            return (Some(self[n as usize].clone()), self.copy(n));
+            return (Some(self[n as usize].to_owned()), self.copy(n));
         }
-        (None, self.clone())
+        (None, self.to_owned())
     }
 
     /// Scans the slice moving the cursor forward until the desired match is found.
@@ -191,7 +191,7 @@ impl TokenSlice {
         while pos < self.tokens.len() as isize && !f(&self.tokens[pos as usize]) { pos += 1 }
         if pos > self.pos && pos < self.tokens.len() as isize {
             (&self.tokens[self.pos as usize..pos as usize], self.copy(pos))
-        } else { (&[], self.clone()) }
+        } else { (&[], self.to_owned()) }
     }
 
     /// Scans the slice moving the cursor forward until the desired match is found.
@@ -202,7 +202,7 @@ impl TokenSlice {
         while pos < self.tokens.len() as isize && !f(&self.tokens[pos as usize]) { pos += 1 }
         if pos > self.pos && pos < self.tokens.len() as isize {
             (&self.tokens[self.pos as usize..=pos as usize], self.copy(pos))
-        } else { (&[], self.clone()) }
+        } else { (&[], self.to_owned()) }
     }
 
     pub fn skip(&self) -> Self { self.next().1 }
@@ -214,7 +214,7 @@ impl TokenSlice {
         cond: fn(&TokenSlice) -> bool,
         f: fn(TokenSlice
         ) -> std::io::Result<TokenSlice>) -> std::io::Result<TokenSlice> {
-        let mut a_ts = self.clone();
+        let mut a_ts = self.to_owned();
         while cond(&a_ts) {
             a_ts = f(a_ts)?
         }

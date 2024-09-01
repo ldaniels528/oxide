@@ -23,6 +23,7 @@ pub const T_UNDEFINED: u8 = 0;
 pub const T_ACK: u8 = 0;
 pub const T_NULL: u8 = 4;
 pub const T_ARRAY: u8 = 8;
+pub const T_BACK_DOOR: u8 = 10;
 pub const T_BLOB: u8 = 12;
 pub const T_BOOLEAN: u8 = 16;
 pub const T_CLOB: u8 = 20;
@@ -38,10 +39,10 @@ pub const T_INT32: u8 = 56;
 pub const T_INT64: u8 = 60;
 pub const T_INT128: u8 = 64;
 pub const T_JSON_OBJECT: u8 = 68;
+pub const T_NAMESPACE: u8 = 70;
 pub const T_ROWS_AFFECTED: u8 = 72;
 pub const T_STRING: u8 = 76;
 pub const T_STRUCTURE: u8 = 80;
-pub const T_TABLE_NS: u8 = 84;
 pub const T_TABLE_VALUE: u8 = 88;
 pub const T_TUPLE: u8 = 92;
 pub const T_UINT8: u8 = 96;
@@ -54,6 +55,7 @@ pub const T_UUID: u8 = 116;
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
     AckType,
+    BackDoorType,
     BLOBType(usize),
     BooleanType,
     CLOBType(usize),
@@ -62,13 +64,13 @@ pub enum DataType {
     ErrorType,
     Float32Type,
     Float64Type,
-    FuncType(Vec<ColumnJs>),
+    FunctionType(Vec<ColumnJs>),
     Int8Type,
     Int16Type,
     Int32Type,
     Int64Type,
     Int128Type,
-    JSONObjectType,
+    JSONType,
     RowsAffectedType,
     StringType(usize),
     StructureType(Vec<ColumnJs>),
@@ -105,7 +107,7 @@ impl DataType {
             let mut compiler = Compiler::new();
             let (args, ts) = compiler.expect_arguments(ts)?;
             if args.len() == 1 {
-                match args[0].clone() {
+                match args[0].to_owned() {
                     Literal(value) => {
                         match value.assume_usize() {
                             Some(size) => Ok(f(size)),
@@ -126,6 +128,7 @@ impl DataType {
         if let (Some(Atom { text: name, .. }), ts) = ts.next() {
             match name.as_str() {
                 "Ack" => Ok(AckType),
+                "BackDoor" => Ok(BackDoorType),
                 "BLOB" => size_parameter(ts, |size| BLOBType(size)),
                 "Boolean" => Ok(BooleanType),
                 "CLOB" => size_parameter(ts, |size| CLOBType(size)),
@@ -134,13 +137,13 @@ impl DataType {
                 "Error" => Ok(ErrorType),
                 "f32" => Ok(Float32Type),
                 "f64" => Ok(Float64Type),
-                "fn" => column_parameters(ts, |columns| FuncType(columns)),
+                "fn" => column_parameters(ts, |columns| FunctionType(columns)),
                 "i8" => Ok(Int8Type),
                 "i16" => Ok(Int16Type),
                 "i32" => Ok(Int32Type),
                 "i64" => Ok(Int64Type),
                 "i128" => Ok(Int128Type),
-                "JSON" => Ok(JSONObjectType),
+                "JSON" => Ok(JSONType),
                 "RowsAffected" => Ok(RowsAffectedType),
                 "String" => size_parameter(ts, |size| StringType(size)),
                 "Struct" => column_parameters(ts, |columns| StructureType(columns)),
@@ -163,6 +166,7 @@ impl DataType {
         use crate::data_types::DataType::*;
         let width: usize = match self {
             AckType => 0,
+            BackDoorType => 1,
             BLOBType(size) => *size,
             BooleanType => 1,
             CLOBType(size) => *size,
@@ -171,13 +175,13 @@ impl DataType {
             ErrorType => 256,
             Float32Type => 4,
             Float64Type => 8,
-            FuncType(columns) => columns.len() * 8,
+            FunctionType(columns) => columns.len() * 8,
             Int8Type => 1,
             Int16Type => 2,
             Int32Type => 4,
             Int64Type => 8,
             Int128Type => 16,
-            JSONObjectType => 512,
+            JSONType => 512,
             RowsAffectedType => 8,
             StringType(size) => *size + size.to_be_bytes().len(),
             StructureType(columns) => columns.len() * 8,
@@ -195,6 +199,7 @@ impl DataType {
     pub fn ordinal(&self) -> u8 {
         match self {
             AckType => T_ACK,
+            BackDoorType => T_BACK_DOOR,
             BLOBType(..) => T_BLOB,
             BooleanType => T_BOOLEAN,
             CLOBType(..) => T_CLOB,
@@ -203,13 +208,13 @@ impl DataType {
             ErrorType => T_ERROR,
             Float32Type => T_FLOAT32,
             Float64Type => T_FLOAT64,
-            FuncType(..) => T_FUNCTION,
+            FunctionType(..) => T_FUNCTION,
             Int8Type => T_INT8,
             Int16Type => T_INT16,
             Int32Type => T_INT32,
             Int64Type => T_INT64,
             Int128Type => T_INT128,
-            JSONObjectType => T_JSON_OBJECT,
+            JSONType => T_JSON_OBJECT,
             RowsAffectedType => T_ROWS_AFFECTED,
             StringType(..) => T_STRING,
             StructureType(..) => T_STRUCTURE,
@@ -226,6 +231,7 @@ impl DataType {
     pub fn to_column_type(&self) -> String {
         match self {
             AckType => "Ack".into(),
+            BackDoorType => "BackDoor".into(),
             BLOBType(size) => format!("BLOB({})", size),
             BooleanType => "Boolean".into(),
             CLOBType(size) => format!("CLOB({})", size),
@@ -234,13 +240,13 @@ impl DataType {
             ErrorType => "Error".into(),
             Float32Type => "f32".into(),
             Float64Type => "f64".into(),
-            FuncType(columns) => format!("fn({})", ColumnJs::render_columns(columns)),
+            FunctionType(columns) => format!("fn({})", ColumnJs::render_columns(columns)),
             Int8Type => "i8".into(),
             Int16Type => "i16".into(),
             Int32Type => "i32".into(),
             Int64Type => "i64".into(),
             Int128Type => "i128".into(),
-            JSONObjectType => "struct".into(),
+            JSONType => "struct".into(),
             RowsAffectedType => "RowsAffected".into(),
             StringType(size) => format!("String({})", size),
             StructureType(columns) => format!("struct({})", ColumnJs::render_columns(columns)),
@@ -322,7 +328,7 @@ mod tests {
     fn test_fn() {
         verify_type_construction(
             "fn(symbol: String(8), exchange: String(8), last_sale: f64)",
-            FuncType(make_quote_columns()));
+            FunctionType(make_quote_columns()));
     }
 
     #[test]
@@ -352,7 +358,7 @@ mod tests {
 
     #[test]
     fn test_json_object() {
-        verify_type_construction("JSON", JSONObjectType);
+        verify_type_construction("JSON", JSONType);
     }
 
     #[test]

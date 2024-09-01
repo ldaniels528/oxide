@@ -74,7 +74,7 @@ fn get_session(session: &Session) -> Result<Interpreter, Box<dyn Error>> {
     } else {
         let state = Interpreter::new();
         info!("create session: {:?}", state);
-        session.insert("state", state.clone())?;
+        session.insert("state", state.to_owned())?;
         Ok(state)
     }
 }
@@ -279,7 +279,7 @@ async fn append_row(req: HttpRequest,
                     data: web::Json<RowJs>,
                     path: web::Path<(String, String, String, usize)>) -> std::io::Result<usize> {
     let ns = Namespace::new(&path.0, &path.1, &path.2);
-    let actor = get_shared_state(&req)?.actor.clone();
+    let actor = get_shared_state(&req)?.actor.to_owned();
     let columns = get_columns!(actor, ns)?;
     append_row!(actor, ns, Row::from_row_js(&columns, &data.0))
 }
@@ -287,7 +287,7 @@ async fn append_row(req: HttpRequest,
 async fn delete_row_by_id(req: HttpRequest,
                           path: web::Path<(String, String, String, usize)>) -> std::io::Result<usize> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
-    let actor = get_shared_state(&req)?.actor.clone();
+    let actor = get_shared_state(&req)?.actor.to_owned();
     delete_row!(actor, ns, id)
 }
 
@@ -302,21 +302,21 @@ fn get_shared_state(req: &HttpRequest) -> std::io::Result<&web::Data<SharedState
 async fn get_range_by_id(req: HttpRequest,
                          path: web::Path<(String, String, String, usize, usize)>) -> std::io::Result<Vec<Row>> {
     let (ns, a, b) = (Namespace::new(&path.0, &path.1, &path.2), path.3, path.4);
-    let actor = get_shared_state(&req)?.actor.clone();
+    let actor = get_shared_state(&req)?.actor.to_owned();
     read_range!(actor, ns, a..b)
 }
 
 async fn get_row_by_id(req: HttpRequest,
                        path: web::Path<(String, String, String, usize)>) -> std::io::Result<Option<Row>> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
-    let actor = get_shared_state(&req)?.actor.clone();
+    let actor = get_shared_state(&req)?.actor.to_owned();
     read_row!(actor, ns, id)
 }
 
 async fn get_row_metadata_by_id(req: HttpRequest,
                                 path: web::Path<(String, String, String, usize)>) -> std::io::Result<RowMetadata> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
-    let actor = get_shared_state(&req)?.actor.clone();
+    let actor = get_shared_state(&req)?.actor.to_owned();
     read_row_metadata!(actor, ns, id)
 }
 
@@ -324,7 +324,7 @@ async fn overwrite_row_by_id(req: HttpRequest,
                              data: web::Json<RowJs>,
                              path: web::Path<(String, String, String, usize)>) -> std::io::Result<usize> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
-    let actor = get_shared_state(&req)?.actor.clone();
+    let actor = get_shared_state(&req)?.actor.to_owned();
     let columns = get_columns!(actor, ns)?;
     overwrite_row!(actor, ns, Row::from_row_js(&columns, &data.0).with_row_id(id))
 }
@@ -333,7 +333,7 @@ async fn update_row_by_id(req: HttpRequest,
                           data: web::Json<RowJs>,
                           path: web::Path<(String, String, String, usize)>) -> std::io::Result<usize> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
-    let actor = get_shared_state(&req)?.actor.clone();
+    let actor = get_shared_state(&req)?.actor.to_owned();
     let columns = get_columns!(actor, ns)?;
     update_row!(actor, ns, Row::from_row_js(&columns, &data.0).with_row_id(id))
 }

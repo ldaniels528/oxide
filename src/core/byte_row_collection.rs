@@ -45,7 +45,7 @@ impl ByteRowCollection {
     pub fn from_rows(rows: Vec<Row>) -> Self {
         let mut encoded_rows = Vec::new();
         let columns = rows.first()
-            .map(|row| row.get_columns().clone())
+            .map(|row| row.get_columns().to_owned())
             .unwrap_or(Vec::new());
         for row in rows { encoded_rows.push(row.encode()) }
         Self::new(columns, encoded_rows)
@@ -91,7 +91,7 @@ impl RowCollection for ByteRowCollection {
             &FieldMetadata::new(true),
             column.max_physical_size,
         );
-        let mut encoded_row = self.row_data[id].clone();
+        let mut encoded_row = self.row_data[id].to_owned();
         let start = offset as usize;
         let end = start + buffer.len();
         encoded_row[start..end].copy_from_slice(buffer.as_slice());

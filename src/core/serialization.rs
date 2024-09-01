@@ -40,12 +40,16 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         CodeBlock(ops) => encode_vec(E_CODE_BLOCK, ops),
         ColumnSet(columns) => encode_columns(columns),
         Contains(a, b) => encode(E_CONTAINS, vec![a, b]),
-        CSV(a) => encode(E_CSV, vec![a]),
         Divide(a, b) => encode(E_DIVIDE, vec![a, b]),
         ElementAt(a, b) => encode(E_ELEM_INDEX, vec![a, b]),
         Equal(a, b) => encode(E_EQUAL, vec![a, b]),
-        Eval(a) => encode(E_EVAL, vec![a]),
         Factorial(a) => encode(E_FACTORIAL, vec![a]),
+        Feature { title, scenarios } => {
+            let mut values = Vec::new();
+            values.push(title.deref());
+            values.extend(scenarios);
+            encode(E_FEATURE, values)
+        }
         From(src) => encode(E_FROM, vec![src]),
         FunctionCall { fx, args } => {
             let mut values = vec![fx.deref()];
@@ -80,20 +84,22 @@ pub fn assemble(expression: &Expression) -> Vec<u8> {
         Pow(a, b) => encode(E_POW, vec![a, b]),
         Range(a, b) => encode(E_RANGE, vec![a, b]),
         Return(a) => encode_vec(E_RETURN, a),
+        Scenario { title, verifications, inherits } => {
+            let mut values = Vec::new();
+            values.push(title.deref());
+            values.push(match inherits {
+                Some(value) => value,
+                None => &UNDEFINED,
+            });
+            values.extend(verifications);
+            encode(E_FEATURE, values)
+        }
         SERVE(a) => encode(E_SERVE, vec![a]),
         SetVariable(name, expr) =>
             encode(E_VAR_SET, vec![&Literal(StringValue(name.into())), expr]),
         ShiftLeft(a, b) => encode(E_SHIFT_LEFT, vec![a, b]),
         ShiftRight(a, b) => encode(E_SHIFT_RIGHT, vec![a, b]),
-        StdErr(a) => encode(E_STDERR, vec![a]),
-        StdOut(a) => encode(E_STDOUT, vec![a]),
-        SystemCall(args) => {
-            let mut my_args = Vec::new();
-            for arg in args { my_args.push(arg) }
-            encode(E_SYSTEM_CALL, my_args)
-        }
         TupleLiteral(values) => encode_vec(E_TUPLE, values),
-        TypeOf(a) => encode(E_TYPE_OF, vec![a]),
         Variable(name) => encode(E_VAR_GET, vec![&Literal(StringValue(name.into()))]),
         Via(src) => encode(E_VIA, vec![src]),
         While { condition, code } =>
@@ -114,14 +120,14 @@ pub fn assemble_infrastructure(expression: &Infrastructure) -> Vec<u8> {
             encode(E_CREATE_INDEX, args)
         }
         Create { path, entity: TableEntity { columns, from } } =>
-            encode(E_CREATE_TABLE, vec![path, &ColumnSet(columns.clone()), &get_or_undef(from)]),
+            encode(E_CREATE_TABLE, vec![path, &ColumnSet(columns.to_owned()), &get_or_undef(from)]),
         Declare(IndexEntity { columns }) => {
             let mut args = Vec::new();
             args.extend(columns);
             encode(E_DECLARE_INDEX, args)
         }
         Declare(TableEntity { columns, from }) =>
-            encode(E_DECLARE_TABLE, vec![&ColumnSet(columns.clone()), &get_or_undef(from)]),
+            encode(E_DECLARE_TABLE, vec![&ColumnSet(columns.to_owned()), &get_or_undef(from)]),
         Drop(IndexTarget { path }) => encode(E_DROP, vec![path]),
         Drop(TableTarget { path }) => encode(E_DROP, vec![path]),
     }
@@ -138,8 +144,8 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
         IntoNs(a, b) => encode(E_INTO_NS, vec![a, b]),
         Overwrite { path, source, condition, limit } => {
             let mut args = Vec::new();
-            args.push(path.deref().clone());
-            args.push(source.deref().clone());
+            args.push(path.deref().to_owned());
+            args.push(source.deref().to_owned());
             args.push(get_or_undef(condition));
             args.push(get_or_undef(limit));
             encode_vec(E_OVERWRITE, &args)
@@ -151,8 +157,8 @@ pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
             encode(E_UNDELETE, vec![path, &get_or_undef(condition), &get_or_undef(limit)]),
         Update { path, source, condition, limit } => {
             let mut args: Vec<Expression> = Vec::new();
-            args.push(path.deref().clone());
-            args.push(source.deref().clone());
+            args.push(path.deref().to_owned());
+            args.push(source.deref().to_owned());
             args.push(get_or_undef(condition));
             args.push(get_or_undef(limit));
             encode_vec(E_UPDATE, &args)
@@ -185,7 +191,7 @@ pub fn assemble_fully(expressions: &Vec<Expression>) -> Vec<u8> {
 /// compiles a JSON-like collection of expressions into binary code
 fn assemble_json_object(tuples: &Vec<(String, Expression)>) -> Vec<u8> {
     let expressions = tuples.iter().flat_map(|(k, v)| {
-        vec![Literal(StringValue(k.into())), v.clone()]
+        vec![Literal(StringValue(k.into())), v.to_owned()]
     }).collect::<Vec<Expression>>();
     encode_vec(E_JSON_LITERAL, &expressions)
 }
@@ -215,6 +221,7 @@ fn assemble_select(
 pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
     match data_type {
         AckType => assemble_bytes(T_ACK, &Vec::new()),
+        BackDoorType => assemble_bytes(T_BACK_DOOR, &vec![0]),
         BLOBType(size) => assemble_bytes(T_BLOB, &assemble_usize(*size)),
         BooleanType => assemble_bytes(T_BOOLEAN, &Vec::new()),
         CLOBType(size) => assemble_bytes(T_CLOB, &assemble_usize(*size)),
@@ -223,13 +230,13 @@ pub fn assemble_type(data_type: &DataType) -> Vec<u8> {
         ErrorType => assemble_bytes(T_STRING, &assemble_usize(256)),
         Float32Type => assemble_bytes(T_FLOAT32, &Vec::new()),
         Float64Type => assemble_bytes(T_FLOAT64, &Vec::new()),
-        FuncType(columns) => assemble_bytes(T_FUNCTION, &encode_columns(columns)),
+        FunctionType(columns) => assemble_bytes(T_FUNCTION, &encode_columns(columns)),
         Int8Type => assemble_bytes(T_INT8, &Vec::new()),
         Int16Type => assemble_bytes(T_INT16, &Vec::new()),
         Int32Type => assemble_bytes(T_INT32, &Vec::new()),
         Int64Type => assemble_bytes(T_INT64, &Vec::new()),
         Int128Type => assemble_bytes(T_INT128, &Vec::new()),
-        JSONObjectType => assemble_bytes(T_JSON_OBJECT, &Vec::new()),
+        JSONType => assemble_bytes(T_JSON_OBJECT, &Vec::new()),
         RowsAffectedType => assemble_bytes(T_ROWS_AFFECTED, &Vec::new()),
         StringType(size) => assemble_bytes(T_STRING, &assemble_usize(*size)),
         StructureType(columns) => assemble_bytes(T_STRUCTURE, &encode_columns(columns)),
@@ -287,11 +294,11 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
     match buf.next_u8() {
         E_AND => Ok(And(decode_box(buf)?, decode_box(buf)?)),
         E_APPEND => Ok(Mutate(Mutation::Append { path: decode_box(buf)?, source: decode_box(buf)? })),
-        E_COMPACT => Ok(Mutate(Mutation::Compact { path: decode_box(buf)? })),
-        E_CSV => Ok(CSV(decode_box(buf)?)),
-        E_ELEM_INDEX => Ok(ElementAt(decode_box(buf)?, decode_box(buf)?)),
         E_ARRAY_LIT => Ok(ArrayLiteral(decode_array(buf)?)),
         E_AS_VALUE => Ok(AsValue(buf.next_string(), decode_box(buf)?)),
+        E_COMPACT => Ok(Mutate(Mutation::Compact { path: decode_box(buf)? })),
+        E_ELEM_INDEX => Ok(ElementAt(decode_box(buf)?, decode_box(buf)?)),
+        E_FEATURE => Ok(Feature { title: decode_box(buf)?, scenarios: decode_array(buf)? }),
         E_BETWEEN => Ok(Between(decode_box(buf)?, decode_box(buf)?, decode_box(buf)?)),
         E_BETWIXT => Ok(Betwixt(decode_box(buf)?, decode_box(buf)?, decode_box(buf)?)),
         E_BITWISE_AND => Ok(BitwiseAnd(decode_box(buf)?, decode_box(buf)?)),
@@ -302,7 +309,7 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
             let mut args = decode_array(buf)?;
             assert!(args.len() >= 2);
             Ok(Perform(Infrastructure::Create {
-                path: Box::new(args.pop().unwrap().clone()),
+                path: Box::new(args.pop().unwrap().to_owned()),
                 entity: IndexEntity {
                     columns: args,
                 },
@@ -329,7 +336,6 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_DIVIDE => Ok(Divide(decode_box(buf)?, decode_box(buf)?)),
         E_DROP => Ok(Perform(Infrastructure::Drop(TableTarget { path: decode_box(buf)? }))),
         E_EQUAL => Ok(Equal(decode_box(buf)?, decode_box(buf)?)),
-        E_EVAL => Ok(Eval(decode_box(buf)?)),
         E_FACTORIAL => Ok(Factorial(decode_box(buf)?)),
         E_FROM => Ok(From(decode_box(buf)?)),
         E_GREATER_OR_EQUAL => Ok(GreaterOrEqual(decode_box(buf)?, decode_box(buf)?)),
@@ -373,10 +379,8 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_RETURN => Ok(Return(decode_array(buf)?)),
         E_REVERSE => Ok(Inquire(Queryable::Reverse(decode_box(buf)?))),
         E_SCAN => Ok(Mutate(Mutation::Scan { path: decode_box(buf)? })),
+        E_SCENARIO => Ok(Scenario { title: decode_box(buf)?, verifications: decode_array(buf)?, inherits: decode_opt(buf)? }),
         E_SELECT => disassemble_select(buf),
-        E_STDERR => Ok(StdErr(decode_box(buf)?)),
-        E_STDOUT => Ok(StdErr(decode_box(buf)?)),
-        E_SYSTEM_CALL => Ok(SystemCall(decode_array(buf)?)),
         E_VAR_SET =>
             match disassemble(buf)? {
                 Literal(StringValue(name)) => Ok(SetVariable(name, decode_box(buf)?)),
@@ -386,7 +390,6 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
         E_SHIFT_RIGHT => Ok(ShiftRight(decode_box(buf)?, decode_box(buf)?)),
         E_TRUNCATE => Ok(Mutate(Mutation::Truncate { path: decode_box(buf)?, limit: decode_opt(buf)? })),
         E_TUPLE => Ok(TupleLiteral(decode_array(buf)?)),
-        E_TYPE_OF => Ok(TypeOf(decode_box(buf)?)),
         E_UNDELETE =>
             Ok(Mutate(Mutation::Undelete {
                 path: decode_box(buf)?,
@@ -409,11 +412,11 @@ pub fn disassemble(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
 
 pub fn disassemble_fully(byte_code: &Vec<u8>) -> std::io::Result<Expression> {
     let mut models = Vec::new();
-    let mut buf = ByteBuffer::wrap(byte_code.clone());
+    let mut buf = ByteBuffer::wrap(byte_code.to_owned());
     while buf.has_next() {
         models.push(disassemble(&mut buf)?);
     }
-    let opcode = if models.len() == 1 { models[0].clone() } else { CodeBlock(models) };
+    let opcode = if models.len() == 1 { models[0].to_owned() } else { CodeBlock(models) };
     Ok(opcode)
 }
 
@@ -433,10 +436,10 @@ fn disassemble_update(buf: &mut ByteBuffer) -> std::io::Result<Expression> {
     if args.len() < 2 {
         return fail(format!("Invalid args: expected 4, got {}", args.len()));
     }
-    let path = Box::new(args[0].clone());
-    let source = Box::new(args[1].clone());
-    let condition = if args.len() > 2 { Some(Box::new(args[2].clone())) } else { None };
-    let limit = if args.len() > 3 { Some(Box::new(args[3].clone())) } else { None };
+    let path = Box::new(args[0].to_owned());
+    let source = Box::new(args[1].to_owned());
+    let condition = if args.len() > 2 { Some(Box::new(args[2].to_owned())) } else { None };
+    let limit = if args.len() > 3 { Some(Box::new(args[3].to_owned())) } else { None };
     Ok(Mutate(Mutation::Update { path, source, condition, limit }))
 }
 
@@ -452,7 +455,7 @@ fn decode_array(buf: &mut ByteBuffer) -> std::io::Result<Vec<Expression>> {
 
 fn decode_array_as_opt(buf: &mut ByteBuffer) -> std::io::Result<Option<Box<Expression>>> {
     let ops = decode_array(buf)?;
-    if ops.is_empty() { Ok(None) } else { Ok(Some(Box::new(ops[0].clone()))) }
+    if ops.is_empty() { Ok(None) } else { Ok(Some(Box::new(ops[0].to_owned()))) }
 }
 
 fn decode_array_opt(buf: &mut ByteBuffer) -> std::io::Result<Option<Vec<Expression>>> {
@@ -524,7 +527,7 @@ fn decode_data_type(buf: &mut ByteBuffer) -> std::io::Result<DataType> {
         T_INT32 => Ok(Int32Type),
         T_INT64 => Ok(Int64Type),
         T_INT128 => Ok(Int128Type),
-        T_JSON_OBJECT => Ok(JSONObjectType),
+        T_JSON_OBJECT => Ok(JSONType),
         T_ROWS_AFFECTED => Ok(RowsAffectedType),
         T_STRING => Ok(StringType(buf.next_u32() as usize)),
         T_TABLE_VALUE => Ok(TableType(buf.next_columns())),
@@ -566,13 +569,13 @@ fn encode_array(ops: &Vec<Expression>) -> Vec<u8> {
 
 fn encode_opt_as_array(opt: &Option<Box<Expression>>) -> Vec<u8> {
     let ops = if opt.is_none() { Vec::new() } else {
-        vec![opt.clone().unwrap().deref().clone()]
+        vec![opt.to_owned().unwrap().deref().to_owned()]
     };
     encode_array(&ops)
 }
 
 fn encode_array_opt(ops_opt: &Option<Vec<Expression>>) -> Vec<u8> {
-    let ops = ops_opt.clone().unwrap_or(Vec::new());
+    let ops = ops_opt.to_owned().unwrap_or(Vec::new());
     encode_array(&ops)
 }
 
@@ -593,6 +596,14 @@ fn assemble_strings(id: u8, strings: &Vec<String>) -> Vec<u8> {
         byte_code.extend(string.len().to_be_bytes());
         byte_code.extend(string.bytes())
     }
+    byte_code
+}
+
+fn encode_native(id: u8, nc: &BackDoorFunction, ops: &Vec<Expression>) -> Vec<u8> {
+    let mut byte_code = vec![id];
+    byte_code.extend((ops.len() as u64).to_be_bytes());
+    byte_code.push(nc.ordinal());
+    byte_code.extend(ops.iter().flat_map(assemble).collect::<Vec<u8>>());
     byte_code
 }
 
@@ -627,7 +638,7 @@ pub fn fact(machine: Machine) -> std::io::Result<Machine> {
 }
 
 fn get_or_undef(opt: &Option<Box<Expression>>) -> Expression {
-    opt.clone().unwrap_or(Box::new(UNDEFINED)).deref().clone()
+    opt.to_owned().unwrap_or(Box::new(UNDEFINED)).deref().to_owned()
 }
 
 /// arithmetic increment
@@ -690,7 +701,7 @@ mod tests {
             E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 4,
             E_LITERAL, T_INT64, 0, 0, 0, 0, 0, 0, 0, 3,
         ];
-        let mut buf = ByteBuffer::wrap(byte_code.clone());
+        let mut buf = ByteBuffer::wrap(byte_code.to_owned());
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut buf).unwrap(), model);
     }
@@ -851,22 +862,5 @@ mod tests {
         assert_eq!(assemble(&model), byte_code);
         assert_eq!(disassemble(&mut ByteBuffer::wrap(byte_code)).unwrap(), model);
     }
-
-    #[test]
-    fn test_multiple_opcodes() {
-        // execute the program
-        let (machine, value) = Machine::new()
-            .push_all(vec![
-                2., 3., // add
-                4., // mul
-                5., // sub
-                2., // div
-            ].iter().map(|n| Float64Value(*n)).collect())
-            .execute(&vec![add, mul, sub, div])
-            .unwrap();
-
-        // verify the result
-        assert_eq!(value, Float64Value(-0.08));
-        assert_eq!(machine.stack_len(), 0)
-    }
+    
 }

@@ -67,7 +67,7 @@ impl HashIndexConfig {
         HashIndexConfig { indexed_column_names, is_unique }
     }
 
-    pub fn get_indexed_column_name(&self) -> Vec<String> { self.indexed_column_names.clone() }
+    pub fn get_indexed_column_name(&self) -> Vec<String> { self.indexed_column_names.to_owned() }
 
     pub fn is_unique(&self) -> bool { self.is_unique }
 }

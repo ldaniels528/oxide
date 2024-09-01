@@ -59,7 +59,7 @@ impl Row {
         let values: Vec<TypedValue> = columns.iter().map(|t| {
             Self::decode_value(&t.data_type, &buffer, t.offset)
         }).collect();
-        (Self::new(id, columns.clone(), values), metadata)
+        (Self::new(id, columns.to_owned(), values), metadata)
     }
 
     pub fn decode_value(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> TypedValue {
@@ -81,7 +81,7 @@ impl Row {
 
     /// Returns an empty row.
     pub fn empty(columns: &Vec<TableColumn>) -> Self {
-        Self::new(0, columns.clone(), columns.iter().map(|_| Null).collect())
+        Self::new(0, columns.to_owned(), columns.iter().map(|_| Null).collect())
     }
 
     pub fn from_buffer(
@@ -100,7 +100,7 @@ impl Row {
             let field = Self::from_buffer_to_value(&col.data_type, buffer, col.offset)?;
             values.push(field);
         }
-        Ok((Self::new(id, columns.clone(), values), metadata))
+        Ok((Self::new(id, columns.to_owned(), values), metadata))
     }
 
     pub fn from_buffer_to_value(data_type: &DataType, buffer: &mut ByteBuffer, offset: usize) -> std::io::Result<TypedValue> {
@@ -116,7 +116,7 @@ impl Row {
         for tc in columns {
             values.push(determine_column_value(form, tc.get_name()));
         }
-        Row::new(form.id.unwrap_or(0), columns.clone(), values)
+        Row::new(form.id.unwrap_or(0), columns.to_owned(), values)
     }
 
     pub fn from_tuples(
@@ -127,18 +127,18 @@ impl Row {
         // build a cache of the tuples as a hashmap
         let mut cache = HashMap::new();
         for (name, value) in tuples {
-            cache.insert(name.to_string(), value.clone());
+            cache.insert(name.to_string(), value.to_owned());
         }
         // construct the fields
         let mut values = Vec::new();
         for c in columns {
             if let Some(value) = cache.get(c.get_name()) {
-                values.push(value.clone());
+                values.push(value.to_owned());
             } else {
                 values.push(TypedValue::Undefined)
             }
         }
-        Row::new(id, columns.clone(), values)
+        Row::new(id, columns.to_owned(), values)
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -190,14 +190,14 @@ impl Row {
     pub fn find_value_by_name(&self, name: &str) -> Option<TypedValue> {
         self.columns.iter().zip(self.values.iter())
             .find_map(|(c, v)| {
-                if c.get_name() == name { Some(v.clone()) } else { None }
+                if c.get_name() == name { Some(v.to_owned()) } else { None }
             })
     }
 
     pub fn get(&self, name: &str) -> TypedValue {
         self.columns.iter().zip(self.values.iter())
             .find(|(c, _)| c.get_name() == name)
-            .map(|(_, v)| v.clone())
+            .map(|(_, v)| v.to_owned())
             .unwrap_or(Undefined)
     }
 
@@ -207,7 +207,7 @@ impl Row {
         (id as u64) * (Self::compute_record_size(&self.columns) as u64)
     }
 
-    pub fn get_values(&self) -> Vec<TypedValue> { self.values.clone() }
+    pub fn get_values(&self) -> Vec<TypedValue> { self.values.to_owned() }
 
     pub fn get_id(&self) -> usize { self.id }
 
@@ -234,7 +234,7 @@ impl Row {
         let mut mapping = HashMap::new();
         mapping.insert("_id".into(), TypedValue::RowsAffected(self.id));
         for (value, column) in self.values.iter().zip(&self.columns) {
-            mapping.insert(column.get_name().to_string(), value.clone());
+            mapping.insert(column.get_name().to_string(), value.to_owned());
         }
         mapping
     }
@@ -252,11 +252,11 @@ impl Row {
     }
 
     pub fn to_struct(&self) -> Structure {
-        Structure::from_physical_columns_and_values(self.columns.clone(), self.values.clone())
+        Structure::from_physical_columns_and_values(self.columns.to_owned(), self.values.to_owned())
     }
 
     pub fn to_table(&self) -> ModelRowCollection {
-        ModelRowCollection::from_rows(vec![self.clone()])
+        ModelRowCollection::from_rows(vec![self.to_owned()])
     }
 
     /// Creates a new [Row] from the supplied fields and values
@@ -272,19 +272,19 @@ impl Row {
         // build a cache (mapping) of field names to values
         let cache = field_names.iter().zip(field_values.iter())
             .fold(HashMap::new(), |mut m, (k, v)| {
-                m.insert(k.to_string(), v.clone());
+                m.insert(k.to_string(), v.to_owned());
                 m
             });
         // build the new fields vector
         let new_fields = self.get_columns().iter().zip(self.get_values().iter())
             .map(|(c, f)| match cache.get(c.get_name()) {
-                Some(Undefined) => f.clone(),
-                Some(tv) => tv.clone(),
-                None => f.clone()
+                Some(Undefined) => f.to_owned(),
+                Some(tv) => tv.to_owned(),
+                None => f.to_owned()
             })
             .collect::<Vec<TypedValue>>();
         // return the transformed row
-        let new_row = Row::new(self.get_id(), self.get_columns().clone(), new_fields);
+        let new_row = Row::new(self.get_id(), self.get_columns().to_owned(), new_fields);
         Ok(new_row)
     }
 
@@ -296,11 +296,11 @@ impl Row {
     }
 
     pub fn with_row_id(&self, id: usize) -> Self {
-        Self::new(id, self.columns.clone(), self.values.clone())
+        Self::new(id, self.columns.to_owned(), self.values.to_owned())
     }
 
     pub fn with_values(&self, values: Vec<TypedValue>) -> Self {
-        Self::new(self.id, self.columns.clone(), values)
+        Self::new(self.id, self.columns.to_owned(), values)
     }
 }
 
@@ -324,8 +324,8 @@ impl Index<usize> for Row {
 #[macro_export]
 macro_rules! row {
     ($id:expr, $columns:expr, $values:expr) => {
-        crate::rows::Row::new($id, $columns.clone(), $values.iter()
-            .map(|v| v.clone()).collect())
+        crate::rows::Row::new($id, $columns.to_owned(), $values.iter()
+            .map(|v| v.to_owned()).collect())
     }
 }
 

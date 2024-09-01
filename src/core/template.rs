@@ -73,20 +73,20 @@ impl Template {
     }
 
     fn capture_params(&self, ts: TokenSlice) -> io::Result<(Vec<(String, Token)>, TokenSlice)> {
-        let mut ts_z = ts.clone();
+        let mut ts_z = ts.to_owned();
         let mut params = Vec::new();
         // capture the parent if named
         if let Some(name) = &self.name {
             if let (Some(parent_token), ts) = ts_z.next() {
-                ts_z = ts.clone();
-                params.push((name.clone(), parent_token.clone()));
+                ts_z = ts.to_owned();
+                params.push((name.to_owned(), parent_token.to_owned()));
             }
         }
         // capture the children
         if let Some(children) = &self.children {
             for child in children {
                 let (expr, ts) = child.capture_all_params(ts_z)?;
-                ts_z = ts.clone();
+                ts_z = ts.to_owned();
                 params.extend(expr);
             }
         }
@@ -95,21 +95,21 @@ impl Template {
 
     /// Returns a clone of the instance; replacing the `children` attribute.
     pub fn with_children(&self, children: Vec<Template>) -> Self {
-        let mut clone = self.clone();
+        let mut clone = self.to_owned();
         clone.children = Some(children);
         clone
     }
 
     /// Returns a clone of the instance; replacing the `is_optional` attribute.
     pub fn with_is_optional(&self, is_optional: bool) -> Self {
-        let mut clone = self.clone();
+        let mut clone = self.to_owned();
         clone.is_optional = is_optional;
         clone
     }
 
     /// Returns a clone of the instance; replacing the `name` attribute.
     pub fn with_name(&self, name: &str) -> Self {
-        let mut clone = self.clone();
+        let mut clone = self.to_owned();
         clone.name = Some(name.into());
         clone
     }

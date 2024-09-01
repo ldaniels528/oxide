@@ -6,3 +6,4 @@ Cargo.lock
 oxide_db/
 target/
 oxide_db
+out/

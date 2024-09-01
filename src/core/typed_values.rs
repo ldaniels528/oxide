@@ -4,7 +4,7 @@
 
 use std::{i32, io};
 use std::cmp::Ordering;
-use std::collections::Bound;
+use std::collections::{Bound, HashMap};
 use std::fmt::Display;
 use std::hash::{DefaultHasher, Hasher};
 use std::ops::*;
@@ -18,8 +18,8 @@ use uuid::Uuid;
 
 use shared_lib::{fail, RowJs};
 
+use crate::{cnv_error, serialization};
 use crate::byte_buffer::ByteBuffer;
-use crate::cnv_error;
 use crate::codec;
 use crate::compiler::fail_value;
 use crate::data_types::*;
@@ -33,6 +33,7 @@ use crate::rows::Row;
 use crate::serialization::disassemble;
 use crate::server::ColumnJs;
 use crate::structure::Structure;
+use crate::typed_values::BackDoorFunction::{Assert, Eval, Matches, StdErr, StdOut, SysCall, ToCSV, TypeOf};
 use crate::typed_values::TypedValue::*;
 
 const ISO_DATE_FORMAT: &str =
@@ -42,11 +43,43 @@ const INTEGER_FORMAT: &str = r"^-?(?:\d+(?:_\d)*)?$";
 const UUID_FORMAT: &str =
     "^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$";
 
+/// Represents a backdoor (hook) for calling native functions
+#[repr(u8)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum BackDoorFunction {
+    Assert = 0,
+    Eval = 1,
+    Matches = 2,
+    StdErr = 3,
+    StdOut = 4,
+    SysCall = 5,
+    ToCSV = 6,
+    TypeOf = 7,
+}
+
+impl BackDoorFunction {
+    pub fn decode(code: u8) -> Self {
+        Self::from(Self::values()[code as usize].to_owned())
+    }
+
+    pub fn ordinal(&self) -> u8 {
+        self.to_owned() as u8
+    }
+
+    pub fn values() -> Vec<BackDoorFunction> {
+        vec![
+            Assert, Eval, Matches, StdErr, StdOut, SysCall,
+            ToCSV, TypeOf,
+        ]
+    }
+}
+
 /// Basic value unit
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     Ack,
     Array(Vec<TypedValue>),
+    BackDoor(BackDoorFunction),
     BLOB(Vec<u8>),
     Boolean(bool),
     CLOB(Vec<char>),
@@ -60,11 +93,11 @@ pub enum TypedValue {
     Int32Value(i32),
     Int64Value(i64),
     Int128Value(i128),
-    JSONObjectValue(Vec<(String, TypedValue)>),
+    JSONValue(Vec<(String, TypedValue)>),
+    NamespaceValue(String),
     RowsAffected(usize),
     StringValue(String),
     StructureValue(Structure),
-    TableNs(String),
     TableValue(ModelRowCollection),
     TupleValue(Vec<TypedValue>),
     UInt8Value(u8),
@@ -84,19 +117,17 @@ impl TypedValue {
     pub fn contains(&self, value: &TypedValue) -> TypedValue {
         match &self {
             Array(items) => Boolean(items.contains(value)),
-            JSONObjectValue(items) =>
+            JSONValue(items) =>
                 match value {
-                    StringValue(name) => {
-                        for (s, _) in items {
-                            if name == s { return Boolean(true); }
-                        }
-                        Boolean(false)
-                    }
+                    StringValue(name) => items.iter()
+                        .find(|(k, v)| k == name)
+                        .map(|_| Boolean(true))
+                        .unwrap_or(Boolean(false)),
                     _ => Boolean(false)
                 },
             TableValue(mrc) =>
                 match value {
-                    JSONObjectValue(tuples) =>
+                    JSONValue(tuples) =>
                         mrc.contains(&Row::from_tuples(0, mrc.get_columns(), tuples)),
                     _ => Boolean(false)
                 }
@@ -108,6 +139,7 @@ impl TypedValue {
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
         match data_type {
             AckType => Ack,
+            BackDoorType => codec::decode_u8(buffer, offset, |b| BackDoor(BackDoorFunction::decode(b))),
             BLOBType(_size) => BLOB(Vec::new()),
             BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             CLOBType(_size) => CLOB(Vec::new()),
@@ -119,16 +151,21 @@ impl TypedValue {
             ErrorType => ErrorValue(codec::decode_string(buffer, offset, 255).to_string()),
             Float32Type => codec::decode_u8x4(buffer, offset, |b| Float32Value(f32::from_be_bytes(b))),
             Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
-            FuncType(columns) => Function {
-                params: columns.clone(),
-                code: Box::new(ACK), // TODO investigate
-            },
+            FunctionType(columns) => {
+                let mut buf = ByteBuffer::wrap(buffer.clone());
+                buf.move_rel(offset as isize);
+                match disassemble(&mut buf) {
+                    Ok(expr) =>
+                        Function { params: columns.to_owned(), code: Box::new(expr) },
+                    Err(err) => ErrorValue(err.to_string())
+                }
+            }
             Int8Type => codec::decode_u8(buffer, offset, |b| Int8Value(b.to_i8().unwrap())),
             Int16Type => codec::decode_u8x2(buffer, offset, |b| Int16Value(i16::from_be_bytes(b))),
             Int32Type => codec::decode_u8x4(buffer, offset, |b| Int32Value(i32::from_be_bytes(b))),
             Int64Type => codec::decode_u8x8(buffer, offset, |b| Int64Value(i64::from_be_bytes(b))),
             Int128Type => codec::decode_u8x16(buffer, offset, |b| Int128Value(i128::from_be_bytes(b))),
-            JSONObjectType => JSONObjectValue(Vec::new()), // TODO implement me
+            JSONType => JSONValue(Vec::new()), // TODO implement me
             RowsAffectedType => RowsAffected(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
             StructureType(columns) =>
@@ -159,8 +196,9 @@ impl TypedValue {
                 for item in items { bytes.extend(item.encode()); }
                 bytes
             }
+            BackDoor(nf) => vec![nf.ordinal()],
             BLOB(bytes) => codec::encode_u8x_n(bytes.to_vec()),
-            Boolean(ok) => [if *ok { 1 } else { 0 }].to_vec(),
+            Boolean(ok) => vec![if *ok { 1 } else { 0 }],
             CLOB(chars) => codec::encode_chars(chars.to_vec()),
             DateValue(number) => number.to_be_bytes().to_vec(),
             ErrorValue(message) => codec::encode_string(message),
@@ -173,7 +211,7 @@ impl TypedValue {
             Int32Value(number) => number.to_be_bytes().to_vec(),
             Int64Value(number) => number.to_be_bytes().to_vec(),
             Int128Value(number) => number.to_be_bytes().to_vec(),
-            JSONObjectValue(pairs) => {
+            JSONValue(pairs) => {
                 let mut bytes = Vec::new();
                 for (name, value) in pairs {
                     bytes.extend(name.bytes().collect::<Vec<u8>>());
@@ -185,7 +223,7 @@ impl TypedValue {
             RowsAffected(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
             StructureValue(structure) => codec::encode_string(structure.to_string().as_str()),
-            TableNs(path) => codec::encode_string(path),
+            NamespaceValue(path) => codec::encode_string(path),
             TupleValue(items) => {
                 let mut bytes = Vec::new();
                 bytes.extend(items.len().to_be_bytes());
@@ -216,6 +254,7 @@ impl TypedValue {
     ) -> std::io::Result<TypedValue> {
         let tv = match data_type {
             AckType => Ack,
+            BackDoorType => BackDoor(buffer.next_backdoor_fn()),
             BLOBType(..) => BLOB(buffer.next_blob()),
             BooleanType => Boolean(buffer.next_bool()),
             CLOBType(..) => CLOB(buffer.next_clob()),
@@ -227,8 +266,8 @@ impl TypedValue {
             ErrorType => ErrorValue(buffer.next_string()),
             Float32Type => Float32Value(buffer.next_f32()),
             Float64Type => Float64Value(buffer.next_f64()),
-            FuncType(columns) => Function {
-                params: columns.clone(),
+            FunctionType(columns) => Function {
+                params: columns.to_owned(),
                 code: Box::new(disassemble(buffer)?),
             },
             Int8Type => Int8Value(buffer.next_i8()),
@@ -236,7 +275,7 @@ impl TypedValue {
             Int32Type => Int32Value(buffer.next_i32()),
             Int64Type => Int64Value(buffer.next_i64()),
             Int128Type => Int128Value(buffer.next_i128()),
-            JSONObjectType => JSONObjectValue(buffer.next_json()?),
+            JSONType => JSONValue(buffer.next_json()?),
             RowsAffectedType => RowsAffected(buffer.next_row_id()),
             StringType(..) => StringValue(buffer.next_string()),
             StructureType(columns) => StructureValue(buffer.next_struct_with_columns(columns)?),
@@ -268,7 +307,7 @@ impl TypedValue {
                 let values: Vec<String> = items.iter().map(|v| v.get_raw_value()).collect();
                 format!("[{}]", values.join(", "))
             }
-            JSONObjectValue(pairs) => {
+            JSONValue(pairs) => {
                 let values: Vec<String> = pairs.iter()
                     .map(|(k, v)| format!("\"{}\":{}", k, v.get_raw_value()))
                     .collect();
@@ -320,7 +359,7 @@ impl TypedValue {
     }
 
     pub fn is_ok(&self) -> bool {
-        matches!(self, Ack | Boolean(true) | RowsAffected(..) | TableNs(..) | TableValue(..))
+        matches!(self, Ack | Boolean(true) | RowsAffected(..) | NamespaceValue(..) | TableValue(..))
     }
 
     pub fn is_string(&self) -> bool {
@@ -345,7 +384,7 @@ impl TypedValue {
             serde_json::Value::Bool(b) => Boolean(b),
             serde_json::Value::Number(n) => n.as_f64().map(Float64Value).unwrap_or(Null),
             serde_json::Value::String(s) => StringValue(s),
-            serde_json::Value::Array(a) => Array(a.iter().map(|v| Self::from_json(v.clone())).collect()),
+            serde_json::Value::Array(a) => Array(a.iter().map(|v| Self::from_json(v.to_owned())).collect()),
             serde_json::Value::Object(..) => todo!()
         }
     }
@@ -368,6 +407,7 @@ impl TypedValue {
             Ack => "Ack",
             Undefined => "Undefined",
             Null => "Null",
+            BackDoor(..) => "BackDoor",
             Function { .. } => "Function",
             Array(..) => "Array",
             BLOB(..) => "BLOB",
@@ -375,7 +415,7 @@ impl TypedValue {
             CLOB(..) => "CLOB",
             DateValue(..) => "Date",
             ErrorValue(..) => "Error",
-            JSONObjectValue(..) => "JSON",
+            JSONValue(..) => "JSON",
             Float32Value(..) => "f32",
             Float64Value(..) => "f64",
             Int8Value(..) => "i8",
@@ -386,7 +426,7 @@ impl TypedValue {
             RowsAffected(..) => "RowsAffected",
             StringValue(..) => "String",
             StructureValue(..) => "Struct",
-            TableNs(..) => "TablePtr",
+            NamespaceValue(..) => "TablePtr",
             TableValue(..) => "Table",
             TupleValue(..) => "Tuple",
             UInt8Value(..) => "u8",
@@ -405,6 +445,18 @@ impl TypedValue {
         hasher.finish()
     }
 
+    pub fn matches(&self, other: &Self) -> TypedValue {
+        match (self, other) {
+            (a, b) if *a == *b => Boolean(true),
+            (JSONValue(aa), JSONValue(bb)) => {
+                let ha: HashMap<_, _> = aa.to_owned().into_iter().collect();
+                let hb: HashMap<_, _> = bb.to_owned().into_iter().collect();
+                Boolean(ha == hb)
+            }
+            _ => Boolean(false)
+        }
+    }
+
     pub fn ordinal(&self) -> u8 {
         match *self {
             Ack => T_ACK,
@@ -412,12 +464,13 @@ impl TypedValue {
             Null => T_NULL,
             Function { .. } => T_FUNCTION,
             Array(..) => T_ARRAY,
+            BackDoor(..) => T_BACK_DOOR,
             BLOB(..) => T_BLOB,
             Boolean(..) => T_BOOLEAN,
             CLOB(..) => T_CLOB,
             DateValue(..) => T_DATE,
             ErrorValue(..) => T_ERROR,
-            JSONObjectValue(..) => T_JSON_OBJECT,
+            JSONValue(..) => T_JSON_OBJECT,
             Float32Value(..) => T_FLOAT32,
             Float64Value(..) => T_FLOAT64,
             Int8Value(..) => T_INT8,
@@ -425,10 +478,10 @@ impl TypedValue {
             Int32Value(..) => T_INT32,
             Int64Value(..) => T_INT64,
             Int128Value(..) => T_INT128,
+            NamespaceValue(..) => T_NAMESPACE,
             RowsAffected(..) => T_ROWS_AFFECTED,
             StringValue(..) => T_STRING,
             StructureValue(..) => T_STRUCTURE,
-            TableNs(..) => T_TABLE_NS,
             TableValue(..) => T_TABLE_VALUE,
             TupleValue(..) => T_TUPLE,
             UInt8Value(..) => T_UINT8,
@@ -453,6 +506,7 @@ impl TypedValue {
             Ack => serde_json::Value::Bool(true),
             Array(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
+            BackDoor(nf) => serde_json::json!(nf),
             BLOB(bytes) => serde_json::json!(bytes),
             Boolean(b) => serde_json::json!(b),
             CLOB(chars) => serde_json::json!(chars),
@@ -462,7 +516,7 @@ impl TypedValue {
             Float64Value(number) => serde_json::json!(number),
             Function { params, code } => {
                 let my_params = serde_json::Value::Array(params.iter().map(|c| c.to_json()).collect());
-                let my_code = code.to_code(); //serde_json::Value::Object();
+                let my_code = code.to_code();
                 serde_json::json!({ "params": my_params, "code": my_code })
             }
             Int8Value(number) => serde_json::json!(number),
@@ -470,12 +524,12 @@ impl TypedValue {
             Int32Value(number) => serde_json::json!(number),
             Int64Value(number) => serde_json::json!(number),
             Int128Value(number) => serde_json::json!(number),
-            JSONObjectValue(pairs) => serde_json::json!(pairs),
+            JSONValue(pairs) => serde_json::json!(pairs),
             Null => serde_json::Value::Null,
             RowsAffected(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
             StructureValue(structure) => serde_json::json!(structure),
-            TableNs(path) => serde_json::json!(path),
+            NamespaceValue(path) => serde_json::json!(path),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
                     .map(|r| r.to_row_js())
@@ -496,12 +550,12 @@ impl TypedValue {
 
     pub fn to_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
         match self {
-            TableValue(mrc) => Ok(Box::new(mrc.clone())),
-            TableNs(path) => {
+            NamespaceValue(path) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let frc = FileRowCollection::open(&ns)?;
                 Ok(Box::new(frc))
             }
+            TableValue(mrc) => Ok(Box::new(mrc.to_owned())),
             ErrorValue(message) => fail(message),
             z => fail_value("Table", z)
         }
@@ -514,6 +568,7 @@ impl TypedValue {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("[{}]", values.join(", "))
             }
+            BackDoor(nf) => format!("{:?}", nf),
             BLOB(bytes) => hex::encode(bytes),
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
             CLOB(chars) => chars.into_iter().collect(),
@@ -530,7 +585,7 @@ impl TypedValue {
             Int32Value(number) => number.to_string(),
             Int64Value(number) => number.to_string(),
             Int128Value(number) => number.to_string(),
-            JSONObjectValue(pairs) => {
+            JSONValue(pairs) => {
                 let values: Vec<String> = pairs.iter()
                     .map(|(k, v)| format!("{}:{}", k, v.unwrap_value()))
                     .collect();
@@ -541,7 +596,7 @@ impl TypedValue {
             RowsAffected(number) => number.to_string(),
             StringValue(string) => string.into(),
             StructureValue(structure) => structure.to_string(),
-            TableNs(path) => path.into(),
+            NamespaceValue(path) => path.into(),
             TupleValue(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("({})", values.join(", "))
@@ -817,7 +872,7 @@ impl Add for TypedValue {
             (RowsAffected(a), RowsAffected(b)) => RowsAffected(*a + *b),
             (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
             (TableValue(a), TableValue(b)) => {
-                match ModelRowCollection::combine(a.get_columns().clone(), vec![a, b]) {
+                match ModelRowCollection::combine(a.get_columns().to_owned(), vec![a, b]) {
                     Ok(mrc) => TableValue(mrc),
                     Err(err) => ErrorValue(err.to_string())
                 }
@@ -1009,6 +1064,27 @@ mod tests {
         assert_eq!(UInt8Value(45) + UInt8Value(32), UInt8Value(77));
         assert_eq!(Boolean(true) + Boolean(true), Boolean(true));
         assert_eq!(StringValue("Hello".into()) + StringValue(" World".into()), StringValue("Hello World".into()));
+    }
+
+    #[test]
+    fn test_array_contains() {
+        let array = Array(vec![
+            StringValue("ABC".into()),
+            StringValue("R2X2".into()),
+            StringValue("123".into()),
+            StringValue("Hello".into()),
+        ]);
+        assert_eq!(array.contains(&StringValue("123".into())), Boolean(true))
+    }
+
+    #[test]
+    fn test_json_contains() {
+        let js_value = JSONValue(vec![
+            ("name".to_string(), StringValue("symbol".to_string())),
+            ("column_type".to_string(), StringValue("String(8)".to_string())),
+            ("default_value".to_string(), Null),
+        ]);
+        assert_eq!(js_value.contains(&StringValue("name".into())), Boolean(true))
     }
 
     #[test]

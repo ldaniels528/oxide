@@ -80,7 +80,7 @@ async fn main() -> std::io::Result<()> {
                 Ok(value) => value,
                 Err(err) => panic!("port: {}", err.to_string())
             };
-            repl::run(REPLState::connect(host.clone(), port)).await
+            repl::run(REPLState::connect(host.to_owned(), port)).await
         }
         // script: execute a script file?
         // ex: ./target/debug/oxide -script ./test.ox

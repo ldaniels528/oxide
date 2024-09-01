@@ -43,8 +43,8 @@ pub const E_DIVIDE: u8 = 60;
 pub const E_DROP: u8 = 65;
 pub const E_ELEM_INDEX: u8 = 67;
 pub const E_EQUAL: u8 = 70;
-pub const E_EVAL: u8 = 75;
 pub const E_FACTORIAL: u8 = 80;
+pub const E_FEATURE: u8 = 82;
 pub const E_FROM: u8 = 85;
 pub const E_FUNCTION: u8 = 87;
 pub const E_GREATER_THAN: u8 = 90;
@@ -77,16 +77,15 @@ pub const E_RANGE: u8 = 195;
 pub const E_RETURN: u8 = 200;
 pub const E_REVERSE: u8 = 205;
 pub const E_SCAN: u8 = 207;
+pub const E_SCENARIO: u8 = 209;
 pub const E_SELECT: u8 = 210;
 pub const E_SERVE: u8 = 215;
 pub const E_SHIFT_LEFT: u8 = 225;
 pub const E_SHIFT_RIGHT: u8 = 230;
-pub const E_SYSTEM_CALL: u8 = 231;
 pub const E_STDERR: u8 = 233;
 pub const E_STDOUT: u8 = 235;
 pub const E_TRUNCATE: u8 = 237;
 pub const E_TUPLE: u8 = 239;
-pub const E_TYPE_OF: u8 = 241;
 pub const E_UNDELETE: u8 = 243;
 pub const E_UPDATE: u8 = 245;
 pub const E_VAR_GET: u8 = 247;
@@ -132,12 +131,11 @@ pub enum Expression {
     CodeBlock(Vec<Expression>),
     ColumnSet(Vec<ColumnJs>),
     Contains(Box<Expression>, Box<Expression>),
-    CSV(Box<Expression>),
     Divide(Box<Expression>, Box<Expression>),
     ElementAt(Box<Expression>, Box<Expression>),
     Equal(Box<Expression>, Box<Expression>),
-    Eval(Box<Expression>),
     Factorial(Box<Expression>),
+    Feature { title: Box<Expression>, scenarios: Vec<Expression> },
     From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     GreaterOrEqual(Box<Expression>, Box<Expression>),
@@ -178,15 +176,12 @@ pub enum Expression {
     Pow(Box<Expression>, Box<Expression>),
     Range(Box<Expression>, Box<Expression>),
     Return(Vec<Expression>),
+    Scenario { title: Box<Expression>, verifications: Vec<Expression>, inherits: Option<Box<Expression>> },
     SERVE(Box<Expression>),
     SetVariable(String, Box<Expression>),
     ShiftLeft(Box<Expression>, Box<Expression>),
     ShiftRight(Box<Expression>, Box<Expression>),
-    StdErr(Box<Expression>),
-    StdOut(Box<Expression>),
-    SystemCall(Vec<Expression>),
     TupleLiteral(Vec<Expression>),
-    TypeOf(Box<Expression>),
     Variable(String),
     Via(Box<Expression>),
     While {
@@ -329,16 +324,22 @@ pub fn decompile(expr: &Expression) -> String {
                 .collect::<Vec<String>>().join(", ")),
         Contains(a, b) =>
             format!("{} contains {}", decompile(a), decompile(b)),
-        CSV(a) => decompile(a),
         Divide(a, b) =>
             format!("{} / {}", decompile(a), decompile(b)),
         ElementAt(a, b) =>
             format!("{}[{}]", decompile(a), decompile(b)),
         Factorial(a) => format!("¡{}", decompile(a)),
+        Feature { title, scenarios } => {
+            let title = title.to_code();
+            let scenarios = scenarios.iter()
+                .map(|s| s.to_code())
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("feature {title} {{\n{scenarios}\n}}")
+        }
         From(a) => format!("from {}", decompile(a)),
         Equal(a, b) =>
             format!("{} == {}", decompile(a), decompile(b)),
-        Eval(a) => format!("eval {}", decompile(a)),
         FunctionCall { fx, args } =>
             format!("{}({})", decompile(fx), decompile_list(args)),
         GreaterThan(a, b) =>
@@ -346,7 +347,7 @@ pub fn decompile(expr: &Expression) -> String {
         GreaterOrEqual(a, b) =>
             format!("{} >= {}", decompile(a), decompile(b)),
         If { condition, a, b } =>
-            format!("if {} {}{}", decompile(condition), decompile(a), b.clone()
+            format!("if {} {}{}", decompile(condition), decompile(a), b.to_owned()
                 .map(|x| format!(" else {}", decompile(&x)))
                 .unwrap_or("".into())),
         Include(path) => format!("include {}", decompile(path)),
@@ -390,6 +391,15 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{}..{}", decompile(a), decompile(b)),
         Return(items) =>
             format!("return {}", decompile_list(items)),
+        Scenario { title, verifications, inherits } => {
+            let title = title.to_code();
+            let inherits = inherits.to_owned().map(|e| e.to_code()).unwrap_or(String::new());
+            let verifications = verifications.iter()
+                .map(|s| s.to_code())
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!("scenario {title} {{\n{verifications}\n}}")
+        }
         SERVE(a) => format!("SERVE {}", decompile(a)),
         SetVariable(name, value) =>
             format!("{} := {}", name, decompile(value)),
@@ -397,13 +407,8 @@ pub fn decompile(expr: &Expression) -> String {
             format!("{} << {}", decompile(a), decompile(b)),
         ShiftRight(a, b) =>
             format!("{} >> {}", decompile(a), decompile(b)),
-        StdErr(a) => format!("stderr {}", decompile(a)),
-        StdOut(a) => format!("stdout {}", decompile(a)),
-        SystemCall(args) =>
-            format!("system({})", decompile_list(args)),
         TupleLiteral(items) =>
             format!("({})", decompile_list(items)),
-        TypeOf(a) => format!("type_of {}", decompile(a)),
         Variable(name) => name.to_string(),
         Via(expr) => format!("via {}", decompile(expr)),
         While { condition, code } =>
@@ -451,8 +456,8 @@ pub fn decompile_modification(expr: &Mutation) -> String {
             format!("{} ~> {}", decompile(a), decompile(b)),
         Mutation::Overwrite { path, source, condition, limit } =>
             format!("overwrite {} {}{}{}", decompile(path), decompile(source),
-                    condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
-                    limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
+                    condition.to_owned().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
+                    limit.to_owned().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
             ),
         Mutation::Scan { path } =>
             format!("scan {}", decompile(path)),
@@ -462,7 +467,7 @@ pub fn decompile_modification(expr: &Mutation) -> String {
             format!("undelete from {} where {}{}", decompile(path), decompile_opt(condition), decompile_opt(limit)),
         Mutation::Update { path, source, condition, limit } =>
             format!("update {} {} where {}{}", decompile(path), decompile(source), decompile_opt(condition),
-                    limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()), ),
+                    limit.to_owned().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()), ),
     }
 }
 
@@ -477,12 +482,12 @@ pub fn decompile_queryable(expr: &Queryable) -> String {
         Queryable::Reverse(a) => format!("reverse {}", decompile(a)),
         Queryable::Select { fields, from, condition, group_by, having, order_by, limit } =>
             format!("select {}{}{}{}{}{}{}", decompile_list(fields),
-                    from.clone().map(|e| format!(" from {}", decompile(&e))).unwrap_or("".into()),
-                    condition.clone().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
-                    limit.clone().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
-                    group_by.clone().map(|items| format!(" group by {}", items.iter().map(|e| decompile(e)).collect::<Vec<String>>().join(", "))).unwrap_or("".into()),
-                    having.clone().map(|e| format!(" having {}", decompile(&e))).unwrap_or("".into()),
-                    order_by.clone().map(|e| format!(" order by {}", decompile_list(&e))).unwrap_or("".into()),
+                    from.to_owned().map(|e| format!(" from {}", decompile(&e))).unwrap_or("".into()),
+                    condition.to_owned().map(|e| format!(" where {}", decompile(&e))).unwrap_or("".into()),
+                    limit.to_owned().map(|e| format!(" limit {}", decompile(&e))).unwrap_or("".into()),
+                    group_by.to_owned().map(|items| format!(" group by {}", items.iter().map(|e| decompile(e)).collect::<Vec<String>>().join(", "))).unwrap_or("".into()),
+                    having.to_owned().map(|e| format!(" having {}", decompile(&e))).unwrap_or("".into()),
+                    order_by.to_owned().map(|e| format!(" order by {}", decompile_list(&e))).unwrap_or("".into()),
             ),
     }
 }
@@ -504,7 +509,7 @@ fn decompile_insert_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> 
 }
 
 fn decompile_limit(opt: &Option<Box<Expression>>) -> String {
-    opt.clone().map(|x| format!(" limit {}", decompile(&x))).unwrap_or("".into())
+    opt.to_owned().map(|x| format!(" limit {}", decompile(&x))).unwrap_or("".into())
 }
 
 fn decompile_list(fields: &Vec<Expression>) -> String {
@@ -512,7 +517,7 @@ fn decompile_list(fields: &Vec<Expression>) -> String {
 }
 
 fn decompile_opt(opt: &Option<Box<Expression>>) -> String {
-    opt.clone().map(|i| decompile(&i)).unwrap_or("".into())
+    opt.to_owned().map(|i| decompile(&i)).unwrap_or("".into())
 }
 
 fn decompile_update_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> String {

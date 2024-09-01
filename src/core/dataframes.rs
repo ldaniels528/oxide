@@ -31,7 +31,7 @@ impl DataFrame {
     pub fn create(ns: Namespace, config: DataFrameConfig) -> std::io::Result<Self> {
         config.save(&ns)?;
         let table_columns = TableColumn::from_columns(config.get_columns())?;
-        let device = Box::new(FileRowCollection::create_table(&ns, table_columns.clone())?);
+        let device = Box::new(FileRowCollection::create_table(&ns, table_columns.to_owned())?);
         Ok(Self::new(device))
     }
 
@@ -320,11 +320,11 @@ impl DataFrame {
     }
 
     fn replace_undefined_with_null(&self, row: Row) -> Row {
-        let columns = self.get_columns().clone();
-        Row::new(row.get_id(), columns.clone(), columns.iter().zip(row.get_values().iter()).map(|(c, v)| {
+        let columns = self.get_columns().to_owned();
+        Row::new(row.get_id(), columns.to_owned(), columns.iter().zip(row.get_values().iter()).map(|(c, v)| {
             match v {
-                Null | Undefined => c.default_value.clone(),
-                v => v.clone()
+                Null | Undefined => c.default_value.to_owned(),
+                v => v.to_owned()
             }
         }).collect())
     }
@@ -550,7 +550,7 @@ mod tests {
         let columns = make_table_columns();
         df.append(make_quote(0, &columns, "SPAM", "NYSE", 11.99)).unwrap();
 
-        let df0 = DataFrame::load(ns.clone()).unwrap();
+        let df0 = DataFrame::load(ns.to_owned()).unwrap();
         let (row, metadata) = df0.read_row(0).unwrap();
         assert!(metadata.is_allocated);
         assert_eq!(row, make_quote(0, &columns, "SPAM", "NYSE", 11.99));
@@ -680,7 +680,7 @@ mod tests {
         let row_a = make_quote(0, &phys_columns, "A", "AMEX", 11.77);
         let row_b = make_quote(1, &phys_columns, "BB", "AMEX", 33.22);
         let row_c = make_quote(2, &phys_columns, "CCC", "AMEX", 55.44);
-        for row in vec![&row_a, &row_b, &row_c] { df.append(row.clone()).unwrap(); }
+        for row in vec![&row_a, &row_b, &row_c] { df.append(row.to_owned()).unwrap(); }
         assert_eq!(df.reverse().unwrap(), [row_c, row_b, row_a]);
     }
 
@@ -710,14 +710,14 @@ mod tests {
 
         // verify the row was deleted
         let rows = df.read_active_rows().unwrap();
-        assert_eq!(rows, vec![row_0.clone(), row_2.clone()]);
+        assert_eq!(rows, vec![row_0.to_owned(), row_2.to_owned()]);
 
         // restore the middle row
         assert_eq!(df.undelete(1).unwrap(), 1);
 
         // verify the row was restored
         let rows = df.read_active_rows().unwrap();
-        assert_eq!(rows, vec![row_0.clone(), row_1.clone(), row_2.clone()]);
+        assert_eq!(rows, vec![row_0.to_owned(), row_1.to_owned(), row_2.to_owned()]);
     }
 
     #[test]
@@ -734,7 +734,7 @@ mod tests {
         let row_to_update = row!(1, phys_columns, vec![
             Undefined, Undefined, Float64Value(33.33),
         ]);
-        assert_eq!(df.update(row_to_update.clone()).unwrap(), 1);
+        assert_eq!(df.update(row_to_update.to_owned()).unwrap(), 1);
 
         // verify the row was updated
         let (updated_row, updated_rmd) = df.read_row(row_to_update.get_id()).unwrap();

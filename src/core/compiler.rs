@@ -77,7 +77,7 @@ impl Compiler {
 
         // return the instruction
         match opcodes {
-            ops if ops.len() == 1 => Ok((ops[0].clone(), ts)),
+            ops if ops.len() == 1 => Ok((ops[0].to_owned(), ts)),
             ops => Ok((CodeBlock(ops), ts))
         }
     }
@@ -131,13 +131,12 @@ impl Compiler {
                 "append" => self.parse_keyword_append(nts),
                 "compact" => self.parse_keyword_compact(nts),
                 "create" => self.parse_keyword_create(nts),
-                "csv" => self.parse_expression_1a(nts, CSV),
                 "delete" => self.parse_keyword_delete(nts),
                 "DELETE" => self.parse_keyword_http(ts),
                 "describe" => self.parse_keyword_describe(nts),
                 "drop" => self.parse_mutate_target(nts, |m| Perform(Infrastructure::Drop(m))),
-                "eval" => self.parse_expression_1a(nts, Eval),
                 "false" => Ok((FALSE, nts)),
+                "feature" => self.parse_keyword_feature(nts),
                 "fn" => self.parse_keyword_fn(nts),
                 "from" => {
                     let (from, ts) = self.parse_expression_1a(nts, From)?;
@@ -158,19 +157,15 @@ impl Compiler {
                 "PUT" => self.parse_keyword_http(ts),
                 "reverse" => self.parse_expression_1a(nts, |q| Inquire(Queryable::Reverse(q))),
                 "scan" => self.parse_keyword_scan(nts),
+                "scenario" => self.parse_keyword_scenario(nts),
                 "select" => self.parse_keyword_select(nts),
                 "SERVE" => self.parse_expression_1a(nts, SERVE),
-                "stderr" => self.parse_expression_1a(nts, StdErr),
-                "stdout" => self.parse_expression_1a(nts, StdOut),
                 "struct" => self.parse_keyword_struct(nts),
-                "syscall" => self.parse_keyword_syscall(nts),
                 "table" => self.parse_keyword_table(nts),
                 "true" => Ok((TRUE, nts)),
-                "type_of" => self.parse_expression_1a(nts, TypeOf),
                 "undefined" => Ok((UNDEFINED, nts)),
                 "undelete" => self.parse_keyword_undelete(nts),
                 "update" => self.parse_keyword_update(nts),
-                "UPLOAD" => self.parse_keyword_http(ts),
                 "via" => self.parse_expression_1a(nts, Via),
                 "where" => fail_near("`from` is expected before `where`: from stocks where last_sale < 1.0", &nts),
                 "while" => self.parse_keyword_while(nts),
@@ -183,8 +178,8 @@ impl Compiler {
     fn parse_expression_1a(
         &mut self,
         ts: TokenSlice,
-        f: fn(Box<Expression>,
-        ) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
+        f: fn(Box<Expression>) -> Expression,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
         let (expr, ts) = self.compile_next(ts)?;
         Ok((f(Box::new(expr)), ts))
     }
@@ -206,8 +201,8 @@ impl Compiler {
         &mut self,
         ts: TokenSlice,
         expr0: Expression,
-        f: fn(Box<Expression>, Box<Expression>,
-        ) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
+        f: fn(Box<Expression>, Box<Expression>) -> Expression,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
         let (expr1, ts) = self.compile_next(ts)?;
         Ok((f(Box::new(expr0), Box::new(expr1)), ts))
     }
@@ -216,8 +211,8 @@ impl Compiler {
     fn parse_expression_2b(
         &mut self, ts: TokenSlice,
         expr1: Expression,
-        f: fn(Box<Expression>, Box<Expression>,
-        ) -> Expression) -> std::io::Result<(Expression, TokenSlice)> {
+        f: fn(Box<Expression>, Box<Expression>) -> Expression,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
         match self.pop() {
             None => fail_near("expected an expression", &ts),
             Some(expr0) => Ok((f(Box::new(expr0), Box::new(expr1)), ts))
@@ -300,7 +295,7 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (index, ts) = self.compile_next(ts)?;
         let ts = ts.expect("on")?;
-        if let (ArrayLiteral(columns), ts) = self.compile_next(ts.clone())? {
+        if let (ArrayLiteral(columns), ts) = self.compile_next(ts.to_owned())? {
             Ok((Perform(Infrastructure::Create {
                 path: Box::new(index),
                 entity: IndexEntity { columns },
@@ -316,7 +311,7 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         // create table `stocks` (name: String, ..)
         let (table, ts) = self.compile_next(ts)?;
-        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.clone())? {
+        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.to_owned())? {
             // from { symbol: "ABC", exchange: "NYSE", last_sale: 67.89 }
             let (from, ts) =
                 if ts.is("from") {
@@ -353,6 +348,57 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.compile_next(ts)?;
         Ok((Inquire(Queryable::Describe(Box::new(table))), ts))
+    }
+
+    fn parse_keyword_feature(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (title, ts) = self.compile_next(ts)?;
+        let ts = ts.expect("{")?;
+        let (code, ts) = self.expect_curly_brackets(ts)?;
+        let scenarios = match code {
+            CodeBlock(scenarios) => scenarios,
+            JSONLiteral(tuples) => tuples.iter()
+                .map(|(name, expression)| Scenario {
+                    title: Box::new(Literal(StringValue(name.to_owned()))),
+                    verifications: match expression.to_owned() {
+                        CodeBlock(ops) => ops,
+                        z => vec![z]
+                    },
+                    inherits: None,
+                })
+                .collect::<Vec<_>>(),
+            other => {
+                println!("parse_keyword_feature: other {:?}", other);
+                return fail_expr("Code block expected", &other);
+            }
+        };
+        Ok((Feature {
+            title: Box::new(title),
+            scenarios,
+        }, ts))
+    }
+
+    fn parse_keyword_scenario(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (title, ts) = self.compile_next(ts)?;
+        let ts = ts.expect("{")?;
+        let (code, ts) = self.expect_curly_brackets(ts)?;
+        match code {
+            CodeBlock(verifications) =>
+                Ok((Scenario {
+                    title: Box::new(title),
+                    verifications,
+                    inherits: None,
+                }, ts)),
+            other => {
+                println!("parse_keyword_scenario: other {:?}", other);
+                return fail_expr("Code block expected", &other);
+            }
+        }
     }
 
     /// Builds a language model from a function variant
@@ -449,9 +495,9 @@ impl Compiler {
         match args.as_slice() {
             [c, a, b] =>
                 Ok((If {
-                    condition: Box::new(c.clone()),
-                    a: Box::new(a.clone()),
-                    b: Some(Box::new(b.clone())),
+                    condition: Box::new(c.to_owned()),
+                    a: Box::new(a.to_owned()),
+                    b: Some(Box::new(b.to_owned())),
                 }, ts)),
             _ => fail_near("Syntax error. Usage: iff(cond, a, b)", &ts)
         }
@@ -503,18 +549,11 @@ impl Compiler {
     /// Builds a language model from a 'struct' statement:
     /// ex: struct(symbol: String(8), exchange: String(8), last_sale: f64)
     fn parse_keyword_struct(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.clone())? {
+        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.to_owned())? {
             Ok((Literal(StructureValue(Structure::from_logical_columns(&columns)?)), ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }
-    }
-
-    /// Builds a language model from a SYSCALL statement:
-    /// ex: syscall("ps", "aux")
-    fn parse_keyword_syscall(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (args, ts) = self.expect_arguments(ts)?;
-        Ok((SystemCall(args), ts))
     }
 
     /// Builds a language model from a table expression.
@@ -523,7 +562,7 @@ impl Compiler {
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.clone())? {
+        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.to_owned())? {
             // from { symbol: "ABC", exchange: "NYSE", last_sale: 67.89 }
             let (from, ts) = if ts.is("from") {
                 let ts = ts.expect("from")?;
@@ -667,7 +706,7 @@ impl Compiler {
         host: Expression,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        match ts.clone() {
+        match ts.to_owned() {
             t if t.is("limit") => {
                 let (expr, ts) = self.compile_next(ts.skip())?;
                 self.parse_queryable(Inquire(Queryable::Limit { from: Box::new(host), limit: Box::new(expr) }), ts)
@@ -709,7 +748,7 @@ impl Compiler {
         let mut args = Vec::new();
         let mut ts = ts.expect("(")?;
         while ts.isnt(")") {
-            if let (Variable(name), ats) = self.compile_next(ts.clone())? {
+            if let (Variable(name), ats) = self.compile_next(ts.to_owned())? {
                 args.push(name);
                 ts = if ats.is(")") { ats } else { ats.expect(",")? }
             } else {
@@ -720,20 +759,34 @@ impl Compiler {
     }
 
     fn expect_curly_brackets(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        // collect all expressions and/or key-value pairs
+        let (mut expressions, mut key_values) = (Vec::new(), Vec::new());
         let mut ts = ts;
-        let mut kvps = Vec::new();
         while ts.isnt("}") {
-            match self.compile_next(ts)? {
-                (AsValue(name, expr), ats) => {
-                    kvps.push((name, *expr));
-                    ts = ats;
-                }
-                (expr, ats) =>
-                    return fail_near(format!("Illegal expression {}", expr), &ats),
+            // process the next expression
+            let (expr, tsb) = self.compile_next(ts)?;
+            ts = tsb;
+
+            // capture key-value pairs (JSON)
+            if let AsValue(name, value) = expr.to_owned() {
+                key_values.push((name, *value))
             }
+
+            // add the expression (code block)
+            expressions.push(expr);
+
+            // end of block?
             if ts.isnt("}") { ts = ts.expect(",")? }
         }
-        Ok((JSONLiteral(kvps), ts.expect("}")?))
+        let ts = ts.expect("}")?;
+
+        // if all expressions are key-value pairs, it's a JSON literal,
+        // otherwise it's a code block
+        if !key_values.is_empty() && key_values.len() == expressions.len() {
+            Ok((JSONLiteral(key_values), ts))
+        } else {
+            Ok((CodeBlock(expressions), ts))
+        }
     }
 
     fn expect_function_call_or_variable(
@@ -758,7 +811,7 @@ impl Compiler {
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         // extract the function parameters
-        if let (ColumnSet(params), ts) = self.expect_parameters(ts.clone())? {
+        if let (ColumnSet(params), ts) = self.expect_parameters(ts.to_owned())? {
             // extract the function body
             let ts = ts.expect("=>")?;
             let (body, ts) = self.compile_next(ts)?;
@@ -782,7 +835,7 @@ impl Compiler {
         let mut is_done = ts.is(")");
         while !is_done {
             // get the next parameter
-            let (param, ats) = self.expect_parameter(ts.clone())?;
+            let (param, ats) = self.expect_parameter(ts.to_owned())?;
             columns.push(param);
 
             // are we done yet?
@@ -842,45 +895,13 @@ impl Compiler {
         Ok((ArrayLiteral(items), ts.expect("]")?))
     }
 
-    pub fn get_stack(&self) -> Vec<Expression> {
-        self.stack.iter().map(|x| x.clone()).collect()
-    }
-
     fn maybe_curly_brackets(
         &mut self,
         ts: TokenSlice,
     ) -> Option<(std::io::Result<Expression>, TokenSlice)> {
         match ts.next() {
             (Some(t), ts) if t.contains("{") =>
-                match self.expect_curly_brackets(ts.clone()) {
-                    Ok((expr, ts)) => Some((Ok(expr), ts)),
-                    Err(err) => Some((fail(format!("{}", err)), ts))
-                }
-            _ => None
-        }
-    }
-
-    fn maybe_parentheses(
-        &mut self,
-        ts: TokenSlice,
-    ) -> Option<(std::io::Result<Expression>, TokenSlice)> {
-        match ts.next() {
-            (Some(t), ts) if t.contains("(") =>
-                match self.expect_parentheses(ts.clone()) {
-                    Ok((expr, ts)) => Some((Ok(expr), ts)),
-                    Err(err) => Some((fail(format!("{}", err)), ts))
-                }
-            _ => None
-        }
-    }
-
-    fn maybe_square_brackets(
-        &mut self,
-        ts: TokenSlice,
-    ) -> Option<(std::io::Result<Expression>, TokenSlice)> {
-        match ts.next() {
-            (Some(t), ts) if t.contains("[") =>
-                match self.expect_square_brackets(ts.clone()) {
+                match self.expect_curly_brackets(ts.to_owned()) {
                     Ok((expr, ts)) => Some((Ok(expr), ts)),
                     Err(err) => Some((fail(format!("{}", err)), ts))
                 }
@@ -915,13 +936,6 @@ impl Compiler {
     fn next_keyword_expression_list(&mut self, keyword0: &str, keyword1: &str, ts: TokenSlice) -> std::io::Result<(Option<Vec<Expression>>, TokenSlice)> {
         if ts.isnt(keyword0) || ts.skip().isnt(keyword1) { Ok((None, ts)) } else {
             self.next_expression_list(ts.skip().skip())
-        }
-    }
-
-    /// Returns the [Option] of a list of expressions based the next token matching the specified keyword
-    fn next_keyword_value_list(&mut self, keyword: &str, ts: TokenSlice) -> std::io::Result<(Option<Vec<Expression>>, TokenSlice)> {
-        if ts.isnt(keyword) { Ok((None, ts)) } else {
-            self.next_expression_list(ts.skip())
         }
     }
 
@@ -967,7 +981,7 @@ mod tests {
     use crate::data_types::*;
     use crate::expression::{E_ARRAY_LIT, E_JSON_LITERAL, E_LITERAL, Infrastructure, Mutation, Queryable};
     use crate::server::ColumnJs;
-    use crate::typed_values::TypedValue::{Float64Value, Int64Value};
+    use crate::typed_values::TypedValue::{Boolean, Float64Value, Int64Value};
 
     use super::*;
 
@@ -997,8 +1011,7 @@ mod tests {
                 Literal(Int64Value(7)), Literal(Int64Value(5)), Literal(Int64Value(8)),
                 Literal(Int64Value(2)), Literal(Int64Value(4)), Literal(Int64Value(1)),
             ])),
-            Box::new(Literal(Int64Value(3))),
-        );
+            Box::new(Literal(Int64Value(3))));
         assert_eq!(model.to_code(), script);
         assert_eq!(Compiler::compile_script(script).unwrap(), model);
     }
@@ -1027,7 +1040,7 @@ mod tests {
         // fn add(a: u64, b: u64) => a + b
         // fn add(a: u64, b: u64) : u64 => a + b
         let code = Compiler::compile_script(r#"
-        fn add(a, b) => a + b
+            fn add(a, b) => a + b
         "#).unwrap();
         assert_eq!(code,
                    SetVariable("add".to_string(), Box::new(
@@ -1052,7 +1065,7 @@ mod tests {
         // fn (a: u64, b: u64) : u64 => a + b
         // fn (a, b) => a + b
         let code = Compiler::compile_script(r#"
-        fn (a, b) => a * b
+            fn (a, b) => a * b
         "#).unwrap();
         assert_eq!(code,
                    Literal(Function {
@@ -1070,17 +1083,9 @@ mod tests {
     }
 
     #[test]
-    fn test_eval() {
-        let code = Compiler::compile_script(r#"
-        eval "5 + 7"
-        "#).unwrap();
-        assert_eq!(code, Eval(Box::new(Literal(StringValue("5 + 7".to_string())))))
-    }
-
-    #[test]
     fn test_function_call() {
         let code = Compiler::compile_script(r#"
-        f(2, 3)
+            f(2, 3)
         "#).unwrap();
         assert_eq!(code, FunctionCall {
             fx: Box::new(Variable("f".into())),
@@ -1094,7 +1099,7 @@ mod tests {
     #[test]
     fn create_index_in_namespace() {
         let code = Compiler::compile_script(r#"
-        create index ns("compiler.create.stocks") on [symbol, exchange]
+            create index ns("compiler.create.stocks") on [symbol, exchange]
         "#).unwrap();
         assert_eq!(code, Perform(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
@@ -1111,11 +1116,11 @@ mod tests {
     fn create_table_in_namespace() {
         let ns_path = "compiler.create.stocks";
         let code = Compiler::compile_script(r#"
-        create table ns("compiler.create.stocks") (
-            symbol: String(8),
-            exchange: String(8),
-            last_sale: f64)
-        "#).unwrap();
+            create table ns("compiler.create.stocks") (
+                symbol: String(8),
+                exchange: String(8),
+                last_sale: f64)
+            "#).unwrap();
         assert_eq!(code, Perform(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
             entity: TableEntity {
@@ -1132,11 +1137,11 @@ mod tests {
     #[test]
     fn test_declare_table() {
         let model = Compiler::compile_script(r#"
-        table(
-            symbol: String(8),
-            exchange: String(8),
-            last_sale: f64
-        )"#).unwrap();
+            table(
+                symbol: String(8),
+                exchange: String(8),
+                last_sale: f64
+            )"#).unwrap();
         assert_eq!(model, Perform(Infrastructure::Declare(TableEntity {
             columns: vec![
                 ColumnJs::new("symbol", "String(8)", None),
@@ -1150,7 +1155,7 @@ mod tests {
     #[test]
     fn test_drop_table() {
         let code = Compiler::compile_script(r#"
-        drop table ns('finance.securities.stocks')
+            drop table ns('finance.securities.stocks')
         "#).unwrap();
         assert_eq!(code,
                    Perform(Infrastructure::Drop(TableTarget {
@@ -1160,9 +1165,34 @@ mod tests {
     }
 
     #[test]
+    fn test_feature_with_a_scenario() {
+        let code = Compiler::compile_script(r#"
+            feature "Karate translator" {
+                scenario "Translate Karate Scenario to Oxide Scenario" {
+                    assert(true)
+                }
+            } "#).unwrap();
+        assert_eq!(code, Feature {
+            title: Box::new(Literal(StringValue("Karate translator".to_string()))),
+            scenarios: vec![
+                Scenario {
+                    title: Box::new(Literal(StringValue("Translate Karate Scenario to Oxide Scenario".to_string()))),
+                    verifications: vec![
+                        FunctionCall {
+                            fx: Box::new(Variable("assert".to_string())),
+                            args: vec![Literal(Boolean(true))],
+                        }
+                    ],
+                    inherits: None,
+                }
+            ],
+        })
+    }
+
+    #[test]
     fn test_if() {
         let code = Compiler::compile_script(r#"
-        if(n > 100) "Yes"
+            if(n > 100) "Yes"
         "#).unwrap();
         assert_eq!(code, If {
             condition: Box::new(GreaterThan(
@@ -1177,7 +1207,7 @@ mod tests {
     #[test]
     fn test_if_else() {
         let code = Compiler::compile_script(r#"
-        if(n > 100) n else m
+            if(n > 100) n else m
         "#).unwrap();
         assert_eq!(code, If {
             condition: Box::new(GreaterThan(
@@ -1192,7 +1222,7 @@ mod tests {
     #[test]
     fn test_iff() {
         let code = Compiler::compile_script(r#"
-        iff(x > 5, a, b)
+            iff(x > 5, a, b)
         "#).unwrap();
         assert_eq!(code, If {
             condition: Box::new(GreaterThan(
@@ -1207,7 +1237,7 @@ mod tests {
     #[test]
     fn test_json_literal_value() {
         let code = Compiler::compile_script(r#"
-        {symbol: "ABC", exchange: "NYSE", last_sale: 16.79}
+            {symbol: "ABC", exchange: "NYSE", last_sale: 16.79}
         "#).unwrap();
         assert_eq!(code,
                    JSONLiteral(vec![
@@ -1296,30 +1326,45 @@ mod tests {
     #[test]
     fn test_must_succeed() {
         let code = Compiler::compile_script(r#"
-        [+] eval "5 + 7"
+        [+] eval("5 + 7")
         "#).unwrap();
         assert_eq!(code, MustAck(Box::new(
-            Eval(Box::new(Literal(StringValue("5 + 7".to_string()))))
+            FunctionCall {
+                fx: Box::new(Variable("eval".to_string())),
+                args: vec![
+                    Literal(StringValue("5 + 7".to_string()))
+                ],
+            }
         )));
     }
 
     #[test]
     fn test_must_not_succeed() {
         let code = Compiler::compile_script(r#"
-        [-] eval "7 / 0"
+        [-] eval("7 / 0")
         "#).unwrap();
         assert_eq!(code, MustNotAck(Box::new(
-            Eval(Box::new(Literal(StringValue("7 / 0".to_string()))))
+            FunctionCall {
+                fx: Box::new(Variable("eval".to_string())),
+                args: vec![
+                    Literal(StringValue("7 / 0".to_string()))
+                ],
+            }
         )))
     }
 
     #[test]
     fn test_must_ignore_failure() {
         let code = Compiler::compile_script(r#"
-        [~] eval "7 / 0"
+        [~] eval("7 / 0")
         "#).unwrap();
         assert_eq!(code, MustIgnoreAck(Box::new(
-            Eval(Box::new(Literal(StringValue("7 / 0".to_string()))))
+            FunctionCall {
+                fx: Box::new(Variable("eval".to_string())),
+                args: vec![
+                    Literal(StringValue("7 / 0".to_string()))
+                ],
+            }
         )))
     }
 
@@ -1881,10 +1926,15 @@ mod tests {
         let model = Compiler::compile_script(r#"
         syscall("cat", "LICENSE")
         "#).unwrap();
-        assert_eq!(model, SystemCall(vec![
-            Literal(StringValue("cat".into())),
-            Literal(StringValue("LICENSE".into())),
-        ]));
+        assert_eq!(
+            model,
+            FunctionCall {
+                fx: Box::new(Variable("syscall".into())),
+                args: vec![
+                    Literal(StringValue("cat".into())),
+                    Literal(StringValue("LICENSE".into())),
+                ],
+            });
     }
 
     #[test]
@@ -1892,7 +1942,14 @@ mod tests {
         let model = Compiler::compile_script(r#"
         type_of("cat")
         "#).unwrap();
-        assert_eq!(model, TypeOf(Box::new(Literal(StringValue("cat".into())))));
+        assert_eq!(
+            model,
+            FunctionCall {
+                fx: Box::new(Variable("type_of".to_string())),
+                args: vec![
+                    Literal(StringValue("cat".to_string()))
+                ],
+            });
     }
 
     #[test]

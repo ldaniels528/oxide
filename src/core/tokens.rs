@@ -54,7 +54,7 @@ impl Token {
         ].iter().map(|s| s.to_string()).collect::<Vec<String>>();
         let precedence = Self::determine_precedence(text.as_str());
         let is_postfix = text == "¡" || text == "²" || text == "³";
-        let is_barrier = barrier_symbols.contains(&text.clone());
+        let is_barrier = barrier_symbols.contains(&text.to_owned());
         Operator { text, start, end, line_number, column_number, precedence, is_postfix, is_barrier }
     }
 

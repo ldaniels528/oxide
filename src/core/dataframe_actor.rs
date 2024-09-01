@@ -172,7 +172,7 @@ pub enum IORequest {
 #[macro_export]
 macro_rules! append_row {
     ($actor:expr, $ns:expr, $row:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::AppendRow { ns: $ns.clone(), row: $row }).await
+        $actor.send(crate::dataframe_actor::IORequest::AppendRow { ns: $ns.to_owned(), row: $row }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -182,7 +182,7 @@ macro_rules! append_row {
 macro_rules! create_table {
     ($actor:expr, $ns:expr, $columns:expr) => {
         $actor.send(crate::dataframe_actor::IORequest::CreateTable {
-            ns: $ns.clone(),
+            ns: $ns.to_owned(),
             cfg: DataFrameConfig::new($columns, Vec::new(), Vec::new())
         }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
@@ -193,7 +193,7 @@ macro_rules! create_table {
 #[macro_export]
 macro_rules! create_table_from_config {
     ($actor:expr, $ns:expr, $cfg:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::CreateTable { ns: $ns.clone(), cfg: $cfg }).await
+        $actor.send(crate::dataframe_actor::IORequest::CreateTable { ns: $ns.to_owned(), cfg: $cfg }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -202,7 +202,7 @@ macro_rules! create_table_from_config {
 #[macro_export]
 macro_rules! delete_row {
     ($actor:expr, $ns:expr, $id:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::DeleteRow { ns: $ns.clone(), id: $id }).await
+        $actor.send(crate::dataframe_actor::IORequest::DeleteRow { ns: $ns.to_owned(), id: $id }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -211,7 +211,7 @@ macro_rules! delete_row {
 #[macro_export]
 macro_rules! get_columns {
     ($actor:expr, $ns:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::GetColumns { ns: $ns.clone() }).await
+        $actor.send(crate::dataframe_actor::IORequest::GetColumns { ns: $ns.to_owned() }).await
             .map(|s|serde_json::from_str::<Vec<TableColumn>>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -220,7 +220,7 @@ macro_rules! get_columns {
 #[macro_export]
 macro_rules! overwrite_row {
     ($actor:expr, $ns:expr, $row:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::OverwriteRow { ns: $ns.clone(), row: $row }).await
+        $actor.send(crate::dataframe_actor::IORequest::OverwriteRow { ns: $ns.to_owned(), row: $row }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -238,7 +238,7 @@ macro_rules! get_namespaces {
 #[macro_export]
 macro_rules! read_fully {
     ($actor:expr, $ns:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::ReadFully { ns: $ns.clone() }).await
+        $actor.send(crate::dataframe_actor::IORequest::ReadFully { ns: $ns.to_owned() }).await
             .map(|s|serde_json::from_str::<Vec<Row>>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -247,7 +247,7 @@ macro_rules! read_fully {
 #[macro_export]
 macro_rules! read_range {
     ($actor:expr, $ns:expr, $range:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::ReadRange { ns: $ns.clone(), range: $range }).await
+        $actor.send(crate::dataframe_actor::IORequest::ReadRange { ns: $ns.to_owned(), range: $range }).await
             .map(|s|serde_json::from_str::<Vec<Row>>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -256,7 +256,7 @@ macro_rules! read_range {
 #[macro_export]
 macro_rules! read_row {
     ($actor:expr, $ns:expr, $id:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::ReadRow { ns: $ns.clone(), id: $id }).await
+        $actor.send(crate::dataframe_actor::IORequest::ReadRow { ns: $ns.to_owned(), id: $id }).await
             .map(|s|serde_json::from_str::<Option<Row>>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -265,7 +265,7 @@ macro_rules! read_row {
 #[macro_export]
 macro_rules! read_row_metadata {
     ($actor:expr, $ns:expr, $id:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::ReadRowMetadata { ns: $ns.clone(), id: $id }).await
+        $actor.send(crate::dataframe_actor::IORequest::ReadRowMetadata { ns: $ns.to_owned(), id: $id }).await
             .map(|s|serde_json::from_str::<RowMetadata>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -274,7 +274,7 @@ macro_rules! read_row_metadata {
 #[macro_export]
 macro_rules! update_row {
     ($actor:expr, $ns:expr, $row:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::UpdateRow { ns: $ns.clone(), row: $row }).await
+        $actor.send(crate::dataframe_actor::IORequest::UpdateRow { ns: $ns.to_owned(), row: $row }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }

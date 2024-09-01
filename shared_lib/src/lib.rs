@@ -31,7 +31,7 @@ impl FieldJs {
     }
 
     pub fn get_value(&self) -> Value {
-        self.value.clone()
+        self.value.to_owned()
     }
 }
 
@@ -98,9 +98,9 @@ impl RemoteCallResponse {
         }
     }
 
-    pub fn get_message(&self) -> Option<String> { self.message.clone() }
+    pub fn get_message(&self) -> Option<String> { self.message.to_owned() }
 
-    pub fn get_result(&self) -> Value { self.result.clone() }
+    pub fn get_result(&self) -> Value { self.result.to_owned() }
 }
 
 /// Transforms the cells into a textual table
@@ -110,8 +110,8 @@ pub fn tabulate_cells(
 ) -> Vec<String> {
     // create a combined vector of cells (header and body)
     let mut cells = Vec::new();
-    cells.extend(header_cells.clone());
-    cells.extend(body_cells.clone());
+    cells.extend(header_cells.to_owned());
+    cells.extend(body_cells.to_owned());
 
     // compute the width for each cell
     let cell_widths = cells.iter().map(|cell| {
@@ -120,7 +120,7 @@ pub fn tabulate_cells(
 
     // compute the width for each column
     let column_widths = cell_widths.iter()
-        .fold(cell_widths[0].clone(), |a, b| tabulate_maximums(&a, b));
+        .fold(cell_widths[0].to_owned(), |a, b| tabulate_maximums(&a, b));
 
     // produce formatted lines
     tabulate_table(header_cells, body_cells, column_widths)
@@ -163,9 +163,9 @@ pub fn tabulate_table(
 
     // produce formatted lines
     let mut lines = Vec::new();
-    lines.push(separator.clone());
+    lines.push(separator.to_owned());
     lines.extend(tabulate_lines(&header_cells, &column_widths));
-    lines.push(separator.clone());
+    lines.push(separator.to_owned());
     lines.extend(tabulate_lines(&body_cells, &column_widths));
     lines.push(separator);
     lines
@@ -202,7 +202,7 @@ pub fn fail<A>(message: impl Into<String>) -> std::io::Result<A> {
 pub fn get_host_and_port(args: Vec<String>) -> std::io::Result<(String, String)> {
     // args: ['./myapp', 'arg1', 'arg2', ..]
     let (host, port) = match args.as_slice() {
-        [_, port] => ("127.0.0.1".to_string(), port.to_string()),
+        [_, port] => (String::from("127.0.0.1"), port.to_string()),
         [_, host, port] => (host.to_string(), port.to_string()),
         [_, host, port, ..] => (host.to_string(), port.to_string()),
         _ => ("127.0.0.1".to_string(), "8080".to_string())

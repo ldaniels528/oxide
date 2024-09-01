@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::{cnv_error, RemoteCallRequest, RemoteCallResponse, RowJs};
 
+use crate::expression::ACK;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
 use crate::row_collection::RowCollection;
@@ -23,7 +24,7 @@ use crate::table_columns::TableColumn;
 use crate::table_renderer::TableRenderer;
 use crate::table_writer::TableWriter;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::ErrorValue;
+use crate::typed_values::TypedValue::{ErrorValue, Function};
 
 pub const HISTORY_TABLE_NAME: &str = "history";
 
@@ -66,11 +67,21 @@ impl REPLState {
         REPLState {
             database: "oxide".into(),
             schema: "public".into(),
-            interpreter: Interpreter::new(),
+            interpreter: Self::attach_builtin_functions(Interpreter::new()),
             counter: 0,
             is_alive: true,
             connection: REPLConnection::LocalConnection,
         }
+    }
+
+    pub fn attach_builtin_functions(mut interpreter: Interpreter) -> Interpreter {
+        interpreter.with_variable("assert", Function {
+            params: vec![
+                ColumnJs::new("condition", "Boolean", None)
+            ],
+            code: Box::new(ACK),
+        });
+        interpreter
     }
 
     /// instructs the REPL to quit after the current statement has been processed
@@ -111,7 +122,7 @@ impl REPLState {
         };
         // capture the row ID and columns
         let id = mrc.len()?;
-        let columns = mrc.get_columns().clone();
+        let columns = mrc.get_columns().to_owned();
         // cleanup the user input
         let clean_input = input.trim().split('\n').map(|s| s.trim())
             .collect::<Vec<&str>>().join("; ");
@@ -156,7 +167,7 @@ pub async fn run(mut state: REPLState) -> std::io::Result<()> {
         let t0 = Local::now();
         let result = process_statement(&mut state, input.as_str())
             .await
-            .unwrap_or_else(|err| TypedValue::StringValue(err.to_string()));
+            .unwrap_or_else(|err| TypedValue::ErrorValue(err.to_string()));
         let t1 = Local::now();
         let t2 = t1 - t0;
 
@@ -176,7 +187,7 @@ pub async fn run(mut state: REPLState) -> std::io::Result<()> {
         match result {
             TypedValue::TableValue(mrc) => {
                 let lines =
-                    TableRenderer::from_collection(Box::new(mrc.clone()));
+                    TableRenderer::from_collection(Box::new(mrc.to_owned()));
                 for line in lines { stdout.write((line + "\n").as_bytes())?; }
             }
             z => {
@@ -214,7 +225,7 @@ pub async fn process_statement(state: &mut REPLState, user_input: &str) -> std::
             let response = reqwest::Client::new()
                 .post(format!("http://{}:{}/rpc", host, port))
                 .body(body)
-                .header("Content-type", "application/json")
+                .header("Content-Type", "application/json")
                 .send()
                 .await.map_err(|e| cnv_error!(e))?;
             let response_body = response.text().await.map_err(|e| cnv_error!(e))?;
@@ -238,7 +249,7 @@ fn say(message: &str) -> std::io::Result<()> {
         }
         // is it JSON object?
         s if s.starts_with("{") => RowJs::from_string(s)?.to_json_string(),
-        s => s.to_string()
+        s => String::from(s)
     };
     execute!(
         stdout(),
@@ -266,9 +277,9 @@ mod tests {
         let r: REPLState = REPLState::new();
         assert_eq!(r.get_prompt(), "oxide.public[0]> ");
         assert_eq!(r, REPLState {
-            interpreter: Interpreter::new(),
-            database: "oxide".into(),
-            schema: "public".into(),
+            interpreter: REPLState::attach_builtin_functions(Interpreter::new()),
+            database: String::from("oxide"),
+            schema: String::from("public"),
             counter: 0,
             is_alive: true,
             connection: REPLConnection::LocalConnection,

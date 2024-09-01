@@ -143,7 +143,7 @@ mod tests {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let ns = Namespace::new("file_row_collection", "get_columns", "stocks");
-        let frc = FileRowCollection::create_table(&ns, phys_columns.clone()).unwrap();
-        assert_eq!(frc.get_columns().clone(), phys_columns)
+        let frc = FileRowCollection::create_table(&ns, phys_columns.to_owned()).unwrap();
+        assert_eq!(frc.get_columns().to_owned(), phys_columns)
     }
 }
