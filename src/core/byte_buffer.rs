@@ -335,7 +335,11 @@ impl ByteBuffer {
             T_STRING => Ok(StringValue(self.next_string())),
             T_STRUCTURE => Ok(StructureValue(self.next_struct()?)),
             T_TABLE_VALUE => Ok(TableValue(self.next_table()?)),
-            T_NAMESPACE => Ok(NamespaceValue(self.next_string())),
+            T_NAMESPACE =>
+                match self.next_string().split('.').collect::<Vec<_>>().as_slice() {
+                    [d, s, n] => Ok(NamespaceValue(d.to_string(), s.to_string(), n.to_string())),
+                    _ => fail("Invalid namespace reference (ex. 'a.b.stocks')")
+                }
             T_TUPLE => Ok(TupleValue(self.next_array()?)),
             T_UINT8 => Ok(UInt8Value(self.next_u8())),
             T_UINT16 => Ok(UInt16Value(self.next_u16())),

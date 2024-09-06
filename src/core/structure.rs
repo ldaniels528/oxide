@@ -100,9 +100,9 @@ impl Structure {
 
     pub fn to_string(&self) -> String {
         let mapping = self.columns.iter().zip(self.values.iter())
-            .map(|(c, v)| format!("\"{}\": {}", c.get_name(), v.to_json().to_string()))
+            .map(|(c, v)| format!("\"{}\":{}", c.get_name(), v.to_json().to_string()))
             .collect::<Vec<String>>();
-        format!("{{ {} }}", mapping.join(", "))
+        format!("{{{}}}", mapping.join(","))
     }
 
     pub fn with_rows(&self, rows: Vec<Row>) -> ModelRowCollection {
@@ -128,7 +128,17 @@ mod tests {
     use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
 
     #[test]
-    fn test_new_empty_structure() {
+    fn test_new_structure_from_logical_columns() {
+        let structure = Structure::from_logical_columns(&make_quote_columns()).unwrap();
+        assert_eq!(structure.get("symbol"), Null);
+        assert_eq!(structure.get("exchange"), Null);
+        assert_eq!(structure.get("last_sale"), Null);
+        assert_eq!(structure.get_values(), vec![Null, Null, Null]);
+        assert_eq!(structure.to_string(), r#"{"symbol":null,"exchange":null,"last_sale":null}"#)
+    }
+
+    #[test]
+    fn test_new_structure_from_physical_columns() {
         let structure = Structure::new(make_table_columns());
         assert_eq!(structure.get_columns(), vec![
             TableColumn::new("symbol", StringType(8), Null, 9),
@@ -139,7 +149,7 @@ mod tests {
         assert_eq!(structure.get("exchange"), Null);
         assert_eq!(structure.get("last_sale"), Null);
         assert_eq!(structure.get_values(), vec![Null, Null, Null]);
-        assert_eq!(structure.to_string(), r#"{ "symbol": null, "exchange": null, "last_sale": null }"#)
+        assert_eq!(structure.to_string(), r#"{"symbol":null,"exchange":null,"last_sale":null}"#)
     }
 
     #[test]
@@ -158,7 +168,7 @@ mod tests {
             StringValue("NYSE".to_string()),
             Float64Value(11.11),
         ]);
-        assert_eq!(structure.to_string(), r#"{ "symbol": "ABC", "exchange": "NYSE", "last_sale": 11.11 }"#)
+        assert_eq!(structure.to_string(), r#"{"symbol":"ABC","exchange":"NYSE","last_sale":11.11}"#)
     }
 
     #[test]
@@ -178,7 +188,7 @@ mod tests {
             StringValue("NYSE".to_string()),
             Float64Value(11.11),
         ]);
-        assert_eq!(structure.to_string(), r#"{ "symbol": "ABC", "exchange": "NYSE", "last_sale": 11.11 }"#)
+        assert_eq!(structure.to_string(), r#"{"symbol":"ABC","exchange":"NYSE","last_sale":11.11}"#)
     }
 
     #[test]
@@ -196,7 +206,7 @@ mod tests {
             StringValue("AMEX".to_string()),
             Float64Value(11.77),
         ]);
-        assert_eq!(structure.to_string(), r#"{ "symbol": "ABC", "exchange": "AMEX", "last_sale": 11.77 }"#)
+        assert_eq!(structure.to_string(), r#"{"symbol":"ABC","exchange":"AMEX","last_sale":11.77}"#)
     }
 
     #[test]
@@ -223,7 +233,7 @@ mod tests {
             ]);
         assert_eq!(
             table.to_string(),
-            r#"[{ "symbol": "ICE", "exchange": "NASDAQ", "last_sale": 22.11 }, { "symbol": "ABC", "exchange": "AMEX", "last_sale": 11.77 }, { "symbol": "UNO", "exchange": "OTC", "last_sale": 0.2456 }, { "symbol": "BIZ", "exchange": "NYSE", "last_sale": 23.66 }]"#
+            r#"[{"symbol":"ICE","exchange":"NASDAQ","last_sale":22.11}, {"symbol":"ABC","exchange":"AMEX","last_sale":11.77}, {"symbol":"UNO","exchange":"OTC","last_sale":0.2456}, {"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}]"#
         )
     }
 

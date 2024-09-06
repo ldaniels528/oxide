@@ -57,22 +57,17 @@ pub trait RowCollection: Debug {
         &mut self,
         table: Box<dyn RowCollection>,
     ) -> TypedValue {
-        let mut affected = 0;
         let len = match self.len() {
             Ok(len) => len,
             Err(err) => return ErrorValue(err.to_string())
         };
-        for row_id in 0..len {
-            match table.read_one(row_id) {
-                Ok(Some(row)) => {
-                    let new_row_id = len + row_id;
-                    if let RowsAffected(n) = self.overwrite_row(new_row_id, row.with_row_id(new_row_id)) {
-                        affected += n
-                    }
-                }
-                Ok(None) => {}
-                Err(err) => return ErrorValue(err.to_string())
-            };
+        let mut affected = 0;
+        for row in table.iter() {
+            let row_id = row.get_id();
+            let new_row_id = len + row_id;
+            if let RowsAffected(n) = self.overwrite_row(new_row_id, row.with_row_id(new_row_id)) {
+                affected += n
+            }
         }
         RowsAffected(affected)
     }
@@ -132,22 +127,24 @@ pub trait RowCollection: Debug {
     }
 
     /// Removes rows that satisfy the include function
-    fn delete_rows(&mut self, include: fn(Row, RowMetadata) -> bool) -> TypedValue {
+    fn delete_rows(&mut self, include: fn(&Row) -> bool) -> TypedValue {
         let mut removals = 0;
         let range = match self.get_indices() {
             Ok(result) => result,
             Err(err) => return ErrorValue(err.to_string())
         };
+        let metadata = RowMetadata::new(false);
         for row_id in range {
-            let (row, metadata) = match self.read_row(row_id) {
-                Ok(result) => result,
+            match self.read_one(row_id) {
+                Ok(Some(row)) if include(&row) =>
+                    match self.overwrite_row_metadata(row.get_id(), metadata.to_owned()) {
+                        RowsAffected(n) => removals += n,
+                        ErrorValue(msg) => return ErrorValue(msg),
+                        _ => {}
+                    }
+                Ok(_) => {}
                 Err(err) => return ErrorValue(err.to_string())
             };
-            if metadata.is_allocated && include(row.to_owned(), metadata) {
-                if self.overwrite_row_metadata(row.get_id(), metadata.as_delete()).is_ok() {
-                    removals += 1
-                }
-            }
         }
         RowsAffected(removals)
     }
@@ -806,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn test_condition_exists_in__table() {
+    fn test_condition_exists_in_table() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // append some rows to the host table (rc)
             assert_eq!(RowsAffected(4), rc.append_rows(vec![
@@ -818,14 +815,14 @@ mod tests {
 
             // verify: there is at least one row where exchange is "NYSE"
             assert_eq!(rc.exists(|row| matches!(
-                row.find_value_by_name("exchange"),
-                Some(StringValue(s)) if s == "NYSE"
+                row.get("exchange"),
+                StringValue(s) if s == "NYSE"
             )), Boolean(true));
 
             // verify: there are no rows where exchange starts with "OTC"
             assert_eq!(rc.exists(|row| matches!(
-                row.find_value_by_name("exchange"),
-                Some(StringValue(s)) if s.starts_with("OTC")
+                row.get("exchange"),
+                StringValue(s) if s.starts_with("OTC")
             )), Boolean(false));
         }
 
@@ -1001,9 +998,7 @@ mod tests {
             assert_eq!(RowsAffected(4), rc.append_row(make_quote(4, &columns, "OXIDE", "OSS", 0.00)));
 
             // delete even rows
-            assert_eq!(RowsAffected(3), rc.delete_rows(|row, meta| {
-                row.get_id() % 2 == 0
-            }));
+            assert_eq!(RowsAffected(3), rc.delete_rows(|row| row.get_id() % 2 == 0));
 
             // retrieve the entire range of rows
             let rows = rc.read_active_rows().unwrap();
@@ -1115,7 +1110,7 @@ mod tests {
 
             // resize and verify
             assert_eq!(Float64Value(152.99759999999998),
-                       rc.fold_left(Float64Value(0.), |agg, row| agg + row.get_value_by_name("last_sale")));
+                       rc.fold_left(Float64Value(0.), |agg, row| agg + row.get("last_sale")));
         }
 
         // test the variants
@@ -1134,7 +1129,7 @@ mod tests {
 
             // fold and verify
             assert_eq!(Float64Value(347.00239999999997),
-                       rc.fold_right(Float64Value(500.), |agg, row| agg - row.get_value_by_name("last_sale")));
+                       rc.fold_right(Float64Value(500.), |agg, row| agg - row.get("last_sale")));
         }
 
         // test the variants
@@ -1503,7 +1498,7 @@ mod tests {
 
             // perform a forward scan
             let result = rc.find_next(2, |row| {
-                matches!(row.find_value_by_name("exchange"), Some(StringValue(s)) if s == "OTC".to_string())
+                matches!(row.get("exchange"), StringValue(s) if s == "OTC".to_string())
             }).unwrap();
 
             // verify the result
@@ -1561,7 +1556,7 @@ mod tests {
 
             // perform a reverse scan
             let result = rc.find_previous(4, |(row, _)| {
-                matches!(row.find_value_by_name("exchange"), Some(StringValue(s)) if s == "OTC".to_string())
+                matches!(row.get("exchange"), StringValue(s) if s == "OTC".to_string())
             }).unwrap();
 
             // verify the result

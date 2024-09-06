@@ -19,18 +19,18 @@ pub struct Namespace {
 
 impl Namespace {
     /// constructs a new [Namespace]
-    pub fn new(database: &str, schema: &str, name: &str) -> Self {
+    pub fn new<S: AsRef<str>>(database: S, schema: S, name: S) -> Self {
         Self {
-            database: database.to_string(),
-            schema: schema.to_string(),
-            name: name.to_string(),
+            database: database.as_ref().to_string(),
+            schema: schema.as_ref().to_string(),
+            name: name.as_ref().to_string(),
         }
     }
 
     pub fn parse(text: &str) -> std::io::Result<Namespace> {
         let result: Vec<&str> = text.split(".").collect();
         match result.as_slice() {
-            [a, b, c] => Ok(Namespace::new(a, b, c)),
+            [d, s, n] => Ok(Namespace::new(d, s, n)),
             _ => fail(format!("Failed to parse namespace '{}'", text))
         }
     }

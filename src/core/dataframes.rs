@@ -165,7 +165,7 @@ impl DataFrame {
             if let Some(row) = self.device.read_one(id)? {
                 // if the predicate matches the condition, overwrite the row.
                 if row.matches(machine, condition) {
-                    let (machine, my_fields) = machine.with_row(&row).evaluate_atoms(fields)?;
+                    let (machine, my_fields) = machine.with_row(&row).evaluate_as_atoms(fields)?;
                     if let (_, TypedValue::Array(my_values)) = machine.evaluate_array(values)? {
                         let new_row = row.transform(&my_fields, &my_values)?;
                         overwritten += self.overwrite(new_row)?;
@@ -306,7 +306,7 @@ impl DataFrame {
             if let Some(row) = self.device.read_one(id)? {
                 // if the predicate matches the condition, update the row.
                 if row.matches(machine, condition) {
-                    let (machine, field_names) = machine.with_row(&row).evaluate_atoms(fields)?;
+                    let (machine, field_names) = machine.with_row(&row).evaluate_as_atoms(fields)?;
                     if let (_, TypedValue::Array(field_values)) = machine.evaluate_array(values)? {
                         let new_row = row.transform(&field_names, &field_values)?;
                         if self.device.overwrite_row(id, new_row).is_ok() {
@@ -565,7 +565,7 @@ mod tests {
         assert_eq!(df.append(make_quote(0, &make_table_columns(), "FLY", "AMEX", 51.11)).unwrap(), 2);
         assert_eq!(df.append(make_quote(0, &make_table_columns(), "FAR", "NYSE", 42.33)).unwrap(), 3);
         assert_eq!(df.append(make_quote(0, &make_table_columns(), "AWAY", "AMEX", 9.73)).unwrap(), 4);
-        assert_eq!(df.map(|row| row.get_value_by_name("last_sale")).unwrap(), vec![
+        assert_eq!(df.map(|row| row.get("last_sale")).unwrap(), vec![
             Float64Value(123.45), Float64Value(88.22), Float64Value(51.11),
             Float64Value(42.33), Float64Value(9.73),
         ])

@@ -48,6 +48,11 @@ impl Row {
     //      Static Methods
     ////////////////////////////////////////////////////////////////////
 
+    /// Computes the total record size (in bytes)
+    pub fn compute_record_size(columns: &Vec<TableColumn>) -> usize {
+        Row::overhead() + columns.iter().map(|c| c.max_physical_size).sum::<usize>()
+    }
+
     /// Decodes the supplied buffer returning a row and its metadata
     pub fn decode(buffer: &Vec<u8>, columns: &Vec<TableColumn>) -> (Self, RowMetadata) {
         // if the buffer is empty, just return an empty row
@@ -82,6 +87,18 @@ impl Row {
     /// Returns an empty row.
     pub fn empty(columns: &Vec<TableColumn>) -> Self {
         Self::new(0, columns.to_owned(), columns.iter().map(|_| Null).collect())
+    }
+
+    pub fn encode_value(
+        value: &TypedValue,
+        metadata: &FieldMetadata,
+        capacity: usize,
+    ) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::with_capacity(capacity);
+        buf.push(metadata.encode());
+        buf.extend(value.encode());
+        buf.resize(capacity, 0u8);
+        buf
     }
 
     pub fn from_buffer(
@@ -141,14 +158,14 @@ impl Row {
         Row::new(id, columns.to_owned(), values)
     }
 
-    ////////////////////////////////////////////////////////////////////
-    //      Utilities
-    ////////////////////////////////////////////////////////////////////
 
-    /// Computes the total record size (in bytes)
-    pub fn compute_record_size(columns: &Vec<TableColumn>) -> usize {
-        Row::overhead() + columns.iter().map(|c| c.max_physical_size).sum::<usize>()
-    }
+    /// Represents the number of bytes before the start of column data, which includes
+    /// the embedded row metadata (1-byte) and row ID (4- or 8-bytes)
+    pub fn overhead() -> usize { 1 + size_of::<usize>() }
+
+    ////////////////////////////////////////////////////////////////////
+    //      Instance Methods
+    ////////////////////////////////////////////////////////////////////
 
     /// Returns the binary-encoded equivalent of the row.
     pub fn encode(&self) -> Vec<u8> {
@@ -164,34 +181,6 @@ impl Row {
         buf.extend(bb);
         buf.resize(capacity, 0u8);
         buf
-    }
-
-    pub fn encode_value(
-        value: &TypedValue,
-        metadata: &FieldMetadata,
-        capacity: usize,
-    ) -> Vec<u8> {
-        let mut buf: Vec<u8> = Vec::with_capacity(capacity);
-        buf.push(metadata.encode());
-        buf.extend(value.encode());
-        buf.resize(capacity, 0u8);
-        buf
-    }
-
-    pub fn filter_by_keys(&self, keys: Vec<String>) -> Self {
-        let new_values = self.columns.iter()
-            .map(|c| match c.get_name() {
-                name if name == "__row_id__" => UInt64Value(self.id as u64),
-                name => self.get(name)
-            }).collect();
-        self.with_values(new_values)
-    }
-
-    pub fn find_value_by_name(&self, name: &str) -> Option<TypedValue> {
-        self.columns.iter().zip(self.values.iter())
-            .find_map(|(c, v)| {
-                if c.get_name() == name { Some(v.to_owned()) } else { None }
-            })
     }
 
     pub fn get(&self, name: &str) -> TypedValue {
@@ -214,10 +203,6 @@ impl Row {
     /// returns the total record size (in bytes)
     pub fn get_record_size(&self) -> usize { Self::compute_record_size(&self.columns) }
 
-    pub fn get_value_by_name(&self, name: &str) -> TypedValue {
-        self.find_value_by_name(name).unwrap_or(Undefined)
-    }
-
     pub fn matches(&self, machine: &Machine, condition: &Option<Box<Expression>>) -> bool {
         if let Some(condition) = condition {
             let machine = machine.with_row(self);
@@ -225,9 +210,12 @@ impl Row {
         } else { true }
     }
 
-    /// Represents the number of bytes before the start of column data, which includes
-    /// the embedded row metadata (1-byte) and row ID (4- or 8-bytes)
-    pub fn overhead() -> usize { 1 + size_of::<usize>() }
+    /// Transforms the row into CSV
+    pub fn to_csv(&self) -> String {
+        self.get_values().iter()
+            .map(|v| v.get_raw_value())
+            .collect::<Vec<_>>().join(",")
+    }
 
     /// Returns a [HashMap] containing name-values pairs that represent the row's internal state.
     pub fn to_hash_map(&self) -> HashMap<String, TypedValue> {
@@ -239,24 +227,28 @@ impl Row {
         mapping
     }
 
+    /// Transforms the row into JSON
+    pub fn to_json(&self) -> String {
+        let inside = self.columns.iter().zip(self.values.iter())
+            .map(|(k, v)|
+                format!(r#""{}":{}"#, k.get_name().to_string(), v.get_raw_value()))
+            .collect::<Vec<_>>()
+            .join(",");
+        format!("{{{}}}", inside)
+    }
+
+    /// Transforms the row into a Row model
     pub fn to_row_js(&self) -> shared_lib::RowJs {
         RowJs::new(Some(self.get_id()), self.get_values().iter().zip(self.get_columns())
             .map(|(v, c)| FieldJs::new(c.get_name(), v.to_json())).collect())
     }
 
     pub fn to_string(&self) -> String {
-        let mapping = self.columns.iter().zip(self.values.iter())
-            .map(|(c, v)| format!("\"{}\": {}", c.get_name(), v.to_json().to_string()))
-            .collect::<Vec<String>>();
-        format!("{{ {} }}", mapping.join(", "))
+        self.to_json()
     }
 
     pub fn to_struct(&self) -> Structure {
         Structure::from_physical_columns_and_values(self.columns.to_owned(), self.values.to_owned())
-    }
-
-    pub fn to_table(&self) -> ModelRowCollection {
-        ModelRowCollection::from_rows(vec![self.to_owned()])
     }
 
     /// Creates a new [Row] from the supplied fields and values
@@ -423,21 +415,21 @@ mod tests {
         let row = row!(111, make_table_columns(), vec![
             StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
         ]);
-        assert_eq!(row.find_value_by_name("symbol"), Some(StringValue("GE".into())));
-        assert_eq!(row.find_value_by_name("exchange"), Some(StringValue("NYSE".into())));
-        assert_eq!(row.find_value_by_name("last_sale"), Some(Float64Value(48.88)));
-        assert_eq!(row.find_value_by_name("rating"), None);
+        assert_eq!(row.get("symbol"), StringValue("GE".into()));
+        assert_eq!(row.get("exchange"), StringValue("NYSE".into()));
+        assert_eq!(row.get("last_sale"), Float64Value(48.88));
+        assert_eq!(row.get("rating"), Undefined);
     }
 
     #[test]
-    fn test_get_value_by_name() {
+    fn test_get() {
         let row = row!(111, make_table_columns(), vec![
             StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
         ]);
-        assert_eq!(row.get_value_by_name("symbol"), StringValue("GE".into()));
-        assert_eq!(row.get_value_by_name("exchange"), StringValue("NYSE".into()));
-        assert_eq!(row.get_value_by_name("last_sale"), Float64Value(48.88));
-        assert_eq!(row.get_value_by_name("rating"), Undefined);
+        assert_eq!(row.get("symbol"), StringValue("GE".into()));
+        assert_eq!(row.get("exchange"), StringValue("NYSE".into()));
+        assert_eq!(row.get("last_sale"), Float64Value(48.88));
+        assert_eq!(row.get("rating"), Undefined);
     }
 
     #[test]

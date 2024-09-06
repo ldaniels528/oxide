@@ -106,7 +106,7 @@ impl REPLState {
             .evaluate_async(HISTORY_TABLE_NAME).await;
         if let Ok(TypedValue::TableValue(mrc)) = outcome {
             for row in mrc.get_rows() {
-                let input = row.get_value_by_name("input");
+                let input = row.get("input");
                 listing.push(format!("[{}] {}", &row.get_id(), input.unwrap_value()));
             }
         }

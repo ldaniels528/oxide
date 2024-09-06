@@ -49,12 +49,17 @@ const UUID_FORMAT: &str =
 pub enum BackDoorFunction {
     Assert = 0,
     Eval = 1,
-    Matches = 2,
-    StdErr = 3,
-    StdOut = 4,
-    SysCall = 5,
-    ToCSV = 6,
-    TypeOf = 7,
+    Format = 2,
+    If = 3,
+    Matches = 4,
+    Reset = 5,
+    StdErr = 6,
+    StdOut = 7,
+    SysCall = 8,
+    ToCSV = 9,
+    ToJSON = 10,
+    TypeOf = 11,
+    Variables = 12,
 }
 
 impl BackDoorFunction {
@@ -67,9 +72,10 @@ impl BackDoorFunction {
     }
 
     pub fn values() -> Vec<BackDoorFunction> {
+        use BackDoorFunction::*;
         vec![
-            Assert, Eval, Matches, StdErr, StdOut, SysCall,
-            ToCSV, TypeOf,
+            Assert, Eval, Format, If, Matches, Reset, StdErr, StdOut, SysCall,
+            ToCSV, ToJSON, TypeOf, Variables,
         ]
     }
 }
@@ -94,7 +100,7 @@ pub enum TypedValue {
     Int64Value(i64),
     Int128Value(i128),
     JSONValue(Vec<(String, TypedValue)>),
-    NamespaceValue(String),
+    NamespaceValue(String, String, String),
     RowsAffected(usize),
     StringValue(String),
     StructureValue(Structure),
@@ -223,7 +229,8 @@ impl TypedValue {
             RowsAffected(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
             StructureValue(structure) => codec::encode_string(structure.to_string().as_str()),
-            NamespaceValue(path) => codec::encode_string(path),
+            NamespaceValue(a, b, c) =>
+                codec::encode_string(format!("{a}.{b}.{c}").as_str()),
             TupleValue(items) => {
                 let mut bytes = Vec::new();
                 bytes.extend(items.len().to_be_bytes());
@@ -529,7 +536,7 @@ impl TypedValue {
             RowsAffected(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
             StructureValue(structure) => serde_json::json!(structure),
-            NamespaceValue(path) => serde_json::json!(path),
+            NamespaceValue(d, s, n) => serde_json::json!(format!("{d}.{s}.{n}")),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
                     .map(|r| r.to_row_js())
@@ -550,8 +557,8 @@ impl TypedValue {
 
     pub fn to_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
         match self {
-            NamespaceValue(path) => {
-                let ns = Namespace::parse(path.as_str())?;
+            NamespaceValue(d, s, n) => {
+                let ns = Namespace::new(d, s, n);
                 let frc = FileRowCollection::open(&ns)?;
                 Ok(Box::new(frc))
             }
@@ -596,7 +603,7 @@ impl TypedValue {
             RowsAffected(number) => number.to_string(),
             StringValue(string) => string.into(),
             StructureValue(structure) => structure.to_string(),
-            NamespaceValue(path) => path.into(),
+            NamespaceValue(d, s, n) => format!("{d}.{s}.{n}"),
             TupleValue(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("({})", values.join(", "))

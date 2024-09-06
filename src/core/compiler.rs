@@ -100,6 +100,16 @@ impl Compiler {
 
         // handle postfix operator?
         match ts.next() {
+            // keyword operator "is"
+            (Some(Atom { text: kw, .. }), ts) if kw == "is" => {
+                let (expr1, ts) = self.compile_next(ts)?;
+                Ok((Equal(Box::new(expr), Box::new(expr1)), ts))
+            }
+            // keyword operator "isnt"
+            (Some(Atom { text: kw, .. }), ts) if kw == "isnt" => {
+                let (expr1, ts) = self.compile_next(ts)?;
+                Ok((NotEqual(Box::new(expr), Box::new(expr1)), ts))
+            }
             // non-barrier operator: "," | ";"
             (Some(Operator { is_barrier, .. }), _) if !is_barrier => {
                 self.push(expr);
@@ -147,7 +157,6 @@ impl Compiler {
                 "HTTP" => self.parse_keyword_http(nts),
                 "include" => self.parse_expression_1a(nts, Include),
                 "if" => self.parse_keyword_if(nts),
-                "iff" => self.parse_keyword_iff(nts),
                 "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &nts),
                 "ns" => self.parse_expression_1a(nts, Ns),
                 "null" => Ok((NULL, nts)),
@@ -485,24 +494,6 @@ impl Compiler {
         }, ts))
     }
 
-    /// Builds a language model from an if function
-    /// ex: iff(x > 5, x, 5)
-    fn parse_keyword_iff(
-        &mut self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (args, ts) = self.expect_arguments(ts)?;
-        match args.as_slice() {
-            [c, a, b] =>
-                Ok((If {
-                    condition: Box::new(c.to_owned()),
-                    a: Box::new(a.to_owned()),
-                    b: Some(Box::new(b.to_owned())),
-                }, ts)),
-            _ => fail_near("Syntax error. Usage: iff(cond, a, b)", &ts)
-        }
-    }
-
     /// Builds a language model from an OVERWRITE statement:
     /// ex: overwrite stocks
     ///         via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
@@ -641,6 +632,13 @@ impl Compiler {
         }
     }
 
+    fn parse_negative(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        todo!()
+    }
+
     /// compiles the [TokenSlice] into an operator-based [Expression]
     fn parse_operator(
         &mut self,
@@ -669,6 +667,10 @@ impl Compiler {
             "(" => self.expect_parentheses(ts),
             "[" => self.expect_square_brackets(ts),
             "{" => self.expect_curly_brackets(ts),
+            "-" if self.stack.is_empty() => {
+                let (expr, ts) = self.compile_next(ts)?;
+                Ok((Neg(Box::new(expr)), ts))
+            }
             sym =>
                 if let Some(op0) = self.pop() {
                     match sym {
@@ -775,8 +777,8 @@ impl Compiler {
             // add the expression (code block)
             expressions.push(expr);
 
-            // end of block?
-            if ts.isnt("}") { ts = ts.expect(",")? }
+            // comma separator?
+            if ts.is(",") { ts = ts.next().1 }
         }
         let ts = ts.expect("}")?;
 
@@ -890,7 +892,10 @@ impl Compiler {
         while innards.has_more() {
             let (expr, its) = self.compile_next(innards)?;
             items.push(expr);
-            innards = if its.has_more() { its.expect(",")? } else { its };
+            innards = match its {
+                t if t.is(",") => t.next().1,
+                t => t
+            }
         }
         Ok((ArrayLiteral(items), ts.expect("]")?))
     }
@@ -952,15 +957,15 @@ impl Compiler {
 }
 
 pub fn fail_expr<A>(message: impl Into<String>, expr: &Expression) -> std::io::Result<A> {
-    Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} near {}", message.into(), expr.to_code())))
+    fail(format!("{} near {}", message.into(), expr.to_code()))
 }
 
 pub fn fail_near<A>(message: impl Into<String>, ts: &TokenSlice) -> std::io::Result<A> {
-    Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} near {}", message.into(), ts)))
+    fail(format!("{} near {}", message.into(), ts))
 }
 
 pub fn fail_token<A>(message: impl Into<String>, t: &Token) -> std::io::Result<A> {
-    Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} near {}", message.into(), t)))
+    fail(format!("{} near {}", message.into(), t))
 }
 
 pub fn fail_unexpected<A>(expected_type: impl Into<String>, value: &TypedValue) -> std::io::Result<A> {
@@ -972,7 +977,7 @@ pub fn fail_unhandled_expr<A>(expr: &Expression) -> std::io::Result<A> {
 }
 
 pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io::Result<A> {
-    Err(std::io::Error::new(std::io::ErrorKind::Other, format!("{} near {}", message.into(), value.unwrap_value())))
+    fail(format!("{} near {}", message.into(), value.unwrap_value()))
 }
 
 // Unit tests
@@ -1224,13 +1229,16 @@ mod tests {
         let code = Compiler::compile_script(r#"
             iff(x > 5, a, b)
         "#).unwrap();
-        assert_eq!(code, If {
-            condition: Box::new(GreaterThan(
-                Box::new(Variable("x".to_string())),
-                Box::new(Literal(Int64Value(5))),
-            )),
-            a: Box::new(Variable("a".to_string())),
-            b: Some(Box::new(Variable("b".to_string()))),
+        assert_eq!(code, FunctionCall {
+            fx: Box::new(Variable("iff".into())),
+            args: vec![
+                GreaterThan(
+                    Box::new(Variable("x".to_string())),
+                    Box::new(Literal(Int64Value(5))),
+                ),
+                Variable("a".to_string()),
+                Variable("b".to_string()),
+            ],
         });
     }
 

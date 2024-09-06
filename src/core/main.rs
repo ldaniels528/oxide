@@ -29,7 +29,7 @@ mod dataframes;
 mod data_types;
 mod expression;
 mod field_metadata;
-mod file_column_row_collection;
+mod file_embedded_row_collection;
 mod file_row_collection;
 mod hash_table_row_collection;
 mod interpreter;
