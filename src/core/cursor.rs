@@ -90,9 +90,7 @@ impl Cursor {
     /// Transforms all rows from the current position to the end-of-file (EOF)
     pub fn map<A>(&mut self, f: fn(Row) -> A) -> Vec<A> {
         let mut values = Vec::new();
-        while let Ok(Some(row)) = self.next() {
-            values.push(f(row))
-        }
+        while let Ok(Some(row)) = self.next() { values.push(f(row)) }
         values
     }
 
@@ -103,9 +101,10 @@ impl Cursor {
 
     /// Returns the next qualifying row or [None] if not found before the end-of-file (EOF)
     fn move_next(&mut self) -> std::io::Result<Option<Row>> {
-        let mut result = None;
+        let mut result: Option<Row> = None;
         let mut pos = self.position;
-        while result.is_none() && pos < self.rc.len()? {
+        let eof = self.rc.len()?;
+        while result.is_none() && pos < eof {
             result = self.get(pos)?;
             pos += 1;
         }
@@ -147,10 +146,12 @@ impl Cursor {
 
     /// Returns the previous qualifying row or [None] if not found before the top-of-file
     pub fn take(&mut self, limit: usize) -> std::io::Result<Vec<Row>> {
+        println!("take: limit {}", limit);
         let mut rows = Vec::new();
         let mut done = false;
-        while !done && rows.len() < limit {
+        while !done && (limit == 0 || rows.len() < limit) {
             if let Ok(Some(row)) = self.next() {
+                println!("take: {:?}", row.to_json());
                 rows.push(row)
             } else {
                 done = true

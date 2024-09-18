@@ -15,11 +15,12 @@ use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::file_row_collection::FileRowCollection;
 use crate::namespaces::Namespace;
+use crate::numbers::NumberValue::{Float64Value, UInt64Value};
 use crate::row;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
-use crate::typed_values::TypedValue::{Boolean, Float64Value, StringValue, UInt64Value};
+use crate::typed_values::TypedValue::*;
 
 pub fn make_quote_columns() -> Vec<ColumnJs> {
     vec![
@@ -49,7 +50,7 @@ pub fn make_quote(id: usize,
     row!(id, phys_columns, vec![
         StringValue(symbol.into()),
         StringValue(exchange.into()),
-        Float64Value(last_sale)
+        Number(Float64Value(last_sale))
     ])
 }
 
@@ -62,8 +63,8 @@ pub fn make_scan_quote(id: usize,
     row!(id, columns, vec![
                 StringValue(symbol.into()),
                 StringValue(exchange.into()),
-                Float64Value(last_sale),
-                UInt64Value(id as u64),
+                Number(Float64Value(last_sale)),
+                Number(UInt64Value(id as u64)),
                 Boolean(_active)
             ])
 }

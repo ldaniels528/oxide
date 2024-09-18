@@ -227,10 +227,11 @@ impl RowCollection for ModelRowCollection {
 #[cfg(test)]
 mod tests {
     use crate::model_row_collection::ModelRowCollection;
+    use crate::numbers::NumberValue::UInt64Value;
     use crate::row_collection::RowCollection;
     use crate::table_columns::TableColumn;
     use crate::testdata::{make_quote, make_quote_columns};
-    use crate::typed_values::TypedValue::{Boolean, UInt64Value};
+    use crate::typed_values::TypedValue::*;
 
     #[test]
     fn test_contains() {
@@ -262,7 +263,7 @@ mod tests {
     fn test_index_of() {
         let (mrc, phys_columns) = create_data_set();
         let row = make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442);
-        assert_eq!(mrc.index_of(&row), UInt64Value(3));
+        assert_eq!(mrc.index_of(&row), Number(UInt64Value(3)));
     }
 
     fn create_data_set() -> (ModelRowCollection, Vec<TableColumn>) {

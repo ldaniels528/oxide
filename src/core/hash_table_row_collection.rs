@@ -7,14 +7,17 @@ use std::ops::Range;
 use log::warn;
 
 use crate::data_types::DataType;
+use crate::data_types::DataType::NumberType;
 use crate::field_metadata::FieldMetadata;
+use crate::numbers::NumberKind::{F64Kind, U64Kind};
+use crate::numbers::NumberValue::UInt64Value;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Ack, ErrorValue, RowsAffected, UInt64Value};
+use crate::typed_values::TypedValue::*;
 
 /// Hash-Table-based RowCollection implementation
 #[derive(Debug)]
@@ -34,7 +37,7 @@ impl HashTableRowCollection {
     /// Generates the columns for the index base on the source column
     fn create_hash_keys_columns(src_column: &TableColumn) -> std::io::Result<Vec<TableColumn>> {
         TableColumn::from_columns(&vec![
-            ColumnJs::new("__row_id__", DataType::UInt64Type.to_column_type(), Some("null".into())),
+            ColumnJs::new("__row_id__", NumberType(U64Kind).to_column_type(), Some("null".into())),
             ColumnJs::new(src_column.get_name(), src_column.data_type.to_column_type(), Some(src_column.default_value.unwrap_value())),
         ])
     }
@@ -46,7 +49,7 @@ impl HashTableRowCollection {
         new_value: &TypedValue,
     ) -> Row {
         Row::new(keys_row_id, keys_columns.to_owned(), vec![
-            UInt64Value(data_row_id as u64),
+            Number(UInt64Value(data_row_id as u64)),
             new_value.to_owned(),
         ])
     }
@@ -168,8 +171,11 @@ impl HashTableRowCollection {
         for row_id in keys_row_id_range {
             if let Some(row) = self.keys_table.read_one(row_id as usize)? {
                 //println!("find_row_by_key[{}]:row {}", row_id, row.to_string());
-                if &row[1] == key {
-                    let data_row_id = row[0].assume_usize().unwrap_or(0);
+                if row[1] == *key {
+                    let data_row_id = match row[0].to_owned() {
+                        Number(number) => number.to_usize(),
+                        _ => 0
+                    };
                     return self.read_one(data_row_id);
                 }
             }
@@ -386,11 +392,12 @@ mod tests {
 
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
+    use crate::numbers::NumberValue::Float64Value;
     use crate::row_collection::RowCollection;
     use crate::rows::Row;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_table_columns, StockQuote};
-    use crate::typed_values::TypedValue::{Ack, Float64Value, RowsAffected, StringValue};
+    use crate::typed_values::TypedValue::*;
 
     use super::*;
 
@@ -400,7 +407,7 @@ mod tests {
         let ns = Namespace::new("hash_key", "create", "stocks");
         let columns = make_table_columns();
         let (symbol, exchange, last_sale) =
-            (StringValue("ABC".into()), StringValue("NASDAQ".into()), Float64Value(5.04));
+            (StringValue("ABC".into()), StringValue("NASDAQ".into()), Number(Float64Value(5.04)));
 
         // append-then-query the hash index
         let hkrc = build_hash_key_table_with_samples(&ns, 0, 1000, 100);
@@ -423,7 +430,7 @@ mod tests {
         let ns = Namespace::new("hash_key", "append_modify", "stocks");
         let columns = make_table_columns();
         let (symbol, exchange, last_sale) =
-            (StringValue("CRT".into()), StringValue("OTC_BB".into()), Float64Value(1.2582));
+            (StringValue("CRT".into()), StringValue("OTC_BB".into()), Number(Float64Value(1.2582)));
 
         // append rows then query the hash index
         let mut hkrc = build_hash_key_table_with_samples(&ns, 0, 1000, 100);
@@ -438,7 +445,7 @@ mod tests {
         assert_eq!(
             RowsAffected(1),
             hkrc.overwrite_row(2, Row::new(2, columns.to_owned(), vec![
-                StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Float64Value(1.2598),
+                StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Number(Float64Value(1.2598)),
             ])));
 
         // verify the modified record (data table)
@@ -450,7 +457,9 @@ mod tests {
         assert_eq!(
             hkrc.find_row_by_key(&StringValue("CRT.Q".into())).unwrap(),
             Some(Row::new(2, columns.to_owned(), vec![
-                StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Float64Value(1.2598),
+                StringValue("CRT.Q".into()),
+                StringValue("OTC_BB".into()),
+                Number(Float64Value(1.2598)),
             ])));
 
         // verify the deleted record (hash index table)
@@ -474,7 +483,7 @@ mod tests {
             let (outcome, msec) = measure_time(|| stocks.overwrite_row(id, Row::new(id, columns.to_owned(), vec![
                 StringValue(q.symbol.to_owned()),
                 StringValue(q.exchange.to_owned()),
-                Float64Value(q.last_sale),
+                Number(Float64Value(q.last_sale)),
             ])));
             timings.push(msec);
             assert_eq!(RowsAffected(1), outcome);
@@ -585,7 +594,7 @@ mod tests {
                 Row::new(0, columns.to_owned(), vec![
                     StringValue(symbol.to_string()),
                     StringValue(exchange.to_string()),
-                    Float64Value(*last_sale),
+                    Number(Float64Value(*last_sale)),
                 ])
             }).collect();
         assert_eq!(RowsAffected(9), frc.append_rows(rows));

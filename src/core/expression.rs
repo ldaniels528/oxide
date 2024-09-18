@@ -5,94 +5,20 @@
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
+use crate::byte_code_compiler::ByteCodeCompiler;
 
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
-use crate::serialization::assemble;
 use crate::server::ColumnJs;
 use crate::typed_values::TypedValue;
 
+// constants
 pub const ACK: Expression = Literal(TypedValue::Ack);
 pub const FALSE: Expression = Literal(TypedValue::Boolean(false));
 pub const TRUE: Expression = Literal(TypedValue::Boolean(true));
 pub const NULL: Expression = Literal(TypedValue::Null);
 pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
-
-// constants
-pub const E_AND: u8 = 2;
-pub const E_APPEND: u8 = 4;
-pub const E_ARRAY_LIT: u8 = 8;
-pub const E_AS_VALUE: u8 = 10;
-pub const E_BETWEEN: u8 = 15;
-pub const E_BETWIXT: u8 = 20;
-pub const E_BITWISE_AND: u8 = 25;
-pub const E_BITWISE_OR: u8 = 30;
-pub const E_BITWISE_XOR: u8 = 33;
-pub const E_CODE_BLOCK: u8 = 35;
-pub const E_COMPACT: u8 = 37;
-pub const E_CONTAINS: u8 = 40;
-pub const E_CREATE_INDEX: u8 = 45;
-pub const E_CREATE_TABLE: u8 = 50;
-pub const E_DECLARE_INDEX: u8 = 52;
-pub const E_DECLARE_TABLE: u8 = 54;
-pub const E_DELETE: u8 = 56;
-pub const E_DESCRIBE: u8 = 58;
-pub const E_CSV: u8 = 59;
-pub const E_DIVIDE: u8 = 60;
-pub const E_DROP: u8 = 65;
-pub const E_ELEM_INDEX: u8 = 67;
-pub const E_EQUAL: u8 = 70;
-pub const E_FACTORIAL: u8 = 80;
-pub const E_FEATURE: u8 = 82;
-pub const E_FROM: u8 = 85;
-pub const E_FUNCTION: u8 = 87;
-pub const E_GREATER_THAN: u8 = 90;
-pub const E_GREATER_OR_EQUAL: u8 = 95;
-pub const E_HTTP: u8 = 97;
-pub const E_IF: u8 = 100;
-pub const E_INCLUDE: u8 = 105;
-pub const E_INTO_NS: u8 = 110;
-pub const E_JSON_LITERAL: u8 = 115;
-pub const E_LESS_THAN: u8 = 120;
-pub const E_LESS_OR_EQUAL: u8 = 125;
-pub const E_LIMIT: u8 = 130;
-pub const E_LITERAL: u8 = 135;
-pub const E_MINUS: u8 = 140;
-pub const E_MODULO: u8 = 145;
-pub const E_MULTIPLY: u8 = 147;
-pub const E_MUST_ACK: u8 = 149;
-pub const E_MUST_DIE: u8 = 151;
-pub const E_MUST_IGNORE_ACK: u8 = 153;
-pub const E_MUST_NOT_ACK: u8 = 155;
-pub const E_NEG: u8 = 157;
-pub const E_NOT: u8 = 160;
-pub const E_NOT_EQUAL: u8 = 165;
-pub const E_NS: u8 = 170;
-pub const E_OR: u8 = 175;
-pub const E_OVERWRITE: u8 = 180;
-pub const E_PLUS: u8 = 185;
-pub const E_POW: u8 = 190;
-pub const E_RANGE: u8 = 195;
-pub const E_RETURN: u8 = 200;
-pub const E_REVERSE: u8 = 205;
-pub const E_SCAN: u8 = 207;
-pub const E_SCENARIO: u8 = 209;
-pub const E_SELECT: u8 = 210;
-pub const E_SERVE: u8 = 215;
-pub const E_SHIFT_LEFT: u8 = 225;
-pub const E_SHIFT_RIGHT: u8 = 230;
-pub const E_STDERR: u8 = 233;
-pub const E_STDOUT: u8 = 235;
-pub const E_TRUNCATE: u8 = 237;
-pub const E_TUPLE: u8 = 239;
-pub const E_UNDELETE: u8 = 243;
-pub const E_UPDATE: u8 = 245;
-pub const E_VAR_GET: u8 = 247;
-pub const E_VAR_SET: u8 = 249;
-pub const E_VIA: u8 = 250;
-pub const E_WHERE: u8 = 251;
-pub const E_WHILE: u8 = 255;
 
 /// Represents a Creation Entity
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -197,7 +123,7 @@ impl Expression {
     ////////////////////////////////////////////////////////////////
 
     pub fn encode(&self) -> Vec<u8> {
-        assemble(&self)
+        ByteCodeCompiler::assemble(&self)
     }
 
     /// Indicates whether the expression is a conditional expression
@@ -528,10 +454,11 @@ fn decompile_update_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> 
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::expression::{FALSE, Mutation, Queryable, TRUE};
+    use crate::expression::*;
     use crate::expression::Expression::*;
     use crate::machine::Machine;
-    use crate::typed_values::TypedValue::{Boolean, Float64Value, Int32Value, Int64Value, StringValue};
+    use crate::numbers::NumberValue::*;
+    use crate::typed_values::TypedValue::*;
 
     #[test]
     fn test_and() {
@@ -546,9 +473,9 @@ mod tests {
     fn test_between() {
         let machine = Machine::new();
         let model = Between(
-            Box::new(Literal(Int32Value(10))),
-            Box::new(Literal(Int32Value(1))),
-            Box::new(Literal(Int32Value(10))));
+            Box::new(Literal(Number(Int32Value(10)))),
+            Box::new(Literal(Number(Int32Value(1)))),
+            Box::new(Literal(Number(Int32Value(10)))));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "10 between 1 and 10")
@@ -558,42 +485,83 @@ mod tests {
     fn test_betwixt() {
         let machine = Machine::new();
         let model = Betwixt(
-            Box::new(Literal(Int32Value(10))),
-            Box::new(Literal(Int32Value(1))),
-            Box::new(Literal(Int32Value(10))));
+            Box::new(Literal(Number(Int32Value(10)))),
+            Box::new(Literal(Number(Int32Value(1)))),
+            Box::new(Literal(Number(Int32Value(10)))),
+        );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(false));
         assert_eq!(model.to_code(), "10 betwixt 1 and 10")
     }
 
     #[test]
-    fn test_eq() {
+    fn test_equality_integers() {
         let machine = Machine::new();
         let model = Equal(
-            Box::new(Literal(Int32Value(5))),
-            Box::new(Literal(Int32Value(5))));
+            Box::new(Literal(Number(Int32Value(5)))),
+            Box::new(Literal(Number(Int32Value(5)))),
+        );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5 == 5")
     }
 
     #[test]
-    fn test_gt() {
+    fn test_equality_floats() {
         let machine = Machine::new();
-        let model = GreaterThan(
-            Box::new(Literal(Int32Value(5))),
-            Box::new(Literal(Int32Value(1))));
+        let model = Equal(
+            Box::new(Literal(Number(Float64Value(5.)))),
+            Box::new(Literal(Number(Float64Value(5.)))),
+        );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
-        assert_eq!(model.to_code(), "5 > 1")
+        assert_eq!(model.to_code(), "5 == 5")
+    }
+
+    #[test]
+    fn test_equality_strings() {
+        let machine = Machine::new();
+        let model = Equal(
+            Box::new(Literal(StringValue("Hello".to_string()))),
+            Box::new(Literal(StringValue("Hello".to_string()))),
+        );
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, Boolean(true));
+        assert_eq!(model.to_code(), "\"Hello\" == \"Hello\"")
+    }
+
+    #[test]
+    fn test_inequality_strings() {
+        let machine = Machine::new();
+        let model = NotEqual(
+            Box::new(Literal(StringValue("Hello".to_string()))),
+            Box::new(Literal(StringValue("Goodbye".to_string()))),
+        );
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, Boolean(true));
+        assert_eq!(model.to_code(), "\"Hello\" != \"Goodbye\"")
+    }
+
+    #[test]
+    fn test_gt() {
+        let machine = Machine::new()
+            .with_variable("x", Number(Int64Value(5)));
+        let model = GreaterThan(
+            Box::new(Variable("x".into())),
+            Box::new(Literal(Number(Int64Value(1)))),
+        );
+        let (_, result) = machine.evaluate(&model).unwrap();
+        assert_eq!(result, Boolean(true));
+        assert_eq!(model.to_code(), "x > 1")
     }
 
     #[test]
     fn test_gte() {
         let machine = Machine::new();
         let model = GreaterOrEqual(
-            Box::new(Literal(Int32Value(5))),
-            Box::new(Literal(Int32Value(1))));
+            Box::new(Literal(Number(Int32Value(5)))),
+            Box::new(Literal(Number(Int32Value(1)))),
+        );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5 >= 1")
@@ -603,8 +571,9 @@ mod tests {
     fn test_lt() {
         let machine = Machine::new();
         let model = LessThan(
-            Box::new(Literal(Int32Value(4))),
-            Box::new(Literal(Int32Value(5))));
+            Box::new(Literal(Number(Int32Value(4)))),
+            Box::new(Literal(Number(Int32Value(5)))),
+        );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "4 < 5")
@@ -614,8 +583,9 @@ mod tests {
     fn test_lte() {
         let machine = Machine::new();
         let model = LessOrEqual(
-            Box::new(Literal(Int32Value(1))),
-            Box::new(Literal(Int32Value(5))));
+            Box::new(Literal(Number(Int32Value(1)))),
+            Box::new(Literal(Number(Int32Value(5)))),
+        );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "1 <= 5")
@@ -625,8 +595,8 @@ mod tests {
     fn test_ne() {
         let machine = Machine::new();
         let model = NotEqual(
-            Box::new(Literal(Int32Value(-5))),
-            Box::new(Literal(Int32Value(5))));
+            Box::new(Literal(Number(Int32Value(-5)))),
+            Box::new(Literal(Number(Int32Value(5)))));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "-5 != 5")
@@ -649,9 +619,9 @@ mod tests {
 
         let model = Between(
             Box::new(Variable("x".into())),
-            Box::new(Literal(Int32Value(1))),
-            Box::new(Literal(Int32Value(10))
-            ));
+            Box::new(Literal(Number(Int32Value(1)))),
+            Box::new(Literal(Number(Int32Value(10)))),
+        );
         assert_eq!(model.to_code(), "x between 1 and 10");
         assert!(model.is_conditional());
 
@@ -667,8 +637,8 @@ mod tests {
                 Box::new(Variable("x".into())),
                 Box::new(Variable("y".into())),
             )),
-            a: Box::new(Literal(Int32Value(1))),
-            b: Some(Box::new(Literal(Int32Value(10)))),
+            a: Box::new(Literal(Number(Int32Value(1)))),
+            b: Some(Box::new(Literal(Number(Int32Value(10))))),
         };
         assert!(op.is_control_flow());
         assert_eq!(op.to_code(), "if x < y 1 else 10");
@@ -683,12 +653,12 @@ mod tests {
             from: Box::new(from),
             condition: Box::new(GreaterOrEqual(
                 Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Float64Value(1.25))),
+                Box::new(Literal(Number(Float64Value(1.25)))),
             )),
         });
         let from = Inquire(Queryable::Limit {
             from: Box::new(from),
-            limit: Box::new(Literal(Int64Value(5))),
+            limit: Box::new(Literal(Number(Int64Value(5)))),
         });
         assert_eq!(
             from.to_code(),
@@ -703,13 +673,13 @@ mod tests {
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("BOX".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                ("last_sale".into(), Literal(Float64Value(21.77))),
+                ("last_sale".into(), Literal(Number(Float64Value(21.77)))),
             ])))),
             condition: Some(Box::new(Equal(
                 Box::new(Variable("symbol".into())),
                 Box::new(Literal(StringValue("BOX".into()))),
             ))),
-            limit: Some(Box::new(Literal(Int64Value(1)))),
+            limit: Some(Box::new(Literal(Number(Int64Value(1))))),
         });
         assert_eq!(
             model.to_code(),
@@ -721,7 +691,7 @@ mod tests {
         // CodeBlock(..) | If(..) | Return(..) | While { .. }
         let op = While {
             condition: Box::new(LessThan(Box::new(Variable("x".into())), Box::new(Variable("y".into())))),
-            code: Box::new(Literal(Int32Value(1))),
+            code: Box::new(Literal(Number(Int32Value(1)))),
         };
         assert!(op.is_control_flow());
     }

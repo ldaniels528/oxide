@@ -11,16 +11,21 @@ use shared_lib::fail;
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::compiler::fail_value;
-use crate::data_types::DataType::{BooleanType, UInt64Type};
+use crate::data_types::DataType::*;
+use crate::expression::Expression;
 use crate::field_metadata::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
+use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
+use crate::numbers::NumberKind::U64Kind;
+use crate::numbers::NumberValue::UInt64Value;
+use crate::row;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Boolean, ErrorValue, RowsAffected, StringValue, StructureValue, TableValue, UInt64Value, Undefined};
+use crate::typed_values::TypedValue::*;
 
 /// represents the underlying storage resource for the dataframe
 pub trait RowCollection: Debug {
@@ -177,7 +182,7 @@ pub trait RowCollection: Debug {
         // create the augmented columns
         let mut columns = self.get_columns().to_owned();
         let record_size = self.get_record_size();
-        columns.push(TableColumn::new("_id", UInt64Type, Undefined, record_size));
+        columns.push(TableColumn::new("_id", NumberType(U64Kind), Undefined, record_size));
         columns.push(TableColumn::new("_active", BooleanType, Undefined, 8 + record_size));
 
         // gather the row data
@@ -190,7 +195,7 @@ pub trait RowCollection: Debug {
             };
             // augment the values with the extras
             let mut values = row.get_values();
-            values.push(UInt64Value(row_id as u64));
+            values.push(Number(UInt64Value(row_id as u64)));
             values.push(Boolean(meta.is_allocated));
             // build a new row
             let row = Row::new(row_id, columns.to_owned(), values);
@@ -224,6 +229,18 @@ pub trait RowCollection: Debug {
             }
             Err(err) => ErrorValue(err.to_string())
         }
+    }
+
+    fn filter_rows(&self, condition: &Expression) -> std::io::Result<Vec<Row>> {
+        let machine = Machine::new();
+        let result = self.iter().filter(|row| {
+            let machine = machine.with_row(&row);
+            match machine.evaluate(condition) {
+                Ok((_, Boolean(true))) => true,
+                _ => false
+            }
+        }).collect::<Vec<_>>();
+        Ok(result)
     }
 
     /// Returns an option of the first row that satisfies the given function
@@ -399,11 +416,15 @@ pub trait RowCollection: Debug {
     fn get_columns(&self) -> &Vec<TableColumn>;
 
     fn get_indices(&self) -> std::io::Result<Range<usize>> {
-        Ok(0..self.len()?)
+        self.get_indices_with_limit(Null)
     }
 
     fn get_indices_with_limit(&self, limit: TypedValue) -> std::io::Result<Range<usize>> {
-        Ok(0..limit.assume_usize().unwrap_or(self.len()?))
+        match limit {
+            Number(n) => Ok(0..n.to_usize()),
+            ErrorValue(msg) => fail(msg),
+            _ => Ok(0..self.len()?)
+        }
     }
 
     /// returns the record size of the device
@@ -415,7 +436,7 @@ pub trait RowCollection: Debug {
             Ok(len) => {
                 for row_id in 0..len {
                     match self.read_one(row_id) {
-                        Ok(Some(row)) => if row == *item { return UInt64Value(row_id as u64); },
+                        Ok(Some(row)) => if row == *item { return Number(UInt64Value(row_id as u64)); },
                         Ok(None) => {}
                         Err(err) => return ErrorValue(err.to_string())
                     }
@@ -613,7 +634,7 @@ pub trait RowCollection: Debug {
         for row_id in initial_row_id..self.len()? {
             if let Some(row) = self.read_one(row_id)? {
                 let value = &row[search_column_index];
-                if search_column_value == value { return Ok(Some(row)); }
+                if *search_column_value == *value { return Ok(Some(row)); }
             }
         }
         Ok(None)
@@ -762,10 +783,11 @@ mod tests {
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
+    use crate::numbers::NumberValue::Float64Value;
     use crate::row;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote, make_quote_columns, make_scan_quote, make_table_columns, make_table_file};
-    use crate::typed_values::TypedValue::{Ack, Float64Value, Null, StringValue};
+    use crate::typed_values::TypedValue::*;
 
     use super::*;
 
@@ -783,7 +805,7 @@ mod tests {
         let (row, rmd) = rc.read_row(0).unwrap();
         assert!(rmd.is_allocated);
         assert_eq!(row, row!(0, make_table_columns(), vec![
-            StringValue("RICE".into()), StringValue("NYSE".into()), Float64Value(78.78)
+            StringValue("RICE".into()), StringValue("NYSE".into()), Number(Float64Value(78.78))
         ]))
     }
 
@@ -798,7 +820,7 @@ mod tests {
         let (row, rmd) = rc.read_row(0).unwrap();
         assert!(rmd.is_allocated);
         assert_eq!(row, row!(0, make_table_columns(), vec![
-            StringValue("BEAM".into()), StringValue("NYSE".into()), Float64Value(78.35)
+            StringValue("BEAM".into()), StringValue("NYSE".into()), Number(Float64Value(78.35))
         ]))
     }
 
@@ -1062,15 +1084,20 @@ mod tests {
             // write some rows
             assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
             assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "HAZ", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "XMT", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.001)));
 
             // resize and verify
-            assert_eq!(
-                Some(make_quote(3, &columns, "X", "NASDAQ", 33.33)),
-                rc.scan_first(0, &StringValue("X".into())).unwrap()
-            );
+            let expected = vec![
+                StringValue("XMT".to_string()),
+                StringValue("NASDAQ".to_string()),
+                Number(Float64Value(33.33)),
+            ];
+            let actual = rc.scan_first(0, &StringValue("XMT".into())).unwrap()
+                .map(|row| row.get_values())
+                .unwrap();
+            assert_eq!(actual, expected);
         }
 
         // test the variants
@@ -1109,8 +1136,8 @@ mod tests {
             assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
 
             // resize and verify
-            assert_eq!(Float64Value(152.99759999999998),
-                       rc.fold_left(Float64Value(0.), |agg, row| agg + row.get("last_sale")));
+            assert_eq!(Number(Float64Value(152.99759999999998)),
+                       rc.fold_left(Number(Float64Value(0.)), |agg, row| agg + row.get("last_sale")));
         }
 
         // test the variants
@@ -1128,8 +1155,10 @@ mod tests {
             assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
 
             // fold and verify
-            assert_eq!(Float64Value(347.00239999999997),
-                       rc.fold_right(Float64Value(500.), |agg, row| agg - row.get("last_sale")));
+            assert_eq!(
+                Number(Float64Value(347.00239999999997)),
+                rc.fold_right(Number(Float64Value(500.)), |agg, row| agg - row.get("last_sale"))
+            );
         }
 
         // test the variants
@@ -1147,13 +1176,13 @@ mod tests {
             assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "E", "NYSE", 0.26)));
 
             // use an iterator
-            let mut total = Float64Value(0.);
+            let mut total = Number(Float64Value(0.));
             for row in rc.iter() {
                 total = total + row[2].to_owned();
             }
 
             // fold and verify
-            assert_eq!(total, Float64Value(202.75));
+            assert_eq!(total, Number(Float64Value(202.75)));
         }
 
         // test the variants
@@ -1206,7 +1235,7 @@ mod tests {
                     Row::new(0, rc.get_columns().to_owned(), vec![
                         StringValue("GE".to_string()),
                         Null,
-                        Float64Value(21.22),
+                        Number(Float64Value(21.22)),
                     ]),
                 ));
         }

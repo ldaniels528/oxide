@@ -11,19 +11,18 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::{fail, FieldJs, RowJs};
 
-use crate::byte_buffer::ByteBuffer;
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::codec;
 use crate::data_types::DataType;
 use crate::expression::Expression;
 use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
-use crate::model_row_collection::ModelRowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::server::determine_column_value;
 use crate::structure::Structure;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Null, UInt64Value, Undefined};
+use crate::typed_values::TypedValue::{Boolean, Null, Undefined};
 
 /// Represents a row of a table structure.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -103,7 +102,7 @@ impl Row {
 
     pub fn from_buffer(
         columns: &Vec<TableColumn>,
-        buffer: &mut ByteBuffer,
+        buffer: &mut ByteCodeCompiler,
     ) -> std::io::Result<(Self, RowMetadata)> {
         // if the buffer is empty, just return an empty row
         let size = buffer.next_u64();
@@ -120,7 +119,7 @@ impl Row {
         Ok((Self::new(id, columns.to_owned(), values), metadata))
     }
 
-    pub fn from_buffer_to_value(data_type: &DataType, buffer: &mut ByteBuffer, offset: usize) -> std::io::Result<TypedValue> {
+    pub fn from_buffer_to_value(data_type: &DataType, buffer: &mut ByteCodeCompiler, offset: usize) -> std::io::Result<TypedValue> {
         let metadata: FieldMetadata = FieldMetadata::decode(buffer[offset]);
         let value: TypedValue = if metadata.is_active {
             TypedValue::from_buffer(&data_type, buffer)?
@@ -152,7 +151,7 @@ impl Row {
             if let Some(value) = cache.get(c.get_name()) {
                 values.push(value.to_owned());
             } else {
-                values.push(TypedValue::Undefined)
+                values.push(Undefined)
             }
         }
         Row::new(id, columns.to_owned(), values)
@@ -206,7 +205,11 @@ impl Row {
     pub fn matches(&self, machine: &Machine, condition: &Option<Box<Expression>>) -> bool {
         if let Some(condition) = condition {
             let machine = machine.with_row(self);
-            if let Ok((_, TypedValue::Boolean(v))) = machine.evaluate(condition) { v } else { true }
+            match machine.evaluate(condition) {
+                Ok((_, Boolean(true) | Null | Undefined)) => true,
+                Ok(_) => false,
+                Err(..) => false
+            }
         } else { true }
     }
 
@@ -231,7 +234,7 @@ impl Row {
     pub fn to_json(&self) -> String {
         let inside = self.columns.iter().zip(self.values.iter())
             .map(|(k, v)|
-                format!(r#""{}":{}"#, k.get_name().to_string(), v.get_raw_value()))
+                format!(r#""{}":{}"#, k.get_name(), v.get_raw_value()))
             .collect::<Vec<_>>()
             .join(",");
         format!("{{{}}}", inside)
@@ -325,6 +328,8 @@ macro_rules! row {
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::*;
+    use crate::numbers::NumberKind::*;
+    use crate::numbers::NumberValue::*;
     use crate::testdata::{make_quote, make_table_columns};
     use crate::typed_values::TypedValue::*;
 
@@ -338,12 +343,12 @@ mod tests {
             columns: vec![
                 TableColumn::new("symbol", StringType(8), Null, 9),
                 TableColumn::new("exchange", StringType(8), Null, 26),
-                TableColumn::new("last_sale", Float64Type, Null, 43),
+                TableColumn::new("last_sale", NumberType(F64Kind), Null, 43),
             ],
             values: vec![
                 StringValue("KING".into()),
                 StringValue("YHWH".into()),
-                Float64Value(78.35),
+                Number(Float64Value(78.35)),
             ],
         });
     }
@@ -407,28 +412,28 @@ mod tests {
         assert_eq!(row.id, 213);
         assert_eq!(row[0], StringValue("YRU".into()));
         assert_eq!(row[1], StringValue("OTC".into()));
-        assert_eq!(row[2], Float64Value(88.44));
+        assert_eq!(row[2], Number(Float64Value(88.44)));
     }
 
     #[test]
     fn test_find_field_by_name() {
         let row = row!(111, make_table_columns(), vec![
-            StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
+            StringValue("GE".into()), StringValue("NYSE".into()), Number(Float64Value(48.88)),
         ]);
         assert_eq!(row.get("symbol"), StringValue("GE".into()));
         assert_eq!(row.get("exchange"), StringValue("NYSE".into()));
-        assert_eq!(row.get("last_sale"), Float64Value(48.88));
+        assert_eq!(row.get("last_sale"), Number(Float64Value(48.88)));
         assert_eq!(row.get("rating"), Undefined);
     }
 
     #[test]
     fn test_get() {
         let row = row!(111, make_table_columns(), vec![
-            StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
+            StringValue("GE".into()), StringValue("NYSE".into()), Number(Float64Value(48.88)),
         ]);
         assert_eq!(row.get("symbol"), StringValue("GE".into()));
         assert_eq!(row.get("exchange"), StringValue("NYSE".into()));
-        assert_eq!(row.get("last_sale"), Float64Value(48.88));
+        assert_eq!(row.get("last_sale"), Number(Float64Value(48.88)));
         assert_eq!(row.get("rating"), Undefined);
     }
 
@@ -437,17 +442,17 @@ mod tests {
         use maplit::hashmap;
         let row = make_quote(111, &make_table_columns(), "AAA", "TCE", 1230.78);
         assert_eq!(row.to_hash_map(), hashmap!(
-            "_id".into() => TypedValue::RowsAffected(111),
-            "symbol".into() => TypedValue::StringValue("AAA".into()),
-            "exchange".into() => TypedValue::StringValue("TCE".into()),
-            "last_sale".into() => TypedValue::Float64Value(1230.78),
+            "_id".into() => RowsAffected(111),
+            "symbol".into() => StringValue("AAA".into()),
+            "exchange".into() => StringValue("TCE".into()),
+            "last_sale".into() => Number(Float64Value(1230.78)),
         ));
     }
 
     #[test]
     fn test_to_row_offset() {
         let row = row!(111, make_table_columns(), vec![
-            StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
+            StringValue("GE".into()), StringValue("NYSE".into()), Number(Float64Value(48.88)),
         ]);
         assert_eq!(row.get_row_offset(2), 2 * row.get_record_size() as u64);
     }
@@ -457,7 +462,7 @@ mod tests {
         let row = make_quote(100, &make_table_columns(), "ZZZ", "AMEX", 0.9876);
         assert_eq!(row.id, 100);
         assert_eq!(row.unwrap(), vec![
-            &StringValue("ZZZ".into()), &StringValue("AMEX".into()), &Float64Value(0.9876),
+            &StringValue("ZZZ".into()), &StringValue("AMEX".into()), &Number(Float64Value(0.9876)),
         ]);
     }
 }

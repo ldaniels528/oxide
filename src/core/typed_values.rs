@@ -18,22 +18,27 @@ use uuid::Uuid;
 
 use shared_lib::{fail, RowJs};
 
-use crate::{cnv_error, serialization};
-use crate::byte_buffer::ByteBuffer;
+use crate::{cnv_error};
+use crate::backdoor::BackDoorFunction;
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::codec;
 use crate::compiler::fail_value;
+use crate::data_type_kind::DataTypeKind;
 use crate::data_types::*;
 use crate::data_types::DataType::*;
 use crate::expression::{ACK, Expression};
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
+use crate::numbers::NumberKind::{F32Kind, F64Kind, I128Kind, I16Kind, I32Kind, I64Kind, I8Kind, NaNKind, U128Kind, U16Kind, U32Kind, U64Kind, U8Kind};
+use crate::numbers::NumberValue;
+use crate::numbers::NumberValue::{Float32Value, Float64Value, Int128Value, Int16Value, Int32Value, Int64Value, Int8Value, NotANumber, UInt128Value, UInt16Value, UInt32Value, UInt64Value, UInt8Value};
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
-use crate::serialization::disassemble;
 use crate::server::ColumnJs;
 use crate::structure::Structure;
 use crate::typed_values::BackDoorFunction::{Assert, Eval, Matches, StdErr, StdOut, SysCall, ToCSV, TypeOf};
+use crate::data_type_kind::DataTypeKind::*;
 use crate::typed_values::TypedValue::*;
 
 const ISO_DATE_FORMAT: &str =
@@ -42,43 +47,6 @@ const DECIMAL_FORMAT: &str = r"^-?(?:\d+(?:_\d)*|\d+)(?:\.\d+)?$";
 const INTEGER_FORMAT: &str = r"^-?(?:\d+(?:_\d)*)?$";
 const UUID_FORMAT: &str =
     "^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$";
-
-/// Represents a backdoor (hook) for calling native functions
-#[repr(u8)]
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum BackDoorFunction {
-    Assert = 0,
-    Eval = 1,
-    Format = 2,
-    If = 3,
-    Matches = 4,
-    Reset = 5,
-    StdErr = 6,
-    StdOut = 7,
-    SysCall = 8,
-    ToCSV = 9,
-    ToJSON = 10,
-    TypeOf = 11,
-    Variables = 12,
-}
-
-impl BackDoorFunction {
-    pub fn decode(code: u8) -> Self {
-        Self::from(Self::values()[code as usize].to_owned())
-    }
-
-    pub fn ordinal(&self) -> u8 {
-        self.to_owned() as u8
-    }
-
-    pub fn values() -> Vec<BackDoorFunction> {
-        use BackDoorFunction::*;
-        vec![
-            Assert, Eval, Format, If, Matches, Reset, StdErr, StdOut, SysCall,
-            ToCSV, ToJSON, TypeOf, Variables,
-        ]
-    }
-}
 
 /// Basic value unit
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -91,14 +59,8 @@ pub enum TypedValue {
     CLOB(Vec<char>),
     DateValue(i64),
     ErrorValue(String),
-    Float32Value(f32),
-    Float64Value(f64),
     Function { params: Vec<ColumnJs>, code: Box<Expression> },
-    Int8Value(i8),
-    Int16Value(i16),
-    Int32Value(i32),
-    Int64Value(i64),
-    Int128Value(i128),
+    Number(NumberValue),
     JSONValue(Vec<(String, TypedValue)>),
     NamespaceValue(String, String, String),
     RowsAffected(usize),
@@ -106,11 +68,6 @@ pub enum TypedValue {
     StructureValue(Structure),
     TableValue(ModelRowCollection),
     TupleValue(Vec<TypedValue>),
-    UInt8Value(u8),
-    UInt16Value(u16),
-    UInt32Value(u32),
-    UInt64Value(u64),
-    UInt128Value(u128),
     UUIDValue([u8; 16]),
     Null,
     Undefined,
@@ -145,7 +102,7 @@ impl TypedValue {
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
         match data_type {
             AckType => Ack,
-            BackDoorType => codec::decode_u8(buffer, offset, |b| BackDoor(BackDoorFunction::decode(b))),
+            BackDoorType => codec::decode_u8(buffer, offset, |b| BackDoor(BackDoorFunction::from_u8(b))),
             BLOBType(_size) => BLOB(Vec::new()),
             BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             CLOBType(_size) => CLOB(Vec::new()),
@@ -155,23 +112,17 @@ impl TypedValue {
                 StringValue(labels[index as usize].to_string())
             }
             ErrorType => ErrorValue(codec::decode_string(buffer, offset, 255).to_string()),
-            Float32Type => codec::decode_u8x4(buffer, offset, |b| Float32Value(f32::from_be_bytes(b))),
-            Float64Type => codec::decode_u8x8(buffer, offset, |b| Float64Value(f64::from_be_bytes(b))),
             FunctionType(columns) => {
-                let mut buf = ByteBuffer::wrap(buffer.clone());
+                let mut buf = ByteCodeCompiler::wrap(buffer.clone());
                 buf.move_rel(offset as isize);
-                match disassemble(&mut buf) {
+                match ByteCodeCompiler::disassemble(&mut buf) {
                     Ok(expr) =>
                         Function { params: columns.to_owned(), code: Box::new(expr) },
                     Err(err) => ErrorValue(err.to_string())
                 }
             }
-            Int8Type => codec::decode_u8(buffer, offset, |b| Int8Value(b.to_i8().unwrap())),
-            Int16Type => codec::decode_u8x2(buffer, offset, |b| Int16Value(i16::from_be_bytes(b))),
-            Int32Type => codec::decode_u8x4(buffer, offset, |b| Int32Value(i32::from_be_bytes(b))),
-            Int64Type => codec::decode_u8x8(buffer, offset, |b| Int64Value(i64::from_be_bytes(b))),
-            Int128Type => codec::decode_u8x16(buffer, offset, |b| Int128Value(i128::from_be_bytes(b))),
             JSONType => JSONValue(Vec::new()), // TODO implement me
+            NumberType(kind) => Number(NumberValue::decode(buffer, offset, *kind)),
             RowsAffectedType => RowsAffected(codec::decode_row_id(&buffer, 1)),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
             StructureType(columns) =>
@@ -180,11 +131,6 @@ impl TypedValue {
                     Err(err) => ErrorValue(err.to_string())
                 }
             TableType(columns) => TableValue(ModelRowCollection::construct(columns)),
-            UInt8Type => codec::decode_u8(buffer, offset, |b| UInt8Value(b)),
-            UInt16Type => codec::decode_u8x2(buffer, offset, |b| UInt16Value(u16::from_be_bytes(b))),
-            UInt32Type => codec::decode_u8x4(buffer, offset, |b| UInt32Value(u32::from_be_bytes(b))),
-            UInt64Type => codec::decode_u8x8(buffer, offset, |b| UInt64Value(u64::from_be_bytes(b))),
-            UInt128Type => codec::decode_u8x16(buffer, offset, |b| UInt128Value(u128::from_be_bytes(b))),
             UUIDType => codec::decode_u8x16(buffer, offset, |b| UUIDValue(b))
         }
     }
@@ -202,21 +148,14 @@ impl TypedValue {
                 for item in items { bytes.extend(item.encode()); }
                 bytes
             }
-            BackDoor(nf) => vec![nf.ordinal()],
+            BackDoor(nf) => vec![nf.to_u8()],
             BLOB(bytes) => codec::encode_u8x_n(bytes.to_vec()),
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
             CLOB(chars) => codec::encode_chars(chars.to_vec()),
             DateValue(number) => number.to_be_bytes().to_vec(),
             ErrorValue(message) => codec::encode_string(message),
-            Float32Value(number) => number.to_be_bytes().to_vec(),
-            Float64Value(number) => number.to_be_bytes().to_vec(),
             Function { params, code } =>
                 Self::encode_function(params, code),
-            Int8Value(number) => number.to_be_bytes().to_vec(),
-            Int16Value(number) => number.to_be_bytes().to_vec(),
-            Int32Value(number) => number.to_be_bytes().to_vec(),
-            Int64Value(number) => number.to_be_bytes().to_vec(),
-            Int128Value(number) => number.to_be_bytes().to_vec(),
             JSONValue(pairs) => {
                 let mut bytes = Vec::new();
                 for (name, value) in pairs {
@@ -225,23 +164,19 @@ impl TypedValue {
                 }
                 bytes
             }
-            TableValue(rc) => rc.encode(),
+            NamespaceValue(a, b, c) =>
+                codec::encode_string(format!("{a}.{b}.{c}").as_str()),
+            Number(number) => number.encode(),
             RowsAffected(id) => id.to_be_bytes().to_vec(),
             StringValue(string) => codec::encode_string(string),
             StructureValue(structure) => codec::encode_string(structure.to_string().as_str()),
-            NamespaceValue(a, b, c) =>
-                codec::encode_string(format!("{a}.{b}.{c}").as_str()),
+            TableValue(rc) => rc.encode(),
             TupleValue(items) => {
                 let mut bytes = Vec::new();
                 bytes.extend(items.len().to_be_bytes());
                 for item in items { bytes.extend(item.encode()); }
                 bytes
             }
-            UInt8Value(number) => number.to_be_bytes().to_vec(),
-            UInt16Value(number) => number.to_be_bytes().to_vec(),
-            UInt32Value(number) => number.to_be_bytes().to_vec(),
-            UInt64Value(number) => number.to_be_bytes().to_vec(),
-            UInt128Value(number) => number.to_be_bytes().to_vec(),
             UUIDValue(guid) => guid.to_vec(),
         }
     }
@@ -257,7 +192,7 @@ impl TypedValue {
     /// decodes the typed value based on the supplied data type and buffer
     pub fn from_buffer(
         data_type: &DataType,
-        buffer: &mut ByteBuffer,
+        buffer: &mut ByteCodeCompiler,
     ) -> std::io::Result<TypedValue> {
         let tv = match data_type {
             AckType => Ack,
@@ -271,27 +206,33 @@ impl TypedValue {
                 StringValue(labels[index as usize].to_string())
             }
             ErrorType => ErrorValue(buffer.next_string()),
-            Float32Type => Float32Value(buffer.next_f32()),
-            Float64Type => Float64Value(buffer.next_f64()),
             FunctionType(columns) => Function {
                 params: columns.to_owned(),
-                code: Box::new(disassemble(buffer)?),
+                code: Box::new(ByteCodeCompiler::disassemble(buffer)?),
             },
-            Int8Type => Int8Value(buffer.next_i8()),
-            Int16Type => Int16Value(buffer.next_i16()),
-            Int32Type => Int32Value(buffer.next_i32()),
-            Int64Type => Int64Value(buffer.next_i64()),
-            Int128Type => Int128Value(buffer.next_i128()),
             JSONType => JSONValue(buffer.next_json()?),
+            NumberType(kind) => {
+                let value = match *kind {
+                    F32Kind => Float32Value(buffer.next_f32()),
+                    F64Kind => Float64Value(buffer.next_f64()),
+                    I8Kind => Int8Value(buffer.next_i8()),
+                    I16Kind => Int16Value(buffer.next_i16()),
+                    I32Kind => Int32Value(buffer.next_i32()),
+                    I64Kind => Int64Value(buffer.next_i64()),
+                    I128Kind => Int128Value(buffer.next_i128()),
+                    U8Kind => UInt8Value(buffer.next_u8()),
+                    U16Kind => UInt16Value(buffer.next_u16()),
+                    U32Kind => UInt32Value(buffer.next_u32()),
+                    U64Kind => UInt64Value(buffer.next_u64()),
+                    U128Kind => UInt128Value(buffer.next_u128()),
+                    NaNKind => NotANumber
+                };
+                Number(value)
+            }
             RowsAffectedType => RowsAffected(buffer.next_row_id()),
             StringType(..) => StringValue(buffer.next_string()),
             StructureType(columns) => StructureValue(buffer.next_struct_with_columns(columns)?),
             TableType(columns) => TableValue(buffer.next_table_with_columns(columns)?),
-            UInt8Type => UInt8Value(buffer.next_u8()),
-            UInt16Type => UInt16Value(buffer.next_u16()),
-            UInt32Type => UInt32Value(buffer.next_u32()),
-            UInt64Type => UInt64Value(buffer.next_u64()),
-            UInt128Type => UInt128Value(buffer.next_u128()),
             UUIDType => UUIDValue(buffer.next_uuid()),
         };
         Ok(tv)
@@ -358,11 +299,7 @@ impl TypedValue {
 
     pub fn is_numeric(&self) -> bool {
         use TypedValue::*;
-        matches!(self, Ack | RowsAffected(..)
-            | Int8Value(..) | Int16Value(..) | Int32Value(..)
-            | Int64Value(..) | Int128Value(..)
-            | UInt8Value(..) | UInt16Value(..) | UInt32Value(..)
-            | UInt64Value(..) | UInt128Value(..))
+        matches!(self, Ack | RowsAffected(..) | Number(..))
     }
 
     pub fn is_ok(&self) -> bool {
@@ -389,7 +326,7 @@ impl TypedValue {
         match j_value {
             serde_json::Value::Null => Null,
             serde_json::Value::Bool(b) => Boolean(b),
-            serde_json::Value::Number(n) => n.as_f64().map(Float64Value).unwrap_or(Null),
+            serde_json::Value::Number(n) => n.as_f64().map(|v| Number(Float64Value(v))).unwrap_or(Null),
             serde_json::Value::String(s) => StringValue(s),
             serde_json::Value::Array(a) => Array(a.iter().map(|v| Self::from_json(v.to_owned())).collect()),
             serde_json::Value::Object(..) => todo!()
@@ -403,14 +340,14 @@ impl TypedValue {
             .filter(|c| *c != '_' && *c != ',')
             .collect();
         match number.trim() {
-            s if int_regex.is_match(s) => Ok(Int64Value(s.parse().map_err(|e| cnv_error!(e))?)),
-            s if decimal_regex.is_match(s) => Ok(Float64Value(s.parse().map_err(|e| cnv_error!(e))?)),
+            s if int_regex.is_match(s) => Ok(Number(Int64Value(s.parse().map_err(|e| cnv_error!(e))?))),
+            s if decimal_regex.is_match(s) => Ok(Number(Float64Value(s.parse().map_err(|e| cnv_error!(e))?))),
             s => Ok(StringValue(s.to_string()))
         }
     }
 
     pub fn get_type_name(&self) -> String {
-        let result = match *self {
+        let result = match self.to_owned() {
             Ack => "Ack",
             Undefined => "Undefined",
             Null => "Null",
@@ -423,24 +360,13 @@ impl TypedValue {
             DateValue(..) => "Date",
             ErrorValue(..) => "Error",
             JSONValue(..) => "JSON",
-            Float32Value(..) => "f32",
-            Float64Value(..) => "f64",
-            Int8Value(..) => "i8",
-            Int16Value(..) => "i16",
-            Int32Value(..) => "i32",
-            Int64Value(..) => "i64",
-            Int128Value(..) => "i128",
+            Number(number) => &number.get_type_name(),
             RowsAffected(..) => "RowsAffected",
             StringValue(..) => "String",
             StructureValue(..) => "Struct",
             NamespaceValue(..) => "TablePtr",
             TableValue(..) => "Table",
             TupleValue(..) => "Tuple",
-            UInt8Value(..) => "u8",
-            UInt16Value(..) => "u16",
-            UInt32Value(..) => "u32",
-            UInt64Value(..) => "u64",
-            UInt128Value(..) => "u128",
             UUIDValue(..) => "UUID",
         };
         result.to_string()
@@ -464,47 +390,31 @@ impl TypedValue {
         }
     }
 
-    pub fn ordinal(&self) -> u8 {
-        match *self {
-            Ack => T_ACK,
-            Undefined => T_UNDEFINED,
-            Null => T_NULL,
-            Function { .. } => T_FUNCTION,
-            Array(..) => T_ARRAY,
-            BackDoor(..) => T_BACK_DOOR,
-            BLOB(..) => T_BLOB,
-            Boolean(..) => T_BOOLEAN,
-            CLOB(..) => T_CLOB,
-            DateValue(..) => T_DATE,
-            ErrorValue(..) => T_ERROR,
-            JSONValue(..) => T_JSON_OBJECT,
-            Float32Value(..) => T_FLOAT32,
-            Float64Value(..) => T_FLOAT64,
-            Int8Value(..) => T_INT8,
-            Int16Value(..) => T_INT16,
-            Int32Value(..) => T_INT32,
-            Int64Value(..) => T_INT64,
-            Int128Value(..) => T_INT128,
-            NamespaceValue(..) => T_NAMESPACE,
-            RowsAffected(..) => T_ROWS_AFFECTED,
-            StringValue(..) => T_STRING,
-            StructureValue(..) => T_STRUCTURE,
-            TableValue(..) => T_TABLE_VALUE,
-            TupleValue(..) => T_TUPLE,
-            UInt8Value(..) => T_UINT8,
-            UInt16Value(..) => T_UINT16,
-            UInt32Value(..) => T_UINT32,
-            UInt64Value(..) => T_UINT64,
-            UInt128Value(..) => T_UINT128,
-            UUIDValue(..) => T_UUID,
-        }
-    }
-
     pub fn to_code(&self) -> String {
         match self {
             Undefined => "undefined".to_string(),
             StringValue(s) => format!("\"{}\"", s),
             v => v.unwrap_value()
+        }
+    }
+
+    pub fn to_f64(&self) -> f64 {
+        match self {
+            Ack => 1.,
+            Boolean(true) => 1.,
+            Number(n) => n.to_f64(),
+            RowsAffected(n) => *n as f64,
+            _ => 0.
+        }
+    }
+
+    pub fn to_i64(&self) -> i64 {
+        match self {
+            Ack => 1,
+            Boolean(true) => 1,
+            Number(n) => n.to_i64(),
+            RowsAffected(n) => *n as i64,
+            _ => 0
         }
     }
 
@@ -519,24 +429,18 @@ impl TypedValue {
             CLOB(chars) => serde_json::json!(chars),
             DateValue(millis) => serde_json::json!(Self::millis_to_iso_date(*millis)),
             ErrorValue(message) => serde_json::json!(message),
-            Float32Value(number) => serde_json::json!(number),
-            Float64Value(number) => serde_json::json!(number),
             Function { params, code } => {
                 let my_params = serde_json::Value::Array(params.iter().map(|c| c.to_json()).collect());
                 let my_code = code.to_code();
                 serde_json::json!({ "params": my_params, "code": my_code })
             }
-            Int8Value(number) => serde_json::json!(number),
-            Int16Value(number) => serde_json::json!(number),
-            Int32Value(number) => serde_json::json!(number),
-            Int64Value(number) => serde_json::json!(number),
-            Int128Value(number) => serde_json::json!(number),
             JSONValue(pairs) => serde_json::json!(pairs),
+            NamespaceValue(d, s, n) => serde_json::json!(format!("{d}.{s}.{n}")),
             Null => serde_json::Value::Null,
+            Number(value) => value.to_json(),
             RowsAffected(number) => serde_json::json!(number),
             StringValue(string) => serde_json::json!(string),
             StructureValue(structure) => serde_json::json!(structure),
-            NamespaceValue(d, s, n) => serde_json::json!(format!("{d}.{s}.{n}")),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
                     .map(|r| r.to_row_js())
@@ -546,12 +450,46 @@ impl TypedValue {
             TupleValue(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
             Undefined => serde_json::Value::Null,
-            UInt8Value(number) => serde_json::json!(number),
-            UInt16Value(number) => serde_json::json!(number),
-            UInt32Value(number) => serde_json::json!(number),
-            UInt64Value(number) => serde_json::json!(number),
-            UInt128Value(number) => serde_json::json!(number),
             UUIDValue(guid) => serde_json::json!(Uuid::from_bytes(*guid).to_string()),
+        }
+    }
+
+    pub fn to_kind(&self) -> DataTypeKind {
+        match self {
+            Ack => TAck,
+            Undefined => TUndefined,
+            Null => TNull,
+            Function { .. } => TFunction,
+            Array(..) => TArray,
+            BackDoor(..) => TBackDoor,
+            BLOB(..) => TBlob,
+            Boolean(..) => TBoolean,
+            CLOB(..) => TClob,
+            DateValue(..) => TDate,
+            ErrorValue(..) => TError,
+            JSONValue(..) => TJsonObject,
+            NamespaceValue(..) => TNamespace,
+            Number(value) => match value {
+                Float32Value(..) => TNumberF32,
+                Float64Value(..) => TNumberF64,
+                Int8Value(..) => TNumberI8,
+                Int16Value(..) => TNumberI16,
+                Int32Value(..) => TNumberI32,
+                Int64Value(..) => TNumberI64,
+                Int128Value(..) => TNumberI128,
+                UInt8Value(..) => TNumberU8,
+                UInt16Value(..) => TNumberU16,
+                UInt32Value(..) => TNumberU32,
+                UInt64Value(..) => TNumberU64,
+                UInt128Value(..) => TNumberU128,
+                NotANumber => TNumberNan
+            },
+            RowsAffected(..) => TRowsAffected,
+            StringValue(..) => TString,
+            StructureValue(..) => TStructure,
+            TableValue(..) => TTableValue,
+            TupleValue(..) => TTuple,
+            UUIDValue(..) => TUUID,
         }
     }
 
@@ -565,6 +503,26 @@ impl TypedValue {
             TableValue(mrc) => Ok(Box::new(mrc.to_owned())),
             ErrorValue(message) => fail(message),
             z => fail_value("Table", z)
+        }
+    }
+
+    pub fn to_u64(&self) -> u64 {
+        match self {
+            Ack => 1,
+            Boolean(true) => 1,
+            Number(n) => n.to_u64(),
+            RowsAffected(n) => *n as u64,
+            _ => 0
+        }
+    }
+
+    pub fn to_usize(&self) -> usize {
+        match self {
+            Ack => 1,
+            Boolean(true) => 1,
+            Number(n) => n.to_usize(),
+            RowsAffected(n) => *n,
+            _ => 0
         }
     }
 
@@ -585,13 +543,6 @@ impl TypedValue {
                 format!("(({}) => {})",
                         params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
                         code.to_code()),
-            Float32Value(number) => number.to_string(),
-            Float64Value(number) => number.to_string(),
-            Int8Value(number) => number.to_string(),
-            Int16Value(number) => number.to_string(),
-            Int32Value(number) => number.to_string(),
-            Int64Value(number) => number.to_string(),
-            Int128Value(number) => number.to_string(),
             JSONValue(pairs) => {
                 let values: Vec<String> = pairs.iter()
                     .map(|(k, v)| format!("{}:{}", k, v.unwrap_value()))
@@ -599,22 +550,18 @@ impl TypedValue {
                 format!("{{{}}}", values.join(", "))
             }
             TableValue(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
+            NamespaceValue(d, s, n) => format!("{d}.{s}.{n}"),
             Null => "null".into(),
+            Number(number) => number.unwrap_value(),
             RowsAffected(number) => number.to_string(),
             StringValue(string) => string.into(),
             StructureValue(structure) => structure.to_string(),
-            NamespaceValue(d, s, n) => format!("{d}.{s}.{n}"),
             TupleValue(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("({})", values.join(", "))
             }
             Undefined => "undefined".into(),
             UUIDValue(guid) => Uuid::from_bytes(*guid).to_string(),
-            UInt8Value(number) => number.to_string(),
-            UInt16Value(number) => number.to_string(),
-            UInt32Value(number) => number.to_string(),
-            UInt64Value(number) => number.to_string(),
-            UInt128Value(number) => number.to_string(),
         }
     }
 
@@ -662,14 +609,14 @@ impl TypedValue {
     pub fn factorial(&self) -> Option<TypedValue> {
         fn fact_f64(n: f64) -> TypedValue {
             fn fact_f(n: f64) -> f64 { if n <= 1. { 1. } else { n * fact_f(n - 1.) } }
-            Float64Value(fact_f(n))
+            Number(Float64Value(fact_f(n)))
         }
-        let num = self.assume_f64()?;
+        let num = self.to_f64();
         Some(fact_f64(num))
     }
 
     pub fn ne(&self, rhs: &Self) -> Option<Self> {
-        Some(Boolean(self.assume_f64()? != rhs.assume_f64()?))
+        Some(Boolean(self.to_f64() != rhs.to_f64()))
     }
 
     pub fn not(&self) -> Option<Self> {
@@ -681,12 +628,13 @@ impl TypedValue {
     }
 
     pub fn pow(&self, rhs: &Self) -> Option<Self> {
-        Self::numeric_op_2f(self, rhs, |a, b| num_traits::pow(a, b as usize))
+        let n = num_traits::pow(self.to_f64(), rhs.to_usize());
+        Some(Number(Float64Value(n)))
     }
 
     pub fn range(&self, rhs: &Self) -> Option<Self> {
         let mut values = Vec::new();
-        for n in self.assume_i64()?..rhs.assume_i64()? { values.push(Int64Value(n)) }
+        for n in self.to_i64()..rhs.to_i64() { values.push(Number(Int64Value(n))) }
         Some(Array(values))
     }
 
@@ -702,190 +650,32 @@ impl TypedValue {
             _ => None
         }
     }
-
-    pub fn assume_f64(&self) -> Option<f64> {
-        match &self {
-            Ack => Some(1f64),
-            Float32Value(n) => Some(*n as f64),
-            Float64Value(n) => Some(*n),
-            Int8Value(n) => Some(*n as f64),
-            Int16Value(n) => Some(*n as f64),
-            Int32Value(n) => Some(*n as f64),
-            Int64Value(n) => Some(*n as f64),
-            Int128Value(n) => Some(*n as f64),
-            RowsAffected(n) => Some(*n as f64),
-            UInt8Value(n) => Some(*n as f64),
-            UInt16Value(n) => Some(*n as f64),
-            UInt32Value(n) => Some(*n as f64),
-            UInt64Value(n) => Some(*n as f64),
-            UInt128Value(n) => Some(*n as f64),
-            _ => None
-        }
-    }
-
-    pub fn assume_i64(&self) -> Option<i64> {
-        match &self {
-            Ack => Some(1),
-            Float32Value(n) => Some(*n as i64),
-            Float64Value(n) => Some(*n as i64),
-            Int8Value(n) => Some(*n as i64),
-            Int16Value(n) => Some(*n as i64),
-            Int32Value(n) => Some(*n as i64),
-            Int64Value(n) => Some(*n),
-            Int128Value(n) => Some(*n as i64),
-            UInt8Value(n) => Some(*n as i64),
-            UInt16Value(n) => Some(*n as i64),
-            UInt32Value(n) => Some(*n as i64),
-            UInt64Value(n) => Some(*n as i64),
-            UInt128Value(n) => Some(*n as i64),
-            RowsAffected(n) => Some(*n as i64),
-            _ => None
-        }
-    }
-
-    pub fn assume_u64(&self) -> Option<u64> {
-        match &self {
-            Ack => Some(1),
-            Float32Value(n) => Some(*n as u64),
-            Float64Value(n) => Some(*n as u64),
-            Int8Value(n) => Some(*n as u64),
-            Int16Value(n) => Some(*n as u64),
-            Int32Value(n) => Some(*n as u64),
-            Int64Value(n) => Some(*n as u64),
-            Int128Value(n) => Some(*n as u64),
-            UInt8Value(n) => Some(*n as u64),
-            UInt16Value(n) => Some(*n as u64),
-            UInt32Value(n) => Some(*n as u64),
-            UInt64Value(n) => Some(*n),
-            UInt128Value(n) => Some(*n as u64),
-            RowsAffected(n) => Some(*n as u64),
-            _ => None
-        }
-    }
-
-    pub fn assume_usize(&self) -> Option<usize> {
-        match &self {
-            Ack => Some(1),
-            Float32Value(n) => Some(*n as usize),
-            Float64Value(n) => Some(*n as usize),
-            Int8Value(n) => Some(*n as usize),
-            Int16Value(n) => Some(*n as usize),
-            Int32Value(n) => Some(*n as usize),
-            Int64Value(n) => Some(*n as usize),
-            Int128Value(n) => Some(*n as usize),
-            UInt8Value(n) => Some(*n as usize),
-            UInt16Value(n) => Some(*n as usize),
-            UInt32Value(n) => Some(*n as usize),
-            UInt64Value(n) => Some(*n as usize),
-            UInt128Value(n) => Some(*n as usize),
-            RowsAffected(n) => Some(*n),
-            _ => None
-        }
-    }
-
-    fn numeric_op_1f(lhs: &Self, ff: fn(f64) -> f64) -> Option<Self> {
-        match lhs {
-            Ack => Some(Int64Value(1)),
-            Float64Value(a) => Some(Float64Value(ff(*a))),
-            Float32Value(a) => Some(Float32Value(ff(*a as f64) as f32)),
-            Int128Value(a) => Some(Int128Value(ff(*a as f64) as i128)),
-            Int64Value(a) => Some(Int64Value(ff(*a as f64) as i64)),
-            Int32Value(a) => Some(Int32Value(ff(*a as f64) as i32)),
-            Int16Value(a) => Some(Int16Value(ff(*a as f64) as i16)),
-            Int8Value(a) => Some(Int8Value(ff(*a as f64) as i8)),
-            UInt128Value(a) => Some(UInt128Value(ff(*a as f64) as u128)),
-            UInt64Value(a) => Some(UInt64Value(ff(*a as f64) as u64)),
-            UInt32Value(a) => Some(UInt32Value(ff(*a as f64) as u32)),
-            UInt16Value(a) => Some(UInt16Value(ff(*a as f64) as u16)),
-            UInt8Value(a) => Some(UInt8Value(ff(*a as f64) as u8)),
-            RowsAffected(a) => Some(RowsAffected(ff(*a as f64) as usize)),
-            _ => Some(Float64Value(lhs.assume_f64()?))
-        }
-    }
-
-    fn numeric_op_2f(lhs: &Self, rhs: &Self, ff: fn(f64, f64) -> f64) -> Option<Self> {
-        match Self::intercept_unknowns(lhs, rhs) {
-            Some(value) => Some(value),
-            None =>
-                match (lhs, rhs) {
-                    (Float64Value(a), Float64Value(b)) => Some(Float64Value(ff(*a, *b))),
-                    (Float32Value(a), Float32Value(b)) => Some(Float32Value(ff(*a as f64, *b as f64) as f32)),
-                    (Int128Value(a), Int128Value(b)) => Some(Int128Value(ff(*a as f64, *b as f64) as i128)),
-                    (Int64Value(a), Int64Value(b)) => Some(Int64Value(ff(*a as f64, *b as f64) as i64)),
-                    (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as f64, *b as f64) as i32)),
-                    (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as f64, *b as f64) as i16)),
-                    (Int8Value(a), Int8Value(b)) => Some(Int8Value(ff(*a as f64, *b as f64) as i8)),
-                    (UInt128Value(a), UInt128Value(b)) => Some(UInt128Value(ff(*a as f64, *b as f64) as u128)),
-                    (UInt64Value(a), UInt64Value(b)) => Some(UInt64Value(ff(*a as f64, *b as f64) as u64)),
-                    (UInt32Value(a), UInt32Value(b)) => Some(UInt32Value(ff(*a as f64, *b as f64) as u32)),
-                    (UInt16Value(a), UInt16Value(b)) => Some(UInt16Value(ff(*a as f64, *b as f64) as u16)),
-                    (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as f64, *b as f64) as u8)),
-                    (RowsAffected(a), RowsAffected(b)) => Some(RowsAffected(ff(*a as f64, *b as f64) as usize)),
-                    _ => Some(Float64Value(ff(lhs.assume_f64()?, rhs.assume_f64()?)))
-                }
-        }
-    }
-
-    fn numeric_op_2i(lhs: &Self, rhs: &Self, ff: fn(i64, i64) -> i64) -> Option<Self> {
-        match Self::intercept_unknowns(lhs, rhs) {
-            Some(value) => Some(value),
-            None => {
-                match (lhs, rhs) {
-                    (Float64Value(a), Float64Value(b)) => Some(Float64Value(ff(*a as i64, *b as i64) as f64)),
-                    (Float32Value(a), Float32Value(b)) => Some(Float32Value(ff(*a as i64, *b as i64) as f32)),
-                    (Int128Value(a), Int128Value(b)) => Some(Int128Value(ff(*a as i64, *b as i64) as i128)),
-                    (Int64Value(a), Int64Value(b)) => Some(Int64Value(ff(*a as i64, *b as i64) as i64)),
-                    (Int32Value(a), Int32Value(b)) => Some(Int32Value(ff(*a as i64, *b as i64) as i32)),
-                    (Int16Value(a), Int16Value(b)) => Some(Int16Value(ff(*a as i64, *b as i64) as i16)),
-                    (Int8Value(a), Int8Value(b)) => Some(Int8Value(ff(*a as i64, *b as i64) as i8)),
-                    (UInt128Value(a), UInt128Value(b)) => Some(UInt128Value(ff(*a as i64, *b as i64) as u128)),
-                    (UInt64Value(a), UInt64Value(b)) => Some(UInt64Value(ff(*a as i64, *b as i64) as u64)),
-                    (UInt32Value(a), UInt32Value(b)) => Some(UInt32Value(ff(*a as i64, *b as i64) as u32)),
-                    (UInt16Value(a), UInt16Value(b)) => Some(UInt16Value(ff(*a as i64, *b as i64) as u16)),
-                    (UInt8Value(a), UInt8Value(b)) => Some(UInt8Value(ff(*a as i64, *b as i64) as u8)),
-                    (RowsAffected(a), RowsAffected(b)) => Some(RowsAffected(ff(*a as i64, *b as i64) as usize)),
-                    _ => Some(Int64Value(ff(lhs.assume_i64()?, rhs.assume_i64()?)))
-                }
-            }
-        }
-    }
 }
 
 impl Add for TypedValue {
     type Output = TypedValue;
 
     fn add(self, rhs: Self) -> Self::Output {
-        match (&self, &rhs) {
+        match (self, rhs) {
             (Ack, Boolean(..)) => Boolean(true),
-            (Ack, RowsAffected(n)) => RowsAffected(*n),
+            (Ack, RowsAffected(n)) => RowsAffected(n),
             (Boolean(..), Ack) => Boolean(true),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
             (ErrorValue(a), ErrorValue(b)) => ErrorValue(format!("{a}\n{b}")),
             (ErrorValue(a), _) => ErrorValue(a.to_string()),
             (_, ErrorValue(b)) => ErrorValue(b.to_string()),
-            (Float32Value(a), Float32Value(b)) => Float32Value(*a + *b),
-            (Float64Value(a), Float64Value(b)) => Float64Value(*a + *b),
-            (Int128Value(a), Int128Value(b)) => Int128Value(*a + *b),
-            (Int64Value(a), Int64Value(b)) => Int64Value(*a + *b),
-            (Int32Value(a), Int32Value(b)) => Int32Value(*a + *b),
-            (Int16Value(a), Int16Value(b)) => Int16Value(*a + *b),
-            (Int8Value(a), Int8Value(b)) => Int8Value(*a + *b),
-            (UInt128Value(a), UInt128Value(b)) => UInt128Value(*a + *b),
-            (UInt64Value(a), UInt64Value(b)) => UInt64Value(*a + *b),
-            (UInt32Value(a), UInt32Value(b)) => UInt32Value(*a + *b),
-            (UInt16Value(a), UInt16Value(b)) => UInt16Value(*a + *b),
-            (UInt8Value(a), UInt8Value(b)) => UInt8Value(*a + *b),
-            (RowsAffected(n), Ack) => RowsAffected(*n),
-            (RowsAffected(a), RowsAffected(b)) => RowsAffected(*a + *b),
-            (StringValue(a), StringValue(b)) => StringValue(a.to_string() + b),
+            (Number(a), Number(b)) => Number(a + b),
+            (RowsAffected(n), Ack) => RowsAffected(n),
+            (RowsAffected(a), RowsAffected(b)) => RowsAffected(a + b),
+            (StringValue(a), StringValue(b)) => StringValue(a + b.as_str()),
             (TableValue(a), TableValue(b)) => {
-                match ModelRowCollection::combine(a.get_columns().to_owned(), vec![a, b]) {
+                match ModelRowCollection::combine(a.get_columns().to_owned(), vec![&a, &b]) {
                     Ok(mrc) => TableValue(mrc),
                     Err(err) => ErrorValue(err.to_string())
                 }
             }
             (TableValue(a), StructureValue(b)) => {
-                let mut mrc = match ModelRowCollection::from_table(Box::new(a)) {
+                let mut mrc = match ModelRowCollection::from_table(Box::new(&a)) {
                     Ok(mrc) => mrc,
                     Err(err) => return ErrorValue(err.to_string())
                 };
@@ -894,8 +684,7 @@ impl Add for TypedValue {
                     _ => TableValue(mrc),
                 }
             }
-            // (a, b) => ErrorValue(format!("Type mismatch: cannot perform {} + {}", a.unwrap_value(), b.unwrap_value()))
-            _ => Self::numeric_op_2f(&self, &rhs, |a, b| a + b).unwrap_or(Undefined)
+            (a, b) => ErrorValue(format!("Type mismatch: cannot perform {} + {}", a.unwrap_value(), b.unwrap_value()))
         }
     }
 }
@@ -904,7 +693,10 @@ impl BitAnd for TypedValue {
     type Output = TypedValue;
 
     fn bitand(self, rhs: Self) -> Self::Output {
-        Self::numeric_op_2i(&self, &rhs, |a, b| a & b).unwrap_or(Undefined)
+        match (self, rhs) {
+            (Number(a), Number(b)) => Number(a & b),
+            _ => Undefined
+        }
     }
 }
 
@@ -912,7 +704,10 @@ impl BitOr for TypedValue {
     type Output = TypedValue;
 
     fn bitor(self, rhs: Self) -> Self::Output {
-        Self::numeric_op_2i(&self, &rhs, |a, b| a | b).unwrap_or(Undefined)
+        match (self, rhs) {
+            (Number(a), Number(b)) => Number(a | b),
+            _ => Undefined
+        }
     }
 }
 
@@ -920,7 +715,10 @@ impl BitXor for TypedValue {
     type Output = TypedValue;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
-        Self::numeric_op_2i(&self, &rhs, |a, b| a ^ b).unwrap_or(Undefined)
+        match (self, rhs) {
+            (Number(a), Number(b)) => Number(a ^ b),
+            _ => Undefined
+        }
     }
 }
 
@@ -934,7 +732,10 @@ impl Div for TypedValue {
     type Output = TypedValue;
 
     fn div(self, rhs: Self) -> Self::Output {
-        Self::numeric_op_2f(&self, &rhs, |a, b| a / b).unwrap_or(Undefined)
+        match (self, rhs) {
+            (Number(a), Number(b)) => Number(a / b),
+            _ => Undefined
+        }
     }
 }
 
@@ -944,10 +745,13 @@ impl Index<usize> for TypedValue {
     fn index(&self, _index: usize) -> &Self::Output {
         match self {
             Array(items) => &items[_index],
-            //MemoryTable(brc) => &StructValue(brc[_index]),
+            // TableValue(brc) => {
+            //     let my_mrc = brc.to_owned();
+            //     &StructureValue(my_mrc[_index])
+            // },
             Null => &Null,
             Undefined => &Undefined,
-            x => panic!("illegal value for index {}", x)
+            _ => &Undefined,
         }
     }
 }
@@ -956,7 +760,10 @@ impl Mul for TypedValue {
     type Output = TypedValue;
 
     fn mul(self, rhs: Self) -> Self::Output {
-        Self::numeric_op_2f(&self, &rhs, |a, b| a * b).unwrap_or(Undefined)
+        match (self, rhs) {
+            (Number(a), Number(b)) => Number(a * b),
+            _ => Undefined
+        }
     }
 }
 
@@ -964,7 +771,10 @@ impl Neg for TypedValue {
     type Output = TypedValue;
 
     fn neg(self) -> Self::Output {
-        Self::numeric_op_1f(&self, |a| -a).unwrap_or(Undefined)
+        match self {
+            Number(a) => Number(-a),
+            _ => Undefined
+        }
     }
 }
 
@@ -972,9 +782,10 @@ impl Not for TypedValue {
     type Output = TypedValue;
 
     fn not(self) -> Self::Output {
-        match self.assume_bool() {
-            Some(v) => Boolean(!v),
-            None => Undefined
+        match self {
+            Boolean(v) => Boolean(!v),
+            Number(a) => Number(-a),
+            _ => Undefined
         }
     }
 }
@@ -993,7 +804,10 @@ impl Rem for TypedValue {
     type Output = TypedValue;
 
     fn rem(self, rhs: Self) -> Self::Output {
-        Self::numeric_op_2i(&self, &rhs, |a, b| a % b).unwrap_or(Undefined)
+        match (self, rhs) {
+            (Number(a), Number(b)) => Number(a % b),
+            _ => Undefined
+        }
     }
 }
 
@@ -1005,18 +819,7 @@ impl PartialOrd for TypedValue {
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
             (CLOB(a), CLOB(b)) => a.partial_cmp(b),
             (DateValue(a), DateValue(b)) => a.partial_cmp(b),
-            (Float32Value(a), Float32Value(b)) => a.partial_cmp(b),
-            (Float64Value(a), Float64Value(b)) => a.partial_cmp(b),
-            (Int8Value(a), Int8Value(b)) => a.partial_cmp(b),
-            (Int16Value(a), Int16Value(b)) => a.partial_cmp(b),
-            (Int32Value(a), Int32Value(b)) => a.partial_cmp(b),
-            (Int64Value(a), Int64Value(b)) => a.partial_cmp(b),
-            (Int128Value(a), Int128Value(b)) => a.partial_cmp(b),
-            (UInt8Value(a), UInt8Value(b)) => a.partial_cmp(b),
-            (UInt16Value(a), UInt16Value(b)) => a.partial_cmp(b),
-            (UInt32Value(a), UInt32Value(b)) => a.partial_cmp(b),
-            (UInt64Value(a), UInt64Value(b)) => a.partial_cmp(b),
-            (UInt128Value(a), UInt128Value(b)) => a.partial_cmp(b),
+            (Number(a), Number(b)) => a.partial_cmp(b),
             (RowsAffected(a), RowsAffected(b)) => a.partial_cmp(b),
             (StringValue(a), StringValue(b)) => a.partial_cmp(b),
             (UUIDValue(a), UUIDValue(b)) => a.partial_cmp(b),
@@ -1033,7 +836,10 @@ impl Shl for TypedValue {
     type Output = TypedValue;
 
     fn shl(self, rhs: Self) -> Self::Output {
-        Self::numeric_op_2i(&self, &rhs, |a, b| a << b).unwrap_or(Undefined)
+        match (self, rhs) {
+            (Number(a), Number(b)) => Number(a << b),
+            _ => Undefined
+        }
     }
 }
 
@@ -1041,7 +847,10 @@ impl Shr for TypedValue {
     type Output = TypedValue;
 
     fn shr(self, rhs: Self) -> Self::Output {
-        Self::numeric_op_2i(&self, &rhs, |a, b| a >> b).unwrap_or(Undefined)
+        match (self, rhs) {
+            (Number(a), Number(b)) => Number(a >> b),
+            _ => Undefined
+        }
     }
 }
 
@@ -1049,9 +858,10 @@ impl Sub for TypedValue {
     type Output = TypedValue;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        match (&self, &rhs) {
+        match (self, rhs) {
             (Boolean(a), Boolean(b)) => Boolean(a & b),
-            _ => Self::numeric_op_2f(&self, &rhs, |a, b| a - b).unwrap_or(Undefined)
+            (Number(a), Number(b)) => Number(a - b),
+            _ => Undefined
         }
     }
 }
@@ -1063,12 +873,13 @@ mod tests {
 
     #[test]
     fn test_add() {
-        assert_eq!(Float64Value(45.0) + Float64Value(32.7), Float64Value(77.7));
-        assert_eq!(Float32Value(45.7) + Float32Value(32.0), Float32Value(77.7));
-        assert_eq!(Int64Value(45) + Int64Value(32), Int64Value(77));
-        assert_eq!(Int32Value(45) + Int32Value(32), Int32Value(77));
-        assert_eq!(Int16Value(45) + Int16Value(32), Int16Value(77));
-        assert_eq!(UInt8Value(45) + UInt8Value(32), UInt8Value(77));
+        use NumberValue::*;
+        assert_eq!(Number(Float64Value(45.0)) + Number(Float64Value(32.7)), Number(Float64Value(77.7)));
+        assert_eq!(Number(Float32Value(45.7)) + Number(Float32Value(32.0)), Number(Float32Value(77.7)));
+        assert_eq!(Number(Int64Value(45)) + Number(Int64Value(32)), Number(Int64Value(77)));
+        assert_eq!(Number(Int32Value(45)) + Number(Int32Value(32)), Number(Int32Value(77)));
+        assert_eq!(Number(Int16Value(45)) + Number(Int16Value(32)), Number(Int16Value(77)));
+        assert_eq!(Number(UInt8Value(45)) + Number(UInt8Value(32)), Number(UInt8Value(77)));
         assert_eq!(Boolean(true) + Boolean(true), Boolean(true));
         assert_eq!(StringValue("Hello".into()) + StringValue(" World".into()), StringValue("Hello World".into()));
     }
@@ -1096,6 +907,7 @@ mod tests {
 
     #[test]
     fn test_eq() {
+        use NumberValue::*;
         assert_eq!(UInt8Value(0xCE), UInt8Value(0xCE));
         assert_eq!(Int16Value(0x7ACE), Int16Value(0x7ACE));
         assert_eq!(Int32Value(0x1111_BEEF), Int32Value(0x1111_BEEF));
@@ -1106,6 +918,7 @@ mod tests {
 
     #[test]
     fn test_ne() {
+        use NumberValue::*;
         assert_ne!(UInt8Value(0xCE), UInt8Value(0x00));
         assert_ne!(Int16Value(0x7ACE), Int16Value(0xACE));
         assert_ne!(Int32Value(0x1111_BEEF), Int32Value(0xBEEF));
@@ -1116,45 +929,14 @@ mod tests {
 
     #[test]
     fn test_gt() {
-        assert!(Array(vec![UInt8Value(0xCE), UInt8Value(0xCE)]) > Array(vec![UInt8Value(0x23), UInt8Value(0xBE)]));
+        use NumberValue::*;
+        assert!(Array(vec![Number(UInt8Value(0xCE)), Number(UInt8Value(0xCE))]) > Array(vec![Number(UInt8Value(0x23)), Number(UInt8Value(0xBE))]));
         assert!(UInt8Value(0xCE) > UInt8Value(0xAA));
         assert!(Int16Value(0x7ACE) > Int16Value(0x1111));
         assert!(Int32Value(0x1111_BEEF) > Int32Value(0x0ABC_BEEF));
         assert!(Int64Value(0x5555_FACE_CAFE_BABE) > Int64Value(0x0000_FACE_CAFE_BABE));
         assert!(Float32Value(287.11) > Float32Value(45.3867));
         assert!(Float64Value(359.7854) > Float64Value(99.992));
-    }
-
-    #[test]
-    fn test_rem() {
-        assert_eq!(Int64Value(10) % Int64Value(3), Int64Value(1));
-    }
-
-    #[test]
-    fn test_pow() {
-        let a = Int64Value(5);
-        let b = Int64Value(2);
-        assert_eq!(a.pow(&b), Some(Int64Value(25)))
-    }
-
-    #[test]
-    fn test_shl() {
-        assert_eq!(Int64Value(1) << Int64Value(5), Int64Value(32));
-    }
-
-    #[test]
-    fn test_shr() {
-        assert_eq!(Int64Value(32) >> Int64Value(5), Int64Value(1));
-    }
-
-    #[test]
-    fn test_sub() {
-        assert_eq!(Float64Value(45.0) - Float64Value(32.0), Float64Value(13.0));
-        assert_eq!(Float32Value(45.0) - Float32Value(32.0), Float32Value(13.0));
-        assert_eq!(Int64Value(45) - Int64Value(32), Int64Value(13));
-        assert_eq!(Int32Value(45) - Int32Value(32), Int32Value(13));
-        assert_eq!(Int16Value(45) - Int16Value(32), Int16Value(13));
-        assert_eq!(UInt8Value(45) - UInt8Value(32), UInt8Value(13));
     }
 
     #[test]
@@ -1171,22 +953,23 @@ mod tests {
 
     #[test]
     fn test_to_json() {
+        use NumberValue::*;
         verify_to_json(Ack, serde_json::Value::Bool(true));
         verify_to_json(Boolean(false), serde_json::Value::Bool(false));
         verify_to_json(Boolean(true), serde_json::Value::Bool(true));
         verify_to_json(DateValue(1709163679081), serde_json::Value::String("2024-02-28T23:41:19.081Z".into()));
-        verify_to_json(Float32Value(38.15999984741211), serde_json::json!(38.15999984741211));
-        verify_to_json(Float64Value(100.1), serde_json::json!(100.1));
-        verify_to_json(Int8Value(-100), serde_json::json!(-100));
-        verify_to_json(Int16Value(-1000), serde_json::json!(-1000));
-        verify_to_json(Int32Value(-123_456), serde_json::json!(-123_456));
-        verify_to_json(Int64Value(-123_456_789), serde_json::json!(-123_456_789));
-        verify_to_json(Int128Value(-123_456_789), serde_json::json!(-123_456_789));
-        verify_to_json(UInt8Value(100), serde_json::json!(100));
-        verify_to_json(UInt16Value(1000), serde_json::json!(1000));
-        verify_to_json(UInt32Value(123_456), serde_json::json!(123_456));
-        verify_to_json(UInt64Value(123_456_789), serde_json::json!(123_456_789));
-        verify_to_json(UInt128Value(123_456_789), serde_json::json!(123_456_789));
+        verify_to_json(Number(Float32Value(38.15999984741211)), serde_json::json!(38.15999984741211));
+        verify_to_json(Number(Float64Value(100.1)), serde_json::json!(100.1));
+        verify_to_json(Number(Int8Value(-100)), serde_json::json!(-100));
+        verify_to_json(Number(Int16Value(-1000)), serde_json::json!(-1000));
+        verify_to_json(Number(Int32Value(-123_456)), serde_json::json!(-123_456));
+        verify_to_json(Number(Int64Value(-123_456_789)), serde_json::json!(-123_456_789));
+        verify_to_json(Number(Int128Value(-123_456_789)), serde_json::json!(-123_456_789));
+        verify_to_json(Number(UInt8Value(100)), serde_json::json!(100));
+        verify_to_json(Number(UInt16Value(1000)), serde_json::json!(1000));
+        verify_to_json(Number(UInt32Value(123_456)), serde_json::json!(123_456));
+        verify_to_json(Number(UInt64Value(123_456_789)), serde_json::json!(123_456_789));
+        verify_to_json(Number(UInt128Value(123_456_789)), serde_json::json!(123_456_789));
         verify_to_json(Null, serde_json::Value::Null);
         verify_to_json(StringValue("Hello World".into()), serde_json::Value::String("Hello World".into()));
         verify_to_json(Undefined, serde_json::Value::Null);
@@ -1202,8 +985,8 @@ mod tests {
         verify_wrap_unwrap("false", Boolean(false));
         verify_wrap_unwrap("true", Boolean(true));
         verify_wrap_unwrap("2024-02-28T23:41:19.081Z", DateValue(1709163679081));
-        verify_wrap_unwrap("100.1", Float64Value(100.1));
-        verify_wrap_unwrap("100", Int64Value(100));
+        verify_wrap_unwrap("100.1", Number(Float64Value(100.1)));
+        verify_wrap_unwrap("100", Number(Int64Value(100)));
         verify_wrap_unwrap("null", Null);
         verify_wrap_unwrap("Hello World", StringValue("Hello World".into()));
         verify_wrap_unwrap("undefined", Undefined);
@@ -1215,7 +998,10 @@ mod tests {
 
     #[test]
     fn test_unwrap_optional_value() {
-        assert_eq!(TypedValue::wrap_value_opt(&Some("123.45".into())).unwrap(), Float64Value(123.45))
+        assert_eq!(
+            TypedValue::wrap_value_opt(&Some("123.45".into())).unwrap(),
+            Number(Float64Value(123.45))
+        )
     }
 
     fn verify_to_json(typed_value: TypedValue, expected: serde_json::Value) {

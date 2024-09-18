@@ -68,18 +68,20 @@ impl TableColumn {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::data_types::DataType::{Float64Type, StringType};
+    use crate::data_types::DataType::*;
+    use crate::numbers::NumberKind::F64Kind;
+    use crate::numbers::NumberValue::Float64Value;
     use crate::testdata::make_quote_columns;
-    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
+    use crate::typed_values::TypedValue::*;
 
     use super::*;
 
     #[test]
     fn test_new() {
-        let column: TableColumn = TableColumn::new("last_sale", Float64Type, Float64Value(0.142857), 0);
+        let column: TableColumn = TableColumn::new("last_sale", NumberType(F64Kind), Number(Float64Value(0.142857)), 0);
         assert_eq!(column.name, "last_sale");
-        assert_eq!(column.data_type, Float64Type);
-        assert_eq!(column.default_value, Float64Value(0.142857));
+        assert_eq!(column.data_type, NumberType(F64Kind));
+        assert_eq!(column.default_value, Number(Float64Value(0.142857)));
         assert_eq!(column.max_physical_size, 9);
     }
 
@@ -101,7 +103,7 @@ mod tests {
         let natural: Vec<TableColumn> = vec![
             TableColumn::new("symbol", StringType(8), Null, 9),
             TableColumn::new("exchange", StringType(8), Null, 26),
-            TableColumn::new("last_sale", Float64Type, Null, 43),
+            TableColumn::new("last_sale", NumberType(F64Kind), Null, 43),
         ];
         assert_eq!(generated, natural);
     }

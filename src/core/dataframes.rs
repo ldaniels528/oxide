@@ -62,7 +62,10 @@ impl DataFrame {
 
     /// deletes an existing row by ID from the table
     pub fn delete(&mut self, id: usize) -> usize {
-        self.device.delete_row(id).assume_usize().unwrap_or(0)
+        match self.device.delete_row(id) {
+            TypedValue::RowsAffected(n) => n,
+            _ => 0
+        }
     }
 
     /// deletes rows from the table based on a condition
@@ -147,7 +150,11 @@ impl DataFrame {
 
     /// overwrites a specified row by ID
     pub fn overwrite(&mut self, row: Row) -> std::io::Result<usize> {
-        Ok(self.device.overwrite_row(row.get_id(), row).assume_usize().unwrap_or(0))
+        Ok(match self.device.overwrite_row(row.get_id(), row) {
+            TypedValue::RowsAffected(n) => n,
+            TypedValue::ErrorValue(msg) => return fail(msg),
+            _ => 0
+        })
     }
 
     /// overwrites rows that match the supplied criteria
@@ -250,7 +257,7 @@ impl DataFrame {
     /// restores a deleted row to an active state
     pub fn undelete(&mut self, id: usize) -> std::io::Result<usize> {
         Ok(self.device.undelete_row(id))
-            .map(|v| v.assume_usize().unwrap_or(0))
+            .map(|v| v.to_usize())
     }
 
     /// restores rows from the table based on a condition
@@ -407,16 +414,18 @@ mod tests {
 
     use shared_lib::cnv_error;
 
-    use crate::data_types::DataType::{Float64Type, StringType};
+    use crate::data_types::DataType::*;
     use crate::dataframes::DataFrame;
-    use crate::expression::Expression::{Equal, Literal, Variable};
+    use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::namespaces::Namespace;
+    use crate::numbers::NumberKind::F64Kind;
+    use crate::numbers::NumberValue::*;
     use crate::row;
     use crate::table_columns::TableColumn;
     use crate::testdata::*;
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::{Float64Value, Int64Value, Null, StringValue, Undefined};
+    use crate::typed_values::TypedValue::*;
 
     #[test]
     fn test_add_assign() {
@@ -449,7 +458,7 @@ mod tests {
         assert_eq!(columns[1].data_type, StringType(8));
         assert_eq!(columns[1].default_value, Null);
         assert_eq!(columns[2].get_name(), "last_sale");
-        assert_eq!(columns[2].data_type, Float64Type);
+        assert_eq!(columns[2].data_type, NumberType(F64Kind));
         assert_eq!(columns[2].default_value, Null);
     }
 
@@ -487,10 +496,10 @@ mod tests {
         let rows = df.read_active_rows().unwrap();
         assert_eq!(rows, vec![
             row!(0, phys_columns, vec![
-                StringValue("UNO".into()), StringValue("AMEX".into()), Float64Value(11.77),
+                StringValue("UNO".into()), StringValue("AMEX".into()), Number(Float64Value(11.77)),
             ]),
             row!(2, phys_columns, vec![
-                StringValue("TRES".into()), StringValue("AMEX".into()), Float64Value(55.44),
+                StringValue("TRES".into()), StringValue("AMEX".into()), Number(Float64Value(55.44)),
             ]),
         ]);
     }
@@ -566,8 +575,9 @@ mod tests {
         assert_eq!(df.append(make_quote(0, &make_table_columns(), "FAR", "NYSE", 42.33)).unwrap(), 3);
         assert_eq!(df.append(make_quote(0, &make_table_columns(), "AWAY", "AMEX", 9.73)).unwrap(), 4);
         assert_eq!(df.map(|row| row.get("last_sale")).unwrap(), vec![
-            Float64Value(123.45), Float64Value(88.22), Float64Value(51.11),
-            Float64Value(42.33), Float64Value(9.73),
+            Number(Float64Value(123.45)), Number(Float64Value(88.22)),
+            Number(Float64Value(51.11)), Number(Float64Value(42.33)),
+            Number(Float64Value(9.73)),
         ])
     }
 
@@ -596,13 +606,13 @@ mod tests {
             Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into()),
         ];
         let values = vec![
-            Literal(StringValue("XXX".into())), Literal(StringValue("YYY".into())), Literal(Float64Value(0.)),
+            Literal(StringValue("XXX".into())), Literal(StringValue("YYY".into())), Literal(Number(Float64Value(0.))),
         ];
         let condition = Some(Box::new(Equal(
             Box::new(Variable("exchange".into())),
             Box::new(Literal(StringValue("NYSE".into()))),
         )));
-        assert_eq!(df.overwrite_where(&machine, &fields, &values, &condition, Int64Value(2)).unwrap(), 2);
+        assert_eq!(df.overwrite_where(&machine, &fields, &values, &condition, Number(Int64Value(2))).unwrap(), 2);
 
         // verify the rows
         assert_eq!(df.read_active_rows().unwrap(), vec![
@@ -699,13 +709,13 @@ mod tests {
 
         // define the verification rows
         let row_0 = row!(0, phys_columns, vec![
-            StringValue("UNO".into()), StringValue("AMEX".into()), Float64Value(11.77),
+            StringValue("UNO".into()), StringValue("AMEX".into()), Number(Float64Value(11.77)),
         ]);
         let row_1 = row!(1, phys_columns, vec![
-            StringValue("DOS".into()), StringValue("AMEX".into()), Float64Value(33.22),
+            StringValue("DOS".into()), StringValue("AMEX".into()), Number(Float64Value(33.22)),
         ]);
         let row_2 = row!(2, phys_columns, vec![
-            StringValue("TRES".into()), StringValue("AMEX".into()), Float64Value(55.44),
+            StringValue("TRES".into()), StringValue("AMEX".into()), Number(Float64Value(55.44)),
         ]);
 
         // verify the row was deleted
@@ -732,7 +742,7 @@ mod tests {
 
         // update the middle row
         let row_to_update = row!(1, phys_columns, vec![
-            Undefined, Undefined, Float64Value(33.33),
+            Undefined, Undefined, Number(Float64Value(33.33)),
         ]);
         assert_eq!(df.update(row_to_update.to_owned()).unwrap(), 1);
 
@@ -740,7 +750,7 @@ mod tests {
         let (updated_row, updated_rmd) = df.read_row(row_to_update.get_id()).unwrap();
         assert!(updated_rmd.is_allocated);
         assert_eq!(updated_row, row!(1, phys_columns, vec![
-            StringValue("DORA".into()), StringValue("AMEX".into()), Float64Value(33.33),
+            StringValue("DORA".into()), StringValue("AMEX".into()), Number(Float64Value(33.33)),
         ]))
     }
 
@@ -758,12 +768,12 @@ mod tests {
         // updates rows where ...
         let machine = Machine::new();
         let fields = vec![Variable("last_sale".into())];
-        let values = vec![Literal(Float64Value(11.1111))];
+        let values = vec![Literal(Number(Float64Value(11.1111)))];
         let condition = Some(Box::new(Equal(
             Box::new(Variable("exchange".into())),
             Box::new(Literal(StringValue("NYSE".into()))),
         )));
-        assert_eq!(df.update_where(&machine, &fields, &values, &condition, Int64Value(2)).unwrap(), 2);
+        assert_eq!(df.update_where(&machine, &fields, &values, &condition, Number(Int64Value(2))).unwrap(), 2);
 
         // verify the rows
         assert_eq!(df.read_active_rows().unwrap(), vec![

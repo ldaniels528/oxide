@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-// state machine module
+//  Machine - state machine module
 ////////////////////////////////////////////////////////////////////
 
 use std::{fs, thread};
@@ -19,6 +19,7 @@ use tokio::runtime::Runtime;
 
 use shared_lib::fail;
 
+use crate::backdoor::BackDoorFunction;
 use crate::compiler::{fail_expr, fail_unexpected, fail_value};
 use crate::compiler::Compiler;
 use crate::cursor::Cursor;
@@ -32,13 +33,15 @@ use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
+use crate::numbers::NumberValue::*;
 use crate::rest_server::SharedState;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::structure::Structure;
 use crate::table_columns::TableColumn;
-use crate::typed_values::{BackDoorFunction, TypedValue};
+use crate::table_renderer::TableRenderer;
+use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use crate::web_routes;
 
@@ -629,14 +632,21 @@ impl Machine {
         ])?;
         let mut report = ModelRowCollection::new(verification_columns.to_owned());
         let mut capture = |level: u16, text: String, passed: bool, result: TypedValue| {
-            report.push_row(Row::new(0, verification_columns.to_owned(), vec![
-                UInt16Value(level), StringValue(text), Boolean(passed), result,
-            ])).assume_usize().unwrap_or(0)
+            let outcome = report.push_row(Row::new(0, verification_columns.to_owned(), vec![
+                Number(UInt16Value(level)), StringValue(text), Boolean(passed), result,
+            ]));
+            let count = match outcome {
+                Number(n) => n.to_usize(),
+                RowsAffected(n) => n,
+                ErrorValue(msg) => return fail(msg),
+                _ => 0
+            };
+            Ok((self, count))
         };
 
         // feature processing
         let (mut ms, title) = self.evaluate(title)?;
-        capture(0, title.unwrap_value(), true, Ack);
+        capture(0, title.unwrap_value(), true, Ack)?;
 
         // scenario processing
         for scenario in scenarios {
@@ -648,7 +658,7 @@ impl Machine {
                     ms = msb;
 
                     // update the report
-                    capture(1, subtitle.unwrap_value(), true, Ack);
+                    capture(1, subtitle.unwrap_value(), true, Ack)?;
 
                     // verification processing
                     let level: u16 = 2;
@@ -658,11 +668,11 @@ impl Machine {
                         ms = msb;
                         match result {
                             ErrorValue(msg) => {
-                                capture(level, verification.to_code(), false, ErrorValue(msg));
+                                capture(level, verification.to_code(), false, ErrorValue(msg))?;
                                 errors += 1;
                             }
                             result => {
-                                capture(level, verification.to_code(), true, result);
+                                capture(level, verification.to_code(), true, result)?;
                             }
                         };
                     }
@@ -670,7 +680,7 @@ impl Machine {
                 other => {
                     let (msb, result) = ms.evaluate(other)?;
                     ms = msb;
-                    capture(2, other.to_code(), true, result);
+                    capture(2, other.to_code(), true, result)?;
                 }
             };
         }
@@ -720,9 +730,9 @@ impl Machine {
         args: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         // extract the arguments
-        println!("evaluate_function_call ms0 {:?}", self);
+        //.println!("evaluate_function_call ms0 {:?}", self);
         if let (ms, Array(args)) = self.evaluate_array(args)? {
-            println!("evaluate_function_call ms1 {:?}", ms);
+            //println!("evaluate_function_call ms1 {:?}", ms);
             // evaluate the anonymous- or named-function
             match ms.evaluate(fx)? {
                 (ms, BackDoor(bdf)) =>
@@ -924,11 +934,11 @@ impl Machine {
         let (machine, collection) = machine.evaluate(collection_expr)?;
         let value = match collection {
             Array(items) => {
-                let idx = index.assume_usize().unwrap_or(0);
+                let idx = index.to_usize();
                 if idx < items.len() { items[idx].to_owned() } else { ErrorValue(format!("Array element index is out of range ({} >= {})", idx, items.len())) }
             }
             NamespaceValue(d, s, n) => {
-                let id = index.assume_usize().unwrap_or(0);
+                let id = index.to_usize();
                 let ns = Namespace::new(d, s, n);
                 let frc = FileRowCollection::open(&ns)?;
                 match frc.read_one(id)? {
@@ -937,16 +947,16 @@ impl Machine {
                 }
             }
             StringValue(string) => {
-                let idx = index.assume_usize().unwrap_or(0);
+                let idx = index.to_usize();
                 if idx < string.len() { StringValue(string[idx..idx].to_string()) } else { ErrorValue(format!("String character index is out of range ({} >= {})", idx, string.len())) }
             }
             StructureValue(structure) => {
-                let idx = index.assume_usize().unwrap_or(0);
+                let idx = index.to_usize();
                 let values = structure.get_values();
                 if idx < values.len() { values[idx].to_owned() } else { ErrorValue(format!("Structure element index is out of range ({} >= {})", idx, values.len())) }
             }
             TableValue(mrc) => {
-                let id = index.assume_usize().unwrap_or(0);
+                let id = index.to_usize();
                 match mrc.read_one(id)? {
                     Some(row) => StructureValue(Structure::from_row(&row)),
                     None => StructureValue(Structure::new(mrc.get_columns().to_owned()))
@@ -1043,19 +1053,26 @@ impl Machine {
         let neg_result = match result {
             Ack => Boolean(false),
             Boolean(n) => Boolean(!n),
-            Int8Value(n) => Int8Value(-n),
-            Int16Value(n) => Int16Value(-n),
-            Int32Value(n) => Int32Value(-n),
-            Int64Value(n) => Int64Value(-n),
-            Int128Value(n) => Int128Value(-n),
-            UInt8Value(n) => Int16Value(-(n as i16)),
-            UInt16Value(n) => Int32Value(-(n as i32)),
-            UInt32Value(n) => Int64Value(-(n as i64)),
-            UInt64Value(n) => Int128Value(-(n as i128)),
-            UInt128Value(n) => ErrorValue(format!("{} cannot be negated", n)),
-            Float32Value(n) => Float32Value(-n),
-            Float64Value(n) => Float64Value(-n),
-            RowsAffected(n) => Int64Value(-(n as i64)),
+            Number(number) => {
+                use crate::numbers::NumberValue::*;
+                let value = match number {
+                    Float32Value(n) => Float32Value(-n),
+                    Float64Value(n) => Float64Value(-n),
+                    Int8Value(n) => Int8Value(-n),
+                    Int16Value(n) => Int16Value(-n),
+                    Int32Value(n) => Int32Value(-n),
+                    Int64Value(n) => Int64Value(-n),
+                    Int128Value(n) => Int128Value(-n),
+                    UInt8Value(n) => Int16Value(-(n as i16)),
+                    UInt16Value(n) => Int32Value(-(n as i32)),
+                    UInt32Value(n) => Int64Value(-(n as i64)),
+                    UInt64Value(n) => Int128Value(-(n as i128)),
+                    z =>
+                        return Ok((self.to_owned(), ErrorValue(format!("{} cannot be negated", z))))
+                };
+                Number(value)
+            }
+            RowsAffected(n) => Number(Int64Value(-(n as i64))),
             z => ErrorValue(format!("{} cannot be negated", z.unwrap_value())),
         };
         Ok((machine, neg_result))
@@ -1101,8 +1118,7 @@ impl Machine {
         use crate::rest_server::*;
         let (_ms, port) = self.evaluate(port_expr)?;
         thread::spawn(move || {
-            let port = port.assume_usize()
-                .expect("port: an integer value was expected");
+            let port = port.to_usize();
             let server = actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
                 .bind(format!("{}:{}", "0.0.0.0", port))
                 .expect(format!("Can not bind to port {port}").as_str())
@@ -1287,7 +1303,7 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, table) = self.evaluate(table)?;
         Self::orchestrate_io(machine, table, &Vec::new(), &Vec::new(), &None, limit, |machine, df, _fields, _values, condition, limit| {
-            let limit = limit.assume_usize().unwrap_or(0);
+            let limit = limit.to_usize();
             let new_size = df.resize(limit)?;
             Ok((machine, RowsAffected(new_size)))
         })
@@ -1353,15 +1369,7 @@ impl Machine {
         limit: TypedValue,
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, result) = self.evaluate(src)?;
-        let limit = match limit {
-            Null | Undefined => None,
-            value =>
-                match value.assume_usize() {
-                    None => None,
-                    Some(n) if n < 1 => Some(1),
-                    Some(n) => Some(n)
-                }
-        }.unwrap_or(usize::MAX);
+        let limit = limit.to_usize();
         match result {
             TableValue(mrc) => {
                 let mut cursor = Cursor::filter(Box::new(mrc), condition.to_owned());
@@ -1651,16 +1659,27 @@ impl Machine {
         Self::construct(self.stack.to_owned(), variables)
     }
 
+    pub fn show(rows: Vec<Row>) {
+        for s in TableRenderer::from_rows(rows) {
+            println!("{}", s)
+        }
+    }
+
     pub fn transform_numeric(&self, number: TypedValue,
                              fi: fn(i64) -> TypedValue,
                              ff: fn(f64) -> TypedValue) -> std::io::Result<Self> {
         match number {
-            Float32Value(n) => Ok(self.push(ff(n as f64))),
-            Float64Value(n) => Ok(self.push(ff(n))),
-            UInt8Value(n) => Ok(self.push(fi(n as i64))),
-            Int16Value(n) => Ok(self.push(fi(n as i64))),
-            Int32Value(n) => Ok(self.push(fi(n as i64))),
-            Int64Value(n) => Ok(self.push(fi(n))),
+            Number(number) => {
+                match number {
+                    Float32Value(n) => Ok(self.push(ff(n as f64))),
+                    Float64Value(n) => Ok(self.push(ff(n))),
+                    UInt8Value(n) => Ok(self.push(fi(n as i64))),
+                    Int16Value(n) => Ok(self.push(fi(n as i64))),
+                    Int32Value(n) => Ok(self.push(fi(n as i64))),
+                    Int64Value(n) => Ok(self.push(fi(n))),
+                    unknown => fail(format!("Unsupported type {:?}", unknown))
+                }
+            }
             RowsAffected(n) => Ok(self.push(ff(n as f64))),
             unknown => fail(format!("Unsupported type {:?}", unknown))
         }
@@ -1678,8 +1697,6 @@ impl Machine {
         variables.insert(name.to_string(), value);
         Self::construct(self.stack.to_owned(), variables)
     }
-
-
 }
 
 // Unit tests
@@ -1696,13 +1713,13 @@ mod tests {
 
     #[test]
     fn test_array_declaration() {
-        let models = vec![Literal(Float64Value(3.25)), TRUE, FALSE, NULL, UNDEFINED];
+        let models = vec![Literal(Number(Float64Value(3.25))), TRUE, FALSE, NULL, UNDEFINED];
         assert_eq!(models.iter().map(|e| e.to_code()).collect::<Vec<String>>(), vec![
             "3.25", "true", "false", "null", "undefined",
         ]);
 
         let (_, array) = Machine::new().evaluate_array(&models).unwrap();
-        assert_eq!(array, Array(vec![Float64Value(3.25), Boolean(true), Boolean(false), Null, Undefined]));
+        assert_eq!(array, Array(vec![Number(Float64Value(3.25)), Boolean(true), Boolean(false), Null, Undefined]));
     }
 
     #[test]
@@ -1727,34 +1744,34 @@ mod tests {
         let machine = Machine::new()
             .with_variable("symbol", StringValue("ABC".into()))
             .with_variable("exchange", StringValue("NYSE".into()))
-            .with_variable("last_sale", Float64Value(12.66));
+            .with_variable("last_sale", Number(Float64Value(12.66)));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Array(vec![
             StringValue("ABC".into()),
             StringValue("NYSE".into()),
-            Float64Value(12.66),
+            Number(Float64Value(12.66)),
         ]));
     }
 
     #[test]
     fn test_divide() {
-        let machine = Machine::new().with_variable("x", Int64Value(50));
-        let model = Divide(Box::new(Variable("x".into())), Box::new(Literal(Int64Value(7))));
+        let machine = Machine::new().with_variable("x", Number(Int64Value(50)));
+        let model = Divide(Box::new(Variable("x".into())), Box::new(Literal(Number(Int64Value(7)))));
         assert_eq!(model.to_code(), "x / 7");
 
         let (machine, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Int64Value(7));
-        assert_eq!(machine.get("x"), Some(Int64Value(50)));
+        assert_eq!(result, Number(Int64Value(7)));
+        assert_eq!(machine.get("x"), Some(Number(Int64Value(50))));
     }
 
     #[test]
     fn test_factorial() {
-        let model = Factorial(Box::new(Literal(Float64Value(6.))));
+        let model = Factorial(Box::new(Literal(Number(Float64Value(6.)))));
         assert_eq!(model.to_code(), "¡6");
 
         let machine = Machine::new();
         let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Float64Value(720.))
+        assert_eq!(result, Number(Float64Value(720.)))
     }
 
     #[test]
@@ -1762,18 +1779,18 @@ mod tests {
         let model = If {
             condition: Box::new(GreaterThan(
                 Box::new(Variable("num".into())),
-                Box::new(Literal(Int64Value(25))),
+                Box::new(Literal(Number(Int64Value(25)))),
             )),
             a: Box::new(Literal(StringValue("Yes".into()))),
             b: Some(Box::new(Literal(StringValue("No".into())))),
         };
         assert_eq!(model.to_code(), r#"if num > 25 "Yes" else "No""#);
 
-        let machine = Machine::new().with_variable("num", Int64Value(5));
+        let machine = Machine::new().with_variable("num", Number(Int64Value(5)));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("No".into()));
 
-        let machine = Machine::new().with_variable("num", Int64Value(37));
+        let machine = Machine::new().with_variable("num", Number(Int64Value(37)));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("Yes".into()));
     }
@@ -1783,18 +1800,18 @@ mod tests {
         let model = If {
             condition: Box::new(LessThan(
                 Box::new(Variable("num".into())),
-                Box::new(Literal(Int64Value(10))),
+                Box::new(Literal(Number(Int64Value(10)))),
             )),
             a: Box::new(Literal(StringValue("Yes".into()))),
             b: Some(Box::new(Literal(StringValue("No".into())))),
         };
         assert_eq!(model.to_code(), r#"if num < 10 "Yes" else "No""#);
 
-        let machine = Machine::new().with_variable("num", Int64Value(5));
+        let machine = Machine::new().with_variable("num", Number(Int64Value(5)));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("Yes".into()));
 
-        let machine = Machine::new().with_variable("num", Int64Value(99));
+        let machine = Machine::new().with_variable("num", Number(Int64Value(99)));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("No".into()));
     }
@@ -1804,23 +1821,25 @@ mod tests {
         // create the instruction model for "[1, 4, 2, 8, 5, 7][5]"
         let model = ElementAt(
             Box::new(ArrayLiteral(vec![
-                Literal(Int64Value(1)), Literal(Int64Value(4)), Literal(Int64Value(2)),
-                Literal(Int64Value(8)), Literal(Int64Value(5)), Literal(Int64Value(7)),
+                Literal(Number(Int64Value(1))), Literal(Number(Int64Value(4))),
+                Literal(Number(Int64Value(2))), Literal(Number(Int64Value(8))),
+                Literal(Number(Int64Value(5))), Literal(Number(Int64Value(7))),
             ])),
-            Box::new(Literal(Int64Value(5))),
+            Box::new(Literal(Number(Int64Value(5)))),
         );
         assert_eq!(model.to_code(), "[1, 4, 2, 8, 5, 7][5]");
 
         let machine = Machine::new();
         let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Int64Value(7))
+        assert_eq!(result, Number(Int64Value(7)))
     }
 
     #[test]
     fn test_index_of_table_in_namespace() {
         // create a table with test data
         let ns = Namespace::new("machine", "element_at", "stocks");
-        let phys_columns = make_table_columns();
+        let logical_columns = make_quote_columns();
+        let phys_columns = TableColumn::from_columns(&logical_columns).unwrap();
         let value_tuples = vec![
             ("ABC", "AMEX", 11.77), ("UNO", "OTC", 0.2456),
             ("BIZ", "NYSE", 23.66), ("GOTO", "OTC", 0.1428),
@@ -1831,16 +1850,16 @@ mod tests {
                 Row::new(0, phys_columns.to_owned(), vec![
                     StringValue(symbol.to_string()),
                     StringValue(exchange.to_string()),
-                    Float64Value(*last_sale),
+                    Number(Float64Value(*last_sale)),
                 ])
             }).collect();
-        let mut frc = FileRowCollection::create_table(&ns, phys_columns.to_owned()).unwrap();
-        assert_eq!(RowsAffected(5), frc.append_rows(rows));
+        let mut dfrc = DataFrame::create(ns.to_owned(), DataFrameConfig::build(logical_columns)).unwrap();
+        assert_eq!(RowsAffected(5), dfrc.append_rows(rows));
 
         // create the instruction model 'ns("machine.element_at.stocks")[2]'
         let model = ElementAt(
             Box::new(Ns(Box::new(Literal(StringValue(ns.into()))))),
-            Box::new(Literal(Int64Value(2))),
+            Box::new(Literal(Number(Int64Value(2)))),
         );
         assert_eq!(model.to_code(), r#"ns("machine.element_at.stocks")[2]"#);
 
@@ -1865,7 +1884,7 @@ mod tests {
         // create the instruction model "stocks[4]"
         let model = ElementAt(
             Box::new(Variable("stocks".to_string())),
-            Box::new(Literal(Int64Value(4))),
+            Box::new(Literal(Number(Int64Value(4)))),
         );
         assert_eq!(model.to_code(), "stocks[4]");
 
@@ -2002,19 +2021,19 @@ mod tests {
         let dump = rows.iter().map(|row| row.get_values()).collect::<Vec<_>>();
         assert_eq!(dump, vec![
             vec![
-                UInt16Value(0),
+                Number(UInt16Value(0)),
                 StringValue("Karate translator".into()),
                 Boolean(true),
                 Ack,
             ],
             vec![
-                UInt16Value(1),
+                Number(UInt16Value(1)),
                 StringValue("Translate Karate Scenario to Oxide Scenario".into()),
                 Boolean(true),
                 Ack,
             ],
             vec![
-                UInt16Value(2),
+                Number(UInt16Value(2)),
                 StringValue("assert(true)".into()),
                 Boolean(true),
                 Boolean(true),
@@ -2033,19 +2052,19 @@ mod tests {
                     ],
                     code: Box::new(Plus(
                         Box::new(Variable("n".into())),
-                        Box::new(Literal(Int64Value(5))))),
+                        Box::new(Literal(Number(Int64Value(5)))))),
                 })),
             args: vec![
-                Literal(Int64Value(3))
+                Literal(Number(Int64Value(3)))
             ],
         };
 
         // evaluate the function
         let (machine, result) = Machine::new()
-            .with_variable("n", Int64Value(3))
+            .with_variable("n", Number(Int64Value(3)))
             .evaluate(&model)
             .unwrap();
-        assert_eq!(result, Int64Value(8));
+        assert_eq!(result, Number(Int64Value(8)));
         assert_eq!(model.to_code(), "((n: i64) => n + 5)(3)")
     }
 
@@ -2076,14 +2095,14 @@ mod tests {
         let model = FunctionCall {
             fx: Box::new(Literal(fx)),
             args: vec![
-                Literal(Int64Value(2)),
-                Literal(Int64Value(3)),
+                Literal(Number(Int64Value(2))),
+                Literal(Number(Int64Value(3))),
             ],
         };
         let (machine, result) = machine
             .evaluate(&model)
             .unwrap();
-        assert_eq!(result, Int64Value(5));
+        assert_eq!(result, Number(Int64Value(5)));
         assert_eq!(model.to_code(), "((a: i64, b: i64) => a + b)(2, 3)")
     }
 
@@ -2106,10 +2125,10 @@ mod tests {
                 from: Box::new(From(Box::new(Variable("stocks".into())))),
                 condition: Box::new(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Float64Value(1.0))),
+                    Box::new(Literal(Number(Float64Value(1.0)))),
                 )),
             })),
-            limit: Box::new(Literal(Int64Value(2))),
+            limit: Box::new(Literal(Number(Int64Value(2)))),
         });
         assert_eq!(model.to_code(), "from stocks where last_sale >= 1 limit 2");
 
@@ -2196,7 +2215,7 @@ mod tests {
             source: Box::new(From(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("REX".into()))),
                 ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
-                ("last_sale".into(), Literal(Float64Value(16.99))),
+                ("last_sale".into(), Literal(Number(Float64Value(16.99)))),
             ])))),
         })).unwrap();
         assert_eq!(result, RowsAffected(1));
@@ -2221,7 +2240,7 @@ mod tests {
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("BOOM".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                ("last_sale".into(), Literal(Float64Value(56.99))),
+                ("last_sale".into(), Literal(Number(Float64Value(56.99)))),
             ])))),
             condition: Some(Box::new(Equal(
                 Box::new(Variable("symbol".into())),
@@ -2255,26 +2274,26 @@ mod tests {
     fn test_precedence() {
         // 2 + 4 * 3
         let opcodes = vec![
-            Plus(Box::new(Literal(Int64Value(2))),
-                 Box::new(Multiply(Box::new(Literal(Int64Value(4))),
-                                   Box::new(Literal(Int64Value(3))))))
+            Plus(Box::new(Literal(Number(Int64Value(2)))),
+                 Box::new(Multiply(Box::new(Literal(Number(Int64Value(4)))),
+                                   Box::new(Literal(Number(Int64Value(3)))))))
         ];
 
         let (_ms, result) = Machine::new().evaluate_scope(&opcodes).unwrap();
-        assert_eq!(result, Float64Value(14.))
+        assert_eq!(result, Number(Float64Value(14.)))
     }
 
     #[test]
     fn test_push_all() {
         let machine = Machine::new().push_all(vec![
-            Float32Value(2.), Float64Value(3.),
-            Int16Value(4), Int32Value(5),
-            Int64Value(6), StringValue("Hello World".into()),
+            Number(Float32Value(2.)), Number(Float64Value(3.)),
+            Number(Int16Value(4)), Number(Int32Value(5)),
+            Number(Int64Value(6)), StringValue("Hello World".into()),
         ]);
         assert_eq!(machine.stack, vec![
-            Float32Value(2.), Float64Value(3.),
-            Int16Value(4), Int32Value(5),
-            Int64Value(6), StringValue("Hello World".into()),
+            Number(Float32Value(2.)), Number(Float64Value(3.)),
+            Number(Int16Value(4)), Number(Int32Value(5)),
+            Number(Int64Value(6)), StringValue("Hello World".into()),
         ])
     }
 
@@ -2317,12 +2336,12 @@ mod tests {
             from: Some(Box::new(Ns(Box::new(Literal(StringValue("machine.select.stocks".into())))))),
             condition: Some(Box::new(GreaterThan(
                 Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Float64Value(1.0))),
+                Box::new(Literal(Number(Float64Value(1.0)))),
             ))),
             group_by: None,
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
-            limit: Some(Box::new(Literal(Int64Value(5)))),
+            limit: Some(Box::new(Literal(Number(Int64Value(5))))),
         })).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
@@ -2347,12 +2366,12 @@ mod tests {
             from: Some(Box::new(Variable("stocks".into()))),
             condition: Some(Box::new(LessThan(
                 Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Float64Value(1.0))),
+                Box::new(Literal(Number(Float64Value(1.0)))),
             ))),
             group_by: None,
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
-            limit: Some(Box::new(Literal(Int64Value(5)))),
+            limit: Some(Box::new(Literal(Number(Int64Value(5))))),
         })).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(vec![
             make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
@@ -2421,7 +2440,7 @@ SOFTWARE.
                     Box::new(Literal(StringValue("OTC".into()))),
                 ))
             ),
-            limit: Some(Box::new(Literal(Int64Value(5)))),
+            limit: Some(Box::new(Literal(Number(Int64Value(5))))),
         });
         assert_eq!(model.to_code(), r#"update stocks via {exchange: "OTC_BB"} where exchange == "OTC" limit 5"#);
 
@@ -2461,7 +2480,7 @@ SOFTWARE.
                     Box::new(Literal(StringValue("OTC".into()))),
                 ))
             ),
-            limit: Some(Box::new(Literal(Int64Value(5)))),
+            limit: Some(Box::new(Literal(Number(Int64Value(5))))),
         });
 
         // update some rows
@@ -2483,7 +2502,7 @@ SOFTWARE.
     fn test_truncate_table() {
         let model = Mutate(Mutation::Truncate {
             path: Box::new(Variable("stocks".into())),
-            limit: Some(Box::new(Literal(Int64Value(0)))),
+            limit: Some(Box::new(Literal(Number(Int64Value(0))))),
         });
 
         let (mrc, _) = create_memory_table();
@@ -2495,10 +2514,10 @@ SOFTWARE.
     #[test]
     fn test_variables() {
         let machine = Machine::new()
-            .with_variable("abc", Int32Value(5))
-            .with_variable("xyz", Int32Value(58));
-        assert_eq!(machine.get("abc"), Some(Int32Value(5)));
-        assert_eq!(machine.get("xyz"), Some(Int32Value(58)));
+            .with_variable("abc", Number(Int32Value(5)))
+            .with_variable("xyz", Number(Int32Value(58)));
+        assert_eq!(machine.get("abc"), Some(Number(Int32Value(5))));
+        assert_eq!(machine.get("xyz"), Some(Number(Int32Value(58))));
     }
 
     #[test]
@@ -2507,19 +2526,19 @@ SOFTWARE.
             // num < 5
             condition: Box::new(LessThan(
                 Box::new(Variable("num".into())),
-                Box::new(Literal(Int64Value(5))),
+                Box::new(Literal(Number(Int64Value(5)))),
             )),
             // num := num + 1
             code: Box::new(SetVariable("num".into(), Box::new(Plus(
                 Box::new(Variable("num".into())),
-                Box::new(Literal(Int64Value(1))),
+                Box::new(Literal(Number(Int64Value(1)))),
             )))),
         };
         assert_eq!(model.to_code(), "while num < 5 num := num + 1");
 
-        let machine = Machine::new().with_variable("num", Int64Value(0));
+        let machine = Machine::new().with_variable("num", Number(Int64Value(0)));
         let (machine, _) = machine.evaluate(&model).unwrap();
-        assert_eq!(machine.get("num"), Some(Int64Value(5)))
+        assert_eq!(machine.get("num"), Some(Number(Int64Value(5))))
     }
 
     fn create_memory_table() -> (ModelRowCollection, Vec<TableColumn>) {

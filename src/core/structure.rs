@@ -8,11 +8,12 @@ use std::fmt::Debug;
 use serde::{Deserialize, Serialize};
 
 use crate::model_row_collection::ModelRowCollection;
+use crate::numbers::NumberValue::UInt16Value;
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Null, UInt16Value, Undefined};
+use crate::typed_values::TypedValue::*;
 
 /// Represents a user-defined record or data object
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,7 +75,7 @@ impl Structure {
     /// Encodes the [Structure] into a byte vector
     pub fn encode(&self) -> Vec<u8> {
         let mut encode_values = Vec::new();
-        encode_values.push(UInt16Value(self.values.len() as u16));
+        encode_values.push(Number(UInt16Value(self.values.len() as u16)));
         encode_values.extend(self.values.to_owned());
         encode_values.iter().flat_map(|v| v.encode()).collect()
     }
@@ -120,12 +121,14 @@ impl Structure {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::data_types::DataType::{Float64Type, StringType};
+    use crate::data_types::DataType::*;
+    use crate::numbers::NumberKind::F64Kind;
+    use crate::numbers::NumberValue::Float64Value;
     use crate::row_collection::RowCollection;
     use crate::structure::Structure;
     use crate::table_columns::TableColumn;
     use crate::testdata::{make_quote, make_quote_columns, make_table_columns};
-    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
+    use crate::typed_values::TypedValue::*;
 
     #[test]
     fn test_new_structure_from_logical_columns() {
@@ -143,7 +146,7 @@ mod tests {
         assert_eq!(structure.get_columns(), vec![
             TableColumn::new("symbol", StringType(8), Null, 9),
             TableColumn::new("exchange", StringType(8), Null, 26),
-            TableColumn::new("last_sale", Float64Type, Null, 43),
+            TableColumn::new("last_sale", NumberType(F64Kind), Null, 43),
         ]);
         assert_eq!(structure.get("symbol"), Null);
         assert_eq!(structure.get("exchange"), Null);
@@ -158,15 +161,15 @@ mod tests {
         let structure = Structure::from_logical_columns_and_values(&columns, vec![
             StringValue("ABC".to_string()),
             StringValue("NYSE".to_string()),
-            Float64Value(11.11),
+            Number(Float64Value(11.11)),
         ]).unwrap();
         assert_eq!(structure.get("symbol"), StringValue("ABC".to_string()));
         assert_eq!(structure.get("exchange"), StringValue("NYSE".to_string()));
-        assert_eq!(structure.get("last_sale"), Float64Value(11.11));
+        assert_eq!(structure.get("last_sale"), Number(Float64Value(11.11)));
         assert_eq!(structure.get_values(), vec![
             StringValue("ABC".to_string()),
             StringValue("NYSE".to_string()),
-            Float64Value(11.11),
+            Number(Float64Value(11.11)),
         ]);
         assert_eq!(structure.to_string(), r#"{"symbol":"ABC","exchange":"NYSE","last_sale":11.11}"#)
     }
@@ -178,15 +181,15 @@ mod tests {
         let structure = Structure::from_physical_columns_and_values(phys_columns, vec![
             StringValue("ABC".to_string()),
             StringValue("NYSE".to_string()),
-            Float64Value(11.11),
+            Number(Float64Value(11.11)),
         ]);
         assert_eq!(structure.get("symbol"), StringValue("ABC".to_string()));
         assert_eq!(structure.get("exchange"), StringValue("NYSE".to_string()));
-        assert_eq!(structure.get("last_sale"), Float64Value(11.11));
+        assert_eq!(structure.get("last_sale"), Number(Float64Value(11.11)));
         assert_eq!(structure.get_values(), vec![
             StringValue("ABC".to_string()),
             StringValue("NYSE".to_string()),
-            Float64Value(11.11),
+            Number(Float64Value(11.11)),
         ]);
         assert_eq!(structure.to_string(), r#"{"symbol":"ABC","exchange":"NYSE","last_sale":11.11}"#)
     }
@@ -200,11 +203,11 @@ mod tests {
         );
         assert_eq!(structure.get("symbol"), StringValue("ABC".to_string()));
         assert_eq!(structure.get("exchange"), StringValue("AMEX".to_string()));
-        assert_eq!(structure.get("last_sale"), Float64Value(11.77));
+        assert_eq!(structure.get("last_sale"), Number(Float64Value(11.77)));
         assert_eq!(structure.get_values(), vec![
             StringValue("ABC".to_string()),
             StringValue("AMEX".to_string()),
-            Float64Value(11.77),
+            Number(Float64Value(11.77)),
         ]);
         assert_eq!(structure.to_string(), r#"{"symbol":"ABC","exchange":"AMEX","last_sale":11.77}"#)
     }
@@ -216,7 +219,7 @@ mod tests {
         let structure = Structure::from_physical_columns_and_values(phys_columns.to_owned(), vec![
             StringValue("ICE".to_string()),
             StringValue("NASDAQ".to_string()),
-            Float64Value(22.11),
+            Number(Float64Value(22.11)),
         ]);
         let table = structure.with_rows(vec![
             make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
@@ -244,7 +247,7 @@ mod tests {
         let structure = Structure::from_physical_columns_and_values(phys_columns, vec![
             StringValue("EDF".to_string()),
             StringValue("NYSE".to_string()),
-            Float64Value(11.11),
+            Number(Float64Value(11.11)),
         ]);
         assert_eq!(
             structure.encode(),

@@ -110,11 +110,13 @@ pub fn determine_column_value(form: &RowJs, name: &str) -> TypedValue {
 mod tests {
     use shared_lib::FieldJs;
 
-    use crate::data_types::DataType::{Float64Type, StringType};
+    use crate::data_types::DataType::*;
+    use crate::numbers::NumberKind::F64Kind;
+    use crate::numbers::NumberValue::Float64Value;
     use crate::row;
     use crate::server::SystemInfoJs;
     use crate::testdata::{make_quote_columns, make_table_columns};
-    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue};
+    use crate::typed_values::TypedValue::*;
 
     use super::*;
 
@@ -164,10 +166,10 @@ mod tests {
         let columns = vec![
             TableColumn::new("symbol", StringType(4), Null, 9),
             TableColumn::new("exchange", StringType(4), Null, 22),
-            TableColumn::new("last_sale", Float64Type, Null, 35),
+            TableColumn::new("last_sale", NumberType(F64Kind), Null, 35),
         ];
         let row = row!(123, columns, vec![
-            StringValue("FOX".into()), StringValue("NYSE".into()), Float64Value(37.65),
+            StringValue("FOX".into()), StringValue("NYSE".into()), Number(Float64Value(37.65)),
         ]);
         // define a row-js
         let fields_js = vec![
@@ -187,7 +189,7 @@ mod tests {
         // verify the value extraction
         assert_eq!(determine_column_value(&row_js, "symbol"), StringValue("FOX".into()));
         assert_eq!(determine_column_value(&row_js, "exchange"), StringValue("NYSE".into()));
-        assert_eq!(determine_column_value(&row_js, "last_sale"), Float64Value(37.65));
+        assert_eq!(determine_column_value(&row_js, "last_sale"), Number(Float64Value(37.65)));
         // cross-convert and verify
         assert_eq!(row.to_row_js(), row_js.to_owned());
         assert_eq!(Row::from_row_js(&columns, &row_js), row);

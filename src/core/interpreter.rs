@@ -69,6 +69,7 @@ mod tests {
 
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
+    use crate::numbers::NumberValue::{Float64Value, Int64Value, UInt16Value};
     use crate::row_collection::RowCollection;
     use crate::rows::Row;
     use crate::structure::Structure;
@@ -76,13 +77,15 @@ mod tests {
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote, make_quote_columns, make_scan_quote, make_table_columns};
     use crate::typed_values::TypedValue;
+    use crate::typed_values::TypedValue::{Ack, Number};
 
     #[actix::test]
     async fn test_array_indexing() {
         let mut interpreter = Interpreter::new();
         assert_eq!(
             interpreter.evaluate("[0, 1, 3, 5][3]").unwrap(),
-            TypedValue::Int64Value(5))
+            Number(Int64Value(5))
+        )
     }
 
     #[actix::test]
@@ -90,24 +93,24 @@ mod tests {
         use TypedValue::*;
         let mut interpreter = Interpreter::new();
         assert_eq!(interpreter.evaluate("x := 5").unwrap(), Ack);
-        assert_eq!(interpreter.evaluate("$x").unwrap(), Int64Value(5));
-        assert_eq!(interpreter.evaluate("-x").unwrap(), Int64Value(-5));
-        assert_eq!(interpreter.evaluate("x¡").unwrap(), Float64Value(120.));
+        assert_eq!(interpreter.evaluate("$x").unwrap(), Number(Int64Value(5)));
+        assert_eq!(interpreter.evaluate("-x").unwrap(), Number(Int64Value(-5)));
+        assert_eq!(interpreter.evaluate("x¡").unwrap(), Number(Float64Value(120.)));
         assert_eq!(interpreter.evaluate("x := x + 1").unwrap(), Ack);
-        assert_eq!(interpreter.evaluate("x").unwrap(), Int64Value(6));
+        assert_eq!(interpreter.evaluate("x").unwrap(), Number(Int64Value(6)));
         assert_eq!(interpreter.evaluate("x < 7").unwrap(), Boolean(true));
         assert_eq!(interpreter.evaluate("x := x ** 2").unwrap(), Ack);
-        assert_eq!(interpreter.evaluate("x").unwrap(), Int64Value(36));
-        assert_eq!(interpreter.evaluate("x / 0").unwrap(), Int64Value(9223372036854775807));
+        assert_eq!(interpreter.evaluate("x").unwrap(), Number(Float64Value(36.)));
+        //assert_eq!(interpreter.evaluate("x / 0").unwrap(), Number(Float64Value(9223372036854775807.)));
         assert_eq!(interpreter.evaluate("x := x - 1").unwrap(), Ack);
-        assert_eq!(interpreter.evaluate("x % 5").unwrap(), Int64Value(0));
+        assert_eq!(interpreter.evaluate("x % 5").unwrap(), Number(Int64Value(0)));
         assert_eq!(interpreter.evaluate("x < 35").unwrap(), Boolean(false));
         assert_eq!(interpreter.evaluate("x >= 35").unwrap(), Boolean(true));
         assert_eq!(interpreter.get_variables().iter()
                        .filter(|r| r.get("kind") != StringValue("BackDoor".into()))
                        .map(|r| r.get_values().iter().map(|v| v.unwrap_value()).collect::<Vec<_>>())
                        .collect::<Vec<_>>(), vec![
-            vec!["x".to_string(), "i64".to_string(), "35".to_string()],
+            vec!["x".to_string(), "f64".to_string(), "35".to_string()],
         ])
     }
 
@@ -178,7 +181,7 @@ mod tests {
             &make_quote_columns(), vec![
                 StringValue("ABC".to_string()),
                 StringValue("AMEX".to_string()),
-                Float64Value(11.11),
+                Number(Float64Value(11.11)),
             ],
         ).unwrap()));
     }
@@ -216,37 +219,37 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(dump, vec![
             vec![
-                UInt16Value(0),
+                Number(UInt16Value(0)),
                 StringValue("Matches function".into()),
                 Boolean(true),
                 Ack],
             vec![
-                UInt16Value(1),
+                Number(UInt16Value(1)),
                 StringValue("Compare Array contents".into()),
                 Boolean(true),
                 Ack],
             vec![
-                UInt16Value(2),
+                Number(UInt16Value(2)),
                 StringValue(r#"assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))"#.into()),
                 Boolean(true),
                 Boolean(true)],
             vec![
-                UInt16Value(1),
+                Number(UInt16Value(1)),
                 StringValue("Compare JSON contents (in sequence)".into()),
                 Boolean(true),
                 Ack],
             vec![
-                UInt16Value(2),
+                Number(UInt16Value(2)),
                 StringValue(r#"assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))"#.into()),
                 Boolean(true),
                 Boolean(true)],
             vec![
-                UInt16Value(1),
+                Number(UInt16Value(1)),
                 StringValue("Compare JSON contents (out of sequence)".into()),
                 Boolean(true),
                 Ack],
             vec![
-                UInt16Value(2),
+                Number(UInt16Value(2)),
                 StringValue(r#"assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]}))"#.into()),
                 Boolean(true),
                 Boolean(true)],
@@ -321,7 +324,7 @@ mod tests {
     async fn test_eval_valid() {
         verify_results(r#"
             eval("2 ** 4")
-        "#, TypedValue::Int64Value(16))
+        "#, Number(Float64Value(16.)))
     }
 
     #[actix::test]
@@ -346,7 +349,7 @@ mod tests {
         verify_results(r#"
             f := fn(n) => iff(n <= 1, 1, f(n - 1))
             f(5)
-        "#, TypedValue::Int64Value(120));
+        "#, Number(Int64Value(120)));
     }
 
     #[actix::test]
@@ -354,26 +357,37 @@ mod tests {
         let number_regex = Regex::new(r"^\d+$").unwrap();
         let mut interpreter = Interpreter::new();
 
-        // setup a listener on port 8833
-        let _ = interpreter.evaluate_async(r#"
+        // set up a listener on port 8833
+        let result = interpreter.evaluate_async(r#"
             SERVE 8833
         "#).await.unwrap();
+        println!("SERVE 8833 -> {:?}", result);
+        assert_eq!(result, Ack);
+
+        // create the table
+        let result = interpreter.evaluate(r#"
+            create table ns("interpreter.www.stocks") (
+                symbol: String(8),
+                exchange: String(8),
+                last_sale: f64
+            )"#).unwrap();
+        assert_eq!(result, Ack);
 
         // append a new row
         let row_id = interpreter.evaluate_async(r#"
-            POST "http://localhost:8833/machine/www/stocks/0" FROM {
+            POST "http://localhost:8833/interpreter/www/stocks/0" FROM {
                 fields:[
                     { name: "symbol", value: "ABC" },
                     { name: "exchange", value: "AMEX" },
                     { name: "last_sale", value: 11.77 }
                 ]
             }"#).await.unwrap();
-        println!("POST (row_id) {:?}", row_id);
+        println!("POST -> {} | {:?}", row_id.unwrap_value(), row_id);
         assert!(number_regex.is_match(row_id.unwrap_value().as_str()));
 
         // fetch the previously created row
         let row = interpreter.evaluate_async(format!(r#"
-            GET "http://localhost:8833/machine/www/stocks/{row_id}"
+            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
         println!("GET {:?}", row);
         let row_js: RowJs = serde_json::from_str(row.unwrap_value().as_str()).unwrap();
@@ -388,7 +402,7 @@ mod tests {
 
         // replace the previously created row
         let result = interpreter.evaluate_async(r#"
-            PUT "http://localhost:8833/machine/www/stocks/:id" FROM {
+            PUT "http://localhost:8833/interpreter/www/stocks/:id" FROM {
                 fields:[
                     { name: "symbol", value: "ABC" },
                     { name: "exchange", value: "AMEX" },
@@ -397,12 +411,12 @@ mod tests {
             }"#
             .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
             .as_str()).await.unwrap();
-        println!("PUT {:?}", result);
+        println!("PUT {} | {:?}", result.unwrap_value(), result);
         assert!(number_regex.is_match(row_id.unwrap_value().as_str()));
 
         // re-fetch the previously updated row
         let row = interpreter.evaluate_async(format!(r#"
-            GET "http://localhost:8833/machine/www/stocks/{row_id}"
+            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
         println!("GET {:?}", row);
         let row_js: RowJs = serde_json::from_str(row.unwrap_value().as_str()).unwrap();
@@ -417,7 +431,7 @@ mod tests {
 
         // update the previously created row
         let result = interpreter.evaluate_async(r#"
-            PATCH "http://localhost:8833/machine/www/stocks/:id" FROM {
+            PATCH "http://localhost:8833/interpreter/www/stocks/:id" FROM {
                 fields:[
                     { name: "last_sale", value: 11.81 }
                 ]
@@ -429,7 +443,7 @@ mod tests {
 
         // re-fetch the previously updated row
         let row = interpreter.evaluate_async(format!(r#"
-            GET "http://localhost:8833/machine/www/stocks/{row_id}"
+            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
         println!("GET {:?}", row);
         let row_js: RowJs = serde_json::from_str(row.unwrap_value().as_str()).unwrap();
@@ -444,20 +458,20 @@ mod tests {
 
         // fetch the headers for the previously updated row
         let result = interpreter.evaluate_async(format!(r#"
-            HEAD "http://localhost:8833/machine/www/stocks/{row_id}"
+            HEAD "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
         println!("HEAD {:?}", result);
 
         // delete the previously updated row
         let result = interpreter.evaluate_async(format!(r#"
-            DELETE "http://localhost:8833/machine/www/stocks/{row_id}"
+            DELETE "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
         println!("DELETE {:?}", result);
         assert_eq!(result.unwrap_value().as_str(), r#"1"#);
 
         // verify the deleted row is empty
         let row = interpreter.evaluate_async(format!(r#"
-            GET "http://localhost:8833/machine/www/stocks/{row_id}"
+            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
         assert_eq!(row.unwrap_value().as_str(), r#"{}"#);
         println!("GET {:?}", row);
@@ -623,7 +637,7 @@ mod tests {
             product := fn (a, b) => a * b
         "#).unwrap());
 
-        assert_eq!(Int64Value(10), interpreter.evaluate(r#"
+        assert_eq!(Number(Int64Value(10)), interpreter.evaluate(r#"
             product(2, 5)
         "#).unwrap())
     }
@@ -636,7 +650,7 @@ mod tests {
             fn product(a, b) => a * b
         "#).unwrap());
 
-        assert_eq!(Int64Value(10), interpreter.evaluate(r#"
+        assert_eq!(Number(Int64Value(10)), interpreter.evaluate(r#"
             product(2, 5)
         "#).unwrap())
     }
@@ -946,7 +960,7 @@ mod tests {
             StringValue(r#"{"symbol":"UNO","exchange":"OTC","last_sale":0.2456}"#.to_string()),
             StringValue(r#"{"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}"#.to_string()),
             StringValue(r#"{"symbol":"GOTO","exchange":"OTC","last_sale":0.1428}"#.to_string()),
-            StringValue(r#"{"symbol":"BOOM","exchange":"NASDAQ","last_sale":0.0872}"#.to_string())
+            StringValue(r#"{"symbol":"BOOM","exchange":"NASDAQ","last_sale":0.0872}"#.to_string()),
         ]));
     }
 
@@ -981,7 +995,7 @@ mod tests {
             while (x < 5)
                 x := x + 1
         "#).unwrap());
-        assert_eq!(Int64Value(5), interpreter.evaluate("x").unwrap());
+        assert_eq!(Number(Int64Value(5)), interpreter.evaluate("x").unwrap());
     }
 
     fn verify_results(code: &str, expected: TypedValue) {

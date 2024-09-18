@@ -18,7 +18,8 @@ use crate::repl::REPLState;
 use crate::rest_server::SharedState;
 use crate::typed_values::TypedValue;
 
-mod byte_buffer;
+mod backdoor;
+mod byte_code_compiler;
 mod byte_row_collection;
 mod codec;
 mod compiler;
@@ -26,6 +27,7 @@ mod cursor;
 mod dataframe_actor;
 mod dataframe_config;
 mod dataframes;
+mod data_type_kind;
 mod data_types;
 mod expression;
 mod field_metadata;
@@ -34,15 +36,16 @@ mod file_row_collection;
 mod hash_table_row_collection;
 mod interpreter;
 mod machine;
+mod mnemonic;
 mod model_row_collection;
 mod namespaces;
+mod numbers;
 mod readme;
 mod repl;
 mod rest_server;
 mod row_collection;
 mod row_metadata;
 mod rows;
-mod serialization;
 mod server;
 mod structure;
 mod table_columns;
@@ -55,8 +58,8 @@ mod token_slice;
 mod tokenizer;
 mod tokens;
 mod typed_values;
+mod view_row_collection;
 mod websockets;
-
 
 /// Starts the Oxide server
 #[actix_web::main]

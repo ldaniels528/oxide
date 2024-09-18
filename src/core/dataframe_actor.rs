@@ -290,10 +290,12 @@ mod tests {
 
     use actix::prelude::*;
 
-    use crate::data_types::DataType::{Float64Type, StringType};
+    use crate::data_types::DataType::*;
+    use crate::numbers::NumberKind::F64Kind;
+    use crate::numbers::NumberValue::*;
     use crate::row;
     use crate::testdata::{make_quote_columns, make_table_columns};
-    use crate::typed_values::TypedValue::{Float64Value, Null, StringValue, Undefined};
+    use crate::typed_values::TypedValue::*;
 
     use super::*;
 
@@ -305,7 +307,7 @@ mod tests {
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
             TableColumn::new("symbol", StringType(8), Null, 9),
             TableColumn::new("exchange", StringType(8), Null, 26),
-            TableColumn::new("last_sale", Float64Type, Null, 43),
+            TableColumn::new("last_sale", NumberType(F64Kind), Null, 43),
         ]);
     }
 
@@ -320,12 +322,12 @@ mod tests {
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns, row!(0, table_columns, vec![
-            StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(11.88),
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(11.88)),
         ])).unwrap());
 
         // read the previously created row
         assert_eq!(read_row!(actor, ns, 0).unwrap().unwrap(), row!(0, table_columns, vec![
-            StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(11.88),
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(11.88)),
         ]));
     }
 
@@ -340,42 +342,42 @@ mod tests {
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns, row!(111, table_columns, vec![
-            StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(22.88),
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(22.88)),
         ])).unwrap());
 
         // read the previously created row
         assert_eq!(read_row!(actor, ns, 0).unwrap().unwrap(), row!(0, table_columns, vec![
-            StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(22.88),
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(22.88)),
         ]));
 
         // overwrite a new row over offset 1
         assert_eq!(1, overwrite_row!(actor, ns, row!(1, table_columns, vec![
-            StringValue("YARD".into()), StringValue("NYSE".into()), Float64Value(88.22),
+            StringValue("YARD".into()), StringValue("NYSE".into()), Number(Float64Value(88.22)),
         ])).unwrap());
 
         // read rows
         assert_eq!(read_range!(actor, ns, 0..2).unwrap(), vec![
             row!(0, table_columns, vec![
-                StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(22.88),
+                StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(22.88)),
             ]),
             row!(1, table_columns, vec![
-                StringValue("YARD".into()), StringValue("NYSE".into()), Float64Value(88.22),
+                StringValue("YARD".into()), StringValue("NYSE".into()), Number(Float64Value(88.22)),
             ]),
         ]);
 
         // update the row at offset 1
         assert_eq!(1, update_row!(actor, ns, row!(1, table_columns, vec![
-            Undefined, Undefined, Float64Value(88.99),
+            Undefined, Undefined, Number(Float64Value(88.99)),
         ])).unwrap());
 
         // re-read rows
         let rows = read_fully!(actor, ns).unwrap();
         assert_eq!(rows, vec![
             row!(0, table_columns, vec![
-                StringValue("JUNO".into()), StringValue("AMEX".into()), Float64Value(22.88),
+                StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(22.88)),
             ]),
             row!(1, table_columns, vec![
-                StringValue("YARD".into()), StringValue("NYSE".into()), Float64Value(88.99),
+                StringValue("YARD".into()), StringValue("NYSE".into()), Number(Float64Value(88.99)),
             ]),
         ]);
 
@@ -385,7 +387,7 @@ mod tests {
         // re-read rows
         assert_eq!(read_fully!(actor, ns).unwrap(), vec![
             row!(1, table_columns, vec![
-                StringValue("YARD".into()), StringValue("NYSE".into()), Float64Value(88.99),
+                StringValue("YARD".into()), StringValue("NYSE".into()), Number(Float64Value(88.99)),
             ]),
         ]);
     }
@@ -402,12 +404,12 @@ mod tests {
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns0, row!(111, make_table_columns(), vec![
-            StringValue("GE".into()), StringValue("NYSE".into()), Float64Value(48.88),
+            StringValue("GE".into()), StringValue("NYSE".into()), Number(Float64Value(48.88)),
         ])).unwrap());
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns1, row!(112, make_table_columns(), vec![
-            StringValue("IBM".into()), StringValue("NYSE".into()), Float64Value(122.88),
+            StringValue("IBM".into()), StringValue("NYSE".into()), Number(Float64Value(122.88)),
         ])).unwrap());
 
         // verify the namespaces

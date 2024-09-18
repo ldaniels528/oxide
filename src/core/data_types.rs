@@ -4,53 +4,26 @@
 
 use std::fmt::Debug;
 use std::io;
+use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
 
 use crate::compiler::{Compiler, fail_expr, fail_near};
+use crate::data_type_kind::T_NUMBER_START;
 use crate::data_types::DataType::*;
 use crate::expression::Expression;
 use crate::expression::Expression::{ColumnSet, Literal};
+use crate::numbers::*;
+use crate::numbers::NumberKind::*;
 use crate::server::ColumnJs;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::Atom;
-use crate::typed_values::TypedValue;
-
-pub const T_UNDEFINED: u8 = 0;
-pub const T_ACK: u8 = 0;
-pub const T_NULL: u8 = 4;
-pub const T_ARRAY: u8 = 8;
-pub const T_BACK_DOOR: u8 = 10;
-pub const T_BLOB: u8 = 12;
-pub const T_BOOLEAN: u8 = 16;
-pub const T_CLOB: u8 = 20;
-pub const T_DATE: u8 = 24;
-pub const T_ERROR: u8 = 28;
-pub const T_ENUM: u8 = 32;
-pub const T_FLOAT32: u8 = 36;
-pub const T_FLOAT64: u8 = 40;
-pub const T_FUNCTION: u8 = 44;
-pub const T_INT8: u8 = 48;
-pub const T_INT16: u8 = 52;
-pub const T_INT32: u8 = 56;
-pub const T_INT64: u8 = 60;
-pub const T_INT128: u8 = 64;
-pub const T_JSON_OBJECT: u8 = 68;
-pub const T_NAMESPACE: u8 = 70;
-pub const T_ROWS_AFFECTED: u8 = 72;
-pub const T_STRING: u8 = 76;
-pub const T_STRUCTURE: u8 = 80;
-pub const T_TABLE_VALUE: u8 = 88;
-pub const T_TUPLE: u8 = 92;
-pub const T_UINT8: u8 = 96;
-pub const T_UINT16: u8 = 100;
-pub const T_UINT32: u8 = 104;
-pub const T_UINT64: u8 = 108;
-pub const T_UINT128: u8 = 112;
-pub const T_UUID: u8 = 116;
+use crate::typed_values::*;
+use crate::typed_values::TypedValue::Number;
+use crate::data_type_kind::DataTypeKind::*;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
@@ -62,24 +35,13 @@ pub enum DataType {
     DateType,
     EnumType(Vec<String>),
     ErrorType,
-    Float32Type,
-    Float64Type,
     FunctionType(Vec<ColumnJs>),
-    Int8Type,
-    Int16Type,
-    Int32Type,
-    Int64Type,
-    Int128Type,
     JSONType,
+    NumberType(NumberKind),
     RowsAffectedType,
     StringType(usize),
     StructureType(Vec<ColumnJs>),
     TableType(Vec<ColumnJs>),
-    UInt8Type,
-    UInt16Type,
-    UInt32Type,
-    UInt64Type,
-    UInt128Type,
     UUIDType,
 }
 
@@ -108,12 +70,7 @@ impl DataType {
             let (args, ts) = compiler.expect_arguments(ts)?;
             if args.len() == 1 {
                 match args[0].to_owned() {
-                    Literal(value) => {
-                        match value.assume_usize() {
-                            Some(size) => Ok(f(size)),
-                            _ => fail_near("a numeric value was expected", &ts)
-                        }
-                    }
+                    Literal(Number(value)) => Ok(f(value.to_usize())),
                     _ => fail_near("a numeric value was expected", &ts)
                 }
             } else { fail("a single parameter was expected for this type") }
@@ -135,24 +92,24 @@ impl DataType {
                 "Date" => Ok(DateType),
                 "Enum" => string_parameters(ts, |params| EnumType(params)),
                 "Error" => Ok(ErrorType),
-                "f32" => Ok(Float32Type),
-                "f64" => Ok(Float64Type),
+                "f32" => Ok(NumberType(F32Kind)),
+                "f64" => Ok(NumberType(F64Kind)),
                 "fn" => column_parameters(ts, |columns| FunctionType(columns)),
-                "i8" => Ok(Int8Type),
-                "i16" => Ok(Int16Type),
-                "i32" => Ok(Int32Type),
-                "i64" => Ok(Int64Type),
-                "i128" => Ok(Int128Type),
+                "i8" => Ok(NumberType(I8Kind)),
+                "i16" => Ok(NumberType(I16Kind)),
+                "i32" => Ok(NumberType(I32Kind)),
+                "i64" => Ok(NumberType(I64Kind)),
+                "i128" => Ok(NumberType(I128Kind)),
                 "JSON" => Ok(JSONType),
                 "RowsAffected" => Ok(RowsAffectedType),
                 "String" => size_parameter(ts, |size| StringType(size)),
                 "Struct" => column_parameters(ts, |columns| StructureType(columns)),
                 "Table" => column_parameters(ts, |columns| TableType(columns)),
-                "u8" => Ok(UInt8Type),
-                "u16" => Ok(UInt16Type),
-                "u32" => Ok(UInt32Type),
-                "u64" => Ok(UInt64Type),
-                "u128" => Ok(UInt128Type),
+                "u8" => Ok(NumberType(U8Kind)),
+                "u16" => Ok(NumberType(U16Kind)),
+                "u32" => Ok(NumberType(U32Kind)),
+                "u64" => Ok(NumberType(U64Kind)),
+                "u128" => Ok(NumberType(U128Kind)),
                 "UUID" => Ok(UUIDType),
                 type_name => Err(io::Error::new(io::ErrorKind::Other, format!("unrecognized type {}", type_name)))
             }
@@ -173,24 +130,20 @@ impl DataType {
             DateType => 8,
             EnumType(..) => 2,
             ErrorType => 256,
-            Float32Type => 4,
-            Float64Type => 8,
             FunctionType(columns) => columns.len() * 8,
-            Int8Type => 1,
-            Int16Type => 2,
-            Int32Type => 4,
-            Int64Type => 8,
-            Int128Type => 16,
             JSONType => 512,
+            NumberType(kind) => match kind {
+                I8Kind | U8Kind => 1,
+                I16Kind | U16Kind => 2,
+                F32Kind | I32Kind | U32Kind => 4,
+                F64Kind | I64Kind | U64Kind => 8,
+                I128Kind | U128Kind => 16,
+                NaNKind => 0,
+            },
             RowsAffectedType => 8,
             StringType(size) => *size + size.to_be_bytes().len(),
             StructureType(columns) => columns.len() * 8,
             TableType(columns) => columns.len() * 8,
-            UInt8Type => 1,
-            UInt16Type => 2,
-            UInt32Type => 4,
-            UInt64Type => 8,
-            UInt128Type => 16,
             UUIDType => 16
         };
         width + 1 // +1 for field metadata
@@ -198,33 +151,22 @@ impl DataType {
 
     pub fn ordinal(&self) -> u8 {
         match self {
-            AckType => T_ACK,
-            BackDoorType => T_BACK_DOOR,
-            BLOBType(..) => T_BLOB,
-            BooleanType => T_BOOLEAN,
-            CLOBType(..) => T_CLOB,
-            DateType => T_DATE,
-            EnumType(..) => T_ENUM,
-            ErrorType => T_ERROR,
-            Float32Type => T_FLOAT32,
-            Float64Type => T_FLOAT64,
-            FunctionType(..) => T_FUNCTION,
-            Int8Type => T_INT8,
-            Int16Type => T_INT16,
-            Int32Type => T_INT32,
-            Int64Type => T_INT64,
-            Int128Type => T_INT128,
-            JSONType => T_JSON_OBJECT,
-            RowsAffectedType => T_ROWS_AFFECTED,
-            StringType(..) => T_STRING,
-            StructureType(..) => T_STRUCTURE,
-            TableType(..) => T_TABLE_VALUE,
-            UInt8Type => T_UINT8,
-            UInt16Type => T_UINT16,
-            UInt32Type => T_UINT32,
-            UInt64Type => T_UINT64,
-            UInt128Type => T_UINT128,
-            UUIDType => T_UUID
+            AckType => TAck.to_u8(),
+            BackDoorType => TBackDoor.to_u8(),
+            BLOBType(..) => TBlob.to_u8(),
+            BooleanType => TBoolean.to_u8(),
+            CLOBType(..) => TClob.to_u8(),
+            DateType => TDate.to_u8(),
+            EnumType(..) => TEnum.to_u8(),
+            ErrorType => TError.to_u8(),
+            FunctionType(..) => TFunction.to_u8(),
+            JSONType => TJsonObject.to_u8(),
+            NumberType(kind) => T_NUMBER_START + kind.to_u8(),
+            RowsAffectedType => TRowsAffected.to_u8(),
+            StringType(..) => TString.to_u8(),
+            StructureType(..) => TStructure.to_u8(),
+            TableType(..) => TTableValue.to_u8(),
+            UUIDType => TUUID.to_u8()
         }
     }
 
@@ -238,24 +180,29 @@ impl DataType {
             DateType => "Date".into(),
             EnumType(labels) => format!("Enum({:?})", labels),
             ErrorType => "Error".into(),
-            Float32Type => "f32".into(),
-            Float64Type => "f64".into(),
             FunctionType(columns) => format!("fn({})", ColumnJs::render_columns(columns)),
-            Int8Type => "i8".into(),
-            Int16Type => "i16".into(),
-            Int32Type => "i32".into(),
-            Int64Type => "i64".into(),
-            Int128Type => "i128".into(),
             JSONType => "struct".into(),
+            NumberType(index) => {
+                match *index {
+                    F32Kind => "f32".into(),
+                    F64Kind => "f64".into(),
+                    I8Kind => "i8".into(),
+                    I16Kind => "i16".into(),
+                    I32Kind => "i32".into(),
+                    I64Kind => "i64".into(),
+                    I128Kind => "i128".into(),
+                    U8Kind => "u8".into(),
+                    U16Kind => "u16".into(),
+                    U32Kind => "u32".into(),
+                    U64Kind => "u64".into(),
+                    U128Kind => "u128".into(),
+                    NaNKind => "NaN".into()
+                }
+            }
             RowsAffectedType => "RowsAffected".into(),
             StringType(size) => format!("String({})", size),
             StructureType(columns) => format!("struct({})", ColumnJs::render_columns(columns)),
             TableType(columns) => format!("Table({})", ColumnJs::render_columns(columns)),
-            UInt8Type => "u8".into(),
-            UInt16Type => "u16".into(),
-            UInt32Type => "u32".into(),
-            UInt64Type => "u64".into(),
-            UInt128Type => "u128".into(),
             UUIDType => "UUID".into()
         }
     }
@@ -285,6 +232,7 @@ impl DataType {
 mod tests {
     use crate::data_types::DataType;
     use crate::data_types::DataType::*;
+    use crate::numbers::NumberKind::*;
     use crate::testdata::make_quote_columns;
 
     #[test]
@@ -316,12 +264,12 @@ mod tests {
 
     #[test]
     fn test_f32() {
-        verify_type_construction("f32", Float32Type);
+        verify_type_construction("f32", NumberType(F32Kind));
     }
 
     #[test]
     fn test_f64() {
-        verify_type_construction("f64", Float64Type);
+        verify_type_construction("f64", NumberType(F64Kind));
     }
 
     #[test]
@@ -333,27 +281,27 @@ mod tests {
 
     #[test]
     fn test_i8() {
-        verify_type_construction("i8", Int8Type);
+        verify_type_construction("i8", NumberType(I8Kind));
     }
 
     #[test]
     fn test_i16() {
-        verify_type_construction("i16", Int16Type);
+        verify_type_construction("i16", NumberType(I16Kind));
     }
 
     #[test]
     fn test_i32() {
-        verify_type_construction("i32", Int32Type);
+        verify_type_construction("i32", NumberType(I32Kind));
     }
 
     #[test]
     fn test_i64() {
-        verify_type_construction("i64", Int64Type);
+        verify_type_construction("i64", NumberType(I64Kind));
     }
 
     #[test]
     fn test_i128() {
-        verify_type_construction("i128", Int128Type);
+        verify_type_construction("i128", NumberType(I128Kind));
     }
 
     #[test]
@@ -387,27 +335,27 @@ mod tests {
 
     #[test]
     fn test_u8() {
-        verify_type_construction("u8", UInt8Type);
+        verify_type_construction("u8", NumberType(U8Kind));
     }
 
     #[test]
     fn test_u16() {
-        verify_type_construction("u16", UInt16Type);
+        verify_type_construction("u16", NumberType(U16Kind));
     }
 
     #[test]
     fn test_u32() {
-        verify_type_construction("u32", UInt32Type);
+        verify_type_construction("u32", NumberType(U32Kind));
     }
 
     #[test]
     fn test_u64() {
-        verify_type_construction("u64", UInt64Type);
+        verify_type_construction("u64", NumberType(U64Kind));
     }
 
     #[test]
     fn test_u128() {
-        verify_type_construction("u128", UInt128Type);
+        verify_type_construction("u128", NumberType(U128Kind));
     }
 
     #[test]

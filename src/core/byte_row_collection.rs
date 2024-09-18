@@ -172,10 +172,11 @@ impl RowCollection for ByteRowCollection {
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
+    use crate::numbers::NumberValue::UInt64Value;
     use crate::row_collection::RowCollection;
     use crate::table_columns::TableColumn;
     use crate::testdata::{make_quote, make_quote_columns};
-    use crate::typed_values::TypedValue::UInt64Value;
+    use crate::typed_values::TypedValue::Number;
 
     #[test]
     fn test_contains() {
@@ -207,7 +208,7 @@ mod tests {
     fn test_index_of() {
         let (brc, phys_columns) = create_data_set();
         let row = make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289);
-        assert_eq!(brc.index_of(&row), UInt64Value(4));
+        assert_eq!(brc.index_of(&row), Number(UInt64Value(4)));
     }
 
     fn create_data_set() -> (ByteRowCollection, Vec<TableColumn>) {
