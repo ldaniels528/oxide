@@ -4,26 +4,25 @@
 
 use std::fmt::Debug;
 use std::io;
-use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
 
 use crate::compiler::{Compiler, fail_expr, fail_near};
+use crate::data_type_kind::DataTypeKind::*;
 use crate::data_type_kind::T_NUMBER_START;
 use crate::data_types::DataType::*;
 use crate::expression::Expression;
 use crate::expression::Expression::{ColumnSet, Literal};
-use crate::numbers::*;
-use crate::numbers::NumberKind::*;
+use crate::number_kind::NumberKind::*;
+use crate::number_kind::NumberKind;
 use crate::server::ColumnJs;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::Atom;
 use crate::typed_values::*;
 use crate::typed_values::TypedValue::Number;
-use crate::data_type_kind::DataTypeKind::*;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
@@ -151,22 +150,22 @@ impl DataType {
 
     pub fn ordinal(&self) -> u8 {
         match self {
-            AckType => TAck.to_u8(),
-            BackDoorType => TBackDoor.to_u8(),
-            BLOBType(..) => TBlob.to_u8(),
-            BooleanType => TBoolean.to_u8(),
-            CLOBType(..) => TClob.to_u8(),
-            DateType => TDate.to_u8(),
-            EnumType(..) => TEnum.to_u8(),
-            ErrorType => TError.to_u8(),
-            FunctionType(..) => TFunction.to_u8(),
-            JSONType => TJsonObject.to_u8(),
+            AckType => TxAck.to_u8(),
+            BackDoorType => TxBackDoor.to_u8(),
+            BLOBType(..) => TxBlob.to_u8(),
+            BooleanType => TxBoolean.to_u8(),
+            CLOBType(..) => TxClob.to_u8(),
+            DateType => TxDate.to_u8(),
+            EnumType(..) => TxEnum.to_u8(),
+            ErrorType => TxError.to_u8(),
+            FunctionType(..) => TxFunction.to_u8(),
+            JSONType => TxJsonObject.to_u8(),
             NumberType(kind) => T_NUMBER_START + kind.to_u8(),
-            RowsAffectedType => TRowsAffected.to_u8(),
-            StringType(..) => TString.to_u8(),
-            StructureType(..) => TStructure.to_u8(),
-            TableType(..) => TTableValue.to_u8(),
-            UUIDType => TUUID.to_u8()
+            RowsAffectedType => TxRowsAffected.to_u8(),
+            StringType(..) => TxString.to_u8(),
+            StructureType(..) => TxStructure.to_u8(),
+            TableType(..) => TxTableValue.to_u8(),
+            UUIDType => TxUUID.to_u8()
         }
     }
 
@@ -232,7 +231,7 @@ impl DataType {
 mod tests {
     use crate::data_types::DataType;
     use crate::data_types::DataType::*;
-    use crate::numbers::NumberKind::*;
+    use crate::number_kind::NumberKind::*;
     use crate::testdata::make_quote_columns;
 
     #[test]

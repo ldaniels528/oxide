@@ -42,12 +42,9 @@ impl ByteRowCollection {
     }
 
     /// Creates a new [ByteRowCollection] from the specified rows
-    pub fn from_rows(rows: Vec<Row>) -> Self {
+    pub fn from_rows(columns: Vec<TableColumn>, rows: Vec<Row>) -> Self {
         let mut encoded_rows = Vec::new();
-        let columns = rows.first()
-            .map(|row| row.get_columns().to_owned())
-            .unwrap_or(Vec::new());
-        for row in rows { encoded_rows.push(row.encode()) }
+        for row in rows { encoded_rows.push(row.encode(&columns)) }
         Self::new(columns, encoded_rows)
     }
 
@@ -117,7 +114,7 @@ impl RowCollection for ByteRowCollection {
         }
 
         // set the block, update the watermark
-        self.row_data[id] = row.encode();
+        self.row_data[id] = row.encode(&self.columns);
         if self.watermark <= id {
             self.watermark = id + 1;
         }
@@ -172,16 +169,16 @@ impl RowCollection for ByteRowCollection {
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
-    use crate::numbers::NumberValue::UInt64Value;
+    use crate::numbers::NumberValue::U64Value;
     use crate::row_collection::RowCollection;
     use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::testdata::{make_quote, make_table_columns};
     use crate::typed_values::TypedValue::Number;
 
     #[test]
     fn test_contains() {
         let (brc, phys_columns) = create_data_set();
-        let row = make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289);
+        let row = make_quote(4, "XYZ", "NYSE", 0.0289);
         assert!(brc.contains(&row));
     }
 
@@ -196,30 +193,29 @@ mod tests {
     fn test_get_rows() {
         let (brc, phys_columns) = create_data_set();
         assert_eq!(brc.get_rows(), vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
-            make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
+            make_quote(0, "ABC", "AMEX", 12.33),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 9.775),
+            make_quote(3, "GOTO", "OTC", 0.1442),
+            make_quote(4, "XYZ", "NYSE", 0.0289),
         ])
     }
 
     #[test]
     fn test_index_of() {
         let (brc, phys_columns) = create_data_set();
-        let row = make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289);
-        assert_eq!(brc.index_of(&row), Number(UInt64Value(4)));
+        let row = make_quote(4, "XYZ", "NYSE", 0.0289);
+        assert_eq!(brc.index_of(&row), Number(U64Value(4)));
     }
 
     fn create_data_set() -> (ByteRowCollection, Vec<TableColumn>) {
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let brc = ByteRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
-            make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289),
+        let phys_columns = make_table_columns();
+        let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(0, "ABC", "AMEX", 12.33),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 9.775),
+            make_quote(3, "GOTO", "OTC", 0.1442),
+            make_quote(4, "XYZ", "NYSE", 0.0289),
         ]);
         (brc, phys_columns)
     }

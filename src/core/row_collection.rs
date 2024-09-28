@@ -17,9 +17,8 @@ use crate::field_metadata::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
-use crate::numbers::NumberKind::U64Kind;
-use crate::numbers::NumberValue::UInt64Value;
-use crate::row;
+use crate::number_kind::NumberKind::U64Kind;
+use crate::numbers::NumberValue::U64Value;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::server::ColumnJs;
@@ -162,13 +161,9 @@ pub trait RowCollection: Debug {
             ColumnJs::new("default_value", "String(128)", None),
             ColumnJs::new("is_nullable", "Boolean", None),
         ];
-        let physical_columns = match TableColumn::from_columns(&columns) {
-            Ok(columns) => columns,
-            Err(err) => return ErrorValue(err.to_string())
-        };
         let mut mrc = ModelRowCollection::construct(&columns);
         for column in self.get_columns() {
-            mrc.append_row(Row::new(0, physical_columns.to_owned(), vec![
+            mrc.append_row(Row::new(0, vec![
                 StringValue(column.get_name().to_string()),
                 StringValue(column.data_type.to_column_type()),
                 StringValue(column.default_value.unwrap_value()),
@@ -195,10 +190,10 @@ pub trait RowCollection: Debug {
             };
             // augment the values with the extras
             let mut values = row.get_values();
-            values.push(Number(UInt64Value(row_id as u64)));
+            values.push(Number(U64Value(row_id as u64)));
             values.push(Boolean(meta.is_allocated));
             // build a new row
-            let row = Row::new(row_id, columns.to_owned(), values);
+            let row = Row::new(row_id, values);
             let meta = meta.with_allocated(true);
             row_data.push((row, meta));
         }
@@ -234,7 +229,7 @@ pub trait RowCollection: Debug {
     fn filter_rows(&self, condition: &Expression) -> std::io::Result<Vec<Row>> {
         let machine = Machine::new();
         let result = self.iter().filter(|row| {
-            let machine = machine.with_row(&row);
+            let machine = machine.with_row(self.get_columns(), &row);
             match machine.evaluate(condition) {
                 Ok((_, Boolean(true))) => true,
                 _ => false
@@ -432,19 +427,13 @@ pub trait RowCollection: Debug {
 
     /// Returns true, if the given item matches a [Row] found within it
     fn index_of(&self, item: &Row) -> TypedValue {
-        match self.len() {
-            Ok(len) => {
-                for row_id in 0..len {
-                    match self.read_one(row_id) {
-                        Ok(Some(row)) => if row == *item { return Number(UInt64Value(row_id as u64)); },
-                        Ok(None) => {}
-                        Err(err) => return ErrorValue(err.to_string())
-                    }
-                }
-                Undefined
+        let mut it = self.iter();
+        while let Some(row) = it.next() {
+            if row.get_values() == item.get_values() {
+                return Number(U64Value(row.get_id() as u64));
             }
-            Err(err) => ErrorValue(err.to_string())
         }
+        Undefined
     }
 
     /// Returns an iterator of all active rows
@@ -512,7 +501,7 @@ pub trait RowCollection: Debug {
         match self.find_last_active_row() {
             Ok(Some(row)) => {
                 let _ = self.delete_row(row.get_id());
-                StructureValue(row.to_struct())
+                StructureValue(row.to_struct(self.get_columns()))
             }
             Ok(None) => Undefined,
             Err(err) => ErrorValue(err.to_string())
@@ -707,14 +696,15 @@ pub trait RowCollection: Debug {
             Err(err) => return ErrorValue(err.to_string())
         };
         // verify compatibility between the columns of the incoming row vs. table row
-        let (cols0, cols1) = (row0.get_columns(), row.get_columns());
+        let columns = self.get_columns();
+        let (cols0, cols1) = (columns, columns);
         match TableColumn::validate_compatibility(cols0, cols1) {
             ErrorValue(err) => return ErrorValue(err),
             _ => {
                 // if it is deleted, then use the incoming row
                 let row: Row = if !rmd0.is_allocated { row.with_row_id(id) } else {
                     // otherwise, construct a new composite row
-                    Row::new(id, cols1.to_owned(), row0.get_values().iter().zip(row.get_values().iter())
+                    Row::new(id, row0.get_values().iter().zip(row.get_values().iter())
                         .map(|(field0, field1)| {
                             match (field0.to_owned(), field1.to_owned()) {
                                 (a, TypedValue::Undefined) => a,
@@ -783,11 +773,9 @@ mod tests {
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
-    use crate::numbers::NumberValue::Float64Value;
-    use crate::row;
+    use crate::numbers::NumberValue::F64Value;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote, make_quote_columns, make_scan_quote, make_table_columns, make_table_file};
-    use crate::typed_values::TypedValue::*;
 
     use super::*;
 
@@ -795,7 +783,7 @@ mod tests {
     fn test_from_bytes() {
         // determine the record size of the row
         let columns = make_table_columns();
-        let row = make_quote(0, &columns, "RICE", "NYSE", 78.78);
+        let row = make_quote(0, "RICE", "NYSE", 78.78);
         let mut rc = <dyn RowCollection>::from_bytes(columns.to_owned(), Vec::new());
 
         // create a new row
@@ -804,8 +792,8 @@ mod tests {
         // read and verify the row
         let (row, rmd) = rc.read_row(0).unwrap();
         assert!(rmd.is_allocated);
-        assert_eq!(row, row!(0, make_table_columns(), vec![
-            StringValue("RICE".into()), StringValue("NYSE".into()), Number(Float64Value(78.78))
+        assert_eq!(row, Row::new(0, vec![
+            StringValue("RICE".into()), StringValue("NYSE".into()), Number(F64Value(78.78))
         ]))
     }
 
@@ -814,13 +802,13 @@ mod tests {
         let (path, file, columns, _) =
             make_table_file("rows", "append_row", "stocks", make_quote_columns());
         let mut rc = <dyn RowCollection>::from_file(columns.to_owned(), file, path.as_str());
-        rc.overwrite_row(0, make_quote(0, &columns, "BEAM", "NYSE", 78.35));
+        rc.overwrite_row(0, make_quote(0, "BEAM", "NYSE", 78.35));
 
         // read and verify the row
         let (row, rmd) = rc.read_row(0).unwrap();
         assert!(rmd.is_allocated);
-        assert_eq!(row, row!(0, make_table_columns(), vec![
-            StringValue("BEAM".into()), StringValue("NYSE".into()), Number(Float64Value(78.35))
+        assert_eq!(row, Row::new(0, vec![
+            StringValue("BEAM".into()), StringValue("NYSE".into()), Number(F64Value(78.35))
         ]))
     }
 
@@ -829,21 +817,21 @@ mod tests {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // append some rows to the host table (rc)
             assert_eq!(RowsAffected(4), rc.append_rows(vec![
-                make_quote(0, &columns, "HOCK", "AMEX", 0.0076),
-                make_quote(1, &columns, "XIE", "NASDAQ", 33.33),
-                make_quote(2, &columns, "AAA", "NYSE", 22.44),
-                make_quote(3, &columns, "XYZ", "NASDAQ", 66.67),
+                make_quote(0, "HOCK", "AMEX", 0.0076),
+                make_quote(1, "XIE", "NASDAQ", 33.33),
+                make_quote(2, "AAA", "NYSE", 22.44),
+                make_quote(3, "XYZ", "NASDAQ", 66.67),
             ]));
 
             // verify: there is at least one row where exchange is "NYSE"
             assert_eq!(rc.exists(|row| matches!(
-                row.get("exchange"),
+                row.get(1),
                 StringValue(s) if s == "NYSE"
             )), Boolean(true));
 
             // verify: there are no rows where exchange starts with "OTC"
             assert_eq!(rc.exists(|row| matches!(
-                row.get("exchange"),
+                row.get(1),
                 StringValue(s) if s.starts_with("OTC")
             )), Boolean(false));
         }
@@ -856,7 +844,7 @@ mod tests {
     fn test_write_then_read_row() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a new row
-            let row = make_quote(2, &columns, "AMD", "NYSE", 88.78);
+            let row = make_quote(2, "AMD", "NYSE", 88.78);
             assert_eq!(rc.overwrite_row(row.get_id(), row.to_owned()), RowsAffected(1));
 
             // read and verify the row
@@ -873,7 +861,7 @@ mod tests {
     fn test_write_then_read_row_metadata() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a new row
-            let row = make_quote(2, &columns, "BOX", "AMEX", 777.9311);
+            let row = make_quote(2, "BOX", "AMEX", 777.9311);
             assert_eq!(rc.overwrite_row(row.get_id(), row.to_owned()), RowsAffected(1));
 
             // read and verify the row metadata
@@ -889,8 +877,8 @@ mod tests {
     fn test_write_then_read_field() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write two rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "INTC", "NYSE", 66.77)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(1, &columns, "AMD", "NASDAQ", 77.66)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "INTC", "NYSE", 66.77)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(1, "AMD", "NASDAQ", 77.66)));
 
             // read the first column of the first row
             assert_eq!(rc.read_field(0, 0), StringValue("INTC".into()));
@@ -908,19 +896,19 @@ mod tests {
         let columns = make_table_columns();
 
         // create a second table for which to append
-        let mrc_a = ModelRowCollection::from_rows(vec![
-            make_quote(0, &columns, "AAB", "NYSE", 22.44),
-            make_quote(1, &columns, "WXYZ", "NASDAQ", 66.67),
-            make_quote(2, &columns, "SSO", "NYSE", 123.44),
-            make_quote(3, &columns, "RAND", "AMEX", 11.33),
+        let mrc_a = ModelRowCollection::from_rows(columns.clone(), vec![
+            make_quote(0, "AAB", "NYSE", 22.44),
+            make_quote(1, "WXYZ", "NASDAQ", 66.67),
+            make_quote(2, "SSO", "NYSE", 123.44),
+            make_quote(3, "RAND", "AMEX", 11.33),
         ]);
 
         // create a second table for which to append
-        let mrc_b = ModelRowCollection::from_rows(vec![
-            make_quote(0, &columns, "IBM", "NYSE", 21.22),
-            make_quote(1, &columns, "ATT", "NYSE", 98.44),
-            make_quote(2, &columns, "HOCK", "AMEX", 0.0076),
-            make_quote(3, &columns, "XIE", "NASDAQ", 33.33),
+        let mrc_b = ModelRowCollection::from_rows(columns.clone(), vec![
+            make_quote(0, "IBM", "NYSE", 21.22),
+            make_quote(1, "ATT", "NYSE", 98.44),
+            make_quote(2, "HOCK", "AMEX", 0.0076),
+            make_quote(3, "XIE", "NASDAQ", 33.33),
         ]);
 
         // perform: table0 + table1
@@ -932,14 +920,14 @@ mod tests {
 
         // verify the results
         assert_eq!(rows, vec![
-            make_quote(0, &columns, "AAB", "NYSE", 22.44),
-            make_quote(1, &columns, "WXYZ", "NASDAQ", 66.67),
-            make_quote(2, &columns, "SSO", "NYSE", 123.44),
-            make_quote(3, &columns, "RAND", "AMEX", 11.33),
-            make_quote(4, &columns, "IBM", "NYSE", 21.22),
-            make_quote(5, &columns, "ATT", "NYSE", 98.44),
-            make_quote(6, &columns, "HOCK", "AMEX", 0.0076),
-            make_quote(7, &columns, "XIE", "NASDAQ", 33.33),
+            make_quote(0, "AAB", "NYSE", 22.44),
+            make_quote(1, "WXYZ", "NASDAQ", 66.67),
+            make_quote(2, "SSO", "NYSE", 123.44),
+            make_quote(3, "RAND", "AMEX", 11.33),
+            make_quote(4, "IBM", "NYSE", 21.22),
+            make_quote(5, "ATT", "NYSE", 98.44),
+            make_quote(6, "HOCK", "AMEX", 0.0076),
+            make_quote(7, "XIE", "NASDAQ", 33.33),
         ]);
     }
 
@@ -948,18 +936,18 @@ mod tests {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // append some rows to the host table (rc)
             assert_eq!(RowsAffected(4), rc.append_rows(vec![
-                make_quote(0, &columns, "IBM", "NYSE", 21.22),
-                make_quote(1, &columns, "ATT", "NYSE", 98.44),
-                make_quote(2, &columns, "HOCK", "AMEX", 0.0076),
-                make_quote(3, &columns, "XIE", "NASDAQ", 33.33),
+                make_quote(0, "IBM", "NYSE", 21.22),
+                make_quote(1, "ATT", "NYSE", 98.44),
+                make_quote(2, "HOCK", "AMEX", 0.0076),
+                make_quote(3, "XIE", "NASDAQ", 33.33),
             ]));
 
             // create a second table for which to append
-            let mrc = ModelRowCollection::from_rows(vec![
-                make_quote(0, &columns, "AAA", "NYSE", 22.44),
-                make_quote(1, &columns, "XYZ", "NASDAQ", 66.67),
-                make_quote(2, &columns, "SSO", "NYSE", 123.44),
-                make_quote(3, &columns, "RAND", "AMEX", 11.33),
+            let mrc = ModelRowCollection::from_rows(columns.clone(), vec![
+                make_quote(0, "AAA", "NYSE", 22.44),
+                make_quote(1, "XYZ", "NASDAQ", 66.67),
+                make_quote(2, "SSO", "NYSE", 123.44),
+                make_quote(3, "RAND", "AMEX", 11.33),
             ]);
 
             // append the second table to the host
@@ -967,14 +955,14 @@ mod tests {
 
             // retrieve the entire range of rows
             assert_eq!(rc.read_active_rows().unwrap(), vec![
-                make_quote(0, &columns, "IBM", "NYSE", 21.22),
-                make_quote(1, &columns, "ATT", "NYSE", 98.44),
-                make_quote(2, &columns, "HOCK", "AMEX", 0.0076),
-                make_quote(3, &columns, "XIE", "NASDAQ", 33.33),
-                make_quote(4, &columns, "AAA", "NYSE", 22.44),
-                make_quote(5, &columns, "XYZ", "NASDAQ", 66.67),
-                make_quote(6, &columns, "SSO", "NYSE", 123.44),
-                make_quote(7, &columns, "RAND", "AMEX", 11.33),
+                make_quote(0, "IBM", "NYSE", 21.22),
+                make_quote(1, "ATT", "NYSE", 98.44),
+                make_quote(2, "HOCK", "AMEX", 0.0076),
+                make_quote(3, "XIE", "NASDAQ", 33.33),
+                make_quote(4, "AAA", "NYSE", 22.44),
+                make_quote(5, "XYZ", "NASDAQ", 66.67),
+                make_quote(6, "SSO", "NYSE", 123.44),
+                make_quote(7, "RAND", "AMEX", 11.33),
             ]);
         }
 
@@ -986,11 +974,11 @@ mod tests {
     fn test_delete_row() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(1, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(2, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(3, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(4, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(1, "ATT", "NYSE", 98.44)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(2, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(3, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(4, "OXIDE", "OSS", 0.00)));
 
             // delete even rows
             assert_eq!(RowsAffected(1), rc.delete_row(0));
@@ -1000,8 +988,8 @@ mod tests {
             // retrieve the entire range of rows
             let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
-                make_quote(1, &columns, "ATT", "NYSE", 98.44),
-                make_quote(3, &columns, "X", "NASDAQ", 33.33),
+                make_quote(1, "ATT", "NYSE", 98.44),
+                make_quote(3, "X", "NASDAQ", 33.33),
             ]);
         }
 
@@ -1013,11 +1001,11 @@ mod tests {
     fn test_delete_rows() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(1, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(2, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(3, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(4, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(1, "ATT", "NYSE", 98.44)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(2, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(3, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(4, "OXIDE", "OSS", 0.00)));
 
             // delete even rows
             assert_eq!(RowsAffected(3), rc.delete_rows(|row| row.get_id() % 2 == 0));
@@ -1025,8 +1013,8 @@ mod tests {
             // retrieve the entire range of rows
             let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
-                make_quote(1, &columns, "ATT", "NYSE", 98.44),
-                make_quote(3, &columns, "X", "NASDAQ", 33.33),
+                make_quote(1, "ATT", "NYSE", 98.44),
+                make_quote(3, "X", "NASDAQ", 33.33),
             ]);
         }
 
@@ -1038,7 +1026,7 @@ mod tests {
     fn test_describe_table() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a row
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
 
             // describe the table
             let mrc = rc.describe().to_table().unwrap();
@@ -1053,19 +1041,19 @@ mod tests {
             }
 
             assert_eq!(mrc_rows, vec![
-                Row::new(0, mrc_columns.to_owned(), vec![
+                Row::new(0, vec![
                     StringValue("symbol".to_string()),
                     StringValue("String(8)".to_string()),
                     StringValue("null".to_string()),
                     Boolean(true),
                 ]),
-                Row::new(1, mrc_columns.to_owned(), vec![
+                Row::new(1, vec![
                     StringValue("exchange".to_string()),
                     StringValue("String(8)".to_string()),
                     StringValue("null".to_string()),
                     Boolean(true),
                 ]),
-                Row::new(2, mrc_columns.to_owned(), vec![
+                Row::new(2, vec![
                     StringValue("last_sale".to_string()),
                     StringValue("f64".to_string()),
                     StringValue("null".to_string()),
@@ -1082,17 +1070,17 @@ mod tests {
     fn test_find() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "HAZ", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "XMT", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.001)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, "HAZ", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, "XMT", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.001)));
 
             // resize and verify
             let expected = vec![
                 StringValue("XMT".to_string()),
                 StringValue("NASDAQ".to_string()),
-                Number(Float64Value(33.33)),
+                Number(F64Value(33.33)),
             ];
             let actual = rc.scan_first(0, &StringValue("XMT".into())).unwrap()
                 .map(|row| row.get_values())
@@ -1108,15 +1096,15 @@ mod tests {
     fn test_find_next() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
 
             // resize and verify
             assert_eq!(
-                Some(make_quote(2, &columns, "H", "OTC_BB", 0.0076)),
+                Some(make_quote(2, "H", "OTC_BB", 0.0076)),
                 rc.find_next(0, |row| row[0] == StringValue("H".to_string())).unwrap()
             );
         }
@@ -1129,15 +1117,15 @@ mod tests {
     fn test_fold_left() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
 
             // resize and verify
-            assert_eq!(Number(Float64Value(152.99759999999998)),
-                       rc.fold_left(Number(Float64Value(0.)), |agg, row| agg + row.get("last_sale")));
+            assert_eq!(Number(F64Value(152.99759999999998)),
+                       rc.fold_left(Number(F64Value(0.)), |agg, row| agg + row.get(2)));
         }
 
         // test the variants
@@ -1148,16 +1136,16 @@ mod tests {
     fn test_fold_right() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
 
             // fold and verify
             assert_eq!(
-                Number(Float64Value(347.00239999999997)),
-                rc.fold_right(Number(Float64Value(500.)), |agg, row| agg - row.get("last_sale"))
+                Number(F64Value(347.00239999999997)),
+                rc.fold_right(Number(F64Value(500.)), |agg, row| agg - row.get(2))
             );
         }
 
@@ -1169,20 +1157,20 @@ mod tests {
     fn test_iterator() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "A", "NYSE", 100.74)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "B", "NYSE", 50.19)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "C", "AMEX", 35.11)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "D", "NASDAQ", 16.45)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "E", "NYSE", 0.26)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "A", "NYSE", 100.74)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, "B", "NYSE", 50.19)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, "C", "AMEX", 35.11)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, "D", "NASDAQ", 16.45)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, "E", "NYSE", 0.26)));
 
             // use an iterator
-            let mut total = Number(Float64Value(0.));
+            let mut total = Number(F64Value(0.));
             for row in rc.iter() {
                 total = total + row[2].to_owned();
             }
 
             // fold and verify
-            assert_eq!(total, Number(Float64Value(202.75)));
+            assert_eq!(total, Number(F64Value(202.75)));
         }
 
         // test the variants
@@ -1193,17 +1181,17 @@ mod tests {
     fn test_overwrite_field() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "BAT", "AMEX", 1.66)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, "BAT", "AMEX", 1.66)));
 
             // overwrite the field at (0, 0)
             assert_eq!(RowsAffected(1), rc.overwrite_field(0, 1, StringValue("AMEX".to_string())));
 
             // verify the row
             assert_eq!(rc.read_one(0).unwrap(), Some(
-                make_quote(0, &columns, "GE", "AMEX", 21.22)
+                make_quote(0, "GE", "AMEX", 21.22)
             ));
         }
 
@@ -1215,7 +1203,7 @@ mod tests {
     fn test_overwrite_field_metadata() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write a row at 0
-            assert_eq!(RowsAffected(1), rc.overwrite_row(0, make_quote(0, &columns, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.overwrite_row(0, make_quote(0, "GE", "NYSE", 21.22)));
 
             // overwrite the field metadata at (0, 1)
             assert_eq!(RowsAffected(1), rc.overwrite_field_metadata(0, 1, FieldMetadata::new(false)));
@@ -1226,16 +1214,18 @@ mod tests {
                 rc.read_field_metadata(0, 1).unwrap());
 
             // verify the row
-            for s in TableRenderer::from_rows(rc.read_active_rows().unwrap()) {
+            for s in TableRenderer::from_rows(
+                rc.get_columns().clone(),
+                rc.read_active_rows().unwrap()) {
                 println!("{}", s)
             }
             assert_eq!(
                 rc.read_one(0).unwrap(),
                 Some(
-                    Row::new(0, rc.get_columns().to_owned(), vec![
+                    Row::new(0, vec![
                         StringValue("GE".to_string()),
                         Null,
-                        Number(Float64Value(21.22)),
+                        Number(F64Value(21.22)),
                     ]),
                 ));
         }
@@ -1248,35 +1238,35 @@ mod tests {
     fn test_update_row() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
 
             // retrieve the entire range of rows
             let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
-                make_quote(0, &columns, "GE", "NYSE", 21.22),
-                make_quote(1, &columns, "ATT", "NYSE", 98.44),
-                make_quote(2, &columns, "H", "OTC_BB", 0.0076),
-                make_quote(3, &columns, "X", "NASDAQ", 33.33),
-                make_quote(4, &columns, "OXIDE", "OSS", 0.00),
+                make_quote(0, "GE", "NYSE", 21.22),
+                make_quote(1, "ATT", "NYSE", 98.44),
+                make_quote(2, "H", "OTC_BB", 0.0076),
+                make_quote(3, "X", "NASDAQ", 33.33),
+                make_quote(4, "OXIDE", "OSS", 0.00),
             ]);
 
             // update a row
             assert_eq!(
                 RowsAffected(1),
-                rc.update_row(2, make_quote(2, &columns, "H.Q", "OTC_BB", 0.0001)));
+                rc.update_row(2, make_quote(2, "H.Q", "OTC_BB", 0.0001)));
 
             // retrieve the entire range of rows
             let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
-                make_quote(0, &columns, "GE", "NYSE", 21.22),
-                make_quote(1, &columns, "ATT", "NYSE", 98.44),
-                make_quote(2, &columns, "H.Q", "OTC_BB", 0.0001),
-                make_quote(3, &columns, "X", "NASDAQ", 33.33),
-                make_quote(4, &columns, "OXIDE", "OSS", 0.00),
+                make_quote(0, "GE", "NYSE", 21.22),
+                make_quote(1, "ATT", "NYSE", 98.44),
+                make_quote(2, "H.Q", "OTC_BB", 0.0001),
+                make_quote(3, "X", "NASDAQ", 33.33),
+                make_quote(4, "OXIDE", "OSS", 0.00),
             ]);
         }
 
@@ -1289,19 +1279,19 @@ mod tests {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
             assert_eq!(RowsAffected(4), rc.append_rows(vec![
-                make_quote(0, &columns, "GE", "NYSE", 21.22),
-                make_quote(0, &columns, "ATT", "NYSE", 98.44),
-                make_quote(0, &columns, "H", "OTC_BB", 0.0076),
-                make_quote(0, &columns, "GG", "NASDAQ", 33.33),
+                make_quote(0, "GE", "NYSE", 21.22),
+                make_quote(0, "ATT", "NYSE", 98.44),
+                make_quote(0, "H", "OTC_BB", 0.0076),
+                make_quote(0, "GG", "NASDAQ", 33.33),
             ]));
 
             // verify the initial state
             let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
-                make_quote(0, &columns, "GE", "NYSE", 21.22),
-                make_quote(1, &columns, "ATT", "NYSE", 98.44),
-                make_quote(2, &columns, "H", "OTC_BB", 0.0076),
-                make_quote(3, &columns, "GG", "NASDAQ", 33.33),
+                make_quote(0, "GE", "NYSE", 21.22),
+                make_quote(1, "ATT", "NYSE", 98.44),
+                make_quote(2, "H", "OTC_BB", 0.0076),
+                make_quote(3, "GG", "NASDAQ", 33.33),
             ]);
 
             // delete a row
@@ -1310,9 +1300,9 @@ mod tests {
             // verify the current state
             let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
-                make_quote(0, &columns, "GE", "NYSE", 21.22),
-                make_quote(1, &columns, "ATT", "NYSE", 98.44),
-                make_quote(3, &columns, "GG", "NASDAQ", 33.33),
+                make_quote(0, "GE", "NYSE", 21.22),
+                make_quote(1, "ATT", "NYSE", 98.44),
+                make_quote(3, "GG", "NASDAQ", 33.33),
             ]);
         }
 
@@ -1323,16 +1313,15 @@ mod tests {
     #[test]
     fn test_push_pop() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
-            let columns = make_quote_columns();
-            let phys_columns = TableColumn::from_columns(&columns).unwrap();
-            assert_eq!(RowsAffected(0), rc.push_row(make_quote(0, &phys_columns, "BILL", "AMEX", 12.33)));
-            assert_eq!(RowsAffected(1), rc.push_row(make_quote(1, &phys_columns, "TED", "NYSE", 56.2456)));
+            let phys_columns = make_table_columns();
+            assert_eq!(RowsAffected(0), rc.push_row(make_quote(0, "BILL", "AMEX", 12.33)));
+            assert_eq!(RowsAffected(1), rc.push_row(make_quote(1, "TED", "NYSE", 56.2456)));
             assert_eq!(
                 rc.pop_row(),
-                StructureValue(make_quote(1, &phys_columns, "TED", "NYSE", 56.2456).to_struct()));
+                StructureValue(make_quote(1, "TED", "NYSE", 56.2456).to_struct(&phys_columns)));
             assert_eq!(
                 rc.pop_row(),
-                StructureValue(make_quote(0, &phys_columns, "BILL", "AMEX", 12.33).to_struct()));
+                StructureValue(make_quote(0, "BILL", "AMEX", 12.33).to_struct(&phys_columns)));
             assert_eq!(rc.pop_row(), Undefined);
         }
 
@@ -1345,18 +1334,18 @@ mod tests {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             let columns = make_quote_columns();
             let phys_columns = TableColumn::from_columns(&columns).unwrap();
-            rc.append_row(make_quote(0, &phys_columns, "ABC", "AMEX", 12.33));
-            rc.append_row(make_quote(1, &phys_columns, "TED", "OTC", 0.2456));
-            rc.append_row(make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775));
-            rc.append_row(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442));
-            rc.append_row(make_quote(4, &phys_columns, "XYZ", "NASDAQ", 0.0289));
+            rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
+            rc.append_row(make_quote(1, "TED", "OTC", 0.2456));
+            rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
+            rc.append_row(make_quote(3, "GOTO", "OTC", 0.1442));
+            rc.append_row(make_quote(4, "XYZ", "NASDAQ", 0.0289));
 
             // produce the scan
             let rows = rc.read_range(1..4).unwrap();
             assert_eq!(rows, vec![
-                make_quote(1, &phys_columns, "TED", "OTC", 0.2456),
-                make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
+                make_quote(1, "TED", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 9.775),
+                make_quote(3, "GOTO", "OTC", 0.1442),
             ]);
         }
 
@@ -1368,7 +1357,7 @@ mod tests {
     fn test_resize_shrink() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // insert some rows and verify the size
-            assert_eq!(RowsAffected(1), rc.overwrite_row(5, make_quote(0, &columns, "DUMMY", "OTC_BB", 0.0001)));
+            assert_eq!(RowsAffected(1), rc.overwrite_row(5, make_quote(0, "DUMMY", "OTC_BB", 0.0001)));
             assert_eq!(6, rc.len().unwrap());
 
             // resize and verify
@@ -1386,7 +1375,7 @@ mod tests {
             assert_eq!(Ack, rc.resize(0));
 
             // insert some rows and verify the size
-            assert_eq!(RowsAffected(1), rc.overwrite_row(5, make_quote(0, &columns, "DUMMY", "OTC_BB", 0.0001)));
+            assert_eq!(RowsAffected(1), rc.overwrite_row(5, make_quote(0, "DUMMY", "OTC_BB", 0.0001)));
             assert!(rc.len().unwrap() >= 6);
 
             // resize and verify
@@ -1403,18 +1392,18 @@ mod tests {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
             assert_eq!(RowsAffected(4), rc.append_rows(vec![
-                make_quote(0, &columns, "GE", "NYSE", 21.22),
-                make_quote(0, &columns, "ATT", "NYSE", 98.45),
-                make_quote(0, &columns, "H", "OTC_BB", 0.0076),
-                make_quote(0, &columns, "GG", "NASDAQ", 33.33),
+                make_quote(0, "GE", "NYSE", 21.22),
+                make_quote(0, "ATT", "NYSE", 98.45),
+                make_quote(0, "H", "OTC_BB", 0.0076),
+                make_quote(0, "GG", "NASDAQ", 33.33),
             ]));
 
             // verify the initial state
             assert_eq!(rc.read_active_rows().unwrap(), vec![
-                make_quote(0, &columns, "GE", "NYSE", 21.22),
-                make_quote(1, &columns, "ATT", "NYSE", 98.45),
-                make_quote(2, &columns, "H", "OTC_BB", 0.0076),
-                make_quote(3, &columns, "GG", "NASDAQ", 33.33),
+                make_quote(0, "GE", "NYSE", 21.22),
+                make_quote(1, "ATT", "NYSE", 98.45),
+                make_quote(2, "H", "OTC_BB", 0.0076),
+                make_quote(3, "GG", "NASDAQ", 33.33),
             ]);
 
             // delete a row
@@ -1424,8 +1413,8 @@ mod tests {
             // verify the current state
             let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
-                make_quote(0, &columns, "GE", "NYSE", 21.22),
-                make_quote(2, &columns, "H", "OTC_BB", 0.0076),
+                make_quote(0, "GE", "NYSE", 21.22),
+                make_quote(2, "H", "OTC_BB", 0.0076),
             ]);
 
             // compact the table
@@ -1434,8 +1423,8 @@ mod tests {
             // verify the final state
             let rows = rc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
-                make_quote(0, &columns, "GE", "NYSE", 21.22),
-                make_quote(1, &columns, "H", "OTC_BB", 0.0076),
+                make_quote(0, "GE", "NYSE", 21.22),
+                make_quote(1, "H", "OTC_BB", 0.0076),
             ]);
         }
 
@@ -1448,21 +1437,21 @@ mod tests {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             let columns = make_quote_columns();
             let phys_columns = TableColumn::from_columns(&columns).unwrap();
-            rc.append_row(make_quote(0, &phys_columns, "ABC", "AMEX", 12.33));
-            rc.append_row(make_quote(1, &phys_columns, "UNO", "OTC", 0.2456));
-            rc.append_row(make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775));
-            rc.append_row(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442));
-            rc.append_row(make_quote(4, &phys_columns, "XYZ", "NYSE", 0.0289));
+            rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
+            rc.append_row(make_quote(1, "UNO", "OTC", 0.2456));
+            rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
+            rc.append_row(make_quote(3, "GOTO", "OTC", 0.1442));
+            rc.append_row(make_quote(4, "XYZ", "NYSE", 0.0289));
 
             // produce the reverse order
             let rrc = rc.reverse().unwrap();
             let rows = rrc.read_active_rows().unwrap();
             assert_eq!(rows, vec![
-                make_quote(0, &phys_columns, "XYZ", "NYSE", 0.0289),
-                make_quote(1, &phys_columns, "GOTO", "OTC", 0.1442),
-                make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-                make_quote(3, &phys_columns, "UNO", "OTC", 0.2456),
-                make_quote(4, &phys_columns, "ABC", "AMEX", 12.33),
+                make_quote(0, "XYZ", "NYSE", 0.0289),
+                make_quote(1, "GOTO", "OTC", 0.1442),
+                make_quote(2, "BIZ", "NYSE", 9.775),
+                make_quote(3, "UNO", "OTC", 0.2456),
+                make_quote(4, "ABC", "AMEX", 12.33),
             ])
         }
 
@@ -1476,11 +1465,11 @@ mod tests {
             let columns = make_quote_columns();
             let phys_columns = TableColumn::from_columns(&columns).unwrap();
             assert_eq!(RowsAffected(5), rc.append_rows(vec![
-                make_quote(0, &phys_columns, "ABC", "AMEX", 12.33),
-                make_quote(1, &phys_columns, "TED", "OTC", 0.2456),
-                make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
-                make_quote(4, &phys_columns, "XYZ", "NASDAQ", 0.0289),
+                make_quote(0, "ABC", "AMEX", 12.33),
+                make_quote(1, "TED", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 9.775),
+                make_quote(3, "GOTO", "OTC", 0.1442),
+                make_quote(4, "XYZ", "NASDAQ", 0.0289),
             ]));
 
             // delete some rows
@@ -1490,16 +1479,16 @@ mod tests {
 
             // produce the scan
             let rows = rc.examine_rows().unwrap();
-            let scan_columns = rows[0].get_columns();
-            for s in TableRenderer::from_rows(rows.to_owned()) { println!("{}", s); }
+            let scan_columns = rc.get_columns();
+            for s in TableRenderer::from_rows(scan_columns.clone(), rows.to_owned()) { println!("{}", s); }
 
             // verify row states: active or inactive
             assert_eq!(rows, vec![
-                make_scan_quote(0, scan_columns, "ABC", "AMEX", 12.33, false),
-                make_scan_quote(1, scan_columns, "TED", "OTC", 0.2456, true),
-                make_scan_quote(2, scan_columns, "BIZ", "NYSE", 9.775, false),
-                make_scan_quote(3, scan_columns, "GOTO", "OTC", 0.1442, true),
-                make_scan_quote(4, scan_columns, "XYZ", "NASDAQ", 0.0289, false),
+                make_scan_quote(0, "ABC", "AMEX", 12.33, false),
+                make_scan_quote(1, "TED", "OTC", 0.2456, true),
+                make_scan_quote(2, "BIZ", "NYSE", 9.775, false),
+                make_scan_quote(3, "GOTO", "OTC", 0.1442, true),
+                make_scan_quote(4, "XYZ", "NASDAQ", 0.0289, false),
             ])
         }
 
@@ -1513,11 +1502,11 @@ mod tests {
             let columns = make_quote_columns();
             let phys_columns = TableColumn::from_columns(&columns).unwrap();
             assert_eq!(RowsAffected(5), rc.append_rows(vec![
-                make_quote(0, &phys_columns, "TED", "OTC", 0.2456),
-                make_quote(1, &phys_columns, "ABC", "AMEX", 12.33),
-                make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1442),
-                make_quote(4, &phys_columns, "XYZ", "NASDAQ", 0.0289),
+                make_quote(0, "TED", "OTC", 0.2456),
+                make_quote(1, "ABC", "AMEX", 12.33),
+                make_quote(2, "BIZ", "NYSE", 9.775),
+                make_quote(3, "GOTO", "OTC", 0.1442),
+                make_quote(4, "XYZ", "NASDAQ", 0.0289),
             ]));
 
             // delete some rows
@@ -1527,16 +1516,16 @@ mod tests {
 
             // perform a forward scan
             let result = rc.find_next(2, |row| {
-                matches!(row.get("exchange"), StringValue(s) if s == "OTC".to_string())
+                matches!(row.get(1), StringValue(s) if s == "OTC".to_string())
             }).unwrap();
 
             // verify the result
             let (scan_columns, scan_row) = result
-                .map(|row| (row.get_columns().to_owned(), row))
+                .map(|row| (rc.get_columns().to_owned(), row))
                 .unwrap();
             assert_eq!(
                 scan_row,
-                make_quote(3, &scan_columns, "GOTO", "OTC", 0.1442)
+                make_quote(3, "GOTO", "OTC", 0.1442)
             );
         }
 
@@ -1548,15 +1537,15 @@ mod tests {
     fn test_scan_next() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
             // write some rows
-            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, &columns, "GE", "NYSE", 21.22)));
-            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, &columns, "ATT", "NYSE", 98.44)));
-            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, &columns, "H", "OTC_BB", 0.0076)));
-            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, &columns, "X", "NASDAQ", 33.33)));
-            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, &columns, "OXIDE", "OSS", 0.00)));
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
 
             // resize and verify
             assert_eq!(
-                Some(make_quote(3, &columns, "X", "NASDAQ", 33.33)),
+                Some(make_quote(3, "X", "NASDAQ", 33.33)),
                 rc.scan_next(0, &StringValue("X".into()), 0).unwrap()
             );
         }
@@ -1568,14 +1557,12 @@ mod tests {
     #[test]
     fn test_scan_reverse() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
-            let columns = make_quote_columns();
-            let phys_columns = TableColumn::from_columns(&columns).unwrap();
             assert_eq!(RowsAffected(5), rc.append_rows(vec![
-                make_quote(0, &phys_columns, "TED", "OTC", 0.2456),
-                make_quote(1, &phys_columns, "GOTO", "OTC", 0.1442),
-                make_quote(2, &phys_columns, "BIZ", "NYSE", 9.775),
-                make_quote(3, &phys_columns, "ABC", "AMEX", 12.33),
-                make_quote(4, &phys_columns, "XYZ", "NASDAQ", 0.0289),
+                make_quote(0, "TED", "OTC", 0.2456),
+                make_quote(1, "GOTO", "OTC", 0.1442),
+                make_quote(2, "BIZ", "NYSE", 9.775),
+                make_quote(3, "ABC", "AMEX", 12.33),
+                make_quote(4, "XYZ", "NASDAQ", 0.0289),
             ]));
 
             // delete some rows
@@ -1585,16 +1572,16 @@ mod tests {
 
             // perform a reverse scan
             let result = rc.find_previous(4, |(row, _)| {
-                matches!(row.get("exchange"), StringValue(s) if s == "OTC".to_string())
+                matches!(row.get(1), StringValue(s) if s == "OTC".to_string())
             }).unwrap();
 
             // verify the result
             let (scan_columns, scan_row) = result
-                .map(|(row, _, _)| (row.get_columns().to_owned(), row))
+                .map(|(row, _, _)| (columns, row))
                 .unwrap();
             assert_eq!(
                 scan_row,
-                make_quote(1, &scan_columns, "GOTO", "OTC", 0.1442)
+                make_quote(1, "GOTO", "OTC", 0.1442)
             );
         }
 
@@ -1626,7 +1613,7 @@ mod tests {
                 .collect();
             let exchange = exchanges[rng.next_u32() as usize % exchanges.len()];
             let last_sale = 400.0 * rng.sample(Uniform::new(0.0, 1.0));
-            let row = make_quote(0, &columns, &symbol, exchange, last_sale);
+            let row = make_quote(0, &symbol, exchange, last_sale);
             rc.overwrite_row(id, row);
         }
         let end_time = SystemTime::now().duration_since(UNIX_EPOCH)

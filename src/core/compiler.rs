@@ -5,8 +5,8 @@
 use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
-use crate::byte_code_compiler::ByteCodeCompiler;
 
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::expression::{ACK, Expression, FALSE, Infrastructure, MutateTarget, Mutation, NULL, Queryable, TRUE, UNDEFINED};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
@@ -71,7 +71,6 @@ impl Compiler {
         let mut ts = ts;
         while ts.has_more() {
             let (expr, tts) = self.compile_next(ts)?;
-            //println!("compile: expr -> {:?}", expr);
             opcodes.push(expr);
             ts = tts;
         }
@@ -156,8 +155,8 @@ impl Compiler {
                 "GET" => self.parse_keyword_http(ts),
                 "HEAD" => self.parse_keyword_http(ts),
                 "HTTP" => self.parse_keyword_http(nts),
-                "include" => self.parse_expression_1a(nts, Include),
                 "if" => self.parse_keyword_if(nts),
+                "include" => self.parse_expression_1a(nts, Include),
                 "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &nts),
                 "ns" => self.parse_expression_1a(nts, Ns),
                 "null" => Ok((NULL, nts)),
@@ -252,7 +251,7 @@ impl Compiler {
             (Some(
                 Atom { text: name, .. } |
                 Backticks { text: name, .. }), ts) => Ok((f(name), ts)),
-            (_, ts) => fail_near("Invalid identifier".to_string(), &ts)
+            (_, ts) => fail_near("Invalid identifier", &ts)
         }
     }
 
@@ -540,9 +539,10 @@ impl Compiler {
 
     /// Builds a language model from a 'struct' statement:
     /// ex: struct(symbol: String(8), exchange: String(8), last_sale: f64)
+    /// ex: struct(symbol: String(8) = "TRX", exchange: String(8) = "AMEX", last_sale: f64 = 17.69)
     fn parse_keyword_struct(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        if let (ColumnSet(columns), ts) = self.expect_parameters(ts.to_owned())? {
-            Ok((Literal(StructureValue(Structure::from_logical_columns(&columns)?)), ts))
+        if let (ColumnSet(fields), ts) = self.expect_parameters(ts.to_owned())? {
+            Ok((Literal(StructureValue(Structure::from_columns(&fields)?)), ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }
@@ -648,7 +648,7 @@ impl Compiler {
         _precedence: usize,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         fn pow(compiler: &mut Compiler, ts: TokenSlice, n: i64) -> std::io::Result<(Expression, TokenSlice)> {
-            compiler.parse_expression_2b(ts, Literal(Number(Int64Value(n))), Pow)
+            compiler.parse_expression_2b(ts, Literal(Number(I64Value(n))), Pow)
         }
         match symbol.as_str() {
             ";" => Ok((self.pop().unwrap_or(UNDEFINED), ts.skip())),
@@ -696,8 +696,8 @@ impl Compiler {
                         "**" => self.parse_expression_2a(ts, op0, Pow),
                         ".." => self.parse_expression_2a(ts, op0, Range),
                         ":=" => self.parse_expression_2nv(ts, op0, SetVariable),
-                        "<<" => self.parse_expression_2a(ts, op0, ShiftLeft),
-                        ">>" => self.parse_expression_2a(ts, op0, ShiftRight),
+                        "<<" => self.parse_expression_2a(ts, op0, BitwiseShiftLeft),
+                        ">>" => self.parse_expression_2a(ts, op0, BitwiseShiftRight),
                         unknown => fail(format!("Invalid operator '{}'", unknown))
                     }
                 } else { fail(format!("Illegal start of expression '{}'", symbol)) }
@@ -800,11 +800,30 @@ impl Compiler {
         // is it a function call? e.g., f(2, 3)
         if ts.is("(") {
             let (args, ts) = self.expect_arguments(ts)?;
-            Ok((FunctionCall { fx: Box::new(Variable(name.to_string())), args }, ts))
+            match name {
+                "iff" => self.expect_function_call_iff(args, ts),
+                name => Ok((FunctionCall { fx: Box::new(Variable(name.to_string())), args }, ts))
+            }
         }
         // must be a variable. e.g., abc
         else {
             Ok((Variable(name.to_string()), ts))
+        }
+    }
+
+    fn expect_function_call_iff(
+        &mut self,
+        args: Vec<Expression>,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        match args.as_slice() {
+            [condition, a, b] =>
+                Ok((If {
+                    condition: Box::new(condition.to_owned()),
+                    a: Box::new(a.to_owned()),
+                    b: Some(Box::new(b.to_owned())),
+                }, ts)),
+            _ => fail_near("Syntax error; usage: iff(condition, if_true, if_false)", &ts)
         }
     }
 
@@ -870,7 +889,13 @@ impl Compiler {
                 } else { (None, ts) };
 
                 // finally, check for a default value
-                let default_value = None;
+                let (default_value, ts) = if ts.is("=") {
+                    if let (Some(tok), ts) = ts.skip().next() {
+                        (Some(tok.get_raw_value()), ts)
+                    } else {
+                        return fail_near("An expression was expected", &ts);
+                    }
+                } else { (None, ts) };
 
                 Ok((ColumnJs::new(name, type_name.unwrap_or("".to_string()), default_value), ts))
             }
@@ -1003,8 +1028,8 @@ mod tests {
     fn test_array_declaration() {
         let script = "[7, 5, 8, 2, 4, 1]";
         let model = ArrayLiteral(vec![
-            Literal(Number(Int64Value(7))), Literal(Number(Int64Value(5))), Literal(Number(Int64Value(8))),
-            Literal(Number(Int64Value(2))), Literal(Number(Int64Value(4))), Literal(Number(Int64Value(1))),
+            Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
+            Literal(Number(I64Value(2))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
         ]);
         assert_eq!(model.to_code(), script);
         assert_eq!(Compiler::compile_script(script).unwrap(), model)
@@ -1015,10 +1040,10 @@ mod tests {
         let script = "[7, 5, 8, 2, 4, 1][3]";
         let model = ElementAt(
             Box::new(ArrayLiteral(vec![
-                Literal(Number(Int64Value(7))), Literal(Number(Int64Value(5))), Literal(Number(Int64Value(8))),
-                Literal(Number(Int64Value(2))), Literal(Number(Int64Value(4))), Literal(Number(Int64Value(1))),
+                Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
+                Literal(Number(I64Value(2))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
             ])),
-            Box::new(Literal(Number(Int64Value(3)))));
+            Box::new(Literal(Number(I64Value(3)))));
         assert_eq!(model.to_code(), script);
         assert_eq!(Compiler::compile_script(script).unwrap(), model);
     }
@@ -1027,8 +1052,8 @@ mod tests {
     fn test_bitwise_and() {
         assert_eq!(Compiler::compile_script("20 & 3").unwrap(),
                    BitwiseAnd(
-                       Box::new(Literal(Number(Int64Value(20)))),
-                       Box::new(Literal(Number(Int64Value(3)))),
+                       Box::new(Literal(Number(I64Value(20)))),
+                       Box::new(Literal(Number(I64Value(3)))),
                    ));
     }
 
@@ -1036,8 +1061,8 @@ mod tests {
     fn test_bitwise_or() {
         assert_eq!(Compiler::compile_script("20 | 3").unwrap(),
                    BitwiseOr(
-                       Box::new(Literal(Number(Int64Value(20)))),
-                       Box::new(Literal(Number(Int64Value(3)))),
+                       Box::new(Literal(Number(I64Value(20)))),
+                       Box::new(Literal(Number(I64Value(3)))),
                    ));
     }
 
@@ -1097,8 +1122,8 @@ mod tests {
         assert_eq!(code, FunctionCall {
             fx: Box::new(Variable("f".into())),
             args: vec![
-                Literal(Number(Int64Value(2))),
-                Literal(Number(Int64Value(3))),
+                Literal(Number(I64Value(2))),
+                Literal(Number(I64Value(3))),
             ],
         })
     }
@@ -1124,17 +1149,17 @@ mod tests {
         let ns_path = "compiler.create.stocks";
         let code = Compiler::compile_script(r#"
             create table ns("compiler.create.stocks") (
-                symbol: String(8),
-                exchange: String(8),
-                last_sale: f64)
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.54)
             "#).unwrap();
         assert_eq!(code, Perform(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
             entity: TableEntity {
                 columns: vec![
-                    ColumnJs::new("symbol", "String(8)", None),
-                    ColumnJs::new("exchange", "String(8)", None),
-                    ColumnJs::new("last_sale", "f64", None),
+                    ColumnJs::new("symbol", "String(8)", Some("ABC".into())),
+                    ColumnJs::new("exchange", "String(8)", Some("NYSE".into())),
+                    ColumnJs::new("last_sale", "f64", Some("23.54".into())),
                 ],
                 from: None,
             },
@@ -1204,7 +1229,7 @@ mod tests {
         assert_eq!(code, If {
             condition: Box::new(GreaterThan(
                 Box::new(Variable("n".to_string())),
-                Box::new(Literal(Number(Int64Value(100)))),
+                Box::new(Literal(Number(I64Value(100)))),
             )),
             a: Box::new(Literal(StringValue("Yes".to_string()))),
             b: None,
@@ -1219,7 +1244,7 @@ mod tests {
         assert_eq!(code, If {
             condition: Box::new(GreaterThan(
                 Box::new(Variable("n".to_string())),
-                Box::new(Literal(Number(Int64Value(100)))),
+                Box::new(Literal(Number(I64Value(100)))),
             )),
             a: Box::new(Variable("n".to_string())),
             b: Some(Box::new(Variable("m".to_string()))),
@@ -1229,18 +1254,15 @@ mod tests {
     #[test]
     fn test_iff() {
         let code = Compiler::compile_script(r#"
-            iff(x > 5, a, b)
+            iff(n > 5, a, b)
         "#).unwrap();
-        assert_eq!(code, FunctionCall {
-            fx: Box::new(Variable("iff".into())),
-            args: vec![
-                GreaterThan(
-                    Box::new(Variable("x".to_string())),
-                    Box::new(Literal(Number(Int64Value(5)))),
-                ),
-                Variable("a".to_string()),
-                Variable("b".to_string()),
-            ],
+        assert_eq!(code, If {
+            condition: Box::new(GreaterThan(
+                Box::new(Variable("n".to_string())),
+                Box::new(Literal(Number(I64Value(5)))),
+            )),
+            a: Box::new(Variable("a".to_string())),
+            b: Some(Box::new(Variable("b".to_string()))),
         });
     }
 
@@ -1253,7 +1275,7 @@ mod tests {
                    JSONLiteral(vec![
                        ("symbol".to_string(), Literal(StringValue("ABC".into()))),
                        ("exchange".to_string(), Literal(StringValue("NYSE".into()))),
-                       ("last_sale".to_string(), Literal(Number(Float64Value(16.79)))),
+                       ("last_sale".to_string(), Literal(Number(F64Value(16.79)))),
                    ])
         );
     }
@@ -1261,10 +1283,10 @@ mod tests {
     #[test]
     fn test_numeric_literal_value() {
         assert_eq!(Compiler::compile_script("1_234_567_890").unwrap(),
-                   Literal(Number(Int64Value(1_234_567_890))));
+                   Literal(Number(I64Value(1_234_567_890))));
 
         assert_eq!(Compiler::compile_script("1_234_567.890").unwrap(),
-                   Literal(Number(Float64Value(1_234_567.890))));
+                   Literal(Number(F64Value(1_234_567.890))));
     }
 
     #[test]
@@ -1278,7 +1300,7 @@ mod tests {
         let opcodes = Compiler::compile_script("n + 3").unwrap();
         assert_eq!(opcodes, Plus(
             Box::new(Variable("n".into())),
-            Box::new(Literal(Number(Int64Value(3)))),
+            Box::new(Literal(Number(I64Value(3)))),
         ));
     }
 
@@ -1287,7 +1309,7 @@ mod tests {
         let opcodes = Compiler::compile_script("n / 3").unwrap();
         assert_eq!(opcodes, Divide(
             Box::new(Variable("n".into())),
-            Box::new(Literal(Number(Int64Value(3)))),
+            Box::new(Literal(Number(I64Value(3)))),
         ));
     }
 
@@ -1295,8 +1317,8 @@ mod tests {
     fn test_mathematical_exponent() {
         let opcodes = Compiler::compile_script("5 ** 2").unwrap();
         assert_eq!(opcodes, Pow(
-            Box::new(Literal(Number(Int64Value(5)))),
-            Box::new(Literal(Number(Int64Value(2)))),
+            Box::new(Literal(Number(I64Value(5)))),
+            Box::new(Literal(Number(I64Value(2)))),
         ));
     }
 
@@ -1307,8 +1329,8 @@ mod tests {
         for symbol in symbols {
             let opcodes = Compiler::compile_script(format!("5{}", symbol).as_str()).unwrap();
             assert_eq!(opcodes, Pow(
-                Box::new(Literal(Number(Int64Value(5)))),
-                Box::new(Literal(Number(Int64Value(num)))),
+                Box::new(Literal(Number(I64Value(5)))),
+                Box::new(Literal(Number(I64Value(num)))),
             ));
             num += 1
         }
@@ -1317,14 +1339,14 @@ mod tests {
     #[test]
     fn test_mathematical_factorial() {
         let opcodes = Compiler::compile_script("5¡").unwrap();
-        assert_eq!(opcodes, Factorial(Box::new(Literal(Number(Int64Value(5))))));
+        assert_eq!(opcodes, Factorial(Box::new(Literal(Number(I64Value(5))))));
     }
 
     #[test]
     fn test_mathematical_modulus() {
         let opcodes = Compiler::compile_script("n % 4").unwrap();
         assert_eq!(opcodes,
-                   Modulo(Box::new(Variable("n".into())), Box::new(Literal(Number(Int64Value(4))))));
+                   Modulo(Box::new(Variable("n".into())), Box::new(Literal(Number(I64Value(4))))));
     }
 
     #[test]
@@ -1332,7 +1354,7 @@ mod tests {
         let opcodes = Compiler::compile_script("n * 10").unwrap();
         assert_eq!(opcodes, Multiply(
             Box::new(Variable("n".into())),
-            Box::new(Literal(Number(Int64Value(10)))),
+            Box::new(Literal(Number(I64Value(10)))),
         ));
     }
 
@@ -1340,7 +1362,7 @@ mod tests {
     fn test_mathematical_subtraction() {
         let opcodes = Compiler::compile_script("_ - 7").unwrap();
         assert_eq!(opcodes,
-                   Minus(Box::new(Variable("_".into())), Box::new(Literal(Number(Int64Value(7))))));
+                   Minus(Box::new(Variable("_".into())), Box::new(Literal(Number(I64Value(7))))));
     }
 
     #[test]
@@ -1390,56 +1412,53 @@ mod tests {
 
     #[test]
     fn test_compile_to_byte_code() {
-        use crate::numbers::NumberKind::*;
         // compile script to byte code
         let byte_code = Compiler::compile_to_byte_code(r#"
         {z:'abc', x:1.0, y:2, z:[1, 2, 3]}
         "#).unwrap();
         assert_eq!(byte_code, vec![
-            EJsonLiteral.to_u8(), 0, 0, 0, 0, 0, 0, 0, 8,
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'z',
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c',
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'x',
-            ELiteral.to_u8(), TNumberF64.to_u8(), 63, 240, 0, 0, 0, 0, 0, 0,
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'y',
-            ELiteral.to_u8(), TNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 2,
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'z',
-            EArrayLit.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3,
-            ELiteral.to_u8(), TNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1,
-            ELiteral.to_u8(), TNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 2,
-            ELiteral.to_u8(), TNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3,
+            ExJsonLiteral.to_u8(), 0, 0, 0, 0, 0, 0, 0, 8,
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'z',
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c',
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'x',
+            ExLiteral.to_u8(), TxNumberF64.to_u8(), 63, 240, 0, 0, 0, 0, 0, 0,
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'y',
+            ExLiteral.to_u8(), TxNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 2,
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'z',
+            ExArrayLit.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3,
+            ExLiteral.to_u8(), TxNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1,
+            ExLiteral.to_u8(), TxNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 2,
+            ExLiteral.to_u8(), TxNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3,
         ]);
     }
 
     #[test]
     fn test_decompile_from_byte_code() {
-        use crate::numbers::NumberKind::*;
-        use crate::mnemonic::Mnemonic::*;
         let byte_code = vec![
-            EJsonLiteral.to_u8(), 0, 0, 0, 0, 0, 0, 0, 8,
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'w',
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c',
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'x',
-            ELiteral.to_u8(), TNumberF64.to_u8(), 63, 240, 0, 0, 0, 0, 0, 0,
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'y',
-            ELiteral.to_u8(), TNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 2,
-            ELiteral.to_u8(), TString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'z',
-            EArrayLit.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3,
-            ELiteral.to_u8(), TNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1,
-            ELiteral.to_u8(), TNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 2,
-            ELiteral.to_u8(), TNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3,
+            ExJsonLiteral.to_u8(), 0, 0, 0, 0, 0, 0, 0, 8,
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'w',
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c',
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'x',
+            ExLiteral.to_u8(), TxNumberF64.to_u8(), 63, 240, 0, 0, 0, 0, 0, 0,
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'y',
+            ExLiteral.to_u8(), TxNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 2,
+            ExLiteral.to_u8(), TxString.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1, b'z',
+            ExArrayLit.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3,
+            ExLiteral.to_u8(), TxNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 1,
+            ExLiteral.to_u8(), TxNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 2,
+            ExLiteral.to_u8(), TxNumberI64.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3,
         ];
         // decompile byte code to model code
         let code = Compiler::decompile_from_byte_code(&byte_code).unwrap();
         assert_eq!(code,
                    JSONLiteral(vec![
                        ("w".into(), Literal(StringValue("abc".into()))),
-                       ("x".into(), Literal(Number(Float64Value(1.0)))),
-                       ("y".into(), Literal(Number(Int64Value(2)))),
+                       ("x".into(), Literal(Number(F64Value(1.0)))),
+                       ("y".into(), Literal(Number(I64Value(2)))),
                        ("z".into(), ArrayLiteral(vec![
-                           Literal(Number(Int64Value(1))),
-                           Literal(Number(Int64Value(2))),
-                           Literal(Number(Int64Value(3))),
+                           Literal(Number(I64Value(1))),
+                           Literal(Number(I64Value(2))),
+                           Literal(Number(I64Value(3))),
                        ])),
                    ])
         );
@@ -1455,12 +1474,12 @@ mod tests {
         let result = result.unwrap();
         assert_eq!(result, JSONLiteral(vec![
             ("w".to_string(), Literal(StringValue("abc".to_string()))),
-            ("x".to_string(), Literal(Number(Float64Value(1.)))),
-            ("y".to_string(), Literal(Number(Int64Value(2)))),
+            ("x".to_string(), Literal(Number(F64Value(1.)))),
+            ("y".to_string(), Literal(Number(I64Value(2)))),
             ("z".to_string(), ArrayLiteral(vec![
-                Literal(Number(Int64Value(1))),
-                Literal(Number(Int64Value(2))),
-                Literal(Number(Int64Value(3))),
+                Literal(Number(I64Value(1))),
+                Literal(Number(I64Value(2))),
+                Literal(Number(I64Value(3))),
             ])),
         ]));
     }
@@ -1472,7 +1491,7 @@ mod tests {
         let (items, _) = compiler.expect_arguments(ts).unwrap();
         assert_eq!(items, vec![
             Variable("abc".into()),
-            Literal(Number(Int64Value(123))),
+            Literal(Number(I64Value(123))),
             Literal(StringValue("Hello".into())),
         ])
     }
@@ -1492,7 +1511,7 @@ mod tests {
         let (items, _) = compiler.next_expression_list(ts).unwrap();
         assert_eq!(items, Some(vec![
             Variable("abc".into()),
-            Literal(Number(Float64Value(123.))),
+            Literal(Number(F64Value(123.))),
             Literal(StringValue("Hello".into())),
         ]))
     }
@@ -1501,10 +1520,10 @@ mod tests {
     fn test_order_of_operations_1() {
         let opcodes = Compiler::compile_script("2 + (4 * 3)").unwrap();
         assert_eq!(opcodes, Plus(
-            Box::new(Literal(Number(Int64Value(2)))),
+            Box::new(Literal(Number(I64Value(2)))),
             Box::new(Multiply(
-                Box::new(Literal(Number(Int64Value(4)))),
-                Box::new(Literal(Number(Int64Value(3)))),
+                Box::new(Literal(Number(I64Value(4)))),
+                Box::new(Literal(Number(I64Value(3)))),
             )),
         ));
     }
@@ -1514,12 +1533,12 @@ mod tests {
         let opcodes = Compiler::compile_script("(4.0 / 3.0) + (4 * 3)").unwrap();
         assert_eq!(opcodes, Plus(
             Box::new(Divide(
-                Box::new(Literal(Number(Float64Value(4.0)))),
-                Box::new(Literal(Number(Float64Value(3.0)))),
+                Box::new(Literal(Number(F64Value(4.0)))),
+                Box::new(Literal(Number(F64Value(3.0)))),
             )),
             Box::new(Multiply(
-                Box::new(Literal(Number(Int64Value(4)))),
-                Box::new(Literal(Number(Int64Value(3)))),
+                Box::new(Literal(Number(I64Value(4)))),
+                Box::new(Literal(Number(I64Value(3)))),
             )),
         ));
     }
@@ -1529,10 +1548,10 @@ mod tests {
     fn test_order_of_operations_3() {
         let opcodes = Compiler::compile_script("2 - 4 * 3").unwrap();
         assert_eq!(opcodes, Minus(
-            Box::new(Literal(Number(Float64Value(2.)))),
+            Box::new(Literal(Number(F64Value(2.)))),
             Box::new(Multiply(
-                Box::new(Literal(Number(Float64Value(4.)))),
-                Box::new(Literal(Number(Float64Value(3.)))),
+                Box::new(Literal(Number(F64Value(4.)))),
+                Box::new(Literal(Number(F64Value(3.)))),
             )),
         ));
     }
@@ -1562,10 +1581,10 @@ mod tests {
             condition: Some(
                 Box::new(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Number(Float64Value(1.0)))),
+                    Box::new(Literal(Number(F64Value(1.0)))),
                 ))
             ),
-            limit: Some(Box::new(Literal(Number(Int64Value(100))))),
+            limit: Some(Box::new(Literal(Number(I64Value(100))))),
         }))
     }
 
@@ -1711,10 +1730,10 @@ mod tests {
             condition: Some(
                 Box::new(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Number(Float64Value(1.0)))),
+                    Box::new(Literal(Number(F64Value(1.0)))),
                 ))
             ),
-            limit: Some(Box::new(Literal(Number(Int64Value(100))))),
+            limit: Some(Box::new(Literal(Number(I64Value(100))))),
         }))
     }
 
@@ -1736,10 +1755,10 @@ mod tests {
                                from: Box::new(From(Box::new(Variable("stocks".into())))),
                                condition: Box::new(GreaterOrEqual(
                                    Box::new(Variable("last_sale".into())),
-                                   Box::new(Literal(Number(Float64Value(1.0)))),
+                                   Box::new(Literal(Number(F64Value(1.0)))),
                                )),
                            })),
-                       limit: Box::new(Literal(Number(Int64Value(20)))),
+                       limit: Box::new(Literal(Number(I64Value(20)))),
                    })
         );
     }
@@ -1758,17 +1777,17 @@ mod tests {
                            JSONLiteral(vec![
                                ("symbol".into(), Literal(StringValue("ABC".into()))),
                                ("exchange".into(), Literal(StringValue("AMEX".into()))),
-                               ("last_sale".into(), Literal(Number(Float64Value(12.49)))),
+                               ("last_sale".into(), Literal(Number(F64Value(12.49)))),
                            ]),
                            JSONLiteral(vec![
                                ("symbol".into(), Literal(StringValue("BOOM".into()))),
                                ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                               ("last_sale".into(), Literal(Number(Float64Value(56.88)))),
+                               ("last_sale".into(), Literal(Number(F64Value(56.88)))),
                            ]),
                            JSONLiteral(vec![
                                ("symbol".into(), Literal(StringValue("JET".into()))),
                                ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
-                               ("last_sale".into(), Literal(Number(Float64Value(32.12)))),
+                               ("last_sale".into(), Literal(Number(F64Value(32.12)))),
                            ]),
                        ])),
                        Box::new(Ns(Box::new(Literal(StringValue("interpreter.into.stocks".into()))))),
@@ -1798,7 +1817,7 @@ mod tests {
             source: Box::new(From(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("ABC".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                ("last_sale".into(), Literal(Number(Float64Value(0.1008)))),
+                ("last_sale".into(), Literal(Number(F64Value(0.1008)))),
             ])))),
         }))
     }
@@ -1820,17 +1839,17 @@ mod tests {
                     JSONLiteral(vec![
                         ("symbol".into(), Literal(StringValue("ABC".into()))),
                         ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                        ("last_sale".into(), Literal(Number(Float64Value(11.1234)))),
+                        ("last_sale".into(), Literal(Number(F64Value(11.1234)))),
                     ]),
                     JSONLiteral(vec![
                         ("symbol".into(), Literal(StringValue("DOG".into()))),
                         ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
-                        ("last_sale".into(), Literal(Number(Float64Value(0.1008)))),
+                        ("last_sale".into(), Literal(Number(F64Value(0.1008)))),
                     ]),
                     JSONLiteral(vec![
                         ("symbol".into(), Literal(StringValue("SHARK".into()))),
                         ("exchange".into(), Literal(StringValue("AMEX".into()))),
-                        ("last_sale".into(), Literal(Number(Float64Value(52.08)))),
+                        ("last_sale".into(), Literal(Number(F64Value(52.08)))),
                     ]),
                 ]))
             )),
@@ -1858,14 +1877,14 @@ mod tests {
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("ABC".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                ("last_sale".into(), Literal(Number(Float64Value(0.2308)))),
+                ("last_sale".into(), Literal(Number(F64Value(0.2308)))),
             ])))),
             condition: Some(
                 Box::new(Equal(
                     Box::new(Variable("symbol".into())),
                     Box::new(Literal(StringValue("ABCQ".into()))),
                 ))),
-            limit: Some(Box::new(Literal(Number(Int64Value(5))))),
+            limit: Some(Box::new(Literal(Number(I64Value(5))))),
         }))
     }
 
@@ -1906,7 +1925,7 @@ mod tests {
                 condition: Some(
                     Box::new(GreaterOrEqual(
                         Box::new(Variable("last_sale".into())),
-                        Box::new(Literal(Number(Float64Value(1.0)))),
+                        Box::new(Literal(Number(F64Value(1.0)))),
                     ))
                 ),
                 group_by: None,
@@ -1929,13 +1948,13 @@ mod tests {
             condition: Some(
                 Box::new(LessOrEqual(
                     Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Number(Float64Value(1.0)))),
+                    Box::new(Literal(Number(F64Value(1.0)))),
                 ))
             ),
             group_by: None,
             having: None,
             order_by: None,
-            limit: Some(Box::new(Literal(Number(Int64Value(5))))),
+            limit: Some(Box::new(Literal(Number(I64Value(5))))),
         }))
     }
 
@@ -1953,13 +1972,13 @@ mod tests {
             condition: Some(
                 Box::new(LessThan(
                     Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Number(Float64Value(1.0)))),
+                    Box::new(Literal(Number(F64Value(1.0)))),
                 ))
             ),
             group_by: None,
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
-            limit: Some(Box::new(Literal(Number(Int64Value(5))))),
+            limit: Some(Box::new(Literal(Number(I64Value(5))))),
         }))
     }
 
@@ -2005,7 +2024,7 @@ mod tests {
         assert_eq!(opcodes, Mutate(Mutation::Update {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
-                ("last_sale".into(), Literal(Number(Float64Value(0.1111)))),
+                ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
             ])))),
             condition: Some(
                 Box::new(Equal(
@@ -2013,7 +2032,7 @@ mod tests {
                     Box::new(Literal(StringValue("ABC".into()))),
                 ))
             ),
-            limit: Some(Box::new(Literal(Number(Int64Value(10))))),
+            limit: Some(Box::new(Literal(Number(I64Value(10))))),
         }))
     }
 
@@ -2025,11 +2044,11 @@ mod tests {
         assert_eq!(opcodes, While {
             condition: Box::new(LessThan(
                 Box::new(Variable("x".into())),
-                Box::new(Literal(Number(Int64Value(5)))),
+                Box::new(Literal(Number(I64Value(5)))),
             )),
             code: Box::new(SetVariable("x".into(), Box::new(Plus(
                 Box::new(Variable("x".into())),
-                Box::new(Literal(Number(Int64Value(1))))),
+                Box::new(Literal(Number(I64Value(1))))),
             ))),
         });
     }
@@ -2042,15 +2061,15 @@ mod tests {
             x
         "#).unwrap();
         assert_eq!(opcodes, CodeBlock(vec![
-            SetVariable("x".into(), Box::new(Literal(Number(Int64Value(0))))),
+            SetVariable("x".into(), Box::new(Literal(Number(I64Value(0))))),
             While {
                 condition: Box::new(LessThan(
                     Box::new(Variable("x".into())),
-                    Box::new(Literal(Number(Int64Value(7)))),
+                    Box::new(Literal(Number(I64Value(7)))),
                 )),
                 code: Box::new(SetVariable("x".into(), Box::new(Plus(
                     Box::new(Variable("x".into())),
-                    Box::new(Literal(Number(Int64Value(1))))),
+                    Box::new(Literal(Number(I64Value(1))))),
                 ))),
             },
             Variable("x".into()),

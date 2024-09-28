@@ -8,19 +8,21 @@ use serde::{Deserialize, Serialize};
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum BackDoorFunction {
-    Assert = 0,
-    Eval = 1,
-    Format = 2,
-    If = 3,
-    Matches = 4,
-    Reset = 5,
-    StdErr = 6,
-    StdOut = 7,
-    SysCall = 8,
-    ToCSV = 9,
-    ToJSON = 10,
-    TypeOf = 11,
-    Variables = 12,
+    BxAssert = 0,
+    BxEval = 1,
+    BxFormat = 2,
+    BxLeft = 3,
+    BxMatches = 4,
+    BxReset = 5,
+    BxRight = 6,
+    BxStdErr = 7,
+    BxStdOut = 8,
+    BxSubstring = 9,
+    BxSysCall = 10,
+    BxToCSV = 11,
+    BxToJSON = 12,
+    BxTypeOf = 13,
+    BxVariables = 14,
 }
 
 impl BackDoorFunction {
@@ -35,8 +37,9 @@ impl BackDoorFunction {
     pub fn values() -> Vec<BackDoorFunction> {
         use BackDoorFunction::*;
         vec![
-            Assert, Eval, Format, If, Matches, Reset, StdErr, StdOut, SysCall,
-            ToCSV, ToJSON, TypeOf, Variables,
+            BxAssert, BxEval, BxFormat, BxLeft, BxMatches, BxReset, BxRight,
+            BxStdErr, BxStdOut, BxSysCall, BxToCSV, BxToJSON,
+            BxSubstring, BxTypeOf, BxVariables,
         ]
     }
 }

@@ -23,9 +23,7 @@ impl Interpreter {
 
     /// Constructs a new Interpreter
     pub fn new() -> Self {
-        Interpreter {
-            machine: Machine::new()
-        }
+        Self { machine: Machine::new() }
     }
 
     ////////////////////////////////////////////////////////////////
@@ -62,52 +60,55 @@ impl Interpreter {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use std::convert::From;
+
     use regex::Regex;
     use serde_json::json;
 
     use shared_lib::{FieldJs, RowJs};
 
+    use crate::expression::Expression::*;
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::NumberValue::{Float64Value, Int64Value, UInt16Value};
+    use crate::numbers::NumberValue::{F64Value, I64Value, NaNValue, U16Value};
     use crate::row_collection::RowCollection;
     use crate::rows::Row;
+    use crate::server::ColumnJs;
     use crate::structure::Structure;
     use crate::table_columns::TableColumn;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_quote, make_quote_columns, make_scan_quote, make_table_columns};
+    use crate::testdata::*;
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::{Ack, Number};
+    use crate::typed_values::TypedValue::*;
 
     #[actix::test]
     async fn test_array_indexing() {
         let mut interpreter = Interpreter::new();
         assert_eq!(
             interpreter.evaluate("[0, 1, 3, 5][3]").unwrap(),
-            Number(Int64Value(5))
+            Number(I64Value(5))
         )
     }
 
     #[actix::test]
     async fn test_basic_state_retention() {
-        use TypedValue::*;
         let mut interpreter = Interpreter::new();
         assert_eq!(interpreter.evaluate("x := 5").unwrap(), Ack);
-        assert_eq!(interpreter.evaluate("$x").unwrap(), Number(Int64Value(5)));
-        assert_eq!(interpreter.evaluate("-x").unwrap(), Number(Int64Value(-5)));
-        assert_eq!(interpreter.evaluate("x¡").unwrap(), Number(Float64Value(120.)));
+        assert_eq!(interpreter.evaluate("$x").unwrap(), Number(I64Value(5)));
+        assert_eq!(interpreter.evaluate("-x").unwrap(), Number(I64Value(-5)));
+        assert_eq!(interpreter.evaluate("x¡").unwrap(), Number(F64Value(120.)));
         assert_eq!(interpreter.evaluate("x := x + 1").unwrap(), Ack);
-        assert_eq!(interpreter.evaluate("x").unwrap(), Number(Int64Value(6)));
+        assert_eq!(interpreter.evaluate("x").unwrap(), Number(I64Value(6)));
         assert_eq!(interpreter.evaluate("x < 7").unwrap(), Boolean(true));
         assert_eq!(interpreter.evaluate("x := x ** 2").unwrap(), Ack);
-        assert_eq!(interpreter.evaluate("x").unwrap(), Number(Float64Value(36.)));
-        //assert_eq!(interpreter.evaluate("x / 0").unwrap(), Number(Float64Value(9223372036854775807.)));
+        assert_eq!(interpreter.evaluate("x").unwrap(), Number(F64Value(36.)));
+        assert_eq!(interpreter.evaluate("x / 0").unwrap(), Number(NaNValue));
         assert_eq!(interpreter.evaluate("x := x - 1").unwrap(), Ack);
-        assert_eq!(interpreter.evaluate("x % 5").unwrap(), Number(Int64Value(0)));
+        assert_eq!(interpreter.evaluate("x % 5").unwrap(), Number(F64Value(0.)));
         assert_eq!(interpreter.evaluate("x < 35").unwrap(), Boolean(false));
         assert_eq!(interpreter.evaluate("x >= 35").unwrap(), Boolean(true));
         assert_eq!(interpreter.get_variables().iter()
-                       .filter(|r| r.get("kind") != StringValue("BackDoor".into()))
+                       .filter(|r| r.get(1) != StringValue("BackDoor".into()))
                        .map(|r| r.get_values().iter().map(|v| v.unwrap_value()).collect::<Vec<_>>())
                        .collect::<Vec<_>>(), vec![
             vec!["x".to_string(), "f64".to_string(), "35".to_string()],
@@ -134,9 +135,9 @@ mod tests {
 
         let rc = result.to_table().unwrap();
         assert_eq!(rc.read_active_rows().unwrap(), vec![
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
-            make_quote(5, &phys_columns, "BOOM", "NASDAQ", 0.0872),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(3, "GOTO", "OTC", 0.1428),
+            make_quote(5, "BOOM", "NASDAQ", 0.0872),
         ]);
 
         let result = interpreter.evaluate(r#"
@@ -145,11 +146,11 @@ mod tests {
         "#).unwrap();
         let rc = result.to_table().unwrap();
         let rows = rc.read_active_rows().unwrap();
-        for s in TableRenderer::from_rows(rows.to_owned()) { println!("{}", s); }
+        for s in TableRenderer::from_rows(rc.get_columns().clone(), rows.to_owned()) { println!("{}", s); }
         assert_eq!(rows, vec![
-            make_quote(0, &phys_columns, "BOOM", "NASDAQ", 0.0872),
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(2, &phys_columns, "GOTO", "OTC", 0.1428),
+            make_quote(0, "BOOM", "NASDAQ", 0.0872),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(2, "GOTO", "OTC", 0.1428),
         ]);
     }
 
@@ -157,15 +158,31 @@ mod tests {
     async fn test_create_structure_from_scratch() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            stock := struct(symbol: String(8), exchange: String(8), last_sale: f64)
-            stock
+            struct(symbol: String(8), exchange: String(8), last_sale: f64)
         "#).unwrap();
-        assert_eq!(result, TypedValue::StructureValue(Structure::from_logical_columns(&make_quote_columns()).unwrap()));
+        let phys_columns = make_table_columns();
+        assert_eq!(result, StructureValue(Structure::new(phys_columns.clone(), Vec::new())));
+
+        let result = interpreter.evaluate(r#"
+            struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+        "#).unwrap();
+        match result {
+            StructureValue(s) =>
+                assert_eq!(s.get_values(), vec![
+                    StringValue("ABC".into()),
+                    StringValue("NYSE".into()),
+                    Number(F64Value(23.67)),
+                ]),
+            x => assert_eq!(x, Undefined)
+        }
     }
 
     #[actix::test]
     async fn test_create_structure_from_table() {
-        use TypedValue::*;
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.struct.stocks")
@@ -177,18 +194,17 @@ mod tests {
                  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
             stocks[0]
         "#).unwrap();
-        assert_eq!(result, StructureValue(Structure::from_logical_columns_and_values(
+        assert_eq!(result, StructureValue(Structure::from_columns_and_values(
             &make_quote_columns(), vec![
                 StringValue("ABC".to_string()),
                 StringValue("AMEX".to_string()),
-                Number(Float64Value(11.11)),
+                Number(F64Value(11.11)),
             ],
         ).unwrap()));
     }
 
     #[actix::test]
     async fn test_feature_with_scenarios() {
-        use TypedValue::*;
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             feature "Matches function" {
@@ -210,46 +226,58 @@ mod tests {
                 }
             } "#).unwrap();
         let table = result.to_table().unwrap();
+        let phys_columns = table.get_columns().clone();
         let rows = table.read_active_rows().unwrap();
-        for s in TableRenderer::from_rows(rows.to_owned()) {
+        for s in TableRenderer::from_rows(phys_columns, rows.to_owned()) {
             println!("{}", s)
         }
+        // |---------------------------------------------------------------------------------------------------------------------|
+        // | level | item                                                                                      | passed | result |
+        // |---------------------------------------------------------------------------------------------------------------------|
+        // | 0     | Matches function                                                                          | true   | ack    |
+        // | 1     | Compare Array contents                                                                    | true   | ack    |
+        // | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |
+        // | 1     | Compare JSON contents (in sequence)                                                       | true   | ack    |
+        // | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |
+        // | 1     | Compare JSON contents (out of sequence)                                                   | true   | ack    |
+        // | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |
+        // |---------------------------------------------------------------------------------------------------------------------|
         let dump = rows.iter()
             .map(|row| row.get_values())
             .collect::<Vec<_>>();
         assert_eq!(dump, vec![
             vec![
-                Number(UInt16Value(0)),
+                Number(U16Value(0)),
                 StringValue("Matches function".into()),
                 Boolean(true),
                 Ack],
             vec![
-                Number(UInt16Value(1)),
+                Number(U16Value(1)),
                 StringValue("Compare Array contents".into()),
                 Boolean(true),
                 Ack],
             vec![
-                Number(UInt16Value(2)),
+                Number(U16Value(2)),
                 StringValue(r#"assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))"#.into()),
                 Boolean(true),
                 Boolean(true)],
             vec![
-                Number(UInt16Value(1)),
+                Number(U16Value(1)),
                 StringValue("Compare JSON contents (in sequence)".into()),
                 Boolean(true),
                 Ack],
             vec![
-                Number(UInt16Value(2)),
+                Number(U16Value(2)),
                 StringValue(r#"assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))"#.into()),
                 Boolean(true),
                 Boolean(true)],
             vec![
-                Number(UInt16Value(1)),
+                Number(U16Value(1)),
                 StringValue("Compare JSON contents (out of sequence)".into()),
                 Boolean(true),
                 Ack],
             vec![
-                Number(UInt16Value(2)),
+                Number(U16Value(2)),
                 StringValue(r#"assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]}))"#.into()),
                 Boolean(true),
                 Boolean(true)],
@@ -258,7 +286,6 @@ mod tests {
 
     #[actix::test]
     async fn test_describe_table_structure() {
-        use TypedValue::*;
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.struct.stocks")
@@ -277,21 +304,21 @@ mod tests {
         let mrc = result.to_table().unwrap();
         let mrc_rows = mrc.read_active_rows().unwrap();
         let mrc_columns = mrc.get_columns();
-        for s in TableRenderer::from_rows(mrc_rows.to_owned()) { println!("{}", s); }
+        for s in TableRenderer::from_rows(mrc_columns.clone(), mrc_rows.to_owned()) { println!("{}", s); }
         assert_eq!(mrc_rows, vec![
-            Row::new(0, mrc_columns.to_owned(), vec![
+            Row::new(0, vec![
                 StringValue("symbol".to_string()),
                 StringValue("String(8)".to_string()),
                 StringValue("null".to_string()),
                 Boolean(true),
             ]),
-            Row::new(1, mrc_columns.to_owned(), vec![
+            Row::new(1, vec![
                 StringValue("exchange".to_string()),
                 StringValue("String(8)".to_string()),
                 StringValue("null".to_string()),
                 Boolean(true),
             ]),
-            Row::new(2, mrc_columns.to_owned(), vec![
+            Row::new(2, vec![
                 StringValue("last_sale".to_string()),
                 StringValue("f64".to_string()),
                 StringValue("null".to_string()),
@@ -302,7 +329,7 @@ mod tests {
 
     #[actix::test]
     async fn test_directive_must_be_true() {
-        verify_results("[+] x := 67", TypedValue::Ack);
+        verify_results("[+] x := 67", Ack);
     }
 
     #[actix::test]
@@ -310,46 +337,89 @@ mod tests {
         verify_results(r#"
             [+] x := 67
             [-] x < 67
-        "#, TypedValue::Boolean(false));
+        "#, Boolean(false));
     }
 
     #[actix::test]
     async fn test_directive_die() {
         verify_results(r#"
             [!] "Kaboom!!!"
-        "#, TypedValue::ErrorValue("Kaboom!!!".to_string()));
+        "#, ErrorValue("Kaboom!!!".to_string()));
     }
 
     #[actix::test]
-    async fn test_eval_valid() {
-        verify_results(r#"
-            eval("2 ** 4")
-        "#, Number(Float64Value(16.)))
-    }
-
-    #[actix::test]
-    async fn test_eval_invalid() {
+    async fn test_eval() {
         let mut interpreter = Interpreter::new();
+
+        // valid case
         let value = interpreter.evaluate(r#"
-            eval(123)
+            eval("2 ** 4")
         "#).unwrap();
-        assert_eq!(value, TypedValue::ErrorValue("Type mismatch - expected String, got i64".into()))
+        assert_eq!(value, Number(F64Value(16.)));
+
+        // invalid case
+        let value = interpreter.evaluate("eval(123)").unwrap();
+        assert_eq!(value, ErrorValue("Type mismatch - expected String, got i64".into()))
     }
 
     #[actix::test]
     async fn test_format_string() {
         verify_results(r#"
             format("This {} the {}", "is", "way")
-        "#, TypedValue::StringValue("This is the way".to_string()));
+        "#, StringValue("This is the way".to_string()));
     }
 
-    #[ignore]
     #[test]
     fn test_function_recursion() {
-        verify_results(r#"
-            f := fn(n) => iff(n <= 1, 1, f(n - 1))
-            f(5)
-        "#, Number(Int64Value(120)));
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            f := fn(n: i64) => if(n <= 1) 1 else n * f(n - 1)
+            f
+        "#).unwrap();
+        println!("f := {}", result.to_code());
+
+        let model = Function {
+            params: vec![
+                ColumnJs::new("n", "i64", None)
+            ],
+            // iff(n <= 1, 1, n * f(n - 1))
+            code: Box::new(If {
+                // n <= 1
+                condition: Box::new(LessOrEqual(
+                    Box::from(Variable("n".into())),
+                    Box::from(Literal(Number(I64Value(1)))),
+                )),
+                // 1
+                a: Box::new(Literal(Number(I64Value(1)))),
+                // n * f(n - 1)
+                b: Some(Box::from(Multiply(
+                    Box::from(Variable("n".into())),
+                    Box::from(FunctionCall {
+                        fx: Box::new(Variable("f".into())),
+                        args: vec![
+                            Minus(
+                                Box::from(Variable("n".into())),
+                                Box::from(Literal(Number(I64Value(1)))),
+                            ),
+                        ],
+                    }),
+                ))),
+            }),
+        };
+        assert_eq!(result, model);
+
+        let result = interpreter.evaluate("f(5)").unwrap();
+        assert_eq!(result, Number(I64Value(120)))
+    }
+
+    #[test]
+    fn test_function_recursion_via_iff() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            f := fn(n) => iff(n <= 1, 1, n * f(n - 1))
+            f(6)
+        "#).unwrap();
+        assert_eq!(result, Number(I64Value(720)))
     }
 
     #[actix::test]
@@ -361,7 +431,7 @@ mod tests {
         let result = interpreter.evaluate_async(r#"
             SERVE 8833
         "#).await.unwrap();
-        println!("SERVE 8833 -> {:?}", result);
+        println!("SERVE 8833 -> {}", result.unwrap_value());
         assert_eq!(result, Ack);
 
         // create the table
@@ -382,14 +452,14 @@ mod tests {
                     { name: "last_sale", value: 11.77 }
                 ]
             }"#).await.unwrap();
-        println!("POST -> {} | {:?}", row_id.unwrap_value(), row_id);
+        println!("POST -> {}", row_id.unwrap_value());
         assert!(number_regex.is_match(row_id.unwrap_value().as_str()));
 
         // fetch the previously created row
         let row = interpreter.evaluate_async(format!(r#"
             GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
-        println!("GET {:?}", row);
+        println!("GET -> {}", row.unwrap_value());
         let row_js: RowJs = serde_json::from_str(row.unwrap_value().as_str()).unwrap();
         assert_eq!(
             row_js,
@@ -411,14 +481,14 @@ mod tests {
             }"#
             .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
             .as_str()).await.unwrap();
-        println!("PUT {} | {:?}", result.unwrap_value(), result);
+        println!("PUT -> {}", result.unwrap_value());
         assert!(number_regex.is_match(row_id.unwrap_value().as_str()));
 
         // re-fetch the previously updated row
         let row = interpreter.evaluate_async(format!(r#"
             GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
-        println!("GET {:?}", row);
+        println!("GET -> {}", row.unwrap_value());
         let row_js: RowJs = serde_json::from_str(row.unwrap_value().as_str()).unwrap();
         assert_eq!(
             row_js,
@@ -438,14 +508,14 @@ mod tests {
             }"#
             .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
             .as_str()).await.unwrap();
-        println!("PATCH {:?}", result);
+        println!("PATCH -> {}", result.unwrap_value());
         assert!(number_regex.is_match(row_id.unwrap_value().as_str()));
 
         // re-fetch the previously updated row
         let row = interpreter.evaluate_async(format!(r#"
             GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
-        println!("GET {:?}", row);
+        println!("GET -> {}", row.unwrap_value());
         let row_js: RowJs = serde_json::from_str(row.unwrap_value().as_str()).unwrap();
         assert_eq!(
             row_js,
@@ -460,13 +530,13 @@ mod tests {
         let result = interpreter.evaluate_async(format!(r#"
             HEAD "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
-        println!("HEAD {:?}", result);
+        println!("HEAD -> {}", result.unwrap_value());
 
         // delete the previously updated row
         let result = interpreter.evaluate_async(format!(r#"
             DELETE "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
-        println!("DELETE {:?}", result);
+        println!("DELETE -> {}", result.unwrap_value());
         assert_eq!(result.unwrap_value().as_str(), r#"1"#);
 
         // verify the deleted row is empty
@@ -474,7 +544,7 @@ mod tests {
             GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
         "#).as_str()).await.unwrap();
         assert_eq!(row.unwrap_value().as_str(), r#"{}"#);
-        println!("GET {:?}", row);
+        println!("GET -> {}", row.unwrap_value());
     }
 
     #[actix::test]
@@ -484,7 +554,7 @@ mod tests {
             x := 7
             if(x > 5) "Yes"
         "#).unwrap();
-        assert_eq!(value, TypedValue::StringValue("Yes".to_string()));
+        assert_eq!(value, StringValue("Yes".to_string()));
     }
 
     #[actix::test]
@@ -494,7 +564,7 @@ mod tests {
             x := 4
             if(x > 5) "Yes"
         "#).unwrap();
-        assert_eq!(value, TypedValue::Undefined);
+        assert_eq!(value, Undefined);
     }
 
     #[actix::test]
@@ -506,7 +576,7 @@ mod tests {
             else if(x < 5) "Maybe"
             else "No"
         "#).unwrap();
-        assert_eq!(value, TypedValue::StringValue("Maybe".to_string()));
+        assert_eq!(value, StringValue("Maybe".to_string()));
     }
 
     #[actix::test]
@@ -514,35 +584,31 @@ mod tests {
         verify_results(r#"
             x := 4
             iff(x > 5, "Yes", iff(x < 5, "Maybe", "No"))
-        "#, TypedValue::StringValue("Maybe".to_string()));
+        "#, StringValue("Maybe".to_string()));
     }
 
     #[actix::test]
     async fn test_include_file_valid() {
         let phys_columns = make_table_columns();
         verify_results(r#"
-            include "./demoes/language/include_file.ox"
-        "#, TypedValue::TableValue(ModelRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 12.49),
-            make_quote(1, &phys_columns, "BOOM", "NYSE", 56.88),
-            make_quote(2, &phys_columns, "JET", "NASDAQ", 32.12),
+            include "./demoes/language/include_file.oxide"
+        "#, TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(0, "ABC", "AMEX", 12.49),
+            make_quote(1, "BOOM", "NYSE", 56.88),
+            make_quote(2, "JET", "NASDAQ", 32.12),
         ])));
-    }
 
-    #[actix::test]
-    async fn test_include_file_invalid() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             include 123
         "#).unwrap();
         assert_eq!(
-            result, TypedValue::ErrorValue("Type mismatch - expected String, got i64".to_string())
+            result, ErrorValue("Type mismatch - expected String, got i64".to_string())
         )
     }
 
     #[actix::test]
     async fn test_json_literal() {
-        use TypedValue::*;
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             {
@@ -589,7 +655,7 @@ mod tests {
     async fn test_a_matches_b_1() {
         // test a perfect match
         let mut interpreter = Interpreter::new();
-        assert_eq!(TypedValue::Boolean(true), interpreter.evaluate(r#"
+        assert_eq!(Boolean(true), interpreter.evaluate(r#"
             a := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
             b := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
             matches(a, b)
@@ -600,7 +666,7 @@ mod tests {
     async fn test_a_matches_b_2() {
         // test an unordered match
         let mut interpreter = Interpreter::new();
-        assert_eq!(TypedValue::Boolean(true), interpreter.evaluate(r#"
+        assert_eq!(Boolean(true), interpreter.evaluate(r#"
             a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
             b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
             matches(a, b)
@@ -611,7 +677,7 @@ mod tests {
     async fn test_a_does_not_match_b_1() {
         // test when things do not match 1
         let mut interpreter = Interpreter::new();
-        assert_eq!(TypedValue::Boolean(false), interpreter.evaluate(r#"
+        assert_eq!(Boolean(false), interpreter.evaluate(r#"
             a := { first: "Tom", last: "Lane" }
             b := { first: "Jerry", last: "Lane" }
             matches(a, b)
@@ -622,7 +688,7 @@ mod tests {
     async fn test_a_does_not_match_b_2() {
         // test when things do not match 2
         let mut interpreter = Interpreter::new();
-        assert_eq!(TypedValue::Boolean(false), interpreter.evaluate(r#"
+        assert_eq!(Boolean(false), interpreter.evaluate(r#"
             a := { key: "123", values: [1, 74, 88] }
             b := { key: "123", values: [1, 74, 88, 0] }
             matches(a, b)
@@ -631,26 +697,24 @@ mod tests {
 
     #[actix::test]
     async fn test_lambda_functions() {
-        use TypedValue::*;
         let mut interpreter = Interpreter::new();
         assert_eq!(Ack, interpreter.evaluate(r#"
             product := fn (a, b) => a * b
         "#).unwrap());
 
-        assert_eq!(Number(Int64Value(10)), interpreter.evaluate(r#"
+        assert_eq!(Number(I64Value(10)), interpreter.evaluate(r#"
             product(2, 5)
         "#).unwrap())
     }
 
     #[actix::test]
     async fn test_named_functions() {
-        use TypedValue::*;
         let mut interpreter = Interpreter::new();
         assert_eq!(Ack, interpreter.evaluate(r#"
             fn product(a, b) => a * b
         "#).unwrap());
 
-        assert_eq!(Number(Int64Value(10)), interpreter.evaluate(r#"
+        assert_eq!(Number(I64Value(10)), interpreter.evaluate(r#"
             product(2, 5)
         "#).unwrap())
     }
@@ -662,7 +726,7 @@ mod tests {
             symbol: String(8),
             exchange: String(8),
             last_sale: f64
-        )"#, TypedValue::TableValue(ModelRowCollection::with_rows(
+        )"#, TableValue(ModelRowCollection::with_rows(
             make_table_columns(), Vec::new(),
         )))
     }
@@ -676,7 +740,7 @@ mod tests {
                 exchange: String(8),
                 last_sale: f64
             )"#).unwrap();
-        assert_eq!(result, TypedValue::Ack)
+        assert_eq!(result, Ack)
     }
 
     #[actix::test]
@@ -686,33 +750,33 @@ mod tests {
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
 
         // set up the interpreter
-        assert_eq!(TypedValue::Ack, interpreter.evaluate(r#"
+        assert_eq!(Ack, interpreter.evaluate(r#"
             stocks := ns("interpreter.crud.stocks")
         "#).unwrap());
 
         // create the table
-        assert_eq!(TypedValue::RowsAffected(0), interpreter.evaluate(r#"
+        assert_eq!(RowsAffected(0), interpreter.evaluate(r#"
             table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
         "#).unwrap());
 
         // append a row
-        assert_eq!(TypedValue::RowsAffected(1), interpreter.evaluate(r#"
+        assert_eq!(RowsAffected(1), interpreter.evaluate(r#"
             append stocks from { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
         "#).unwrap());
 
         // write another row
-        assert_eq!(TypedValue::RowsAffected(1), interpreter.evaluate(r#"
+        assert_eq!(RowsAffected(1), interpreter.evaluate(r#"
             { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 } ~> stocks
         "#).unwrap());
 
         // write some more rows
-        assert_eq!(TypedValue::RowsAffected(2), interpreter.evaluate(r#"
+        assert_eq!(RowsAffected(2), interpreter.evaluate(r#"
             [{ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
              { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 }] ~> stocks
         "#).unwrap());
 
         // write even more rows
-        assert_eq!(TypedValue::RowsAffected(2), interpreter.evaluate(r#"
+        assert_eq!(RowsAffected(2), interpreter.evaluate(r#"
             append stocks from [
                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 56.87 },
                 { symbol: "TRX", exchange: "NASDAQ", last_sale: 7.9311 }
@@ -720,12 +784,12 @@ mod tests {
         "#).unwrap());
 
         // remove some rows
-        assert_eq!(TypedValue::RowsAffected(4), interpreter.evaluate(r#"
+        assert_eq!(RowsAffected(4), interpreter.evaluate(r#"
             delete from stocks where last_sale > 1.0
         "#).unwrap());
 
         // overwrite a row
-        assert_eq!(TypedValue::RowsAffected(1), interpreter.evaluate(r#"
+        assert_eq!(RowsAffected(1), interpreter.evaluate(r#"
             overwrite stocks
             via {symbol: "GOTO", exchange: "OTC", last_sale: 0.1421}
             where symbol == "GOTO"
@@ -734,27 +798,27 @@ mod tests {
         // verify the remaining rows
         assert_eq!(
             interpreter.evaluate("from stocks").unwrap(),
-            TypedValue::TableValue(ModelRowCollection::from_rows(vec![
-                make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1421),
+            TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(3, "GOTO", "OTC", 0.1421),
             ]))
         );
 
         // restore the previously deleted rows
-        assert_eq!(TypedValue::RowsAffected(4), interpreter.evaluate(r#"
+        assert_eq!(RowsAffected(4), interpreter.evaluate(r#"
             undelete from stocks where last_sale > 1.0
         "#).unwrap());
 
         // verify the existing rows
         assert_eq!(
             interpreter.evaluate("from stocks").unwrap(),
-            TypedValue::TableValue(ModelRowCollection::from_rows(vec![
-                make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
-                make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-                make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
-                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1421),
-                make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
-                make_quote(5, &phys_columns, "TRX", "NASDAQ", 7.9311),
+            TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC", 0.1421),
+                make_quote(4, "BOOM", "NASDAQ", 56.87),
+                make_quote(5, "TRX", "NASDAQ", 7.9311),
             ]))
         );
     }
@@ -786,13 +850,13 @@ mod tests {
         let mrc = result.to_table().unwrap();
         let mrc_rows = mrc.read_active_rows().unwrap();
         let scan_columns = mrc.get_columns();
-        for s in TableRenderer::from_rows(mrc_rows.to_owned()) { println!("{}", s); }
+        for s in TableRenderer::from_rows(scan_columns.clone(), mrc_rows.to_owned()) { println!("{}", s); }
         assert_eq!(mrc_rows, vec![
-            make_scan_quote(0, scan_columns, "ABC", "AMEX", 12.33, false),
-            make_scan_quote(1, scan_columns, "UNO", "OTC", 0.2456, true),
-            make_scan_quote(2, scan_columns, "BIZ", "NYSE", 9.775, false),
-            make_scan_quote(3, scan_columns, "GOTO", "OTC", 0.1442, true),
-            make_scan_quote(4, scan_columns, "XYZ", "NYSE", 0.0289, true),
+            make_scan_quote(0, "ABC", "AMEX", 12.33, false),
+            make_scan_quote(1, "UNO", "OTC", 0.2456, true),
+            make_scan_quote(2, "BIZ", "NYSE", 9.775, false),
+            make_scan_quote(3, "GOTO", "OTC", 0.1442, true),
+            make_scan_quote(4, "XYZ", "NYSE", 0.0289, true),
         ])
     }
 
@@ -804,7 +868,7 @@ mod tests {
 
         // append some rows
         let mut interpreter = Interpreter::new();
-        assert_eq!(TypedValue::RowsAffected(5), interpreter.evaluate(r#"
+        assert_eq!(RowsAffected(5), interpreter.evaluate(r#"
             stocks := ns("interpreter.select1.stocks")
             table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             append stocks from [
@@ -822,9 +886,9 @@ mod tests {
             where last_sale > 1.0
             order by symbol
             limit 5
-        "#).unwrap(), TypedValue::TableValue(ModelRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+        "#).unwrap(), TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(0, "ABC", "AMEX", 11.77),
+            make_quote(2, "BIZ", "NYSE", 23.66),
         ])));
     }
 
@@ -849,9 +913,9 @@ mod tests {
                 where last_sale > 1.0
                 order by symbol
                 limit 5
-        "#).unwrap(), TypedValue::TableValue(ModelRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+        "#).unwrap(), TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(0, "ABC", "AMEX", 11.77),
+            make_quote(2, "BIZ", "NYSE", 23.66),
         ])));
     }
 
@@ -867,10 +931,10 @@ mod tests {
             [+] reverse from stocks
         "#).unwrap();
         let phys_columns = make_table_columns();
-        assert_eq!(result, TypedValue::TableValue(ModelRowCollection::from_rows(vec![
-            make_quote(2, &phys_columns, "JET", "NASDAQ", 32.12),
-            make_quote(1, &phys_columns, "BOOM", "NYSE", 56.88),
-            make_quote(0, &phys_columns, "ABC", "AMEX", 12.49),
+        assert_eq!(result, TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(2, "JET", "NASDAQ", 32.12),
+            make_quote(1, "BOOM", "NYSE", 56.88),
+            make_quote(0, "ABC", "AMEX", 12.49),
         ])));
     }
 
@@ -878,24 +942,24 @@ mod tests {
     async fn test_reverse_from_variable() {
         let phys_columns = make_table_columns();
         let mut interpreter = Interpreter::new();
-        interpreter.with_variable("stocks", TypedValue::TableValue(
-            ModelRowCollection::from_rows(vec![
-                make_quote(0, &phys_columns, "ABC", "AMEX", 11.88),
-                make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-                make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
-                make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
-                make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
+        interpreter.with_variable("stocks", TableValue(
+            ModelRowCollection::from_rows(phys_columns.clone(), vec![
+                make_quote(0, "ABC", "AMEX", 11.88),
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC", 0.1428),
+                make_quote(4, "BOOM", "NASDAQ", 56.87),
             ])));
 
         let result = interpreter.evaluate(r#"
             reverse from stocks
         "#).unwrap();
-        assert_eq!(result, TypedValue::TableValue(ModelRowCollection::from_rows(vec![
-            make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
-            make_quote(1, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(0, &phys_columns, "ABC", "AMEX", 11.88),
+        assert_eq!(result, TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(4, "BOOM", "NASDAQ", 56.87),
+            make_quote(3, "GOTO", "OTC", 0.1428),
+            make_quote(2, "BIZ", "NYSE", 23.66),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(0, "ABC", "AMEX", 11.88),
         ])));
     }
 
@@ -912,15 +976,14 @@ mod tests {
             [+] from stocks
         "#).unwrap();
         let phys_columns = make_table_columns();
-        assert_eq!(result, TypedValue::TableValue(ModelRowCollection::from_rows(vec![
-            make_quote(1, &phys_columns, "BOOM", "NYSE", 56.88),
-            make_quote(2, &phys_columns, "JET", "NASDAQ", 32.12),
+        assert_eq!(result, TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(1, "BOOM", "NYSE", 56.88),
+            make_quote(2, "JET", "NASDAQ", 32.12),
         ])));
     }
 
     #[actix::test]
     async fn test_to_csv() {
-        use TypedValue::*;
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.csv.stocks")
@@ -932,7 +995,7 @@ mod tests {
                  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
             to_csv(from stocks)
         "#).unwrap();
-        assert_eq!(result, TypedValue::Array(vec![
+        assert_eq!(result, Array(vec![
             StringValue(r#""ABC","AMEX",11.11"#.to_string()),
             StringValue(r#""UNO","OTC",0.2456"#.to_string()),
             StringValue(r#""BIZ","NYSE",23.66"#.to_string()),
@@ -941,9 +1004,71 @@ mod tests {
         ]));
     }
 
-    #[actix::test]
-    async fn test_to_json() {
-        use TypedValue::*;
+    #[test]
+    fn test_string_left() {
+        let mut interpreter = Interpreter::new();
+
+        // test valid case 1 (positive)
+        let result = interpreter.evaluate(r#"
+            left('Hello World', 5)
+        "#).unwrap();
+        assert_eq!(result, StringValue("Hello".into()));
+
+        // test valid case 2 (negative)
+        let result = interpreter.evaluate(r#"
+            left('Hello World', -5)
+        "#).unwrap();
+        assert_eq!(result, StringValue("World".into()));
+
+        // test the invalid case
+        let result = interpreter.evaluate(r#"
+            left(12345, 5)
+        "#).unwrap();
+        assert_eq!(result, Undefined)
+    }
+
+    #[test]
+    fn test_string_right() {
+        let mut interpreter = Interpreter::new();
+
+        // test valid case 1 (positive)
+        let result = interpreter.evaluate(r#"
+            right('Hello World', 5)
+        "#).unwrap();
+        assert_eq!(result, StringValue("World".into()));
+
+        // test valid case 2 (negative)
+        let result = interpreter.evaluate(r#"
+            right('Hello World', -5)
+        "#).unwrap();
+        assert_eq!(result, StringValue("Hello".into()));
+
+        // test the invalid case
+        let result = interpreter.evaluate(r#"
+            right(7779311, 5)
+        "#).unwrap();
+        assert_eq!(result, Undefined)
+    }
+
+    #[test]
+    fn test_substring() {
+        let mut interpreter = Interpreter::new();
+
+        // test the valid case
+        let result = interpreter.evaluate(r#"
+            substring('Hello World', 0, 5)
+        "#).unwrap();
+        assert_eq!(result, StringValue("Hello".into()));
+
+        // test the invalid case
+        let result = interpreter.evaluate(r#"
+            substring(8888, 0, 5)
+        "#).unwrap();
+        assert_eq!(result, Undefined)
+    }
+
+    #[test]
+    fn test_to_json() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             [+] stocks := ns("interpreter.json.stocks")
@@ -955,7 +1080,7 @@ mod tests {
                  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
             to_json(from stocks)
         "#).unwrap();
-        assert_eq!(result, TypedValue::Array(vec![
+        assert_eq!(result, Array(vec![
             StringValue(r#"{"symbol":"ABC","exchange":"AMEX","last_sale":11.11}"#.to_string()),
             StringValue(r#"{"symbol":"UNO","exchange":"OTC","last_sale":0.2456}"#.to_string()),
             StringValue(r#"{"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}"#.to_string()),
@@ -966,7 +1091,6 @@ mod tests {
 
     #[actix::test]
     async fn test_type_of() {
-        use TypedValue::*;
         verify_results(r#"type_of(1234)"#, StringValue("i64".to_string()));
         verify_results(r#"type_of('1234')"#, StringValue("String".to_string()));
         verify_results(r#"type_of("1234")"#, StringValue("String".to_string()));
@@ -976,26 +1100,25 @@ mod tests {
     async fn test_write_to_stderr() {
         verify_results(r#"
             stderr("Goodbye Cruel World")
-        "#, TypedValue::Ack);
+        "#, Ack);
     }
 
     #[actix::test]
     async fn test_write_to_stdout() {
         verify_results(r#"
             stdout("Hello World")
-        "#, TypedValue::Ack);
+        "#, Ack);
     }
 
     #[actix::test]
     async fn test_while_loop() {
-        use TypedValue::*;
         let mut interpreter = Interpreter::new();
         assert_eq!(Ack, interpreter.evaluate("x := 0").unwrap());
         assert_eq!(Ack, interpreter.evaluate(r#"
             while (x < 5)
                 x := x + 1
         "#).unwrap());
-        assert_eq!(Number(Int64Value(5)), interpreter.evaluate("x").unwrap());
+        assert_eq!(Number(I64Value(5)), interpreter.evaluate("x").unwrap());
     }
 
     fn verify_results(code: &str, expected: TypedValue) {

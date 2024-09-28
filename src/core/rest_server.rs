@@ -9,7 +9,6 @@ use actix_session::Session;
 use actix_web::{HttpRequest, HttpResponse, Responder, web};
 use actix_web_actors::ws;
 use log::{error, info};
-use serde_json::Value;
 
 use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse, RowJs};
 
@@ -108,7 +107,9 @@ pub async fn handle_index(_session: Session) -> impl Responder {
 
 /// handler function for deleting a configuration by namespace (database, schema, name)
 // ex: http://localhost:8080/dataframes/create/quotes
-pub async fn handle_config_delete(path: web::Path<(String, String, String)>) -> impl Responder {
+pub async fn handle_config_delete(
+    path: web::Path<(String, String, String)>
+) -> impl Responder {
     match DataFrameConfig::delete(&Namespace::new(&path.0, &path.1, &path.2)) {
         Ok(_) => HttpResponse::Ok().finish(),
         Err(err) => {
@@ -120,7 +121,9 @@ pub async fn handle_config_delete(path: web::Path<(String, String, String)>) -> 
 
 /// handler function for reading a configuration by namespace (database, schema, name)
 // ex: http://localhost:8080/dataframes/create/quotes
-pub async fn handle_config_get(path: web::Path<(String, String, String)>) -> impl Responder {
+pub async fn handle_config_get(
+    path: web::Path<(String, String, String)>
+) -> impl Responder {
     match DataFrameConfig::load(&Namespace::new(&path.0, &path.1, &path.2)) {
         Ok(cfg) => HttpResponse::Ok().json(cfg),
         Err(err) => {
@@ -132,9 +135,11 @@ pub async fn handle_config_get(path: web::Path<(String, String, String)>) -> imp
 
 /// handler function for creating a configuration by namespace (database, schema, name)
 // ex: http://localhost:8080/dataframes/create/quotes
-pub async fn handle_config_post(req: HttpRequest,
-                                data: web::Json<DataFrameConfig>,
-                                path: web::Path<(String, String, String)>) -> impl Responder {
+pub async fn handle_config_post(
+    req: HttpRequest,
+    data: web::Json<DataFrameConfig>,
+    path: web::Path<(String, String, String)>,
+) -> impl Responder {
     async fn intern(req: HttpRequest,
                     data: web::Json<DataFrameConfig>,
                     path: web::Path<(String, String, String)>) -> std::io::Result<usize> {
@@ -152,8 +157,10 @@ pub async fn handle_config_post(req: HttpRequest,
 
 /// handler function for deleting an existing row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
-pub async fn handle_row_delete(req: HttpRequest,
-                               path: web::Path<(String, String, String, usize)>) -> impl Responder {
+pub async fn handle_row_delete(
+    req: HttpRequest,
+    path: web::Path<(String, String, String, usize)>,
+) -> impl Responder {
     match delete_row_by_id(req, path).await {
         Ok(outcome) => HttpResponse::Ok().json(outcome),
         Err(err) => {
@@ -165,11 +172,13 @@ pub async fn handle_row_delete(req: HttpRequest,
 
 /// handler function for row by namespace (database, schema, name) and row ID
 // ex: http://localhost:8080/dataframes/create/quotes/0
-pub async fn handle_row_get(req: HttpRequest,
-                            path: web::Path<(String, String, String, usize)>) -> impl Responder {
+pub async fn handle_row_get(
+    req: HttpRequest,
+    path: web::Path<(String, String, String, usize)>,
+) -> impl Responder {
     match get_row_by_id(req, path).await {
-        Ok(Some(row)) => HttpResponse::Ok().json(row.to_row_js()),
-        Ok(None) => HttpResponse::Ok().json(serde_json::json!({})),
+        Ok((columns, Some(row))) => HttpResponse::Ok().json(row.to_row_js(&columns)),
+        Ok((_, None)) => HttpResponse::Ok().json(serde_json::json!({})),
         Err(err) => {
             error!("error {}", err.to_string());
             HttpResponse::InternalServerError().finish()
@@ -179,8 +188,10 @@ pub async fn handle_row_get(req: HttpRequest,
 
 /// handler function for row metadata by namespace (database, schema, name) and row ID
 // ex: http://localhost:8080/dataframes/create/quotes/0
-pub async fn handle_row_head(req: HttpRequest,
-                             path: web::Path<(String, String, String, usize)>) -> impl Responder {
+pub async fn handle_row_head(
+    req: HttpRequest,
+    path: web::Path<(String, String, String, usize)>,
+) -> impl Responder {
     match get_row_metadata_by_id(req, path).await {
         Ok(meta) => HttpResponse::Ok().json(meta),
         Err(err) => {
@@ -192,9 +203,11 @@ pub async fn handle_row_head(req: HttpRequest,
 
 /// handler function for appending a new row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
-pub async fn handle_row_post(req: HttpRequest,
-                             data: web::Json<RowJs>,
-                             path: web::Path<(String, String, String, usize)>) -> impl Responder {
+pub async fn handle_row_post(
+    req: HttpRequest,
+    data: web::Json<RowJs>,
+    path: web::Path<(String, String, String, usize)>,
+) -> impl Responder {
     match append_row(req, data, path).await {
         Ok(outcome) => HttpResponse::Ok().json(outcome),
         Err(err) => {
@@ -206,9 +219,11 @@ pub async fn handle_row_post(req: HttpRequest,
 
 /// handler function for replacing an existing row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
-pub async fn handle_row_put(req: HttpRequest,
-                            data: web::Json<RowJs>,
-                            path: web::Path<(String, String, String, usize)>) -> impl Responder {
+pub async fn handle_row_put(
+    req: HttpRequest,
+    data: web::Json<RowJs>,
+    path: web::Path<(String, String, String, usize)>,
+) -> impl Responder {
     match overwrite_row_by_id(req, data, path).await {
         Ok(outcome) => HttpResponse::Ok().json(outcome),
         Err(err) => {
@@ -220,9 +235,11 @@ pub async fn handle_row_put(req: HttpRequest,
 
 /// handler function for patching an existing row by namespace (database, schema, name) and offset
 // ex: http://localhost:8080/dataframes/create/quotes
-pub async fn handle_row_patch(req: HttpRequest,
-                              data: web::Json<RowJs>,
-                              path: web::Path<(String, String, String, usize)>) -> impl Responder {
+pub async fn handle_row_patch(
+    req: HttpRequest,
+    data: web::Json<RowJs>,
+    path: web::Path<(String, String, String, usize)>,
+) -> impl Responder {
     match update_row_by_id(req, data, path).await {
         Ok(outcome) => HttpResponse::Ok().json(outcome),
         Err(err) => {
@@ -234,11 +251,15 @@ pub async fn handle_row_patch(req: HttpRequest,
 
 /// handler function for row by namespace (database, schema, name) and row range
 // ex: http://localhost:8080/dataframes/create/quotes/0/2
-pub async fn handle_row_range_get(req: HttpRequest,
-                                  path: web::Path<(String, String, String, usize, usize)>) -> impl Responder {
+pub async fn handle_row_range_get(
+    req: HttpRequest,
+    path: web::Path<(String, String, String, usize, usize)>,
+) -> impl Responder {
     match get_range_by_id(req, path).await {
-        Ok(rows) => HttpResponse::Ok().json(rows.iter()
-            .map(|row| row.to_row_js()).collect::<Vec<RowJs>>()),
+        Ok((columns, rows)) => {
+            HttpResponse::Ok().json(rows.iter()
+                .map(|row| row.to_row_js(&columns)).collect::<Vec<RowJs>>())
+        }
         Err(err) => {
             error!("error {}", err.to_string());
             HttpResponse::InternalServerError().finish()
@@ -270,68 +291,86 @@ pub async fn handle_sys_info_get(_session: Session) -> impl Responder {
     HttpResponse::Ok().json(SystemInfoJs::new())
 }
 
-pub async fn handle_websockets(req: HttpRequest, stream: web::Payload) -> impl Responder {
+pub async fn handle_websockets(
+    req: HttpRequest, stream: web::Payload,
+) -> impl Responder {
     info!("received ws <- {}", req.peer_addr().unwrap());
     ws::start(OxideWebSocket::new(), &req, stream)
 }
 
-async fn append_row(req: HttpRequest,
-                    data: web::Json<RowJs>,
-                    path: web::Path<(String, String, String, usize)>) -> std::io::Result<usize> {
+async fn append_row(
+    req: HttpRequest,
+    data: web::Json<RowJs>,
+    path: web::Path<(String, String, String, usize)>,
+) -> std::io::Result<usize> {
     let ns = Namespace::new(&path.0, &path.1, &path.2);
     let actor = get_shared_state(&req)?.actor.to_owned();
     let columns = get_columns!(actor, ns)?;
     append_row!(actor, ns, Row::from_row_js(&columns, &data.0))
 }
 
-async fn delete_row_by_id(req: HttpRequest,
-                          path: web::Path<(String, String, String, usize)>) -> std::io::Result<usize> {
+async fn delete_row_by_id(
+    req: HttpRequest,
+    path: web::Path<(String, String, String, usize)>,
+) -> std::io::Result<usize> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.to_owned();
     delete_row!(actor, ns, id)
 }
 
 /// Retrieves the shared application state
-fn get_shared_state(req: &HttpRequest) -> std::io::Result<&web::Data<SharedState>> {
+fn get_shared_state(
+    req: &HttpRequest
+) -> std::io::Result<&web::Data<SharedState>> {
     match req.app_data::<web::Data<SharedState>>() {
         None => fail("No shared application state"),
         Some(shared_state) => Ok(shared_state)
     }
 }
 
-async fn get_range_by_id(req: HttpRequest,
-                         path: web::Path<(String, String, String, usize, usize)>) -> std::io::Result<Vec<Row>> {
+async fn get_range_by_id(
+    req: HttpRequest,
+    path: web::Path<(String, String, String, usize, usize)>,
+) -> std::io::Result<(Vec<TableColumn>, Vec<Row>)> {
     let (ns, a, b) = (Namespace::new(&path.0, &path.1, &path.2), path.3, path.4);
     let actor = get_shared_state(&req)?.actor.to_owned();
     read_range!(actor, ns, a..b)
 }
 
-async fn get_row_by_id(req: HttpRequest,
-                       path: web::Path<(String, String, String, usize)>) -> std::io::Result<Option<Row>> {
+async fn get_row_by_id(
+    req: HttpRequest,
+    path: web::Path<(String, String, String, usize)>,
+) -> std::io::Result<(Vec<TableColumn>, Option<Row>)> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.to_owned();
     read_row!(actor, ns, id)
 }
 
-async fn get_row_metadata_by_id(req: HttpRequest,
-                                path: web::Path<(String, String, String, usize)>) -> std::io::Result<RowMetadata> {
+async fn get_row_metadata_by_id(
+    req: HttpRequest,
+    path: web::Path<(String, String, String, usize)>,
+) -> std::io::Result<RowMetadata> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.to_owned();
     read_row_metadata!(actor, ns, id)
 }
 
-async fn overwrite_row_by_id(req: HttpRequest,
-                             data: web::Json<RowJs>,
-                             path: web::Path<(String, String, String, usize)>) -> std::io::Result<usize> {
+async fn overwrite_row_by_id(
+    req: HttpRequest,
+    data: web::Json<RowJs>,
+    path: web::Path<(String, String, String, usize)>,
+) -> std::io::Result<usize> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.to_owned();
     let columns = get_columns!(actor, ns)?;
     overwrite_row!(actor, ns, Row::from_row_js(&columns, &data.0).with_row_id(id))
 }
 
-async fn update_row_by_id(req: HttpRequest,
-                          data: web::Json<RowJs>,
-                          path: web::Path<(String, String, String, usize)>) -> std::io::Result<usize> {
+async fn update_row_by_id(
+    req: HttpRequest,
+    data: web::Json<RowJs>,
+    path: web::Path<(String, String, String, usize)>,
+) -> std::io::Result<usize> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.to_owned();
     let columns = get_columns!(actor, ns)?;

@@ -77,8 +77,8 @@ impl RowCollection for ViewRowCollection {
     fn read_one(&self, id: usize) -> std::io::Result<Option<Row>> {
         let (row, rmd) = self.host.read_row(id)?;
         if rmd.is_allocated {
-            let machine = Machine::new().with_row(&row);
-            if row.matches(&machine, &Some(Box::new(self.condition.to_owned()))) {
+            let machine = Machine::new().with_row(self.get_columns(), &row);
+            if row.matches(&machine, &Some(Box::new(self.condition.to_owned())), self.get_columns()) {
                 return Ok(Some(row));
             }
         }
@@ -88,19 +88,19 @@ impl RowCollection for ViewRowCollection {
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
         let (row, rmd) = self.host.read_row(id)?;
         if rmd.is_allocated {
-            let machine = Machine::new().with_row(&row);
-            if row.matches(&machine, &Some(Box::new(self.condition.to_owned()))) {
+            let machine = Machine::new().with_row(self.get_columns(), &row);
+            if row.matches(&machine, &Some(Box::new(self.condition.to_owned())), self.get_columns()) {
                 return Ok((row, rmd));
             }
         }
-        Ok((Row::empty(row.get_columns()), rmd.with_allocated(false)))
+        Ok((Row::empty(self.host.get_columns()), rmd.with_allocated(false)))
     }
 
     fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
         let (row, rmd) = self.host.read_row(id)?;
         if rmd.is_allocated {
-            let machine = Machine::new().with_row(&row);
-            if row.matches(&machine, &Some(Box::new(self.condition.to_owned()))) {
+            let machine = Machine::new().with_row(self.get_columns(), &row);
+            if row.matches(&machine, &Some(Box::new(self.condition.to_owned())), self.get_columns()) {
                 return Ok(rmd);
             }
         }
@@ -115,10 +115,10 @@ impl RowCollection for ViewRowCollection {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::expression::Expression::{Equal, GreaterThan, LessThan, Literal, Variable};
+    use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::NumberValue::Float64Value;
+    use crate::numbers::NumberValue::F64Value;
     use crate::row_collection::RowCollection;
     use crate::table_columns::TableColumn;
     use crate::testdata::{make_quote, make_quote_columns};
@@ -134,15 +134,15 @@ mod tests {
         );
 
         let rows = vrc.read_active_rows().unwrap();
-        Machine::show(rows.to_owned());
+        Machine::show(vrc.get_columns().clone(), rows.to_owned());
 
         let results = rows.to_owned().iter()
             .map(|row| row.get_values())
             .collect::<Vec<_>>();
 
         assert_eq!(results, vec![
-            vec![StringValue("UNO".into()), StringValue("OTC".into()), Number(Float64Value(0.2456))],
-            vec![StringValue("GOTO".into()), StringValue("OTC".into()), Number(Float64Value(0.1442))],
+            vec![StringValue("UNO".into()), StringValue("OTC".into()), Number(F64Value(0.2456))],
+            vec![StringValue("GOTO".into()), StringValue("OTC".into()), Number(F64Value(0.1442))],
         ])
     }
 
@@ -156,17 +156,17 @@ mod tests {
 
         let rows = vrc.filter_rows(&LessThan(
             Box::new(Variable("last_sale".into())),
-            Box::new(Literal(Number(Float64Value(20.)))),
+            Box::new(Literal(Number(F64Value(20.)))),
         )).unwrap();
-        Machine::show(rows.to_owned());
+        Machine::show(vrc.get_columns().clone(), rows.to_owned());
 
         let results = rows.to_owned().iter()
             .map(|row| row.get_values())
             .collect::<Vec<_>>();
 
         assert_eq!(results, vec![
-            vec![StringValue("BIZ".into()), StringValue("NYSE".into()), Number(Float64Value(9.775))],
-            vec![StringValue("XYZ".into()), StringValue("NYSE".into()), Number(Float64Value(0.0289))],
+            vec![StringValue("BIZ".into()), StringValue("NYSE".into()), Number(F64Value(9.775))],
+            vec![StringValue("XYZ".into()), StringValue("NYSE".into()), Number(F64Value(0.0289))],
         ])
     }
 
@@ -190,20 +190,20 @@ mod tests {
     fn create_data_set() -> ModelRowCollection {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        ModelRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "IBM", "NYSE", 21.22),
-            make_quote(1, &phys_columns, "ATT", "NYSE", 98.44),
-            make_quote(2, &phys_columns, "HOCK", "AMEX", 0.0076),
-            make_quote(3, &phys_columns, "XIE", "NASDAQ", 33.33),
-            make_quote(4, &phys_columns, "AAA", "NYSE", 22.44),
-            make_quote(5, &phys_columns, "XYZ", "NASDAQ", 66.67),
-            make_quote(6, &phys_columns, "SSO", "NYSE", 123.44),
-            make_quote(7, &phys_columns, "RAND", "AMEX", 11.33),
-            make_quote(8, &phys_columns, "ABC", "AMEX", 12.33),
-            make_quote(9, &phys_columns, "UNO", "OTC", 0.2456),
-            make_quote(10, &phys_columns, "BIZ", "NYSE", 9.775),
-            make_quote(11, &phys_columns, "GOTO", "OTC", 0.1442),
-            make_quote(12, &phys_columns, "XYZ", "NYSE", 0.0289),
+        ModelRowCollection::from_rows(phys_columns.clone(),vec![
+            make_quote(0, "IBM", "NYSE", 21.22),
+            make_quote(1, "ATT", "NYSE", 98.44),
+            make_quote(2, "HOCK", "AMEX", 0.0076),
+            make_quote(3, "XIE", "NASDAQ", 33.33),
+            make_quote(4, "AAA", "NYSE", 22.44),
+            make_quote(5, "XYZ", "NASDAQ", 66.67),
+            make_quote(6, "SSO", "NYSE", 123.44),
+            make_quote(7, "RAND", "AMEX", 11.33),
+            make_quote(8, "ABC", "AMEX", 12.33),
+            make_quote(9, "UNO", "OTC", 0.2456),
+            make_quote(10, "BIZ", "NYSE", 9.775),
+            make_quote(11, "GOTO", "OTC", 0.1442),
+            make_quote(12, "XYZ", "NYSE", 0.0289),
         ])
     }
 }

@@ -70,27 +70,40 @@ impl DataframeActor {
         self.get_or_load_dataframe(ns)?.overwrite(row)
     }
 
-    fn read_fully(&mut self, ns: Namespace) -> std::io::Result<Vec<Row>> {
+    fn read_fully(
+        &mut self,
+        ns: Namespace,
+    ) -> std::io::Result<(Vec<TableColumn>, Vec<Row>)> {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = Vec::new();
         for id in 0..df.len()? {
             df.read_then_push(id, &mut rows)?
         }
-        Ok(rows)
+        Ok((df.get_columns().clone(), rows))
     }
 
-    fn read_range(&mut self, ns: Namespace, range: Range<usize>) -> std::io::Result<Vec<Row>> {
+    fn read_range(
+        &mut self,
+        ns: Namespace,
+        range: Range<usize>,
+    ) -> std::io::Result<(Vec<TableColumn>, Vec<Row>)> {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = Vec::new();
         for id in range {
             df.read_then_push(id, &mut rows)?
         }
-        Ok(rows)
+        Ok((df.get_columns().clone(), rows))
     }
 
-    fn read_row(&mut self, ns: Namespace, id: usize) -> std::io::Result<Option<Row>> {
-        self.get_or_load_dataframe(ns)?.read_row(id).map(|(row, meta)| {
-            if meta.is_allocated { Some(row) } else { None }
+    fn read_row(
+        &mut self,
+        ns: Namespace,
+        id: usize,
+    ) -> std::io::Result<(Vec<TableColumn>, Option<Row>)> {
+        let df = self.get_or_load_dataframe(ns)?;
+        df.read_row(id).map(|(row, meta)| {
+            let columns = df.get_columns().clone();
+            if meta.is_allocated { (columns, Some(row)) } else { (columns, None) }
         })
     }
 
@@ -172,7 +185,10 @@ pub enum IORequest {
 #[macro_export]
 macro_rules! append_row {
     ($actor:expr, $ns:expr, $row:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::AppendRow { ns: $ns.to_owned(), row: $row }).await
+        $actor.send(crate::dataframe_actor::IORequest::AppendRow {
+            ns: $ns.to_owned(),
+            row: $row
+        }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -193,7 +209,10 @@ macro_rules! create_table {
 #[macro_export]
 macro_rules! create_table_from_config {
     ($actor:expr, $ns:expr, $cfg:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::CreateTable { ns: $ns.to_owned(), cfg: $cfg }).await
+        $actor.send(crate::dataframe_actor::IORequest::CreateTable {
+            ns: $ns.to_owned(),
+            cfg: $cfg
+        }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -202,7 +221,10 @@ macro_rules! create_table_from_config {
 #[macro_export]
 macro_rules! delete_row {
     ($actor:expr, $ns:expr, $id:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::DeleteRow { ns: $ns.to_owned(), id: $id }).await
+        $actor.send(crate::dataframe_actor::IORequest::DeleteRow {
+            ns: $ns.to_owned(),
+            id: $id
+        }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -211,7 +233,9 @@ macro_rules! delete_row {
 #[macro_export]
 macro_rules! get_columns {
     ($actor:expr, $ns:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::GetColumns { ns: $ns.to_owned() }).await
+        $actor.send(crate::dataframe_actor::IORequest::GetColumns {
+            ns: $ns.to_owned()
+        }).await
             .map(|s|serde_json::from_str::<Vec<TableColumn>>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -220,7 +244,10 @@ macro_rules! get_columns {
 #[macro_export]
 macro_rules! overwrite_row {
     ($actor:expr, $ns:expr, $row:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::OverwriteRow { ns: $ns.to_owned(), row: $row }).await
+        $actor.send(crate::dataframe_actor::IORequest::OverwriteRow {
+            ns: $ns.to_owned(),
+            row: $row
+        }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -238,8 +265,10 @@ macro_rules! get_namespaces {
 #[macro_export]
 macro_rules! read_fully {
     ($actor:expr, $ns:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::ReadFully { ns: $ns.to_owned() }).await
-            .map(|s|serde_json::from_str::<Vec<Row>>(&s).unwrap())
+        $actor.send(crate::dataframe_actor::IORequest::ReadFully {
+            ns: $ns.to_owned()
+        }).await
+            .map(|s|serde_json::from_str::<(Vec<TableColumn>, Vec<Row>)>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
 }
@@ -247,8 +276,11 @@ macro_rules! read_fully {
 #[macro_export]
 macro_rules! read_range {
     ($actor:expr, $ns:expr, $range:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::ReadRange { ns: $ns.to_owned(), range: $range }).await
-            .map(|s|serde_json::from_str::<Vec<Row>>(&s).unwrap())
+        $actor.send(crate::dataframe_actor::IORequest::ReadRange {
+            ns: $ns.to_owned(),
+            range: $range
+        }).await
+            .map(|s|serde_json::from_str::<(Vec<TableColumn>, Vec<Row>)>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
 }
@@ -256,8 +288,11 @@ macro_rules! read_range {
 #[macro_export]
 macro_rules! read_row {
     ($actor:expr, $ns:expr, $id:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::ReadRow { ns: $ns.to_owned(), id: $id }).await
-            .map(|s|serde_json::from_str::<Option<Row>>(&s).unwrap())
+        $actor.send(crate::dataframe_actor::IORequest::ReadRow {
+            ns: $ns.to_owned(),
+            id: $id
+        }).await
+            .map(|s|serde_json::from_str::<(Vec<TableColumn>, Option<Row>)>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
 }
@@ -265,7 +300,10 @@ macro_rules! read_row {
 #[macro_export]
 macro_rules! read_row_metadata {
     ($actor:expr, $ns:expr, $id:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::ReadRowMetadata { ns: $ns.to_owned(), id: $id }).await
+        $actor.send(crate::dataframe_actor::IORequest::ReadRowMetadata {
+            ns: $ns.to_owned(),
+            id: $id
+        }).await
             .map(|s|serde_json::from_str::<RowMetadata>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -274,7 +312,10 @@ macro_rules! read_row_metadata {
 #[macro_export]
 macro_rules! update_row {
     ($actor:expr, $ns:expr, $row:expr) => {
-        $actor.send(crate::dataframe_actor::IORequest::UpdateRow { ns: $ns.to_owned(), row: $row }).await
+        $actor.send(crate::dataframe_actor::IORequest::UpdateRow {
+            ns: $ns.to_owned(),
+            row: $row
+        }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
@@ -291,9 +332,8 @@ mod tests {
     use actix::prelude::*;
 
     use crate::data_types::DataType::*;
-    use crate::numbers::NumberKind::F64Kind;
+    use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::*;
-    use crate::row;
     use crate::testdata::{make_quote_columns, make_table_columns};
     use crate::typed_values::TypedValue::*;
 
@@ -321,13 +361,14 @@ mod tests {
         assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
 
         // append a new row to the table
-        assert_eq!(0, append_row!(actor, ns, row!(0, table_columns, vec![
-            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(11.88)),
+        assert_eq!(0, append_row!(actor, ns, Row::new(0, vec![
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(11.88)),
         ])).unwrap());
 
         // read the previously created row
-        assert_eq!(read_row!(actor, ns, 0).unwrap().unwrap(), row!(0, table_columns, vec![
-            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(11.88)),
+        let (columns, row_maybe) = read_row!(actor, ns, 0).unwrap();
+        assert_eq!(row_maybe.unwrap(), Row::new(0, vec![
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(11.88)),
         ]));
     }
 
@@ -341,43 +382,45 @@ mod tests {
         assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
 
         // append a new row to the table
-        assert_eq!(0, append_row!(actor, ns, row!(111, table_columns, vec![
-            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(22.88)),
+        assert_eq!(0, append_row!(actor, ns, Row::new(111, vec![
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(22.88)),
         ])).unwrap());
 
         // read the previously created row
-        assert_eq!(read_row!(actor, ns, 0).unwrap().unwrap(), row!(0, table_columns, vec![
-            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(22.88)),
+        let (columns, row_maybe) = read_row!(actor, ns, 0).unwrap();
+        assert_eq!(row_maybe.unwrap(), Row::new(0, vec![
+            StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(22.88)),
         ]));
 
         // overwrite a new row over offset 1
-        assert_eq!(1, overwrite_row!(actor, ns, row!(1, table_columns, vec![
-            StringValue("YARD".into()), StringValue("NYSE".into()), Number(Float64Value(88.22)),
+        assert_eq!(1, overwrite_row!(actor, ns, Row::new(1, vec![
+            StringValue("YARD".into()), StringValue("NYSE".into()), Number(F64Value(88.22)),
         ])).unwrap());
 
         // read rows
-        assert_eq!(read_range!(actor, ns, 0..2).unwrap(), vec![
-            row!(0, table_columns, vec![
-                StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(22.88)),
+        let (columns, rows) = read_range!(actor, ns, 0..2).unwrap();
+        assert_eq!(rows, vec![
+            Row::new(0, vec![
+                StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(22.88)),
             ]),
-            row!(1, table_columns, vec![
-                StringValue("YARD".into()), StringValue("NYSE".into()), Number(Float64Value(88.22)),
+            Row::new(1, vec![
+                StringValue("YARD".into()), StringValue("NYSE".into()), Number(F64Value(88.22)),
             ]),
         ]);
 
         // update the row at offset 1
-        assert_eq!(1, update_row!(actor, ns, row!(1, table_columns, vec![
-            Undefined, Undefined, Number(Float64Value(88.99)),
+        assert_eq!(1, update_row!(actor, ns, Row::new(1, vec![
+            Undefined, Undefined, Number(F64Value(88.99)),
         ])).unwrap());
 
         // re-read rows
-        let rows = read_fully!(actor, ns).unwrap();
+        let (columns, rows) = read_fully!(actor, ns).unwrap();
         assert_eq!(rows, vec![
-            row!(0, table_columns, vec![
-                StringValue("JUNO".into()), StringValue("AMEX".into()), Number(Float64Value(22.88)),
+            Row::new(0, vec![
+                StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(22.88)),
             ]),
-            row!(1, table_columns, vec![
-                StringValue("YARD".into()), StringValue("NYSE".into()), Number(Float64Value(88.99)),
+            Row::new(1, vec![
+                StringValue("YARD".into()), StringValue("NYSE".into()), Number(F64Value(88.99)),
             ]),
         ]);
 
@@ -385,9 +428,10 @@ mod tests {
         assert_eq!(1, delete_row!(actor, ns, 0).unwrap());
 
         // re-read rows
-        assert_eq!(read_fully!(actor, ns).unwrap(), vec![
-            row!(1, table_columns, vec![
-                StringValue("YARD".into()), StringValue("NYSE".into()), Number(Float64Value(88.99)),
+        let (columns, rows) = read_fully!(actor, ns).unwrap();
+        assert_eq!(rows, vec![
+            Row::new(1, vec![
+                StringValue("YARD".into()), StringValue("NYSE".into()), Number(F64Value(88.99)),
             ]),
         ]);
     }
@@ -403,13 +447,13 @@ mod tests {
         assert_eq!(1, create_table!(actor, ns1, make_quote_columns()).unwrap());
 
         // append a new row to the table
-        assert_eq!(0, append_row!(actor, ns0, row!(111, make_table_columns(), vec![
-            StringValue("GE".into()), StringValue("NYSE".into()), Number(Float64Value(48.88)),
+        assert_eq!(0, append_row!(actor, ns0, Row::new(111, vec![
+            StringValue("GE".into()), StringValue("NYSE".into()), Number(F64Value(48.88)),
         ])).unwrap());
 
         // append a new row to the table
-        assert_eq!(0, append_row!(actor, ns1, row!(112, make_table_columns(), vec![
-            StringValue("IBM".into()), StringValue("NYSE".into()), Number(Float64Value(122.88)),
+        assert_eq!(0, append_row!(actor, ns1, Row::new(112, vec![
+            StringValue("IBM".into()), StringValue("NYSE".into()), Number(F64Value(122.88)),
         ])).unwrap());
 
         // verify the namespaces

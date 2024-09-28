@@ -165,7 +165,7 @@ impl RowCollection for FileRowCollection {
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
         let offset = self.convert_rowid_to_offset(id);
-        match &self.file.write_at(&row.encode(), offset) {
+        match &self.file.write_at(&row.encode(&self.columns), offset) {
             Ok(_) => TypedValue::RowsAffected(1),
             Err(err) => ErrorValue(err.to_string())
         }

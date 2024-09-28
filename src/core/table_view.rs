@@ -87,9 +87,9 @@ mod tests {
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let mut df = make_dataframe("dataframes", "forward_iterator", "quotes", columns).unwrap();
         df.resize(0).unwrap();
-        df.append(make_quote(0, &phys_columns, "AAPL", "NYSE", 118.77)).unwrap();
-        df.append(make_quote(1, &phys_columns, "AMD", "NYSE", 93.22)).unwrap();
-        df.append(make_quote(2, &phys_columns, "INTC", "NYSE", 67.44)).unwrap();
+        df.append(make_quote(0, "AAPL", "NYSE", 118.77)).unwrap();
+        df.append(make_quote(1, "AMD", "NYSE", 93.22)).unwrap();
+        df.append(make_quote(2, "INTC", "NYSE", 67.44)).unwrap();
 
         // create the iterator and verify the results
         let mut iter = TableIterator::new(df);
@@ -104,9 +104,9 @@ mod tests {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let mut df = make_dataframe("dataframes", "reverse_iterator", "quotes", columns).unwrap();
-        df.append(make_quote(0, &phys_columns, "AAPL", "NYSE", 118.77)).unwrap();
-        df.append(make_quote(1, &phys_columns, "AMD", "NYSE", 93.22)).unwrap();
-        df.append(make_quote(2, &phys_columns, "INTC", "NYSE", 67.44)).unwrap();
+        df.append(make_quote(0, "AAPL", "NYSE", 118.77)).unwrap();
+        df.append(make_quote(1, "AMD", "NYSE", 93.22)).unwrap();
+        df.append(make_quote(2, "INTC", "NYSE", 67.44)).unwrap();
 
         // test the reverse flow
         let mut iter = TableIterator::reverse(df);
@@ -120,6 +120,6 @@ mod tests {
               symbol: &str,
               exchange: &str,
               last_sale: f64) -> Option<Row> {
-        Some(make_quote(id, phys_columns, symbol, exchange, last_sale))
+        Some(make_quote(id, symbol, exchange, last_sale))
     }
 }

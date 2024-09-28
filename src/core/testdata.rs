@@ -15,8 +15,7 @@ use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::file_row_collection::FileRowCollection;
 use crate::namespaces::Namespace;
-use crate::numbers::NumberValue::{Float64Value, UInt64Value};
-use crate::row;
+use crate::numbers::NumberValue::{F64Value, U64Value};
 use crate::rows::Row;
 use crate::server::ColumnJs;
 use crate::table_columns::TableColumn;
@@ -43,28 +42,26 @@ pub fn make_dataframe_config(columns: Vec<ColumnJs>) -> DataFrameConfig {
 }
 
 pub fn make_quote(id: usize,
-                  phys_columns: &Vec<TableColumn>,
                   symbol: &str,
                   exchange: &str,
                   last_sale: f64) -> Row {
-    row!(id, phys_columns, vec![
+    Row::new(id, vec![
         StringValue(symbol.into()),
         StringValue(exchange.into()),
-        Number(Float64Value(last_sale))
+        Number(F64Value(last_sale))
     ])
 }
 
 pub fn make_scan_quote(id: usize,
-                       columns: &Vec<TableColumn>,
                        symbol: &str,
                        exchange: &str,
                        last_sale: f64,
                        _active: bool) -> Row {
-    row!(id, columns, vec![
+    Row::new(id, vec![
                 StringValue(symbol.into()),
                 StringValue(exchange.into()),
-                Number(Float64Value(last_sale)),
-                Number(UInt64Value(id as u64)),
+                Number(F64Value(last_sale)),
+                Number(U64Value(id as u64)),
                 Boolean(_active)
             ])
 }

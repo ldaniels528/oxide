@@ -106,8 +106,8 @@ impl REPLState {
             .evaluate_async(HISTORY_TABLE_NAME).await;
         if let Ok(TypedValue::TableValue(mrc)) = outcome {
             for row in mrc.get_rows() {
-                let input = row.get("input");
-                listing.push(format!("[{}] {}", &row.get_id(), input.unwrap_value()));
+                listing.push(format!("[{}] {}",
+                                     &row.get_id(), row.get(1).unwrap_value()));
             }
         }
         listing
@@ -120,14 +120,12 @@ impl REPLState {
             Ok(TypedValue::TableValue(mrc)) => mrc,
             _ => Self::create_history_table()?
         };
-        // capture the row ID and columns
-        let id = mrc.len()?;
-        let columns = mrc.get_columns().to_owned();
         // cleanup the user input
         let clean_input = input.trim().split('\n').map(|s| s.trim())
             .collect::<Vec<&str>>().join("; ");
         // create a new row
-        let row = Row::new(id, columns, vec![
+        let id = mrc.len()?;
+        let row = Row::new(id, vec![
             TypedValue::RowsAffected(id),
             TypedValue::StringValue(clean_input),
         ]);

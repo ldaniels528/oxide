@@ -75,8 +75,8 @@ impl Cursor {
     pub fn get(&mut self, pos: usize) -> std::io::Result<Option<Row>> {
         let (row, rmd) = self.rc.read_row(pos)?;
         if rmd.is_allocated {
-            let machine = Machine::new().with_row(&row);
-            if row.matches(&machine, &self.condition) {
+            let machine = Machine::new().with_row(self.rc.get_columns(), &row);
+            if row.matches(&machine, &self.condition, self.rc.get_columns()) {
                 return Ok(Some(row));
             }
         }
@@ -146,12 +146,10 @@ impl Cursor {
 
     /// Returns the previous qualifying row or [None] if not found before the top-of-file
     pub fn take(&mut self, limit: usize) -> std::io::Result<Vec<Row>> {
-        println!("take: limit {}", limit);
         let mut rows = Vec::new();
         let mut done = false;
         while !done && (limit == 0 || rows.len() < limit) {
             if let Ok(Some(row)) = self.next() {
-                println!("take: {:?}", row.to_json());
                 rows.push(row)
             } else {
                 done = true
@@ -182,30 +180,30 @@ mod tests {
         let mut cursor = Cursor::new(Box::new(brc));
 
         cursor.middle();
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(2, "BIZ", "NYSE", 23.66)));
 
         cursor.bottom();
-        assert_eq!(cursor.previous().unwrap(), Some(make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)));
+        assert_eq!(cursor.previous().unwrap(), Some(make_quote(4, "BOOM", "NASDAQ", 56.87)));
 
         cursor.top();
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, "ABC", "AMEX", 11.77)));
     }
 
     #[test]
     fn test_cursor_with_all_rows() {
         let (brc, phys_columns) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456)));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, "ABC", "AMEX", 11.77)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(1, "UNO", "NASDAQ", 0.2456)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(2, "BIZ", "NYSE", 23.66)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(3, "GOTO", "OTC", 0.1428)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(4, "BOOM", "NASDAQ", 56.87)));
         assert_eq!(cursor.next().unwrap(), None);
-        assert_eq!(cursor.previous().unwrap(), Some(make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87)));
-        assert_eq!(cursor.previous().unwrap(), Some(make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428)));
-        assert_eq!(cursor.previous().unwrap(), Some(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)));
-        assert_eq!(cursor.previous().unwrap(), Some(make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456)));
-        assert_eq!(cursor.previous().unwrap(), Some(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)));
+        assert_eq!(cursor.previous().unwrap(), Some(make_quote(4, "BOOM", "NASDAQ", 56.87)));
+        assert_eq!(cursor.previous().unwrap(), Some(make_quote(3, "GOTO", "OTC", 0.1428)));
+        assert_eq!(cursor.previous().unwrap(), Some(make_quote(2, "BIZ", "NYSE", 23.66)));
+        assert_eq!(cursor.previous().unwrap(), Some(make_quote(1, "UNO", "NASDAQ", 0.2456)));
+        assert_eq!(cursor.previous().unwrap(), Some(make_quote(0, "ABC", "AMEX", 11.77)));
         assert_eq!(cursor.previous().unwrap(), None);
     }
 
@@ -216,13 +214,13 @@ mod tests {
             Box::new(Variable("exchange".to_string())),
             Box::new(Literal(StringValue("NYSE".to_string()))),
         ));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, &phys_columns, "ABC", "NYSE", 11.77)));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(4, &phys_columns, "BOOM", "NYSE", 56.87)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, "ABC", "NYSE", 11.77)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(2, "BIZ", "NYSE", 23.66)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(4, "BOOM", "NYSE", 56.87)));
         assert_eq!(cursor.next().unwrap(), None);
-        assert_eq!(cursor.previous().unwrap(), Some(make_quote(4, &phys_columns, "BOOM", "NYSE", 56.87)));
-        assert_eq!(cursor.previous().unwrap(), Some(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)));
-        assert_eq!(cursor.previous().unwrap(), Some(make_quote(0, &phys_columns, "ABC", "NYSE", 11.77)));
+        assert_eq!(cursor.previous().unwrap(), Some(make_quote(4, "BOOM", "NYSE", 56.87)));
+        assert_eq!(cursor.previous().unwrap(), Some(make_quote(2, "BIZ", "NYSE", 23.66)));
+        assert_eq!(cursor.previous().unwrap(), Some(make_quote(0, "ABC", "NYSE", 11.77)));
         assert_eq!(cursor.previous().unwrap(), None);
     }
 
@@ -231,7 +229,7 @@ mod tests {
         let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
         let results = cursor.fold_left(Vec::new(), |mut agg, r| {
-            agg.push(r.get("exchange"));
+            agg.push(r.get(1));
             agg
         });
         assert_eq!(results, vec![
@@ -247,7 +245,7 @@ mod tests {
         let mut cursor = Cursor::new(Box::new(brc));
         cursor.bottom();
         let results = cursor.fold_right(Vec::new(), |r, mut agg| {
-            agg.push(r.get("exchange"));
+            agg.push(r.get(1));
             agg
         });
         assert_eq!(results, vec![
@@ -261,7 +259,7 @@ mod tests {
     fn test_map_rows_in_cursor() {
         let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
-        let result = cursor.map(|r| r.get("symbol"));
+        let result = cursor.map(|r| r.get(0));
         assert_eq!(result, vec![
             StringValue("ABC".to_string()), StringValue("UNO".to_string()),
             StringValue("BIZ".to_string()), StringValue("GOTO".to_string()),
@@ -273,14 +271,14 @@ mod tests {
     fn test_reverse() {
         let (brc, phys_columns) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456)));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, "ABC", "AMEX", 11.77)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(1, "UNO", "NASDAQ", 0.2456)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(2, "BIZ", "NYSE", 23.66)));
         cursor.reverse();
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456)));
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, &phys_columns, "ABC", "AMEX", 11.77)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(1, "UNO", "NASDAQ", 0.2456)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(0, "ABC", "AMEX", 11.77)));
         cursor.reverse();
-        assert_eq!(cursor.next().unwrap(), Some(make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456)));
+        assert_eq!(cursor.next().unwrap(), Some(make_quote(1, "UNO", "NASDAQ", 0.2456)));
     }
 
     #[test]
@@ -288,33 +286,33 @@ mod tests {
         let (brc, phys_columns) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
         assert_eq!(cursor.take(3).unwrap(), vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
-            make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
+            make_quote(0, "ABC", "AMEX", 11.77),
+            make_quote(1, "UNO", "NASDAQ", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 23.66),
         ])
     }
 
     fn create_sample_data_1() -> (ByteRowCollection, Vec<TableColumn>) {
         let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
-        let brc = ByteRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
-            make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
-            make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
+        let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(0, "ABC", "AMEX", 11.77),
+            make_quote(1, "UNO", "NASDAQ", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 23.66),
+            make_quote(3, "GOTO", "OTC", 0.1428),
+            make_quote(4, "BOOM", "NASDAQ", 56.87),
         ]);
         (brc, phys_columns)
     }
 
     fn create_sample_data_2() -> (ByteRowCollection, Vec<TableColumn>) {
         let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
-        let brc = ByteRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "NYSE", 11.77),
-            make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
-            make_quote(3, &phys_columns, "GOTO", "NASDAQ", 0.1428),
-            make_quote(4, &phys_columns, "BOOM", "NYSE", 56.87),
-            make_quote(5, &phys_columns, "YIKES", "OTC", 0.00007),
+        let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(0, "ABC", "NYSE", 11.77),
+            make_quote(1, "UNO", "NASDAQ", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 23.66),
+            make_quote(3, "GOTO", "NASDAQ", 0.1428),
+            make_quote(4, "BOOM", "NYSE", 56.87),
+            make_quote(5, "YIKES", "OTC", 0.00007),
         ]);
         (brc, phys_columns)
     }

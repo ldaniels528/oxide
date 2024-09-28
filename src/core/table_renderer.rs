@@ -30,8 +30,8 @@ impl TableRenderer {
     }
 
     /// Transforms the [Vec<Row>] into a textual table
-    pub fn from_rows(rows: Vec<Row>) -> Vec<String> {
-        Self::from_collection(Box::new(ModelRowCollection::from_rows(rows)))
+    pub fn from_rows(columns: Vec<TableColumn>, rows: Vec<Row>) -> Vec<String> {
+        Self::from_collection(Box::new(ModelRowCollection::from_rows(columns, rows)))
     }
 
     fn tabulate_body_cells_from_collection(rc: Box<dyn RowCollection>) -> Vec<Vec<String>> {
@@ -67,7 +67,7 @@ mod tests {
     use crate::cursor::Cursor;
     use crate::table_columns::TableColumn;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::testdata::{make_quote, make_table_columns};
 
     #[test]
     fn test_from_collection() {
@@ -106,13 +106,13 @@ mod tests {
     }
 
     fn create_collection() -> (ByteRowCollection, Vec<TableColumn>) {
-        let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
-        let brc = ByteRowCollection::from_rows(vec![
-            make_quote(0, &phys_columns, "ABC", "AMEX", 11.77),
-            make_quote(1, &phys_columns, "UNO", "NASDAQ", 0.2456),
-            make_quote(2, &phys_columns, "BIZ", "NYSE", 23.66),
-            make_quote(3, &phys_columns, "GOTO", "OTC", 0.1428),
-            make_quote(4, &phys_columns, "BOOM", "NASDAQ", 56.87),
+        let phys_columns = make_table_columns();
+        let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
+            make_quote(0, "ABC", "AMEX", 11.77),
+            make_quote(1, "UNO", "NASDAQ", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 23.66),
+            make_quote(3, "GOTO", "OTC", 0.1428),
+            make_quote(4, "BOOM", "NASDAQ", 56.87),
         ]);
         (brc, phys_columns)
     }

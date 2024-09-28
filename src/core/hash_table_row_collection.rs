@@ -6,11 +6,10 @@ use std::ops::Range;
 
 use log::warn;
 
-use crate::data_types::DataType;
 use crate::data_types::DataType::NumberType;
 use crate::field_metadata::FieldMetadata;
-use crate::numbers::NumberKind::{F64Kind, U64Kind};
-use crate::numbers::NumberValue::UInt64Value;
+use crate::number_kind::NumberKind::*;
+use crate::numbers::NumberValue::U64Value;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
@@ -48,8 +47,8 @@ impl HashTableRowCollection {
         keys_columns: &Vec<TableColumn>,
         new_value: &TypedValue,
     ) -> Row {
-        Row::new(keys_row_id, keys_columns.to_owned(), vec![
-            Number(UInt64Value(data_row_id as u64)),
+        Row::new(keys_row_id, vec![
+            Number(U64Value(data_row_id as u64)),
             new_value.to_owned(),
         ])
     }
@@ -375,7 +374,7 @@ impl RowCollection for HashTableRowCollection {
         let old_value = self.read_field(id, self.key_column_index);
         match old_value {
             ErrorValue(msg) => ErrorValue(msg),
-            TypedValue::Undefined => self.data_table.update_row(id, row),
+            Undefined => self.data_table.update_row(id, row),
             _ =>
                 match self.move_key_value(id, &old_value, new_value) {
                     RowsAffected(..) => self.data_table.update_row(id, row),
@@ -392,12 +391,11 @@ mod tests {
 
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
-    use crate::numbers::NumberValue::Float64Value;
+    use crate::numbers::NumberValue::F64Value;
     use crate::row_collection::RowCollection;
     use crate::rows::Row;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_table_columns, StockQuote};
-    use crate::typed_values::TypedValue::*;
 
     use super::*;
 
@@ -407,7 +405,7 @@ mod tests {
         let ns = Namespace::new("hash_key", "create", "stocks");
         let columns = make_table_columns();
         let (symbol, exchange, last_sale) =
-            (StringValue("ABC".into()), StringValue("NASDAQ".into()), Number(Float64Value(5.04)));
+            (StringValue("ABC".into()), StringValue("NASDAQ".into()), Number(F64Value(5.04)));
 
         // append-then-query the hash index
         let hkrc = build_hash_key_table_with_samples(&ns, 0, 1000, 100);
@@ -419,7 +417,7 @@ mod tests {
         // |-------------------------------|
         // | ABC    | NASDAQ   | 5.04      |
         // |-------------------------------|
-        assert_eq!(result, Some(Row::new(7, columns.to_owned(), vec![
+        assert_eq!(result, Some(Row::new(7, vec![
             symbol, exchange, last_sale,
         ])));
     }
@@ -430,22 +428,20 @@ mod tests {
         let ns = Namespace::new("hash_key", "append_modify", "stocks");
         let columns = make_table_columns();
         let (symbol, exchange, last_sale) =
-            (StringValue("CRT".into()), StringValue("OTC_BB".into()), Number(Float64Value(1.2582)));
+            (StringValue("CRT".into()), StringValue("OTC_BB".into()), Number(F64Value(1.2582)));
 
         // append rows then query the hash index
         let mut hkrc = build_hash_key_table_with_samples(&ns, 0, 1000, 100);
         assert_eq!(
             hkrc.find_row_by_key(&symbol).unwrap(),
-            Some(Row::new(2, columns.to_owned(), vec![
-                symbol, exchange, last_sale,
-            ]))
+            Some(Row::new(2, vec![symbol, exchange, last_sale]))
         );
 
         // overwrite 'CRT' with 'CRT.Q' in the hash index
         assert_eq!(
             RowsAffected(1),
-            hkrc.overwrite_row(2, Row::new(2, columns.to_owned(), vec![
-                StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Number(Float64Value(1.2598)),
+            hkrc.overwrite_row(2, Row::new(2, vec![
+                StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Number(F64Value(1.2598)),
             ])));
 
         // verify the modified record (data table)
@@ -456,10 +452,10 @@ mod tests {
         // |-------------------------------|
         assert_eq!(
             hkrc.find_row_by_key(&StringValue("CRT.Q".into())).unwrap(),
-            Some(Row::new(2, columns.to_owned(), vec![
+            Some(Row::new(2, vec![
                 StringValue("CRT.Q".into()),
                 StringValue("OTC_BB".into()),
-                Number(Float64Value(1.2598)),
+                Number(F64Value(1.2598)),
             ])));
 
         // verify the deleted record (hash index table)
@@ -469,8 +465,29 @@ mod tests {
     #[test]
     fn test_performance() {
         let ns = Namespace::new("hash_key", "performance", "stocks");
-        let columns = make_table_columns();
         let max_count = 25_000;
+        let bucket_count = max_count / 10;
+        let bucket_depth = bucket_count / 10;
+        performance_test(ns, max_count, bucket_count, bucket_depth)
+    }
+
+    #[ignore]
+    #[test]
+    fn test_performance_1million() {
+        let ns = Namespace::new("hash_key", "performance", "stocks_1m");
+        let max_count = 1_000_000;
+        let bucket_count = max_count;
+        let bucket_depth = bucket_count;
+        performance_test(ns, max_count, bucket_count, bucket_depth)
+    }
+
+    fn performance_test(
+        ns: Namespace,
+        max_count: u64,
+        bucket_count: u64,
+        bucket_depth: u64
+    ) {
+        let columns = make_table_columns();
         let bucket_count = max_count / 10;
         let bucket_depth = bucket_count / 10;
         let mut stocks = build_hash_key_table(&ns, 0, bucket_count, bucket_depth);
@@ -480,11 +497,12 @@ mod tests {
         for n in 0..max_count {
             let q = StockQuote::generate_quote();
             let id = n as usize;
-            let (outcome, msec) = measure_time(|| stocks.overwrite_row(id, Row::new(id, columns.to_owned(), vec![
-                StringValue(q.symbol.to_owned()),
-                StringValue(q.exchange.to_owned()),
-                Number(Float64Value(q.last_sale)),
-            ])));
+            let (outcome, msec) = measure_time(
+                || stocks.overwrite_row(id, Row::new(id, vec![
+                    StringValue(q.symbol.to_owned()),
+                    StringValue(q.exchange.to_owned()),
+                    Number(F64Value(q.last_sale)),
+                ])));
             timings.push(msec);
             assert_eq!(RowsAffected(1), outcome);
         }
@@ -591,10 +609,10 @@ mod tests {
         ];
         let rows = quote_data.iter()
             .map(|(symbol, exchange, last_sale)| {
-                Row::new(0, columns.to_owned(), vec![
+                Row::new(0, vec![
                     StringValue(symbol.to_string()),
                     StringValue(exchange.to_string()),
-                    Number(Float64Value(*last_sale)),
+                    Number(F64Value(*last_sale)),
                 ])
             }).collect();
         assert_eq!(RowsAffected(9), frc.append_rows(rows));
@@ -632,7 +650,9 @@ mod tests {
         // | 6          | X      |
         // | 7          | ABC    |
         // |---------------------|
-        for s in TableRenderer::from_rows(hkrc.keys_table.read_active_rows().unwrap()) { println!("{}", s) }
+        for s in TableRenderer::from_rows(
+            hkrc.keys_table.get_columns().clone(),
+            hkrc.keys_table.read_active_rows().unwrap()) { println!("{}", s) }
         hkrc
     }
 }

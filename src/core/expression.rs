@@ -5,13 +5,16 @@
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
-use crate::byte_code_compiler::ByteCodeCompiler;
 
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
+use crate::numbers::NumberValue;
 use crate::server::ColumnJs;
+use crate::tokens::Token;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::{ErrorValue, Number, StringValue};
 
 // constants
 pub const ACK: Expression = Literal(TypedValue::Ack);
@@ -53,6 +56,8 @@ pub enum Expression {
     Betwixt(Box<Expression>, Box<Expression>, Box<Expression>),
     BitwiseAnd(Box<Expression>, Box<Expression>),
     BitwiseOr(Box<Expression>, Box<Expression>),
+    BitwiseShiftLeft(Box<Expression>, Box<Expression>),
+    BitwiseShiftRight(Box<Expression>, Box<Expression>),
     BitwiseXor(Box<Expression>, Box<Expression>),
     CodeBlock(Vec<Expression>),
     ColumnSet(Vec<ColumnJs>),
@@ -105,8 +110,6 @@ pub enum Expression {
     Scenario { title: Box<Expression>, verifications: Vec<Expression>, inherits: Option<Box<Expression>> },
     SERVE(Box<Expression>),
     SetVariable(String, Box<Expression>),
-    ShiftLeft(Box<Expression>, Box<Expression>),
-    ShiftRight(Box<Expression>, Box<Expression>),
     TupleLiteral(Vec<Expression>),
     Variable(String),
     Via(Box<Expression>),
@@ -124,6 +127,17 @@ impl Expression {
 
     pub fn encode(&self) -> Vec<u8> {
         ByteCodeCompiler::assemble(&self)
+    }
+
+    pub fn from_token(token: Token) -> Self {
+        match token {
+            Token::Atom { text, .. } => Variable(text),
+            Token::Backticks { text, .. } => Variable(text),
+            Token::DoubleQuoted { text, .. } => Literal(StringValue(text)),
+            Token::Numeric { text, .. } => Literal(Number(NumberValue::from_string(text))),
+            Token::Operator { text, .. } => Literal(ErrorValue(format!("Illegal use of operator '{}'", text))),
+            Token::SingleQuoted { text, .. } => Literal(StringValue(text)),
+        }
     }
 
     /// Indicates whether the expression is a conditional expression
@@ -329,9 +343,9 @@ pub fn decompile(expr: &Expression) -> String {
         SERVE(a) => format!("SERVE {}", decompile(a)),
         SetVariable(name, value) =>
             format!("{} := {}", name, decompile(value)),
-        ShiftLeft(a, b) =>
+        BitwiseShiftLeft(a, b) =>
             format!("{} << {}", decompile(a), decompile(b)),
-        ShiftRight(a, b) =>
+        BitwiseShiftRight(a, b) =>
             format!("{} >> {}", decompile(a), decompile(b)),
         TupleLiteral(items) =>
             format!("({})", decompile_list(items)),
@@ -455,13 +469,58 @@ fn decompile_update_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> 
 #[cfg(test)]
 mod tests {
     use crate::expression::*;
-    use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::numbers::NumberValue::*;
+    use crate::tokenizer;
     use crate::typed_values::TypedValue::*;
 
     #[test]
-    fn test_and() {
+    fn test_from_token_to_i64() {
+        let model = match tokenizer::parse_fully("12345").as_slice() {
+            [tok] => Expression::from_token(tok.to_owned()),
+            _ => UNDEFINED
+        };
+        assert_eq!(model, Literal(Number(I64Value(12345))))
+    }
+
+    #[test]
+    fn test_from_token_to_f64() {
+        let model = match tokenizer::parse_fully("123.45").as_slice() {
+            [tok] => Expression::from_token(tok.to_owned()),
+            _ => UNDEFINED
+        };
+        assert_eq!(model, Literal(Number(F64Value(123.45))))
+    }
+
+    #[test]
+    fn test_from_token_to_string_double_quoted() {
+        let model = match tokenizer::parse_fully("\"123.45\"").as_slice() {
+            [tok] => Expression::from_token(tok.to_owned()),
+            _ => UNDEFINED
+        };
+        assert_eq!(model, Literal(StringValue("123.45".into())))
+    }
+
+    #[test]
+    fn test_from_token_to_string_single_quoted() {
+        let model = match tokenizer::parse_fully("'123.45'").as_slice() {
+            [tok] => Expression::from_token(tok.to_owned()),
+            _ => UNDEFINED
+        };
+        assert_eq!(model, Literal(StringValue("123.45".into())))
+    }
+
+    #[test]
+    fn test_from_token_to_variable() {
+        let model = match tokenizer::parse_fully("`symbol`").as_slice() {
+            [tok] => Expression::from_token(tok.to_owned()),
+            _ => UNDEFINED
+        };
+        assert_eq!(model, Variable("symbol".into()))
+    }
+
+    #[test]
+    fn test_conditional_and() {
         let machine = Machine::new();
         let model = And(Box::new(TRUE), Box::new(FALSE));
         let (_, result) = machine.evaluate(&model).unwrap();
@@ -470,24 +529,24 @@ mod tests {
     }
 
     #[test]
-    fn test_between() {
+    fn test_between_expression() {
         let machine = Machine::new();
         let model = Between(
-            Box::new(Literal(Number(Int32Value(10)))),
-            Box::new(Literal(Number(Int32Value(1)))),
-            Box::new(Literal(Number(Int32Value(10)))));
+            Box::new(Literal(Number(I32Value(10)))),
+            Box::new(Literal(Number(I32Value(1)))),
+            Box::new(Literal(Number(I32Value(10)))));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "10 between 1 and 10")
     }
 
     #[test]
-    fn test_betwixt() {
+    fn test_betwixt_expression() {
         let machine = Machine::new();
         let model = Betwixt(
-            Box::new(Literal(Number(Int32Value(10)))),
-            Box::new(Literal(Number(Int32Value(1)))),
-            Box::new(Literal(Number(Int32Value(10)))),
+            Box::new(Literal(Number(I32Value(10)))),
+            Box::new(Literal(Number(I32Value(1)))),
+            Box::new(Literal(Number(I32Value(10)))),
         );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(false));
@@ -498,8 +557,8 @@ mod tests {
     fn test_equality_integers() {
         let machine = Machine::new();
         let model = Equal(
-            Box::new(Literal(Number(Int32Value(5)))),
-            Box::new(Literal(Number(Int32Value(5)))),
+            Box::new(Literal(Number(I32Value(5)))),
+            Box::new(Literal(Number(I32Value(5)))),
         );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -510,8 +569,8 @@ mod tests {
     fn test_equality_floats() {
         let machine = Machine::new();
         let model = Equal(
-            Box::new(Literal(Number(Float64Value(5.)))),
-            Box::new(Literal(Number(Float64Value(5.)))),
+            Box::new(Literal(Number(F64Value(5.)))),
+            Box::new(Literal(Number(F64Value(5.)))),
         );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -543,12 +602,12 @@ mod tests {
     }
 
     #[test]
-    fn test_gt() {
+    fn test_greater_than() {
         let machine = Machine::new()
-            .with_variable("x", Number(Int64Value(5)));
+            .with_variable("x", Number(I64Value(5)));
         let model = GreaterThan(
             Box::new(Variable("x".into())),
-            Box::new(Literal(Number(Int64Value(1)))),
+            Box::new(Literal(Number(I64Value(1)))),
         );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -556,11 +615,11 @@ mod tests {
     }
 
     #[test]
-    fn test_gte() {
+    fn test_greater_than_or_equal() {
         let machine = Machine::new();
         let model = GreaterOrEqual(
-            Box::new(Literal(Number(Int32Value(5)))),
-            Box::new(Literal(Number(Int32Value(1)))),
+            Box::new(Literal(Number(I32Value(5)))),
+            Box::new(Literal(Number(I32Value(1)))),
         );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -568,11 +627,11 @@ mod tests {
     }
 
     #[test]
-    fn test_lt() {
+    fn test_less_than() {
         let machine = Machine::new();
         let model = LessThan(
-            Box::new(Literal(Number(Int32Value(4)))),
-            Box::new(Literal(Number(Int32Value(5)))),
+            Box::new(Literal(Number(I32Value(4)))),
+            Box::new(Literal(Number(I32Value(5)))),
         );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -580,11 +639,11 @@ mod tests {
     }
 
     #[test]
-    fn test_lte() {
+    fn test_less_than_or_equal() {
         let machine = Machine::new();
         let model = LessOrEqual(
-            Box::new(Literal(Number(Int32Value(1)))),
-            Box::new(Literal(Number(Int32Value(5)))),
+            Box::new(Literal(Number(I32Value(1)))),
+            Box::new(Literal(Number(I32Value(5)))),
         );
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -592,18 +651,18 @@ mod tests {
     }
 
     #[test]
-    fn test_ne() {
+    fn test_not_equal() {
         let machine = Machine::new();
         let model = NotEqual(
-            Box::new(Literal(Number(Int32Value(-5)))),
-            Box::new(Literal(Number(Int32Value(5)))));
+            Box::new(Literal(Number(I32Value(-5)))),
+            Box::new(Literal(Number(I32Value(5)))));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "-5 != 5")
     }
 
     #[test]
-    fn test_or() {
+    fn test_conditional_or() {
         let machine = Machine::new();
         let model = Or(Box::new(TRUE), Box::new(FALSE));
         let (_, result) = machine.evaluate(&model).unwrap();
@@ -619,8 +678,8 @@ mod tests {
 
         let model = Between(
             Box::new(Variable("x".into())),
-            Box::new(Literal(Number(Int32Value(1)))),
-            Box::new(Literal(Number(Int32Value(10)))),
+            Box::new(Literal(Number(I32Value(1)))),
+            Box::new(Literal(Number(I32Value(10)))),
         );
         assert_eq!(model.to_code(), "x between 1 and 10");
         assert!(model.is_conditional());
@@ -637,8 +696,8 @@ mod tests {
                 Box::new(Variable("x".into())),
                 Box::new(Variable("y".into())),
             )),
-            a: Box::new(Literal(Number(Int32Value(1)))),
-            b: Some(Box::new(Literal(Number(Int32Value(10))))),
+            a: Box::new(Literal(Number(I32Value(1)))),
+            b: Some(Box::new(Literal(Number(I32Value(10))))),
         };
         assert!(op.is_control_flow());
         assert_eq!(op.to_code(), "if x < y 1 else 10");
@@ -653,12 +712,12 @@ mod tests {
             from: Box::new(from),
             condition: Box::new(GreaterOrEqual(
                 Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Number(Float64Value(1.25)))),
+                Box::new(Literal(Number(F64Value(1.25)))),
             )),
         });
         let from = Inquire(Queryable::Limit {
             from: Box::new(from),
-            limit: Box::new(Literal(Number(Int64Value(5)))),
+            limit: Box::new(Literal(Number(I64Value(5)))),
         });
         assert_eq!(
             from.to_code(),
@@ -673,13 +732,13 @@ mod tests {
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("BOX".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                ("last_sale".into(), Literal(Number(Float64Value(21.77)))),
+                ("last_sale".into(), Literal(Number(F64Value(21.77)))),
             ])))),
             condition: Some(Box::new(Equal(
                 Box::new(Variable("symbol".into())),
                 Box::new(Literal(StringValue("BOX".into()))),
             ))),
-            limit: Some(Box::new(Literal(Number(Int64Value(1))))),
+            limit: Some(Box::new(Literal(Number(I64Value(1))))),
         });
         assert_eq!(
             model.to_code(),
@@ -691,7 +750,7 @@ mod tests {
         // CodeBlock(..) | If(..) | Return(..) | While { .. }
         let op = While {
             condition: Box::new(LessThan(Box::new(Variable("x".into())), Box::new(Variable("y".into())))),
-            code: Box::new(Literal(Number(Int32Value(1)))),
+            code: Box::new(Literal(Number(I32Value(1)))),
         };
         assert!(op.is_control_flow());
     }

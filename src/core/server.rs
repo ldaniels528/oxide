@@ -53,9 +53,9 @@ impl ColumnJs {
         phys_columns.iter().map(|c| Self::from_physical_column(c)).collect()
     }
 
-    pub fn get_name(&self) -> &String { &self.name }
+    pub fn get_name(&self) -> &str { &self.name }
 
-    pub fn get_column_type(&self) -> &String { &self.column_type }
+    pub fn get_column_type(&self) -> &str { &self.column_type }
 
     pub fn get_default_value(&self) -> &Option<String> { &self.default_value }
 
@@ -111,9 +111,8 @@ mod tests {
     use shared_lib::FieldJs;
 
     use crate::data_types::DataType::*;
-    use crate::numbers::NumberKind::F64Kind;
-    use crate::numbers::NumberValue::Float64Value;
-    use crate::row;
+    use crate::number_kind::NumberKind::F64Kind;
+    use crate::numbers::NumberValue::F64Value;
     use crate::server::SystemInfoJs;
     use crate::testdata::{make_quote_columns, make_table_columns};
     use crate::typed_values::TypedValue::*;
@@ -168,8 +167,8 @@ mod tests {
             TableColumn::new("exchange", StringType(4), Null, 22),
             TableColumn::new("last_sale", NumberType(F64Kind), Null, 35),
         ];
-        let row = row!(123, columns, vec![
-            StringValue("FOX".into()), StringValue("NYSE".into()), Number(Float64Value(37.65)),
+        let row = Row::new(123, vec![
+            StringValue("FOX".into()), StringValue("NYSE".into()), Number(F64Value(37.65)),
         ]);
         // define a row-js
         let fields_js = vec![
@@ -189,9 +188,9 @@ mod tests {
         // verify the value extraction
         assert_eq!(determine_column_value(&row_js, "symbol"), StringValue("FOX".into()));
         assert_eq!(determine_column_value(&row_js, "exchange"), StringValue("NYSE".into()));
-        assert_eq!(determine_column_value(&row_js, "last_sale"), Number(Float64Value(37.65)));
+        assert_eq!(determine_column_value(&row_js, "last_sale"), Number(F64Value(37.65)));
         // cross-convert and verify
-        assert_eq!(row.to_row_js(), row_js.to_owned());
+        assert_eq!(row.to_row_js(&columns), row_js.to_owned());
         assert_eq!(Row::from_row_js(&columns, &row_js), row);
     }
 }

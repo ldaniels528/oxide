@@ -39,6 +39,7 @@ mod machine;
 mod mnemonic;
 mod model_row_collection;
 mod namespaces;
+mod number_kind;
 mod numbers;
 mod readme;
 mod repl;

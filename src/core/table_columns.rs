@@ -2,8 +2,6 @@
 // table columns module
 ////////////////////////////////////////////////////////////////////
 
-use std::io;
-
 use serde::{Deserialize, Serialize};
 
 use crate::data_types::DataType;
@@ -22,15 +20,6 @@ pub struct TableColumn {
 }
 
 impl TableColumn {
-    pub fn validate_compatibility(cs0: &Vec<TableColumn>, cs1: &Vec<TableColumn>) -> TypedValue {
-        match (cs0, cs1) {
-            (a, b) if a.len() != b.len() =>
-                ErrorValue(format!("Mismatched number of arguments: {} vs. {}", cs0.len(), cs1.len())),
-            _ =>
-                TypedValue::Ack
-        }
-    }
-
     pub fn new(name: impl Into<String>,
                data_type: DataType,
                default_value: TypedValue,
@@ -45,32 +34,44 @@ impl TableColumn {
         }
     }
 
-    pub fn from_column(column: &ColumnJs, offset: usize) -> io::Result<TableColumn> {
-        Ok(Self::new(column.get_name(),
-                     DataType::compile(column.get_column_type())?,
-                     TypedValue::wrap_value_opt(column.get_default_value())?, offset))
+    pub fn from_column(column: &ColumnJs, offset: usize) -> std::io::Result<TableColumn> {
+        Ok(Self::new(
+            column.get_name(),
+            DataType::compile(column.get_column_type())?,
+            TypedValue::wrap_value_opt(&column.get_default_value())?, offset))
     }
 
-    pub fn from_columns(columns: &Vec<ColumnJs>) -> io::Result<Vec<TableColumn>> {
+    pub fn from_columns(columns: &Vec<ColumnJs>) -> std::io::Result<Vec<TableColumn>> {
         let mut offset: usize = Row::overhead();
         let mut physical_columns: Vec<TableColumn> = Vec::with_capacity(columns.len());
         for column in columns {
-            let physical_column: TableColumn = Self::from_column(&column, offset)?;
+            let physical_column = Self::from_column(&column, offset)?;
             offset += physical_column.max_physical_size;
             physical_columns.push(physical_column);
         }
         Ok(physical_columns)
     }
 
+    pub fn validate_compatibility(cs0: &Vec<TableColumn>, cs1: &Vec<TableColumn>) -> TypedValue {
+        match (cs0, cs1) {
+            (a, b) if a.len() != b.len() =>
+                ErrorValue(format!("Mismatched number of arguments: {} vs. {}", cs0.len(), cs1.len())),
+            _ =>
+                TypedValue::Ack
+        }
+    }
+
     pub fn get_name(&self) -> &str { self.name.as_str() }
+
+    pub fn get_default_value(&self) -> TypedValue { self.default_value.to_owned() }
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::*;
-    use crate::numbers::NumberKind::F64Kind;
-    use crate::numbers::NumberValue::Float64Value;
+    use crate::number_kind::NumberKind::F64Kind;
+    use crate::numbers::NumberValue::F64Value;
     use crate::testdata::make_quote_columns;
     use crate::typed_values::TypedValue::*;
 
@@ -78,10 +79,10 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let column: TableColumn = TableColumn::new("last_sale", NumberType(F64Kind), Number(Float64Value(0.142857)), 0);
+        let column: TableColumn = TableColumn::new("last_sale", NumberType(F64Kind), Number(F64Value(0.142857)), 0);
         assert_eq!(column.name, "last_sale");
         assert_eq!(column.data_type, NumberType(F64Kind));
-        assert_eq!(column.default_value, Number(Float64Value(0.142857)));
+        assert_eq!(column.default_value, Number(F64Value(0.142857)));
         assert_eq!(column.max_physical_size, 9);
     }
 

@@ -4,45 +4,46 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const T_NUMBER_START: u8 = 72;
+pub const T_NUMBER_START: u8 = 56;
 
 // Represents a data type kind or class
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataTypeKind {
-    TAck = 0,
-    TUndefined = 1,
-    TNull = 4,
-    TArray = 8,
-    TBackDoor = 10,
-    TBlob = 12,
-    TBoolean = 16,
-    TClob = 20,
-    TDate = 24,
-    TError = 28,
-    TEnum = 32,
-    TFunction = 44,
-    TJsonObject = 68,
-    TNamespace = 70,
-    TNumberF32 = T_NUMBER_START + 0,
-    TNumberF64 = T_NUMBER_START + 1,
-    TNumberI8 = T_NUMBER_START + 2,
-    TNumberI16 = T_NUMBER_START + 3,
-    TNumberI32 = T_NUMBER_START + 4,
-    TNumberI64 = T_NUMBER_START + 5,
-    TNumberI128 = T_NUMBER_START + 6,
-    TNumberU8 = T_NUMBER_START + 7,
-    TNumberU16 = T_NUMBER_START + 8,
-    TNumberU32 = T_NUMBER_START + 9,
-    TNumberU64 = T_NUMBER_START + 10,
-    TNumberU128 = T_NUMBER_START + 11,
-    TNumberNan = T_NUMBER_START + 12,
-    TRowsAffected = 96,
-    TString = 100,
-    TStructure = 104,
-    TTableValue = 108,
-    TTuple = 112,
-    TUUID = 116,
+    TxAck = 0,
+    TxArray = 8,
+    TxBackDoor = 12,
+    TxBlob = 16,
+    TxBoolean = 20,
+    TxClob = 24,
+    TxDate = 28,
+    TxError = 32,
+    TxEnum = 36,
+    TxFunction = 40,
+    TxJsonObject = 44,
+    TxNamespace = 48,
+    TxNull = 52,
+    TxNumberF32 = T_NUMBER_START + 0,
+    TxNumberF64 = T_NUMBER_START + 1,
+    TxNumberI8 = T_NUMBER_START + 2,
+    TxNumberI16 = T_NUMBER_START + 3,
+    TxNumberI32 = T_NUMBER_START + 4,
+    TxNumberI64 = T_NUMBER_START + 5,
+    TxNumberI128 = T_NUMBER_START + 6,
+    TxNumberU8 = T_NUMBER_START + 7,
+    TxNumberU16 = T_NUMBER_START + 8,
+    TxNumberU32 = T_NUMBER_START + 9,
+    TxNumberU64 = T_NUMBER_START + 10,
+    TxNumberU128 = T_NUMBER_START + 11,
+    TxNumberNaN = T_NUMBER_START + 12,
+    TxRowsAffected = 70,
+    TxString = 74,
+    TxStructure = 78,
+    TxTableValue = 82,
+    TxTuple = 86,
+    TxUndefined = 90,
+    TxUUID = 94,
+
 }
 
 impl DataTypeKind {
@@ -60,12 +61,14 @@ impl DataTypeKind {
     pub fn values() -> Vec<DataTypeKind> {
         use DataTypeKind::*;
         vec![
-            TUndefined, TAck, TNull, TArray, TBackDoor, TBlob, TBoolean,
-            TClob, TDate, TError, TEnum, TFunction, TJsonObject, TNamespace,
-            TNumberF32, TNumberF64,
-            TNumberI8, TNumberI16, TNumberI32, TNumberI64, TNumberI128,
-            TNumberU8, TNumberU16, TNumberU32, TNumberU64, TNumberU128,
-            TNumberNan, TRowsAffected, TString, TStructure, TTableValue, TTuple, TUUID,
+            TxAck, TxArray, TxBackDoor, TxBlob, TxBoolean,
+            TxClob, TxDate, TxError, TxEnum, TxFunction, TxJsonObject,
+            TxNamespace, TxNull,
+            TxNumberF32, TxNumberF64,
+            TxNumberI8, TxNumberI16, TxNumberI32, TxNumberI64, TxNumberI128,
+            TxNumberU8, TxNumberU16, TxNumberU32, TxNumberU64, TxNumberU128,
+            TxNumberNaN, TxRowsAffected, TxString, TxStructure, TxTableValue, TxTuple,
+            TxUndefined, TxUUID,
         ]
     }
 }
