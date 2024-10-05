@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-// row-collection module
+// RowCollection module
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::Debug;
@@ -12,7 +12,7 @@ use shared_lib::fail;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::compiler::fail_value;
 use crate::data_types::DataType::*;
-use crate::expression::Expression;
+use crate::expression::Condition;
 use crate::field_metadata::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
@@ -226,11 +226,11 @@ pub trait RowCollection: Debug {
         }
     }
 
-    fn filter_rows(&self, condition: &Expression) -> std::io::Result<Vec<Row>> {
+    fn filter_rows(&self, condition: &Condition) -> std::io::Result<Vec<Row>> {
         let machine = Machine::new();
         let result = self.iter().filter(|row| {
             let machine = machine.with_row(self.get_columns(), &row);
-            match machine.evaluate(condition) {
+            match machine.evaluate_cond(condition) {
                 Ok((_, Boolean(true))) => true,
                 _ => false
             }
@@ -391,7 +391,7 @@ pub trait RowCollection: Debug {
     }
 
     /// Evaluates a callback function for each active row in the table
-    fn for_each(&self, callback: fn(Row) -> ()) -> TypedValue {
+    fn for_each(&self, callback: Box<dyn Fn(Row) -> ()>) -> TypedValue {
         match self.len() {
             Ok(eof) => {
                 for row_id in 0..eof {
@@ -405,6 +405,31 @@ pub trait RowCollection: Debug {
             }
             Err(err) => ErrorValue(err.to_string())
         }
+    }
+
+    fn for_left_where(
+        &self,
+        condition: &Condition,
+        initial_value: TypedValue,
+        callback: fn(&TypedValue, Row) -> TypedValue,
+    ) -> TypedValue {
+        let mut result = initial_value;
+        let machine = Machine::new();
+        let columns = self.get_columns();
+        for row in self.iter() {
+            let ms = machine.with_row(columns, &row);
+            match ms.evaluate_cond(condition) {
+                Ok((_ms, Ack | Boolean(true))) => {
+                    match callback(&result, row) {
+                        ErrorValue(msg) => return ErrorValue(msg),
+                        value => result = value
+                    }
+                }
+                Ok(..) => {}
+                Err(err) => return ErrorValue(err.to_string())
+            }
+        }
+        result
     }
 
     /// returns the columns that represent device
@@ -770,12 +795,14 @@ mod tests {
 
     use shared_lib::cnv_error;
 
+    use crate::expression::Condition::Equal;
+    use crate::expression::Expression::{Literal, Variable};
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::numbers::NumberValue::F64Value;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_quote, make_quote_columns, make_scan_quote, make_table_columns, make_table_file};
+    use crate::testdata::*;
 
     use super::*;
 
@@ -793,7 +820,7 @@ mod tests {
         let (row, rmd) = rc.read_row(0).unwrap();
         assert!(rmd.is_allocated);
         assert_eq!(row, Row::new(0, vec![
-            StringValue("RICE".into()), StringValue("NYSE".into()), Number(F64Value(78.78))
+            StringValue("RICE".into()), StringValue("NYSE".into()), Number(F64Value(78.78)),
         ]))
     }
 
@@ -808,7 +835,7 @@ mod tests {
         let (row, rmd) = rc.read_row(0).unwrap();
         assert!(rmd.is_allocated);
         assert_eq!(row, Row::new(0, vec![
-            StringValue("BEAM".into()), StringValue("NYSE".into()), Number(F64Value(78.35))
+            StringValue("BEAM".into()), StringValue("NYSE".into()), Number(F64Value(78.35)),
         ]))
     }
 
@@ -1130,6 +1157,33 @@ mod tests {
 
         // test the variants
         verify_variants("fold_left", make_table_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_fold_left_where() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<TableColumn>) {
+            // write some rows
+            assert_eq!(RowsAffected(0), rc.append_row(make_quote(0, "ABC", "NYSE", 21.22)));
+            assert_eq!(RowsAffected(1), rc.append_row(make_quote(0, "XCI", "NYSE", 98.44)));
+            assert_eq!(RowsAffected(2), rc.append_row(make_quote(0, "JJJ", "NASDAQ", 0.0076)));
+            assert_eq!(RowsAffected(3), rc.append_row(make_quote(0, "BMX", "NASDAQ", 33.33)));
+            assert_eq!(RowsAffected(4), rc.append_row(make_quote(0, "RIDE", "NASDAQ", 0.00)));
+
+            // fold and verify
+            let condition = Equal(
+                Box::new(Variable("exchange".into())),
+                Box::new(Literal(StringValue("NYSE".into()))));
+            assert_eq!(
+                rc.for_left_where(
+                    &condition,
+                    Number(F64Value(0.)),
+                    |accum, row| accum.to_owned() + row.get(2)),
+                Number(F64Value(119.66)),
+            );
+        }
+
+        // test the variants
+        verify_variants("fold_left_where", make_table_columns(), test_variant);
     }
 
     #[test]

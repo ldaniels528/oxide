@@ -89,6 +89,7 @@ fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
 
 fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
+        skip_comments,
         next_compound_symbol_token,
         next_compound_operator_token,
         next_operator_token,
@@ -243,6 +244,18 @@ fn next_symbol_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_glyph_token(inputs, pos, Token::operator, has_more)
 }
 
+fn skip_comments(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    let symbol1 = "//";
+    let start = *pos;
+    if has_at_least(inputs, pos, symbol1.len()) && is_same(&inputs[start..(start + symbol1.len())], symbol1) {
+        *pos += symbol1.len();
+        while has_more(inputs, pos) && inputs[*pos] != '\n' { *pos += 1 }
+        *pos += 1;
+        has_next(inputs, pos);
+    }
+    None
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
@@ -324,4 +337,15 @@ mod tests {
         }
         assert_eq!(tokens.len(), 9);
     }
+
+    #[test]
+    fn test_skip_comments() {
+        assert_eq!(parse_fully(r#"
+            // this is a comment
+            one
+            "#), vec![
+            Token::atom("one".into(), 46, 49, 3, 14)
+        ])
+    }
+    
 }

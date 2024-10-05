@@ -61,6 +61,9 @@ mod tokens;
 mod typed_values;
 mod view_row_collection;
 mod websockets;
+mod expression_support;
+mod decompiler;
+mod native;
 
 /// Starts the Oxide server
 #[actix_web::main]

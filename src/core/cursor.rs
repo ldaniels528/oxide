@@ -4,7 +4,7 @@
 
 use std::fmt::Debug;
 
-use crate::expression::Expression;
+use crate::expression::Condition;
 use crate::machine::Machine;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
@@ -13,7 +13,7 @@ use crate::rows::Row;
 #[derive(Debug)]
 pub struct Cursor {
     rc: Box<dyn RowCollection>,
-    condition: Option<Box<Expression>>,
+    condition: Option<Condition>,
     is_forward: bool,
     position: usize,
 }
@@ -27,7 +27,7 @@ impl Cursor {
     /// Full constructor
     pub fn construct(
         rc: Box<dyn RowCollection>,
-        condition: Option<Box<Expression>>,
+        condition: Option<Condition>,
         is_forward: bool,
         position: usize,
     ) -> Self {
@@ -35,8 +35,8 @@ impl Cursor {
     }
 
     /// Creates a new cursor that returns rows which satisfy a given condition
-    pub fn filter(rc: Box<dyn RowCollection>, condition: Expression) -> Self {
-        Self::construct(rc, Some(Box::new(condition)), true, 0)
+    pub fn filter(rc: Box<dyn RowCollection>, condition: Condition) -> Self {
+        Self::construct(rc, Some(condition), true, 0)
     }
 
     /// Creates a new cursor that returns all rows
@@ -169,7 +169,8 @@ impl Cursor {
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
     use crate::cursor::Cursor;
-    use crate::expression::Expression::{Equal, Literal, Variable};
+    use crate::expression::Condition::Equal;
+    use crate::expression::Expression::{Literal, Variable};
     use crate::table_columns::TableColumn;
     use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::StringValue;

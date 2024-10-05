@@ -2,8 +2,9 @@
 // REPL module
 ////////////////////////////////////////////////////////////////////
 
-use std::io::{BufRead, BufReader, stdout, Write};
-use std::sync::{Arc, Mutex};
+use std::error::Error;
+use std::io::{BufRead, Read, stdout, Write};
+use std::ops::Sub;
 
 use chrono::Local;
 use crossterm::execute;
@@ -24,7 +25,7 @@ use crate::table_columns::TableColumn;
 use crate::table_renderer::TableRenderer;
 use crate::table_writer::TableWriter;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Function};
+use crate::typed_values::TypedValue::{ErrorValue, Function, TableValue};
 
 pub const HISTORY_TABLE_NAME: &str = "history";
 
@@ -157,59 +158,90 @@ pub async fn run(mut state: REPLState) -> std::io::Result<()> {
         stdout.flush()?;
 
         // read and process the input - capturing the processing time
-        let input = read_lines()?;
-        if input.trim() == "q!" {
-            return Ok(());
+        if let Some(input) = read_line()? {
+            match input.trim() {
+                "" => {}
+                "q!" => return Ok(()),
+                input => {
+                    let pid = state.counter;
+                    let t0 = Local::now();
+                    let result = process_statement(&mut state, input)
+                        .await
+                        .unwrap_or_else(|err| ErrorValue(err.to_string()));
+                    let t1 = Local::now();
+                    let t2 = t1 - t0;
+
+                    // write the outcome result
+                    let execution_time = match t2.num_nanoseconds() {
+                        Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
+                        None => t2.num_milliseconds().to_f64().unwrap_or(0.)
+                    };
+                    let type_name = result.get_type_name();
+                    let extras = match &result {
+                        TableValue(mrc) => format!(" ~ {} row(s)", &mrc.len()?),
+                        _ => "".to_string()
+                    };
+                    stdout.write(format!("[{}] {}{} in {:.1} millis\n", pid, type_name, extras, execution_time).as_bytes())?;
+
+                    // show the output
+                    match result {
+                        TableValue(mrc) => {
+                            let lines =
+                                TableRenderer::from_collection(Box::new(mrc.to_owned()));
+                            for line in lines { stdout.write((line + "\n").as_bytes())?; }
+                        }
+                        z => {
+                            stdout.write((z.unwrap_value() + "\n").as_bytes())?;
+                        }
+                    };
+                    stdout.flush()?;
+                }
+            }
         }
-        let pid = state.counter;
-        let t0 = Local::now();
-        let result = process_statement(&mut state, input.as_str())
-            .await
-            .unwrap_or_else(|err| TypedValue::ErrorValue(err.to_string()));
-        let t1 = Local::now();
-        let t2 = t1 - t0;
-
-        // write the outcome result
-        let execution_time = match t2.num_nanoseconds() {
-            Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
-            None => t2.num_milliseconds().to_f64().unwrap_or(0.)
-        };
-        let type_name = result.get_type_name();
-        let extras = match &result {
-            TypedValue::TableValue(mrc) => format!(" ~ {} row(s)", &mrc.len()?),
-            _ => "".to_string()
-        };
-        stdout.write(format!("[{}] {}{} in {:.1} millis\n", pid, type_name, extras, execution_time).as_bytes())?;
-
-        // show the output
-        match result {
-            TypedValue::TableValue(mrc) => {
-                let lines =
-                    TableRenderer::from_collection(Box::new(mrc.to_owned()));
-                for line in lines { stdout.write((line + "\n").as_bytes())?; }
-            }
-            z => {
-                stdout.write((z.unwrap_value() + "\n").as_bytes())?;
-            }
-        };
-        stdout.flush()?;
     }
     Ok(())
 }
 
-fn read_lines() -> std::io::Result<String> {
-    let reader = Arc::new(Mutex::new(BufReader::new(std::io::stdin())));
-    let mut reader = reader.lock().unwrap();
-    let mut sb = String::new();
-    let mut done = false;
-    while !done {
-        let mut line = String::new();
-        match reader.read_line(&mut line)? {
-            n if n <= 1 => done = true, // EOF reached
-            _ => if !line.trim().is_empty() { sb.push_str(line.as_str()) }
-        }
+fn read_line() -> std::io::Result<Option<String>> {
+    use crossterm::event::{self, Event, KeyCode};
+    use std::io::Write;
+    let mut buffer = String::new();
+    let mut lines = Vec::new();
+    let mut last_char = '\n';
+
+    fn chars_available() -> bool {
+        event::poll(std::time::Duration::from_millis(250)).unwrap_or_else(|_| false)
     }
-    Ok(sb.to_string())
+
+    loop {
+        stdout().flush()?;
+        if chars_available() {
+            if let Event::Key(key_event) = event::read()? {
+                match key_event.code {
+                    KeyCode::Enter =>
+                        match last_char {
+                            '\\' => {
+                                buffer.pop();
+                                lines.push(buffer.to_string());
+                                buffer.clear();
+                                last_char = '\n';
+                            }
+                            _ => {
+                                lines.push(buffer.to_string());
+                                break;
+                            }
+                        }
+                    KeyCode::Char(c) => {
+                        buffer.push(c);
+                        last_char = c;
+                    }
+                    KeyCode::Esc => break,
+                    _ => {}
+                }
+            }
+        } else if !buffer.is_empty() { break; }
+    }
+    Ok(if lines.is_empty() { None } else { Some(lines.join("\n")) })
 }
 
 /// Processes user input against a local Oxide instance or a remote Oxide peer

@@ -7,6 +7,7 @@ use std::fmt::Debug;
 
 use serde::{Deserialize, Serialize};
 
+use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::NumberValue::U16Value;
 use crate::rows::Row;
@@ -109,6 +110,19 @@ impl Structure {
         self.values.to_owned()
     }
 
+    pub fn inject(&self, ms: Machine) -> Machine {
+        // add all scope variables (includes functions)
+        let ms = self.variables.iter().fold(ms, |ms, (name, value)| {
+            ms.with_variable(name, value.to_owned())
+        });
+        // add all structure fields
+        let ms = self.fields.iter().zip(self.values.iter()).fold(ms, |ms, (field, value)| {
+            ms.with_variable(field.get_name(), value.to_owned())
+        });
+        // add self-reference
+        ms.with_variable("self", StructureValue(self.clone()))
+    }
+
     pub fn to_row(&self) -> Row {
         Row::new(0, self.values.to_owned())
     }
@@ -208,7 +222,7 @@ mod tests {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
         let structure = Structure::from_row(phys_columns.clone(),
-            &make_quote(0, "ABC", "AMEX", 11.77)
+                                            &make_quote(0, "ABC", "AMEX", 11.77),
         );
         assert_eq!(structure.get("symbol"), StringValue("ABC".to_string()));
         assert_eq!(structure.get("exchange"), StringValue("AMEX".to_string()));
@@ -300,10 +314,10 @@ mod tests {
             StringValue("NASDAQ".to_string()),
             Number(F64Value(22.11)),
         ], {
-            let mut variables = HashMap::new();
-            variables.insert("name".to_string(), StringValue("Oxide".into()));
-            variables
-        });
+                                            let mut variables = HashMap::new();
+                                            variables.insert("name".to_string(), StringValue("Oxide".into()));
+                                            variables
+                                        });
         assert_eq!(actual, expected);
     }
 }

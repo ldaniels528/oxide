@@ -2,7 +2,7 @@
 // view row-collection module
 ////////////////////////////////////////////////////////////////////
 
-use crate::expression::Expression;
+use crate::expression::Condition;
 use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
 use crate::row_collection::RowCollection;
@@ -16,15 +16,15 @@ use crate::typed_values::TypedValue::ErrorValue;
 #[derive(Debug)]
 pub struct ViewRowCollection {
     host: Box<dyn RowCollection>,
-    condition: Expression,
+    condition: Condition,
 }
 
 impl ViewRowCollection {
-    pub fn new(host: Box<dyn RowCollection>, condition: Expression) -> Self {
+    pub fn new(host: Box<dyn RowCollection>, condition: Condition) -> Self {
         Self { host, condition }
     }
 
-    pub fn get_condition(&self) -> &Expression { &self.condition }
+    pub fn get_condition(&self) -> &Condition { &self.condition }
 
     pub fn get_host(&self) -> &Box<dyn RowCollection> { &self.host }
 }
@@ -78,7 +78,7 @@ impl RowCollection for ViewRowCollection {
         let (row, rmd) = self.host.read_row(id)?;
         if rmd.is_allocated {
             let machine = Machine::new().with_row(self.get_columns(), &row);
-            if row.matches(&machine, &Some(Box::new(self.condition.to_owned())), self.get_columns()) {
+            if row.matches(&machine, &Some(self.condition.to_owned()), self.get_columns()) {
                 return Ok(Some(row));
             }
         }
@@ -89,7 +89,7 @@ impl RowCollection for ViewRowCollection {
         let (row, rmd) = self.host.read_row(id)?;
         if rmd.is_allocated {
             let machine = Machine::new().with_row(self.get_columns(), &row);
-            if row.matches(&machine, &Some(Box::new(self.condition.to_owned())), self.get_columns()) {
+            if row.matches(&machine, &Some(self.condition.to_owned()), self.get_columns()) {
                 return Ok((row, rmd));
             }
         }
@@ -100,7 +100,7 @@ impl RowCollection for ViewRowCollection {
         let (row, rmd) = self.host.read_row(id)?;
         if rmd.is_allocated {
             let machine = Machine::new().with_row(self.get_columns(), &row);
-            if row.matches(&machine, &Some(Box::new(self.condition.to_owned())), self.get_columns()) {
+            if row.matches(&machine, &Some(self.condition.to_owned()), self.get_columns()) {
                 return Ok(rmd);
             }
         }
@@ -115,6 +115,7 @@ impl RowCollection for ViewRowCollection {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::expression::Condition::{Equal, LessThan};
     use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::model_row_collection::ModelRowCollection;
@@ -174,7 +175,7 @@ mod tests {
     fn test_out_of_band_rows() {
         let vrc = ViewRowCollection::new(Box::new(create_data_set()), Equal(
             Box::new(Variable("exchange".into())),
-            Box::new(Literal(StringValue("NASDAQ".into())))),
+            Box::new(Literal(StringValue("NASDAQ".into()))))
         );
 
         // attempt to retrieve out-of-band rows
@@ -190,7 +191,7 @@ mod tests {
     fn create_data_set() -> ModelRowCollection {
         let columns = make_quote_columns();
         let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        ModelRowCollection::from_rows(phys_columns.clone(),vec![
+        ModelRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "IBM", "NYSE", 21.22),
             make_quote(1, "ATT", "NYSE", 98.44),
             make_quote(2, "HOCK", "AMEX", 0.0076),

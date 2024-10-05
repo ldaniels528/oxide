@@ -14,7 +14,7 @@ use shared_lib::{FieldJs, RowJs};
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::codec;
 use crate::data_types::DataType;
-use crate::expression::Expression;
+use crate::expression::Condition;
 use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
 use crate::row_metadata::RowMetadata;
@@ -196,12 +196,12 @@ impl Row {
     pub fn matches(
         &self,
         machine: &Machine,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         columns: &Vec<TableColumn>,
     ) -> bool {
         if let Some(condition) = condition {
             let machine = machine.with_row(columns, &self);
-            match machine.evaluate(condition) {
+            match machine.evaluate_cond(condition) {
                 Ok((_, Boolean(true) | Null | Undefined)) => true,
                 Ok(_) => false,
                 Err(..) => false
@@ -217,7 +217,7 @@ impl Row {
     }
 
     /// Transforms the row into JSON
-    pub fn to_json(&self, columns: Vec<TableColumn>) -> String {
+    pub fn to_json(&self, columns: &Vec<TableColumn>) -> String {
         let inside = columns.iter().zip(self.values.iter())
             .map(|(k, v)|
                 format!(r#""{}":{}"#, k.get_name(), v.get_raw_value()))

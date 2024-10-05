@@ -5,6 +5,7 @@
 use std::mem::size_of;
 
 use uuid::Uuid;
+use shared_lib::fail;
 
 pub fn decode_row_id(buffer: &Vec<u8>, offset: usize) -> usize {
     let mut id_array = [0u8; 8];
@@ -57,9 +58,11 @@ pub(crate) fn decode_u8x16<A>(buffer: &Vec<u8>, offset: usize, f: fn([u8; 16]) -
     f(scratch)
 }
 
-pub(crate) fn decode_uuid(uuid_str: &str) -> std::io::Result<[u8; 16]> {
-    Ok(*Uuid::parse_str(uuid_str)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?.as_bytes())
+pub(crate) fn decode_uuid(uuid_str: &str) -> std::io::Result<u128> {
+    match Uuid::parse_str(uuid_str) {
+        Ok(uuid) => Ok(uuid.as_u128()),
+        Err(err) => fail(err.to_string())
+    }
 }
 
 pub fn encode_chars(chars: Vec<char>) -> Vec<u8> {
@@ -148,8 +151,8 @@ mod tests {
 
     #[test]
     fn test_decode_uuid() {
-        let bytes: [u8; 16] = decode_uuid("2992bb53-cc3c-4f30-8a4c-c1a666afcc46").unwrap();
-        assert_eq!(bytes, [0x29, 0x92, 0xbb, 0x53, 0xcc, 0x3c, 0x4f, 0x30, 0x8a, 0x4c, 0xc1, 0xa6, 0x66, 0xaf, 0xcc, 0x46])
+        let uuid = decode_uuid("2992bb53-cc3c-4f30-8a4c-c1a666afcc46").unwrap();
+        assert_eq!(uuid, 0x2992bb53cc3c4f308a4cc1a666afcc46u128)
     }
 
     #[test]

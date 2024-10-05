@@ -21,7 +21,7 @@ use crate::backdoor::BackDoorFunction;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::cnv_error;
 use crate::codec;
-use crate::compiler::fail_value;
+use crate::compiler::{Compiler, fail_value};
 use crate::data_type_kind::DataTypeKind;
 use crate::data_type_kind::DataTypeKind::*;
 use crate::data_types::*;
@@ -67,7 +67,7 @@ pub enum TypedValue {
     StructureValue(Structure),
     TableValue(ModelRowCollection),
     TupleValue(Vec<TypedValue>),
-    UUIDValue([u8; 16]),
+    UUIDValue(u128),
     Null,
     Undefined,
 }
@@ -111,7 +111,7 @@ impl TypedValue {
                     Err(err) => ErrorValue(err.to_string())
                 }
             TableType(columns) => TableValue(ModelRowCollection::construct(columns)),
-            UUIDType => codec::decode_u8x16(buffer, offset, |b| UUIDValue(b))
+            UUIDType => codec::decode_u8x16(buffer, offset, |b| UUIDValue(u128::from_be_bytes(b)))
         }
     }
 
@@ -153,7 +153,7 @@ impl TypedValue {
                 for item in items { bytes.extend(item.encode()); }
                 bytes
             }
-            UUIDValue(guid) => guid.to_vec(),
+            UUIDValue(guid) => guid.to_be_bytes().to_vec()
         }
     }
 
@@ -207,7 +207,7 @@ impl TypedValue {
             StringType(..) => StringValue(buffer.next_string()),
             StructureType(columns) => StructureValue(buffer.next_struct_with_columns(columns)?),
             TableType(columns) => TableValue(buffer.next_table_with_columns(columns)?),
-            UUIDType => UUIDValue(buffer.next_uuid()),
+            UUIDType => UUIDValue(buffer.next_u128()),
         };
         Ok(tv)
     }
@@ -233,17 +233,6 @@ impl TypedValue {
             s if int_regex.is_match(s) => Ok(Number(I64Value(s.parse().map_err(|e| cnv_error!(e))?))),
             s if decimal_regex.is_match(s) => Ok(Number(F64Value(s.parse().map_err(|e| cnv_error!(e))?))),
             s => Ok(StringValue(s.to_string()))
-        }
-    }
-
-    pub async fn from_response(response: Response) -> Self {
-        if response.status().is_success() {
-            match response.text().await {
-                Ok(body) => StringValue(body),
-                Err(err) => ErrorValue(format!("Error reading response body: {}", err)),
-            }
-        } else {
-            ErrorValue(format!("Request failed with status: {}", response.status()))
         }
     }
 
@@ -499,7 +488,7 @@ impl TypedValue {
             TupleValue(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
             Undefined => serde_json::Value::Null,
-            UUIDValue(guid) => serde_json::json!(Uuid::from_bytes(*guid).to_string()),
+            UUIDValue(guid) => serde_json::json!(Uuid::from_u128(*guid).to_string()),
         }
     }
 
@@ -610,7 +599,7 @@ impl TypedValue {
                 format!("({})", values.join(", "))
             }
             Undefined => "undefined".into(),
-            UUIDValue(guid) => Uuid::from_bytes(*guid).to_string(),
+            UUIDValue(guid) => Uuid::from_u128(*guid).to_string(),
         }
     }
 
@@ -1050,10 +1039,8 @@ mod tests {
         verify_to_json(Null, serde_json::Value::Null);
         verify_to_json(StringValue("Hello World".into()), serde_json::Value::String("Hello World".into()));
         verify_to_json(Undefined, serde_json::Value::Null);
-        verify_to_json(UUIDValue([
-            0x67, 0x45, 0x23, 0x01, 0xAB, 0xCD, 0xEF, 0x89,
-            0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
-        ]), serde_json::Value::String("67452301-abcd-ef89-1234-567890abcdef".into()));
+        verify_to_json(UUIDValue(0x67452301_ABCD_EF89_1234_567890ABCDEFu128),
+                       serde_json::Value::String("67452301-abcd-ef89-1234-567890abcdef".into()));
     }
 
     #[test]
@@ -1067,10 +1054,9 @@ mod tests {
         verify_wrap_unwrap("null", Null);
         verify_wrap_unwrap("Hello World", StringValue("Hello World".into()));
         verify_wrap_unwrap("undefined", Undefined);
-        verify_wrap_unwrap("67452301-abcd-ef89-1234-567890abcdef", UUIDValue([
-            0x67, 0x45, 0x23, 0x01, 0xAB, 0xCD, 0xEF, 0x89,
-            0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,
-        ]))
+        verify_wrap_unwrap("67452301-abcd-ef89-1234-567890abcdef", UUIDValue(
+            0x67452301_ABCD_EF89_1234_567890ABCDEFu128
+        ))
     }
 
     #[test]

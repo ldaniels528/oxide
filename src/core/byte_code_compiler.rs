@@ -14,10 +14,12 @@ use crate::data_type_kind::DataTypeKind;
 use crate::data_type_kind::DataTypeKind::*;
 use crate::data_types::DataType;
 use crate::expression::*;
-use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+use crate::expression::Condition::*;
 use crate::expression::Expression::*;
-use crate::expression::MutateTarget::{IndexTarget, TableTarget};
-use crate::expression::Queryable::Describe;
+use crate::expression_support::{Directives, Excavation, Infrastructure, Mutation, Queryable};
+use crate::expression_support::CreationEntity::{IndexEntity, TableEntity};
+use crate::expression_support::MutateTarget::{IndexTarget, TableTarget};
+use crate::expression_support::Queryable::Describe;
 use crate::mnemonic::Mnemonic;
 use crate::mnemonic::Mnemonic::*;
 use crate::model_row_collection::ModelRowCollection;
@@ -30,7 +32,7 @@ use crate::table_columns::TableColumn;
 use crate::typed_values::*;
 use crate::typed_values::TypedValue::{BackDoor, Function, StringValue};
 
-/// A JVM-inspired Byte Buffer utility (Big Endian)
+/// A JVM-inspired ByteBuffer-like utility (Big Endian)
 pub struct ByteCodeCompiler {
     buf: Vec<u8>,
     limit: usize,
@@ -196,26 +198,26 @@ impl ByteCodeCompiler {
         use crate::expression::Expression::*;
         use crate::mnemonic::Mnemonic::*;
         match expression {
-            And(a, b) => Self::encode(ExAnd.to_u8(), vec![a, b]),
             ArrayLiteral(items) => Self::encode_vec(ExArrayLit.to_u8(), items),
             AsValue(name, expr) =>
                 Self::encode(ExAsValue.to_u8(), vec![&Literal(StringValue(name.to_string())), expr]),
-            Between(a, b, c) =>
-                Self::encode(ExBetween.to_u8(), vec![a, b, c]),
-            Betwixt(a, b, c) =>
-                Self::encode(ExBetwixt.to_u8(), vec![a, b, c]),
             BitwiseAnd(a, b) =>
                 Self::encode(ExBitwiseAnd.to_u8(), vec![a, b]),
             BitwiseOr(a, b) =>
                 Self::encode(ExBitwiseOr.to_u8(), vec![a, b]),
             BitwiseXor(a, b) =>
                 Self::encode(ExBitwiseXor.to_u8(), vec![a, b]),
+            BitwiseShiftLeft(a, b) =>
+                Self::encode(ExBitwiseShiftLeft.to_u8(), vec![a, b]),
+            BitwiseShiftRight(a, b) =>
+                Self::encode(ExBitwiseShiftRight.to_u8(), vec![a, b]),
             CodeBlock(ops) => Self::encode_vec(ExCodeBlock.to_u8(), ops),
             ColumnSet(columns) => Self::encode_columns(columns),
-            Contains(a, b) => Self::encode(ExContains.to_u8(), vec![a, b]),
+            Conditional(cond) => Self::assemble_cond(cond),
+            Directive(d) => Self::assemble_directive(d),
             Divide(a, b) => Self::encode(ExDivide.to_u8(), vec![a, b]),
             ElementAt(a, b) => Self::encode(ExElemIndex.to_u8(), vec![a, b]),
-            Equal(a, b) => Self::encode(ExEqual.to_u8(), vec![a, b]),
+            Extract(a, b) => Self::encode(ExExtract.to_u8(),vec![a, b]),
             Factorial(a) => Self::encode(ExFactorial.to_u8(), vec![a]),
             Feature { title, scenarios } => {
                 let mut values = Vec::new();
@@ -227,36 +229,27 @@ impl ByteCodeCompiler {
             FunctionCall { fx, args } => {
                 let mut values = vec![fx.deref()];
                 values.extend(args);
-                Self::encode(ExWhile.to_u8(), values)
+                Self::encode(ExFunctionCall.to_u8(), values)
             }
-            GreaterThan(a, b) => Self::encode(ExGreaterThan.to_u8(), vec![a, b]),
-            GreaterOrEqual(a, b) => Self::encode(ExGreaterOrEqual.to_u8(), vec![a, b]),
             HTTP { method, url, body, headers, multipart } =>
                 Self::encode(ExHTTP.to_u8(), vec![method, url, &Self::get_or_undef(body), &Self::get_or_undef(headers), &Self::get_or_undef(multipart)]),
             If { condition, a, b } =>
                 Self::encode(ExIf.to_u8(), vec![condition, a, &Self::get_or_undef(b)]),
             Include(path) => Self::encode(ExInclude.to_u8(), vec![path]),
-            Inquire(q) => Self::assemble_inquiry(q),
             JSONLiteral(tuples) => Self::assemble_json_object(tuples),
-            LessThan(a, b) => Self::encode(ExLessThan.to_u8(), vec![a, b]),
-            LessOrEqual(a, b) => Self::encode(ExLessOrEqual.to_u8(), vec![a, b]),
             Literal(value) => Self::encode_value(ExLiteral.to_u8(), value),
             Minus(a, b) => Self::encode(ExMinus.to_u8(), vec![a, b]),
             Modulo(a, b) => Self::encode(ExModulo.to_u8(), vec![a, b]),
             Multiply(a, b) => Self::encode(ExMultiply.to_u8(), vec![a, b]),
-            MustAck(a) => Self::encode(ExMustAck.to_u8(), vec![a]),
-            MustDie(a) => Self::encode(ExMustDie.to_u8(), vec![a]),
-            MustIgnoreAck(a) => Self::encode(ExMustIgnoreAck.to_u8(), vec![a]),
-            MustNotAck(a) => Self::encode(ExMustNotAck.to_u8(), vec![a]),
-            Mutate(m) => Self::assemble_modification(m),
             Neg(a) => Self::encode(ExNeg.to_u8(), vec![a]),
-            Not(a) => Self::encode(ExNot.to_u8(), vec![a]),
-            NotEqual(a, b) => Self::encode(ExNotEqual.to_u8(), vec![a, b]),
             Ns(a) => Self::encode(ExNS.to_u8(), vec![a]),
-            Or(a, b) => Self::encode(ExOr.to_u8(), vec![a, b]),
-            Perform(i) => Self::assemble_infrastructure(i),
             Plus(a, b) => Self::encode(ExPlus.to_u8(), vec![a, b]),
             Pow(a, b) => Self::encode(ExPow.to_u8(), vec![a, b]),
+            Quarry(job) => match job {
+                Excavation::Construct(i) => Self::assemble_infrastructure(i),
+                Excavation::Mutate(m) => Self::assemble_modification(m),
+                Excavation::Query(q) => Self::assemble_inquiry(q),
+            }
             Range(a, b) => Self::encode(ExRange.to_u8(), vec![a, b]),
             Return(a) => Self::encode_vec(ExReturn.to_u8(), a),
             Scenario { title, verifications, inherits } => {
@@ -269,11 +262,15 @@ impl ByteCodeCompiler {
                 values.extend(verifications);
                 Self::encode(ExFeature.to_u8(), values)
             }
-            SERVE(a) => Self::encode(ExSERVE.to_u8(), vec![a]),
             SetVariable(name, expr) =>
                 Self::encode(ExVarSet.to_u8(), vec![&Literal(StringValue(name.into())), expr]),
-            BitwiseShiftLeft(a, b) => Self::encode(ExShiftLeft.to_u8(), vec![a, b]),
-            BitwiseShiftRight(a, b) => Self::encode(ExShiftRight.to_u8(), vec![a, b]),
+            StructureImpl(name, ops) => {
+                let mut my_ops = Vec::new();
+                let temp = Literal(StringValue(name.into()));
+                my_ops.extend(vec![&temp]);
+                my_ops.extend(ops);
+                Self::encode(ExStructureImpl.to_u8(), my_ops)
+            },
             TupleLiteral(values) => Self::encode_vec(ExTuple.to_u8(), values),
             Variable(name) => Self::encode(ExVarGet.to_u8(), vec![&Literal(StringValue(name.into()))]),
             Via(src) => Self::encode(ExVia.to_u8(), vec![src]),
@@ -282,10 +279,57 @@ impl ByteCodeCompiler {
         }
     }
 
+    /// compiles the expression into binary code
+    pub fn assemble_cond(cond: &Condition) -> Vec<u8> {
+        use Condition::*;
+        match cond {
+            And(a, b) => Self::encode(ExAnd.to_u8(), vec![a, b]),
+            Between(a, b, c) =>
+                Self::encode(ExBetween.to_u8(), vec![a, b, c]),
+            Betwixt(a, b, c) =>
+                Self::encode(ExBetwixt.to_u8(), vec![a, b, c]),
+            Contains(a, b) => Self::encode(ExContains.to_u8(), vec![a, b]),
+            Equal(a, b) => Self::encode(ExEqual.to_u8(), vec![a, b]),
+            False => vec![ExBoolean.to_u8(), 0u8],
+            GreaterThan(a, b) => Self::encode(ExGreaterThan.to_u8(), vec![a, b]),
+            GreaterOrEqual(a, b) => Self::encode(ExGreaterOrEqual.to_u8(), vec![a, b]),
+            LessThan(a, b) => Self::encode(ExLessThan.to_u8(), vec![a, b]),
+            LessOrEqual(a, b) => Self::encode(ExLessOrEqual.to_u8(), vec![a, b]),
+            Not(a) => Self::encode(ExNot.to_u8(), vec![a]),
+            NotEqual(a, b) => Self::encode(ExNotEqual.to_u8(), vec![a, b]),
+            Or(a, b) => Self::encode(ExOr.to_u8(), vec![a, b]),
+            True => vec![ExBoolean.to_u8(), 1u8],
+        }
+    }
+
+    /// compiles the expression into binary code
+    pub fn assemble_directive(directive: &Directives) -> Vec<u8> {
+        match directive {
+            Directives::MustAck(a) => Self::encode(ExMustAck.to_u8(), vec![a]),
+            Directives::MustDie(a) => Self::encode(ExMustDie.to_u8(), vec![a]),
+            Directives::MustIgnoreAck(a) => Self::encode(ExMustIgnoreAck.to_u8(), vec![a]),
+            Directives::MustNotAck(a) => Self::encode(ExMustNotAck.to_u8(), vec![a]),
+        }
+    }
+
+    /// compiles the collection of expressions into binary code
+    fn assemble_fully(expressions: &Vec<Expression>) -> Vec<u8> {
+        expressions.iter().flat_map(|expr| Self::assemble(expr)).collect::<Vec<u8>>()
+    }
+
+    /// compiles a JSON-like collection of expressions into binary code
+    fn assemble_json_object(tuples: &Vec<(String, Expression)>) -> Vec<u8> {
+        use Mnemonic::ExJsonLiteral;
+        let expressions = tuples.iter().flat_map(|(k, v)| {
+            vec![Literal(StringValue(k.into())), v.to_owned()]
+        }).collect::<Vec<Expression>>();
+        Self::encode_vec(ExJsonLiteral.to_u8(), &expressions)
+    }
+
     /// compiles the [Infrastructure] into binary code
-    fn assemble_infrastructure(expression: &Infrastructure) -> Vec<u8> {
+    pub fn assemble_infrastructure(expression: &Infrastructure) -> Vec<u8> {
         use Infrastructure::*;
-        use Mnemonic::*;
+        use crate::mnemonic::Mnemonic::*;
         match expression {
             Create { path, entity: IndexEntity { columns } } => {
                 let mut args = vec![path.deref()];
@@ -306,44 +350,10 @@ impl ByteCodeCompiler {
         }
     }
 
-    /// compiles the [Mutation] into binary code
-    fn assemble_modification(expression: &Mutation) -> Vec<u8> {
-        use Mutation::*;
-        use Mnemonic::*;
-        match expression {
-            Append { path, source } => Self::encode(ExAppend.to_u8(), vec![path, source]),
-            Compact { path } => Self::encode(ExCompact.to_u8(), vec![path]),
-            Delete { path, condition, limit } =>
-                Self::encode(ExDelete.to_u8(), vec![path, &Self::get_or_undef(condition), &Self::get_or_undef(limit)]),
-            IntoNs(a, b) => Self::encode(ExIntoNS.to_u8(), vec![a, b]),
-            Overwrite { path, source, condition, limit } => {
-                let mut args = Vec::new();
-                args.push(path.deref().to_owned());
-                args.push(source.deref().to_owned());
-                args.push(Self::get_or_undef(condition));
-                args.push(Self::get_or_undef(limit));
-                Self::encode_vec(ExOverwrite.to_u8(), &args)
-            }
-            Scan { path } => Self::encode(ExScan.to_u8(), vec![path]),
-            Truncate { path, limit: new_size } =>
-                Self::encode(ExTruncate.to_u8(), vec![path, &Self::get_or_undef(new_size)]),
-            Undelete { path, condition, limit } =>
-                Self::encode(ExUndelete.to_u8(), vec![path, &Self::get_or_undef(condition), &Self::get_or_undef(limit)]),
-            Update { path, source, condition, limit } => {
-                let mut args: Vec<Expression> = Vec::new();
-                args.push(path.deref().to_owned());
-                args.push(source.deref().to_owned());
-                args.push(Self::get_or_undef(condition));
-                args.push(Self::get_or_undef(limit));
-                Self::encode_vec(ExUpdate.to_u8(), &args)
-            }
-        }
-    }
-
     /// compiles the [Queryable] into binary code
-    fn assemble_inquiry(expression: &Queryable) -> Vec<u8> {
+    pub fn assemble_inquiry(expression: &Queryable) -> Vec<u8> {
         use Queryable::*;
-        use Mnemonic::*;
+        use crate::mnemonic::Mnemonic::*;
         match expression {
             Describe(a) => Self::encode(ExDescribe.to_u8(), vec![a]),
             Limit { from, limit } => Self::encode(ExLimit.to_u8(), vec![from, limit]),
@@ -354,29 +364,56 @@ impl ByteCodeCompiler {
                 order_by, limit
             } => Self::assemble_select(fields, from, condition, group_by, having, order_by, limit),
             Where { from, condition } =>
-                Self::encode(ExWhere.to_u8(), vec![from, condition]),
+                Self::encode(ExWhere.to_u8(), vec![from, &Conditional(condition.to_owned())]),
         }
     }
 
-    /// compiles the collection of expressions into binary code
-    fn assemble_fully(expressions: &Vec<Expression>) -> Vec<u8> {
-        expressions.iter().flat_map(|expr| Self::assemble(expr)).collect::<Vec<u8>>()
+    /// compiles the [Mutation] into binary code
+    pub fn assemble_modification(expression: &Mutation) -> Vec<u8> {
+        use Mutation::*;
+        use crate::mnemonic::Mnemonic::*;
+        match expression {
+            Append { path, source } => Self::encode(ExAppend.to_u8(), vec![path, source]),
+            Compact { path } => Self::encode(ExCompact.to_u8(), vec![path]),
+            Delete { path, condition, limit } =>
+                Self::encode(ExDelete.to_u8(), vec![path, &Self::get_or_undef(&Self::as_boxed_expr(condition)), &Self::get_or_undef(limit)]),
+            IntoNs(a, b) => Self::encode(ExIntoNS.to_u8(), vec![a, b]),
+            Overwrite { path, source, condition, limit } => {
+                let mut args = Vec::new();
+                args.push(path.deref().to_owned());
+                args.push(source.deref().to_owned());
+                args.push(Self::get_or_undef(&Self::as_boxed_expr(condition)));
+                args.push(Self::get_or_undef(limit));
+                Self::encode_vec(ExOverwrite.to_u8(), &args)
+            }
+            Scan { path } => Self::encode(ExScan.to_u8(), vec![path]),
+            Truncate { path, limit: new_size } =>
+                Self::encode(ExTruncate.to_u8(), vec![path, &Self::get_or_undef(new_size)]),
+            Undelete { path, condition, limit } =>
+                Self::encode(ExUndelete.to_u8(), vec![
+                    path, &Self::get_or_undef(&Self::as_boxed_expr(condition)),
+                    &Self::get_or_undef(limit),
+                ]),
+            Update { path, source, condition, limit } => {
+                let mut args: Vec<Expression> = Vec::new();
+                args.push(path.deref().to_owned());
+                args.push(source.deref().to_owned());
+                args.push(Self::get_or_undef(&condition.to_owned().map(|c| Box::new(Conditional(c)))));
+                args.push(Self::get_or_undef(limit));
+                Self::encode_vec(ExUpdate.to_u8(), &args)
+            }
+        }
     }
 
-    /// compiles a JSON-like collection of expressions into binary code
-    fn assemble_json_object(tuples: &Vec<(String, Expression)>) -> Vec<u8> {
-        use Mnemonic::ExJsonLiteral;
-        let expressions = tuples.iter().flat_map(|(k, v)| {
-            vec![Literal(StringValue(k.into())), v.to_owned()]
-        }).collect::<Vec<Expression>>();
-        Self::encode_vec(ExJsonLiteral.to_u8(), &expressions)
+    fn as_boxed_expr(cond: &Option<Condition>) -> Option<Box<Expression>> {
+        cond.clone().map(|c| Box::new(Conditional(c)))
     }
 
     /// compiles a SELECT query into binary code
     fn assemble_select(
         fields: &Vec<Expression>,
         from: &Option<Box<Expression>>,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         group_by: &Option<Vec<Expression>>,
         having: &Option<Box<Expression>>,
         order_by: &Option<Vec<Expression>>,
@@ -386,7 +423,7 @@ impl ByteCodeCompiler {
         let mut byte_code = vec![ExSelect.to_u8()];
         byte_code.extend(Self::encode_array(fields));
         byte_code.extend(Self::encode_opt_as_array(from));
-        byte_code.extend(Self::encode_opt_as_array(condition));
+        byte_code.extend(Self::encode_opt_as_array(&Self::as_boxed_expr(condition)));
         byte_code.extend(Self::encode_array_opt(group_by));
         byte_code.extend(Self::encode_opt_as_array(having));
         byte_code.extend(Self::encode_array_opt(order_by));
@@ -420,7 +457,6 @@ impl ByteCodeCompiler {
             JSONType => Self::assemble_bytes(TxJsonObject.to_u8(), &Vec::new()),
             NumberType(kind) => {
                 use crate::number_kind::NumberKind::*;
-
                 match *kind {
                     F32Kind => Self::assemble_bytes(F32Kind.to_u8(), &Vec::new()),
                     F64Kind => Self::assemble_bytes(F64Kind.to_u8(), &Vec::new()),
@@ -463,7 +499,7 @@ impl ByteCodeCompiler {
         Ok(opcode)
     }
 
-    fn encode(id: u8, args: Vec<&Expression>) -> Vec<u8> {
+    pub fn encode(id: u8, args: Vec<&Expression>) -> Vec<u8> {
         let mut byte_code = vec![id];
         for expr in args {
             let code = Self::assemble(expr);
@@ -525,60 +561,65 @@ impl ByteCodeCompiler {
 
         // get the next mnemonic
         match Mnemonic::from_u8(self.next_u8()) {
-            ExAnd => Ok(And(self.decode_box()?, self.decode_box()?)),
-            ExAppend => Ok(Mutate(Mutation::Append { path: self.decode_box()?, source: self.decode_box()? })),
+            ExAnd => Ok(Conditional(And(self.decode_box()?, self.decode_box()?))),
+            ExAppend => Ok(Quarry(Excavation::Mutate(Mutation::Append { path: self.decode_box()?, source: self.decode_box()? }))),
             ExArrayLit => Ok(ArrayLiteral(self.decode_array()?)),
             ExAsValue => Ok(AsValue(self.next_string(), self.decode_box()?)),
-            ExCompact => Ok(Mutate(Mutation::Compact { path: self.decode_box()? })),
+            ExCompact => Ok(Quarry(Excavation::Mutate(Mutation::Compact { path: self.decode_box()? }))),
+            ExBoolean => Ok(match self.next_u8() {
+                0 => Conditional(False),
+                _ => Conditional(True)
+            }),
             ExElemIndex => Ok(ElementAt(self.decode_box()?, self.decode_box()?)),
+            ExExtract => Ok(Extract(self.decode_box()?, self.decode_box()?)),
             ExFeature => Ok(Feature { title: self.decode_box()?, scenarios: self.decode_array()? }),
-            ExBetween => Ok(Between(self.decode_box()?, self.decode_box()?, self.decode_box()?)),
-            ExBetwixt => Ok(Betwixt(self.decode_box()?, self.decode_box()?, self.decode_box()?)),
+            ExBetween => Ok(Conditional(Between(self.decode_box()?, self.decode_box()?, self.decode_box()?))),
+            ExBetwixt => Ok(Conditional(Betwixt(self.decode_box()?, self.decode_box()?, self.decode_box()?))),
             ExBitwiseAnd => Ok(BitwiseAnd(self.decode_box()?, self.decode_box()?)),
             ExBitwiseOr => Ok(BitwiseOr(self.decode_box()?, self.decode_box()?)),
             ExBitwiseXor => Ok(BitwiseXor(self.decode_box()?, self.decode_box()?)),
             ExCodeBlock => Ok(CodeBlock(self.decode_array()?)),
-            ExContains => Ok(Contains(self.decode_box()?, self.decode_box()?)),
+            ExContains => Ok(Conditional(Contains(self.decode_box()?, self.decode_box()?))),
             ExCreateIndex => {
                 let mut args = self.decode_array()?;
                 assert!(args.len() >= 2);
-                Ok(Perform(Infrastructure::Create {
+                Ok(Quarry(Excavation::Construct(Infrastructure::Create {
                     path: Box::new(args.pop().unwrap().to_owned()),
                     entity: IndexEntity {
                         columns: args,
                     },
-                }))
+                })))
             }
             ExCreateTable =>
-                Ok(Perform(Infrastructure::Create {
+                Ok(Quarry(Excavation::Construct(Infrastructure::Create {
                     path: self.decode_box()?,
                     entity: TableEntity {
                         columns: self.next_columns(),
                         from: self.decode_opt()?,
                     },
-                })),
+                }))),
             ExCSV => Ok(Literal(BackDoor(BackDoorFunction::from_u8(self.next_u8())))),
             ExDeclareIndex =>
-                Ok(Perform(Infrastructure::Declare(IndexEntity { columns: self.decode_array()? }))),
+                Ok(Quarry(Excavation::Construct(Infrastructure::Declare(IndexEntity { columns: self.decode_array()? })))),
             ExDeclareTable =>
-                Ok(Perform(Infrastructure::Declare(TableEntity { columns: self.next_columns(), from: self.decode_opt()? }))),
-            ExDelete => Ok(Mutate(Mutation::Delete {
+                Ok(Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity { columns: self.next_columns(), from: self.decode_opt()? })))),
+            ExDelete => Ok(Quarry(Excavation::Mutate(Mutation::Delete {
                 path: self.decode_box()?,
-                condition: self.decode_opt()?,
+                condition: self.decode_cond_opt()?,
                 limit: self.decode_opt()?,
-            })),
-            ExDescribe => Ok(Inquire(Describe(self.decode_box()?))),
+            }))),
+            ExDescribe => Ok(Quarry(Excavation::Query(Describe(self.decode_box()?)))),
             ExDivide => Ok(Divide(self.decode_box()?, self.decode_box()?)),
-            ExDrop => Ok(Perform(Infrastructure::Drop(TableTarget { path: self.decode_box()? }))),
-            ExEqual => Ok(Equal(self.decode_box()?, self.decode_box()?)),
+            ExDrop => Ok(Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget { path: self.decode_box()? })))),
+            ExEqual => Ok(Conditional(Equal(self.decode_box()?, self.decode_box()?))),
             ExFactorial => Ok(Factorial(self.decode_box()?)),
             ExFrom => Ok(From(self.decode_box()?)),
-            ExFunction => Ok(Literal(Function {
+            ExFunctionCall => Ok(Literal(Function {
                 params: self.next_columns(),
                 code: Self::decode_box(self)?,
             })),
-            ExGreaterOrEqual => Ok(GreaterOrEqual(self.decode_box()?, self.decode_box()?)),
-            ExGreaterThan => Ok(GreaterThan(self.decode_box()?, self.decode_box()?)),
+            ExGreaterOrEqual => Ok(Conditional(GreaterOrEqual(self.decode_box()?, self.decode_box()?))),
+            ExGreaterThan => Ok(Conditional(GreaterThan(self.decode_box()?, self.decode_box()?))),
             ExHTTP => Ok(HTTP {
                 method: self.decode_box()?,
                 url: self.decode_box()?,
@@ -588,51 +629,51 @@ impl ByteCodeCompiler {
             }),
             ExIf => Ok(If { condition: self.decode_box()?, a: self.decode_box()?, b: self.decode_opt()? }),
             ExInclude => Ok(Include(self.decode_box()?)),
-            ExIntoNS => Ok(Mutate(Mutation::IntoNs(self.decode_box()?, self.decode_box()?))),
+            ExIntoNS => Ok(Quarry(Excavation::Mutate(Mutation::IntoNs(self.decode_box()?, self.decode_box()?)))),
             ExJsonLiteral => Ok(JSONLiteral(self.decode_json_object()?)),
-            ExLessOrEqual => Ok(LessOrEqual(self.decode_box()?, self.decode_box()?)),
-            ExLessThan => Ok(LessThan(self.decode_box()?, self.decode_box()?)),
-            ExLimit => Ok(Inquire(Queryable::Limit { from: self.decode_box()?, limit: self.decode_box()? })),
+            ExLessOrEqual => Ok(Conditional(LessOrEqual(self.decode_box()?, self.decode_box()?))),
+            ExLessThan => Ok(Conditional(LessThan(self.decode_box()?, self.decode_box()?))),
+            ExLimit => Ok(Quarry(Excavation::Query(Queryable::Limit { from: self.decode_box()?, limit: self.decode_box()? }))),
             ExLiteral => Ok(Literal(self.next_value()?)),
             ExMinus => Ok(Minus(self.decode_box()?, self.decode_box()?)),
             ExModulo => Ok(Modulo(self.decode_box()?, self.decode_box()?)),
             ExMultiply => Ok(Multiply(self.decode_box()?, self.decode_box()?)),
-            ExMustAck => Ok(MustAck(self.decode_box()?)),
-            ExMustDie => Ok(MustDie(self.decode_box()?)),
-            ExMustIgnoreAck => Ok(MustIgnoreAck(self.decode_box()?)),
-            ExMustNotAck => Ok(MustNotAck(self.decode_box()?)),
+            ExMustAck => Ok(Directive(Directives::MustAck(self.decode_box()?))),
+            ExMustDie => Ok(Directive(Directives::MustDie(self.decode_box()?))),
+            ExMustIgnoreAck => Ok(Directive(Directives::MustIgnoreAck(self.decode_box()?))),
+            ExMustNotAck => Ok(Directive(Directives::MustNotAck(self.decode_box()?))),
             ExNeg => Ok(Neg(self.decode_box()?)),
-            ExNot => Ok(Not(self.decode_box()?)),
-            ExNotEqual => Ok(NotEqual(self.decode_box()?, self.decode_box()?)),
+            ExNot => Ok(Conditional(Not(self.decode_box()?))),
+            ExNotEqual => Ok(Conditional(NotEqual(self.decode_box()?, self.decode_box()?))),
             ExNS => Ok(Ns(self.decode_box()?)),
-            ExOr => Ok(Or(self.decode_box()?, self.decode_box()?)),
-            ExOverwrite => Ok(Mutate(Mutation::Overwrite {
+            ExOr => Ok(Conditional(Or(self.decode_box()?, self.decode_box()?))),
+            ExOverwrite => Ok(Quarry(Excavation::Mutate(Mutation::Overwrite {
                 path: self.decode_box()?,
                 source: self.decode_box()?,
-                condition: self.decode_opt()?,
+                condition: self.decode_cond_opt()?,
                 limit: self.decode_opt()?,
-            })),
+            }))),
             ExPlus => Ok(Plus(self.decode_box()?, self.decode_box()?)),
             ExPow => Ok(Pow(self.decode_box()?, self.decode_box()?)),
             ExRange => Ok(Range(self.decode_box()?, self.decode_box()?)),
             ExReturn => Ok(Return(self.decode_array()?)),
-            ExReverse => Ok(Inquire(Queryable::Reverse(self.decode_box()?))),
-            ExScan => Ok(Mutate(Mutation::Scan { path: self.decode_box()? })),
+            ExReverse => Ok(Quarry(Excavation::Query(Queryable::Reverse(self.decode_box()?)))),
+            ExScan => Ok(Quarry(Excavation::Mutate(Mutation::Scan { path: self.decode_box()? }))),
             ExScenario => Ok(Scenario { title: self.decode_box()?, verifications: self.decode_array()?, inherits: self.decode_opt()? }),
             ExSelect => self.disassemble_select(),
-            ExSERVE => Ok(SERVE(self.decode_box()?)),
-            ExShiftLeft => Ok(BitwiseShiftLeft(self.decode_box()?, self.decode_box()?)),
-            ExShiftRight => Ok(BitwiseShiftRight(self.decode_box()?, self.decode_box()?)),
+            ExBitwiseShiftLeft => Ok(BitwiseShiftLeft(self.decode_box()?, self.decode_box()?)),
+            ExBitwiseShiftRight => Ok(BitwiseShiftRight(self.decode_box()?, self.decode_box()?)),
             ExStderr => Ok(Literal(BackDoor(BackDoorFunction::BxStdErr))),
             ExStdout => Ok(Literal(BackDoor(BackDoorFunction::BxStdOut))),
-            ExTruncate => Ok(Mutate(Mutation::Truncate { path: self.decode_box()?, limit: self.decode_opt()? })),
+            ExStructureImpl => Ok(StructureImpl(self.next_string(), self.decode_array()?)),
+            ExTruncate => Ok(Quarry(Excavation::Mutate(Mutation::Truncate { path: self.decode_box()?, limit: self.decode_opt()? }))),
             ExTuple => Ok(TupleLiteral(self.decode_array()?)),
             ExUndelete =>
-                Ok(Mutate(Mutation::Undelete {
+                Ok(Quarry(Excavation::Mutate(Mutation::Undelete {
                     path: self.decode_box()?,
-                    condition: self.decode_opt()?,
+                    condition: self.decode_cond_opt()?,
                     limit: self.decode_opt()?,
-                })),
+                }))),
             ExUpdate => self.disassemble_update(),
             ExVarGet =>
                 match self.next_expression()? {
@@ -645,7 +686,10 @@ impl ByteCodeCompiler {
                     z => fail_expr("Expected String", &z)
                 }
             ExVia => Ok(Via(self.decode_box()?)),
-            ExWhere => Ok(Inquire(Queryable::Where { from: self.decode_box()?, condition: self.decode_box()? })),
+            ExWhere => Ok(Quarry(Excavation::Query(Queryable::Where {
+                from: self.decode_box()?,
+                condition: self.decode_cond()?,
+            }))),
             ExWhile => Ok(While { condition: self.decode_box()?, code: self.decode_box()? }),
         }
     }
@@ -657,7 +701,12 @@ impl ByteCodeCompiler {
         Ok(array)
     }
 
-    fn decode_array_as_opt(&mut self) -> std::io::Result<Option<Box<Expression>>> {
+    fn decode_array_as_opt(&mut self) -> std::io::Result<Option<Expression>> {
+        let ops = self.decode_array()?;
+        if ops.is_empty() { Ok(None) } else { Ok(Some(ops[0].to_owned())) }
+    }
+
+    fn decode_array_as_opt_box(&mut self) -> std::io::Result<Option<Box<Expression>>> {
         let ops = self.decode_array()?;
         if ops.is_empty() { Ok(None) } else { Ok(Some(Box::new(ops[0].to_owned()))) }
     }
@@ -669,6 +718,22 @@ impl ByteCodeCompiler {
 
     fn decode_box(&mut self) -> std::io::Result<Box<Expression>> {
         Ok(Box::new(self.next_expression()?))
+    }
+
+    fn decode_cond(&mut self) -> std::io::Result<Condition> {
+        match self.decode_box()?.deref() {
+            Conditional(c) => Ok(c.clone()),
+            other => fail("Conditional expression expected")
+        }
+    }
+
+    fn decode_cond_opt(&mut self) -> std::io::Result<Option<Condition>> {
+        if self.remaining() == 0 { return Ok(None); } else {
+            match *self.decode_box()? {
+                Conditional(c) => Ok(Some(c)),
+                _other => fail("Conditional expression expected")
+            }
+        }
     }
 
     fn decode_json_object(&mut self) -> std::io::Result<Vec<(String, Expression)>> {
@@ -702,13 +767,18 @@ impl ByteCodeCompiler {
 
     fn disassemble_select(&mut self) -> std::io::Result<Expression> {
         let fields = self.decode_array()?;
-        let from = self.decode_array_as_opt()?;
-        let condition = self.decode_array_as_opt()?;
+        let from = self.decode_array_as_opt_box()?;
+        let condition = match self.decode_array_as_opt() {
+            Ok(Some(Conditional(cond))) => Some(cond.clone()),
+            Ok(Some(..)) => return fail("Expected boolean expression"),
+            Ok(None) => None,
+            Err(err) => return fail(err.to_string())
+        };
         let group_by = self.decode_array_opt()?;
-        let having = self.decode_array_as_opt()?;
+        let having = self.decode_array_as_opt_box()?;
         let order_by = self.decode_array_opt()?;
-        let limit = self.decode_array_as_opt()?;
-        Ok(Inquire(Queryable::Select { fields, from, condition, group_by, having, order_by, limit }))
+        let limit = self.decode_array_as_opt_box()?;
+        Ok(Quarry(Excavation::Query(Queryable::Select { fields, from, condition, group_by, having, order_by, limit })))
     }
 
     fn disassemble_update(&mut self) -> std::io::Result<Expression> {
@@ -718,9 +788,9 @@ impl ByteCodeCompiler {
         }
         let path = Box::new(args[0].to_owned());
         let source = Box::new(args[1].to_owned());
-        let condition = if args.len() > 2 { Some(Box::new(args[2].to_owned())) } else { None };
+        let condition = if args.len() > 2 { Some(Self::require_condition(args[2].to_owned())?) } else { None };
         let limit = if args.len() > 3 { Some(Box::new(args[3].to_owned())) } else { None };
-        Ok(Mutate(Mutation::Update { path, source, condition, limit }))
+        Ok(Quarry(Excavation::Mutate(Mutation::Update { path, source, condition, limit })))
     }
 
     pub fn next_json(&mut self) -> std::io::Result<Vec<(String, TypedValue)>> {
@@ -900,7 +970,7 @@ impl ByteCodeCompiler {
             TxTableValue => Ok(TableValue(self.next_table()?)),
             TxTuple => Ok(TupleValue(self.next_array()?)),
             TxUndefined => Ok(Undefined),
-            TxUUID => Ok(UUIDValue(self.next_uuid())),
+            TxUUID => Ok(UUIDValue(self.next_u128())),
         }
     }
 
@@ -1041,6 +1111,13 @@ impl ByteCodeCompiler {
 
     pub fn remaining(&self) -> usize {
         self.limit - self.offset
+    }
+
+    fn require_condition(expr: Expression) -> std::io::Result<Condition> {
+        match expr {
+            Conditional(cond) => Ok(cond),
+            other => fail(format!("{} is not a Condition", other.to_code()))
+        }
     }
 
     /// changes the capacity to the buffer
@@ -1367,16 +1444,14 @@ mod tests {
     #[test]
     fn test_expression_delete() {
         use crate::mnemonic::Mnemonic::*;
-        let model = Mutate(Mutation::Delete {
+        let model = Quarry(Excavation::Mutate(Mutation::Delete {
             path: Box::new(Variable("stocks".into())),
-            condition: Some(
-                Box::new(LessOrEqual(
-                    Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Number(F64Value(1.0)))),
-                ))
-            ),
+            condition: Some(LessOrEqual(
+                Box::new(Variable("last_sale".into())),
+                Box::new(Literal(Number(F64Value(1.0)))),
+            )),
             limit: Some(Box::new(Literal(Number(I64Value(100))))),
-        });
+        }));
         let byte_code = vec![
             ExDelete.to_u8(),
             ExVarGet.to_u8(), ExLiteral.to_u8(), TxString.to_u8(),
@@ -1433,20 +1508,18 @@ mod tests {
     #[test]
     fn test_select() {
         use Mnemonic::{ExLessOrEqual, ExSelect};
-        let model = Inquire(Queryable::Select {
+        let model = Quarry(Excavation::Query(Queryable::Select {
             fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
             from: Some(Box::new(Variable("stocks".into()))),
-            condition: Some(
-                Box::new(LessOrEqual(
-                    Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Number(F64Value(1.0)))),
-                ))
-            ),
+            condition: Some(LessOrEqual(
+                Box::new(Variable("last_sale".into())),
+                Box::new(Literal(Number(F64Value(1.0)))),
+            )),
             group_by: None,
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
             limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        });
+        }));
         let byte_code = vec![
             // select symbol, exchange, last_sale
             ExSelect.to_u8(), 0, 0, 0, 0, 0, 0, 0, 3,
@@ -1486,19 +1559,17 @@ mod tests {
     #[test]
     fn test_update() {
         use Mnemonic::{ExEqual, ExJsonLiteral, ExUpdate, ExVia};
-        let model = Mutate(Mutation::Update {
+        let model = Quarry(Excavation::Mutate(Mutation::Update {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
             ])))),
-            condition: Some(
-                Box::new(Equal(
-                    Box::new(Variable("exchange".into())),
-                    Box::new(Literal(StringValue("NYSE".into()))),
-                ))
-            ),
+            condition: Some(Equal(
+                Box::new(Variable("exchange".into())),
+                Box::new(Literal(StringValue("NYSE".into()))),
+            )),
             limit: Some(Box::new(Literal(Number(I64Value(10))))),
-        });
+        }));
         let byte_code = vec![
             // update stocks
             ExUpdate.to_u8(), 0, 0, 0, 0, 0, 0, 0, 4,

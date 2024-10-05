@@ -10,11 +10,15 @@ use std::io::Read;
 use std::ops::{Deref, Neg};
 use std::process::Output;
 
+use actix_web::web::to;
+use chrono::{Datelike, DateTime, Local, Timelike, TimeZone, Utc};
 use log::info;
-use reqwest::{Client, RequestBuilder};
+use reqwest::{Client, RequestBuilder, Response};
+use reqwest::header::ToStrError;
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
+use uuid::Uuid;
 
 use shared_lib::fail;
 
@@ -24,11 +28,15 @@ use crate::compiler::Compiler;
 use crate::cursor::Cursor;
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::dataframes::DataFrame;
-use crate::expression::{Expression, Infrastructure, Mutation, Queryable, UNDEFINED};
-use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+use crate::expression::{Condition, Expression, UNDEFINED};
+use crate::expression::Condition::True;
 use crate::expression::Expression::*;
-use crate::expression::Infrastructure::Declare;
-use crate::expression::MutateTarget::{IndexTarget, TableTarget};
+use crate::expression_support::{Directives, Excavation, Infrastructure, Mutation, Queryable};
+use crate::expression_support::CreationEntity::{IndexEntity, TableEntity};
+use crate::expression_support::Infrastructure::{Create, Declare, Drop};
+use crate::expression_support::MutateTarget::{IndexTarget, TableTarget};
+use crate::expression_support::Mutation::{Append, Compact, Delete, IntoNs, Overwrite, Scan, Truncate, Undelete, Update};
+use crate::expression_support::Queryable::{Describe, Limit, Reverse, Select, Where};
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -56,6 +64,14 @@ impl Machine {
     //  constructors
     ////////////////////////////////////////////////////////////////
 
+    /// creates a new state machine
+    fn construct(
+        stack: Vec<TypedValue>,
+        variables: HashMap<String, TypedValue>,
+    ) -> Self {
+        Self { stack, variables }
+    }
+
     /// creates a new empty state machine
     pub fn empty() -> Self {
         Self::construct(Vec::new(), HashMap::new())
@@ -63,28 +79,27 @@ impl Machine {
 
     /// creates a new state machine prepopulated with platform functions
     pub fn new() -> Self {
+        use BackDoorFunction::*;
         Self::empty()
-            .with_variable("assert", BackDoor(BackDoorFunction::BxAssert))
-            .with_variable("eval", BackDoor(BackDoorFunction::BxEval))
-            .with_variable("format", BackDoor(BackDoorFunction::BxFormat))
-            .with_variable("left", BackDoor(BackDoorFunction::BxLeft))
-            .with_variable("matches", BackDoor(BackDoorFunction::BxMatches))
-            .with_variable("__reset", BackDoor(BackDoorFunction::BxReset))
-            .with_variable("right", BackDoor(BackDoorFunction::BxRight))
-            .with_variable("println", BackDoor(BackDoorFunction::BxStdOut))
-            .with_variable("stderr", BackDoor(BackDoorFunction::BxStdErr))
-            .with_variable("stdout", BackDoor(BackDoorFunction::BxStdOut))
-            .with_variable("substring", BackDoor(BackDoorFunction::BxSubstring))
-            .with_variable("syscall", BackDoor(BackDoorFunction::BxSysCall))
-            .with_variable("to_csv", BackDoor(BackDoorFunction::BxToCSV))
-            .with_variable("to_json", BackDoor(BackDoorFunction::BxToJSON))
-            .with_variable("type_of", BackDoor(BackDoorFunction::BxTypeOf))
-            .with_variable("__variables", BackDoor(BackDoorFunction::BxVariables))
-    }
-
-    /// creates a new state machine
-    fn construct(stack: Vec<TypedValue>, variables: HashMap<String, TypedValue>) -> Self {
-        Self { stack, variables }
+            .with_variable("assert", BackDoor(BxAssert))
+            .with_variable("eval", BackDoor(BxEval))
+            .with_variable("format", BackDoor(BxFormat))
+            .with_variable("left", BackDoor(BxLeft))
+            .with_variable("matches", BackDoor(BxMatches))
+            .with_variable("__reset", BackDoor(BxReset))
+            .with_variable("right", BackDoor(BxRight))
+            .with_variable("println", BackDoor(BxStdOut))
+            .with_variable("SERVE", BackDoor(BxServe))
+            .with_variable("stderr", BackDoor(BxStdErr))
+            .with_variable("stdout", BackDoor(BxStdOut))
+            .with_variable("substring", BackDoor(BxSubstring))
+            .with_variable("syscall", BackDoor(BxSysCall))
+            .with_variable("timestamp", BackDoor(BxTimestamp))
+            .with_variable("to_csv", BackDoor(BxToCSV))
+            .with_variable("to_json", BackDoor(BxToJSON))
+            .with_variable("type_of", BackDoor(BxTypeOf))
+            .with_variable("uuid", BackDoor(BxUUID))
+            .with_variable("__variables", BackDoor(BxVariables))
     }
 
     ////////////////////////////////////////////////////////////////
@@ -155,9 +170,9 @@ impl Machine {
         table: TypedValue,
         fields: &Vec<Expression>,
         values: &Vec<Expression>,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: TypedValue,
-        f: fn(Self, &mut DataFrame, &Vec<Expression>, &Vec<Expression>, &Option<Box<Expression>>, TypedValue) -> std::io::Result<(Self, TypedValue)>,
+        f: fn(Self, &mut DataFrame, &Vec<Expression>, &Vec<Expression>, &Option<Condition>, TypedValue) -> std::io::Result<(Self, TypedValue)>,
     ) -> std::io::Result<(Self, TypedValue)> {
         use TypedValue::*;
         match table {
@@ -250,6 +265,46 @@ impl Machine {
         }
     }
 
+    pub async fn convert_response(
+        &self,
+        response: Response,
+        is_header_only: bool,
+    ) -> TypedValue {
+        if response.status().is_success() {
+            if is_header_only {
+                let header_keys = response.headers().keys()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>();
+                let header_values = response.headers().values()
+                    .map(|v| match v.to_str() {
+                        Ok(s) => TypedValue::wrap_value(s).unwrap_or(Undefined),
+                        Err(e) => ErrorValue(e.to_string())
+                    }).collect::<Vec<_>>();
+                JSONValue(header_keys.iter().zip(header_values.iter())
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect::<Vec<_>>())
+            } else {
+                match response.text().await {
+                    Ok(body) => {
+                        match Compiler::compile_script(body.as_str()) {
+                            Ok(expr) => {
+                                match self.evaluate(&expr) {
+                                    Ok((_, Undefined)) => JSONValue(vec![]),
+                                    Ok((_, value)) => value,
+                                    Err(_) => StringValue(body)
+                                }
+                            }
+                            _ => StringValue(body)
+                        }
+                    }
+                    Err(err) => ErrorValue(format!("Error reading response body: {}", err)),
+                }
+            }
+        } else {
+            ErrorValue(format!("Request failed with status: {}", response.status()))
+        }
+    }
+
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
     pub fn evaluate(
         &self,
@@ -257,17 +312,11 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         use crate::expression::Expression::*;
         match expression {
-            And(a, b) =>
-                self.evaluate_inline_2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
             ArrayLiteral(items) => self.evaluate_array(items),
             AsValue(name, expr) => {
                 let (machine, tv) = self.evaluate(expr)?;
                 Ok((machine.with_variable(name, tv.to_owned()), tv))
             }
-            Between(a, b, c) =>
-                self.evaluate_inline_3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa <= cc))),
-            Betwixt(a, b, c) =>
-                self.evaluate_inline_3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa < cc))),
             BitwiseAnd(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa & bb),
             BitwiseOr(a, b) =>
@@ -280,32 +329,23 @@ impl Machine {
                 self.evaluate_inline_2(a, b, |aa, bb| aa ^ bb),
             CodeBlock(ops) => self.evaluate_scope(ops),
             ColumnSet(columns) => Ok(self.evaluate_column_set(columns)),
-            Contains(a, b) => self.evaluate_contains(a, b),
+            Conditional(condition) => self.evaluate_cond(condition),
+            Directive(d) => self.evaluate_directive(d),
             Divide(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.evaluate_index_of_collection(a, b),
-            Equal(a, b) =>
-                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa == bb)),
+            Extract(a, b) => self.evaluate_extraction(a, b),
             Factorial(a) => self.evaluate_inline_1(a, |aa| aa.factorial().unwrap_or(Undefined)),
             Feature { title, scenarios } => self.evaluate_feature(title, scenarios),
-            From(src) => self.evaluate_table_row_query(src, &UNDEFINED, Undefined),
+            From(src) => self.evaluate_table_row_query(src, &True, Undefined),
             FunctionCall { fx, args } =>
                 self.evaluate_function_call(fx, args),
-            GreaterThan(a, b) =>
-                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa > bb)),
-            GreaterOrEqual(a, b) =>
-                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa >= bb)),
             HTTP { .. } =>
                 Ok((self.to_owned(), ErrorValue("HTTP is only supported in an async context".to_string()))),
             If { condition, a, b } =>
                 self.evaluate_if_then_else(condition, a, b),
             Include(path) => self.evaluate_include(path),
-            Inquire(q) => self.evaluate_inquiry(q),
             JSONLiteral(items) => self.evaluate_json(items),
-            LessThan(a, b) =>
-                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa < bb)),
-            LessOrEqual(a, b) =>
-                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa <= bb)),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
             Minus(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa - bb),
@@ -313,23 +353,17 @@ impl Machine {
                 self.evaluate_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa * bb),
-            MustAck(a) => self.evaluate_directive_ack(a),
-            MustDie(a) => self.evaluate_directive_die(a),
-            MustIgnoreAck(a) => self.evaluate_directive_ignore_ack(a),
-            MustNotAck(a) => self.evaluate_directive_not_ack(a),
-            Mutate(m) => self.evaluate_mutation(m),
             Neg(a) => Ok(self.evaluate_neg(a)),
-            Not(a) => self.evaluate_inline_1(a, |aa| !aa),
-            NotEqual(a, b) =>
-                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa != bb)),
             Ns(a) => self.evaluate_table_ns(a),
-            Or(a, b) =>
-                self.evaluate_inline_2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
-            Perform(i) => self.evaluate_infrastructure(i),
             Plus(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa + bb),
             Pow(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
+            Quarry(payload) => match payload {
+                Excavation::Construct(i) => self.evaluate_infrastructure(i),
+                Excavation::Query(q) => self.evaluate_inquiry(q),
+                Excavation::Mutate(m) => self.evaluate_mutation(m),
+            },
             Range(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
             Return(a) => {
@@ -337,16 +371,63 @@ impl Machine {
                 Ok((machine, result))
             }
             Scenario { .. } => Ok((self.to_owned(), ErrorValue("Scenario should not be called directly".into()))),
-            SERVE(a) => self.evaluate_serve(a),
             SetVariable(name, expr) => {
                 let (machine, value) = self.evaluate(expr)?;
                 Ok((machine.set(name, value), Ack))
             }
+            StructureImpl(name, ops) => self.evaluate_structure_impl(name, ops),
             TupleLiteral(values) => self.evaluate_array(values),
             Variable(name) => Ok((self.to_owned(), self.get(&name).unwrap_or(Undefined))),
-            Via(src) => self.evaluate_table_row_query(src, &UNDEFINED, Undefined),
+            Via(src) => self.evaluate_table_row_query(src, &True, Undefined),
             While { condition, code } =>
                 self.evaluate_while(condition, code),
+        }
+    }
+
+    /// evaluates the specified [Expression]; returning a [TypedValue] result.
+    pub fn evaluate_cond(
+        &self,
+        condition: &Condition,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        use crate::expression::Condition::*;
+        match condition {
+            And(a, b) =>
+                self.evaluate_inline_2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
+            Between(a, b, c) =>
+                self.evaluate_inline_3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa <= cc))),
+            Betwixt(a, b, c) =>
+                self.evaluate_inline_3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa < cc))),
+            Contains(a, b) => self.evaluate_contains(a, b),
+            Equal(a, b) =>
+                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa == bb)),
+            False => Ok((self.to_owned(), Boolean(false))),
+            GreaterThan(a, b) =>
+                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa > bb)),
+            GreaterOrEqual(a, b) =>
+                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa >= bb)),
+            LessThan(a, b) =>
+                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa < bb)),
+            LessOrEqual(a, b) =>
+                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa <= bb)),
+            Not(a) => self.evaluate_inline_1(a, |aa| !aa),
+            NotEqual(a, b) =>
+                self.evaluate_inline_2(a, b, |aa, bb| Boolean(aa != bb)),
+            Or(a, b) =>
+                self.evaluate_inline_2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
+            True => Ok((self.to_owned(), Boolean(true))),
+        }
+    }
+
+    /// evaluates the specified [Directives]; returning a [TypedValue] result.
+    pub fn evaluate_directive(
+        &self,
+        directive: &Directives,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match directive {
+            Directives::MustAck(a) => self.evaluate_directive_ack(a),
+            Directives::MustDie(a) => self.evaluate_directive_die(a),
+            Directives::MustIgnoreAck(a) => self.evaluate_directive_ignore_ack(a),
+            Directives::MustNotAck(a) => self.evaluate_directive_not_ack(a),
         }
     }
 
@@ -422,14 +503,15 @@ impl Machine {
         bdf: &BackDoorFunction,
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Self, TypedValue)> {
+        use BackDoorFunction::*;
         match bdf {
-            BackDoorFunction::BxAssert =>
+            BxAssert =>
                 self.evaluate_back_door_fn1(args, |ms, value| match value {
                     ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
                     Boolean(false) => (ms, ErrorValue("Assertion was false".to_owned())),
                     z => (ms, z.to_owned())
                 }),
-            BackDoorFunction::BxEval =>
+            BxEval =>
                 self.evaluate_back_door_fn1(args, |ms, value| match value {
                     StringValue(ql) =>
                         match Compiler::compile_script(ql.as_str()) {
@@ -442,37 +524,44 @@ impl Machine {
                         }
                     x => (ms, ErrorValue(format!("Type mismatch - expected String, got {}", x.get_type_name())))
                 }),
-            BackDoorFunction::BxFormat => Ok(self.evaluate_format_string(args)),
-            BackDoorFunction::BxLeft =>
+            BxFormat => Ok(self.evaluate_format_string(args)),
+            BxLeft =>
                 self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_left(s, n)),
-            BackDoorFunction::BxMatches =>
+            BxMatches =>
                 self.evaluate_back_door_fn2(args, |ms, a, b| (ms, a.matches(b))),
-            BackDoorFunction::BxReset =>
+            BxReset =>
                 self.evaluate_back_door_fn0(args, |ms| (Machine::new(), Ack)),
-            BackDoorFunction::BxRight =>
+            BxRight =>
                 self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_right(s, n)),
-            BackDoorFunction::BxStdErr =>
+            BxServe =>
+                self.evaluate_back_door_fn1(args, |ms, a| match ms.evaluate_serve(a) {
+                    Ok(r) => r,
+                    Err(err) => (ms.to_owned(), ErrorValue(err.to_string()))
+                }),
+            BxStdErr =>
                 self.evaluate_back_door_fn1(args, |ms, value| {
                     println!("{}", value.unwrap_value());
                     (ms, Ack)
                 }),
-            BackDoorFunction::BxStdOut =>
+            BxStdOut =>
                 self.evaluate_back_door_fn1(args, |ms, value| {
                     println!("{}", value.unwrap_value());
                     (ms, Ack)
                 }),
-            BackDoorFunction::BxSubstring =>
+            BxSubstring =>
                 self.evaluate_back_door_fn3(args, |ms, s, a, b| ms.evaluate_substring(s, a, b)),
-            BackDoorFunction::BxSysCall => self.evaluate_syscall(args),
-            BackDoorFunction::BxToCSV =>
+            BxSysCall => self.evaluate_syscall(args),
+            BxTimestamp => self.evaluate_timestamp(args),
+            BxToCSV =>
                 self.evaluate_back_door_fn1(args, |ms, value| ms.convert_to_csv_or_json(value, true)),
-            BackDoorFunction::BxToJSON =>
+            BxToJSON =>
                 self.evaluate_back_door_fn1(args, |ms, value| ms.convert_to_csv_or_json(value, false)),
-            BackDoorFunction::BxTypeOf =>
+            BxTypeOf =>
                 self.evaluate_back_door_fn1(args, |ms, value| {
                     (ms, StringValue(value.get_type_name()))
                 }),
-            BackDoorFunction::BxVariables =>
+            BxUUID => self.evaluate_uuid(args),
+            BxVariables =>
                 self.evaluate_back_door_fn0(args, |ms| (ms.to_owned(), TableValue(ms.get_variables()))),
         }
     }
@@ -589,6 +678,86 @@ impl Machine {
             v if v.is_ok() =>
                 Ok((machine, ErrorValue(format!("Expected a non-success value, but got {}", &v)))),
             v => Ok((machine, v))
+        }
+    }
+
+    fn evaluate_extraction(
+        &self,
+        object: &Box<Expression>,
+        field: &Box<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, obj) = self.evaluate(object)?;
+        match obj {
+            DateValue(timestamp) => self.evaluate_extraction_date(field, timestamp),
+            ErrorValue(err) => Ok((ms, ErrorValue(err))),
+            JSONValue(args) => self.evaluate_extraction_json(field, &args),
+            StructureValue(structure) => self.evaluate_extraction_structure(field, &structure),
+            z => fail(format!("Illegal object {}", z.to_code()))
+        }
+    }
+
+    fn evaluate_extraction_date(
+        &self,
+        field: &Expression,
+        epoch_millis: i64,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let datetime = {
+            let seconds = epoch_millis / 1000;
+            let millis_part = epoch_millis % 1000;
+            Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
+        };
+        let ms = self.to_owned();
+        match field {
+            FunctionCall { fx, args } if args.is_empty() =>
+                match fx.deref() {
+                    Variable(name) => match name.as_str() {
+                        "day" => Ok((ms, Number(U32Value(datetime.day())))),
+                        "hour" => Ok((ms, Number(U32Value(datetime.hour())))),
+                        "hour12" => Ok((ms, Number(U32Value(datetime.hour12().1)))),
+                        "minute" => Ok((ms, Number(U32Value(datetime.minute())))),
+                        "month" => Ok((ms, Number(U32Value(datetime.month())))),
+                        "second" => Ok((ms, Number(U32Value(datetime.second())))),
+                        "year" => Ok((ms, Number(I32Value(datetime.year())))),
+                        z => return fail(format!("Illegal field {} for object {}", z, datetime))
+                    }
+                    z => return fail(format!("Illegal field {} for object {}", z, datetime))
+                }
+            z => fail(format!("Illegal field {} for object {}", z, datetime))
+        }
+    }
+
+    fn evaluate_extraction_json(
+        &self,
+        field: &Expression,
+        args: &Vec<(String, TypedValue)>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let ms = self.to_owned();
+        match field.deref() {
+            // { symbol:"AAA", price:123.45 }::symbol
+            Variable(name) =>
+                match args.iter().find(|(k, v)| *name == *k) {
+                    Some((_, v)) => Ok((ms, v.to_owned())),
+                    None => Ok((ms, Undefined))
+                },
+            z => fail(format!("Illegal field {} for object {}",
+                              z.to_code(), JSONValue(args.to_owned()).to_code()))
+        }
+    }
+
+    fn evaluate_extraction_structure(
+        &self,
+        field: &Expression,
+        structure: &Structure,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let ms = self.to_owned();
+        match field.deref() {
+            // method call: math::compute(5, 8)
+            FunctionCall { fx, args } =>
+                structure.inject(ms).evaluate_function_call(fx, args),
+            // stock::symbol
+            Variable(name) => Ok((ms, structure.get(name))),
+            z => fail(format!("Illegal field {} for structure {}",
+                              z.to_code(), StructureValue(structure.to_owned()).to_code()))
         }
     }
 
@@ -711,7 +880,7 @@ impl Machine {
                     ms.evaluate_back_door(&bdf, args),
                 (ms, Function { params, code }) =>
                     ms.evaluate_function_arguments(params, args).evaluate(&code),
-                _ => fail(format!("'{}' is not a function", fx.to_code()))
+                (_, z) => fail(format!("'{}' is not a function ({})", fx.to_code(), z))
             }
         } else {
             fail(format!("Function arguments expected, but got {}", ArrayLiteral(args.to_owned())))
@@ -728,7 +897,6 @@ impl Machine {
             .fold(self.to_owned(), |machine, (c, v)|
                 machine.with_variable(c.get_name(), v.to_owned()))
     }
-
 
     async fn evaluate_http(
         &self,
@@ -768,7 +936,7 @@ impl Machine {
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), Self::evaluate_http_rest_call(Client::new().delete(url), headers, body_opt).await))
+        Ok((self.to_owned(), self.evaluate_http_rest_call(Client::new().delete(url), headers, body_opt, false).await))
     }
 
     async fn evaluate_http_get(
@@ -777,7 +945,7 @@ impl Machine {
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), Self::evaluate_http_rest_call(Client::new().get(url), headers, body_opt).await))
+        Ok((self.to_owned(), self.evaluate_http_rest_call(Client::new().get(url), headers, body_opt, false).await))
     }
 
     async fn evaluate_http_head(
@@ -786,7 +954,7 @@ impl Machine {
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let value = Self::evaluate_http_rest_call(Client::new().head(url), headers, body_opt).await;
+        let value = self.evaluate_http_rest_call(Client::new().head(url), headers, body_opt, true).await;
         Ok((self.to_owned(), value))
     }
 
@@ -815,7 +983,7 @@ impl Machine {
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), Self::evaluate_http_rest_call(Client::new().patch(url), headers, body_opt).await))
+        Ok((self.to_owned(), self.evaluate_http_rest_call(Client::new().patch(url), headers, body_opt, false).await))
     }
 
     async fn evaluate_http_post(
@@ -829,7 +997,7 @@ impl Machine {
             Some(form) => Client::new().post(url).multipart(form),
             None => Client::new().post(url),
         };
-        Ok((self.to_owned(), Self::evaluate_http_rest_call(request, headers, body_opt).await))
+        Ok((self.to_owned(), self.evaluate_http_rest_call(request, headers, body_opt, false).await))
     }
 
     async fn evaluate_http_put(
@@ -838,28 +1006,101 @@ impl Machine {
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), Self::evaluate_http_rest_call(Client::new().put(url), headers, body_opt).await))
+        Ok((self.to_owned(), self.evaluate_http_rest_call(Client::new().put(url), headers, body_opt, false).await))
     }
 
     async fn evaluate_http_rest_call(
+        &self,
         request: RequestBuilder,
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
+        is_header_only: bool,
     ) -> TypedValue {
         let request = Self::enrich_request(request, body_opt);
         let request = headers.iter().fold(request, |request, (k, v)| {
             request.header(k, v)
         });
         match request.send().await {
-            Ok(response) => TypedValue::from_response(response).await,
+            Ok(response) => self.convert_response(response, is_header_only).await,
             Err(err) => ErrorValue(format!("Error making request: {}", err)),
+        }
+    }
+
+    fn evaluate_infrastructure(
+        &self,
+        expression: &Infrastructure,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        use crate::expression_support::Infrastructure::*;
+        match expression {
+            Create { path, entity: IndexEntity { columns } } =>
+                self.evaluate_table_create_index(path, columns),
+            Create { path, entity: TableEntity { columns, from } } =>
+                self.evaluate_table_create_table(path, columns, from),
+            Declare(IndexEntity { columns }) =>
+                self.evaluate_table_declare_index(columns),
+            Declare(TableEntity { columns, from }) =>
+                self.evaluate_table_declare_table(columns, from),
+            Drop(IndexTarget { path }) => self.evaluate_table_drop(path),
+            Drop(TableTarget { path }) => self.evaluate_table_drop(path),
+        }
+    }
+
+    fn evaluate_inquiry(
+        &self,
+        expression: &Queryable,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        use crate::expression_support::Queryable::*;
+        match expression {
+            Describe(table) => self.evaluate_table_describe(table),
+            Limit { from, limit } => {
+                let (machine, limit) = self.evaluate(limit)?;
+                machine.evaluate_table_row_query(from, &True, limit)
+            }
+            Reverse(a) => self.evaluate_table_row_reverse(a),
+            Select { fields, from, condition, group_by, having, order_by, limit } =>
+                self.evaluate_table_row_selection(fields, from, condition, group_by, having, order_by, limit),
+            Where { from, condition } =>
+                self.evaluate_table_row_query(from, condition, Undefined),
+        }
+    }
+
+    fn evaluate_mutation(
+        &self,
+        expression: &Mutation,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        use crate::expression_support::Mutation::*;
+        match expression {
+            Append { path, source } =>
+                self.evaluate_table_row_append(path, source),
+            Compact { path } =>
+                self.evaluate_table_compact(path),
+            Delete { path, condition, limit } =>
+                self.evaluate_table_row_delete(path, condition, limit),
+            IntoNs(source, target) =>
+                self.evaluate_table_into(target, source),
+            Overwrite { path, source, condition, limit } =>
+                self.evaluate_table_row_overwrite(path, source, condition, limit),
+            Scan { path } =>
+                self.evaluate_table_scan(path),
+            Truncate { path, limit } =>
+                match limit {
+                    None => self.evaluate_table_row_resize(path, Boolean(false)),
+                    Some(limit) => {
+                        let (machine, limit) = self.evaluate(limit)?;
+                        machine.evaluate_table_row_resize(path, limit)
+                    }
+                }
+            Undelete { path, condition, limit } =>
+                self.evaluate_table_row_undelete(path, condition, limit),
+            Update { path, source, condition, limit } =>
+                self.evaluate_table_row_update(path, source, condition, limit),
         }
     }
 
     /// Evaluates an if-then-else expression
     fn evaluate_if_then_else(
         &self,
-        condition: &Expression,
+        condition: &Box<Expression>,
         a: &Expression,
         b: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -939,25 +1180,6 @@ impl Machine {
         Ok((machine, value))
     }
 
-    fn evaluate_infrastructure(
-        &self,
-        expression: &Infrastructure,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use Infrastructure::*;
-        match expression {
-            Create { path, entity: IndexEntity { columns } } =>
-                self.evaluate_table_create_index(path, columns),
-            Create { path, entity: TableEntity { columns, from } } =>
-                self.evaluate_table_create_table(path, columns, from),
-            Declare(IndexEntity { columns }) =>
-                self.evaluate_table_declare_index(columns),
-            Declare(TableEntity { columns, from }) =>
-                self.evaluate_table_declare_table(columns, from),
-            Drop(IndexTarget { path }) => self.evaluate_table_drop(path),
-            Drop(TableTarget { path }) => self.evaluate_table_drop(path),
-        }
-    }
-
     /// evaluates expression `a` then applies function `f`. ex: f(a)
     fn evaluate_inline_1(
         &self,
@@ -994,22 +1216,6 @@ impl Machine {
         Ok((machine, f(aa, bb, cc)))
     }
 
-    fn evaluate_inquiry(&self, expression: &Queryable) -> std::io::Result<(Self, TypedValue)> {
-        use Queryable::*;
-        match expression {
-            Describe(table) => self.evaluate_table_describe(table),
-            Limit { from, limit } => {
-                let (machine, limit) = self.evaluate(limit)?;
-                machine.evaluate_table_row_query(from, &UNDEFINED, limit)
-            }
-            Reverse(a) => self.evaluate_table_row_reverse(a),
-            Select { fields, from, condition, group_by, having, order_by, limit } =>
-                self.evaluate_table_row_selection(fields, from, condition, group_by, having, order_by, limit),
-            Where { from, condition } =>
-                self.evaluate_table_row_query(from, condition, Undefined),
-        }
-    }
-
     fn evaluate_json(
         &self,
         items: &Vec<(String, Expression)>,
@@ -1022,36 +1228,6 @@ impl Machine {
         Ok((self.to_owned(), JSONValue(elems)))
     }
 
-    fn evaluate_mutation(&self, expression: &Mutation) -> std::io::Result<(Self, TypedValue)> {
-        use Mutation::*;
-        match expression {
-            Append { path, source } =>
-                self.evaluate_table_row_append(path, source),
-            Compact { path } =>
-                self.evaluate_table_compact(path),
-            Delete { path, condition, limit } =>
-                self.evaluate_table_row_delete(path, condition, limit),
-            IntoNs(source, target) =>
-                self.evaluate_table_into(target, source),
-            Overwrite { path, source, condition, limit } =>
-                self.evaluate_table_row_overwrite(path, source, condition, limit),
-            Scan { path } =>
-                self.evaluate_table_scan(path),
-            Truncate { path, limit } =>
-                match limit {
-                    None => self.evaluate_table_row_resize(path, Boolean(false)),
-                    Some(limit) => {
-                        let (machine, limit) = self.evaluate(limit)?;
-                        machine.evaluate_table_row_resize(path, limit)
-                    }
-                }
-            Undelete { path, condition, limit } =>
-                self.evaluate_table_row_undelete(path, condition, limit),
-            Update { path, source, condition, limit } =>
-                self.evaluate_table_row_update(path, source, condition, limit),
-        }
-    }
-
     /// evaluates the specified [Expression]; returning a negative [TypedValue] result.
     fn evaluate_neg(&self, expr: &Expression) -> (Self, TypedValue) {
         match self.evaluate(expr) {
@@ -1061,10 +1237,10 @@ impl Machine {
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
-    fn evaluate_optional(machine: Self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
+    fn evaluate_optional(&self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
         match expr {
-            Some(item) => machine.evaluate(item),
-            None => Ok((machine, TypedValue::Undefined))
+            Some(item) => self.evaluate(item),
+            None => Ok((self.to_owned(), Undefined))
         }
     }
 
@@ -1094,13 +1270,12 @@ impl Machine {
 
     fn evaluate_serve(
         &self,
-        port_expr: &Expression,
+        port: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
         use actix_web::web;
         use crate::rest_server::*;
-        let (_ms, port) = self.evaluate(port_expr)?;
+        let port = port.to_usize();
         thread::spawn(move || {
-            let port = port.to_usize();
             let server = actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
                 .bind(format!("{}:{}", "0.0.0.0", port))
                 .expect(format!("Can not bind to port {port}").as_str())
@@ -1168,6 +1343,34 @@ impl Machine {
             _ => Undefined
         };
         (self.to_owned(), result)
+    }
+
+    fn evaluate_structure_impl(
+        &self,
+        name: &str,
+        ops: &Vec<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match self.get(name) {
+            Some(StructureValue(structure)) => {
+                let result =
+                    ops.iter().fold(StructureValue(structure), |tv, op| match tv {
+                        ErrorValue(msg) => ErrorValue(msg),
+                        StructureValue(structure) =>
+                            match op {
+                                SetVariable(name, expr) =>
+                                    match self.evaluate(expr) {
+                                        Ok((_, value)) => StructureValue(structure.with_variable(name, value)),
+                                        Err(err) => ErrorValue(err.to_string())
+                                    },
+                                z => ErrorValue(format!("Illegal expression {}", z.to_code()))
+                            },
+                        z => ErrorValue(format!("{} is not a struct ({})", name, z.to_code()))
+                    });
+                Ok((self.with_variable(name, result), Ack))
+            }
+            Some(_) => fail(format!("{} is not a struct", name)),
+            None => fail(format!("{} was not found", name))
+        }
     }
 
     fn evaluate_syscall(
@@ -1298,7 +1501,7 @@ impl Machine {
                 let frc = FileRowCollection::open(&ns)?;
                 (machine, frc.read_active_rows()?)
             }
-            Perform(Declare(TableEntity { columns, from })) =>
+            Quarry(Excavation::Construct(Declare(TableEntity { columns, from }))) =>
                 machine.extract_rows_from_table_declaration(table, from, columns)?,
             source =>
                 self.extract_rows_from_query(source, table)?,
@@ -1372,10 +1575,10 @@ impl Machine {
     fn evaluate_table_row_delete(
         &self,
         from: &Expression,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, limit) = Self::evaluate_optional(self.to_owned(), limit)?;
+        let (machine, limit) = self.evaluate_optional(limit)?;
         let (machine, result) = machine.evaluate(from)?;
         Self::orchestrate_io(machine, result, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _fields, _values, condition, limit| {
             let deleted = df.delete_where(&machine, &condition, limit).ok().unwrap_or(0);
@@ -1387,10 +1590,10 @@ impl Machine {
         &self,
         table: &Expression,
         source: &Expression,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, limit) = Self::evaluate_optional(self.to_owned(), limit)?;
+        let (machine, limit) = self.evaluate_optional(limit)?;
         let (machine, tv_table) = machine.evaluate(table)?;
         let (fields, values) = self.expect_via(&table, &source)?;
         Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
@@ -1404,7 +1607,7 @@ impl Machine {
     fn evaluate_table_row_query(
         &self,
         src: &Expression,
-        condition: &Expression,
+        condition: &Condition,
         limit: TypedValue,
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, result) = self.evaluate(src)?;
@@ -1443,13 +1646,13 @@ impl Machine {
         &self,
         fields: &Vec<Expression>,
         from: &Option<Box<Expression>>,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         _group_by: &Option<Vec<Expression>>,
         _having: &Option<Box<Expression>>,
         _order_by: &Option<Vec<Expression>>,
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, limit) = Self::evaluate_optional(self.to_owned(), limit)?;
+        let (machine, limit) = self.evaluate_optional(limit)?;
         match from {
             None => machine.evaluate_array(fields),
             Some(source) => {
@@ -1466,10 +1669,10 @@ impl Machine {
     fn evaluate_table_row_undelete(
         &self,
         from: &Expression,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, limit) = Self::evaluate_optional(self.to_owned(), limit)?;
+        let (machine, limit) = self.evaluate_optional(limit)?;
         let (machine, result) = machine.evaluate(from)?;
         Self::orchestrate_io(machine, result, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _fields, _values, condition, limit| {
             match df.undelete_where(&machine, &condition, limit) {
@@ -1483,10 +1686,10 @@ impl Machine {
         &self,
         table: &Expression,
         source: &Expression,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, limit) = Self::evaluate_optional(self.to_owned(), limit)?;
+        let (machine, limit) = self.evaluate_optional(limit)?;
         let (machine, tv_table) = machine.evaluate(table)?;
         let (fields, values) = self.expect_via(&table, &source)?;
         Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
@@ -1507,6 +1710,16 @@ impl Machine {
         })
     }
 
+    fn evaluate_timestamp(
+        &self,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        if !args.is_empty() {
+            return fail(format!("No arguments expected, but found {}", args.len()));
+        }
+        Ok((self.to_owned(), DateValue(Local::now().timestamp_millis())))
+    }
+
     fn evaluate_to_csv(
         &self,
         rc: Box<dyn RowCollection>,
@@ -1519,7 +1732,7 @@ impl Machine {
         &self,
         rc: Box<dyn RowCollection>,
     ) -> (Self, TypedValue) {
-        (self.to_owned(), Array(rc.iter().map(|row| row.to_json(rc.get_columns().clone()))
+        (self.to_owned(), Array(rc.iter().map(|row| row.to_json(rc.get_columns()))
             .map(StringValue).collect()))
     }
 
@@ -1541,6 +1754,16 @@ impl Machine {
             }
         }
         Ok((machine, outcome))
+    }
+
+    fn evaluate_uuid(
+        &self,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        if !args.is_empty() {
+            return fail(format!("No arguments expected, but found {}", args.len()));
+        }
+        Ok((self.to_owned(), UUIDValue(Uuid::new_v4().as_u128())))
     }
 
     fn expect_namespace(&self, table: &Expression) -> std::io::Result<Namespace> {
@@ -1705,6 +1928,11 @@ impl Machine {
 mod tests {
     use crate::compiler::Compiler;
     use crate::expression::{FALSE, NULL, TRUE};
+    use crate::expression::Condition::{Equal, GreaterOrEqual, GreaterThan, LessOrEqual, LessThan};
+    use crate::expression_support::{Excavation, Infrastructure, Mutation, Queryable};
+    use crate::expression_support::CreationEntity::{IndexEntity, TableEntity};
+    use crate::expression_support::Excavation::Query;
+    use crate::expression_support::MutateTarget::TableTarget;
     use crate::table_columns::TableColumn;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_dataframe_ns, make_quote, make_quote_columns, make_table_columns};
@@ -1739,7 +1967,7 @@ mod tests {
     #[test]
     fn test_column_set() {
         let model = ColumnSet(make_quote_columns());
-        assert_eq!(model.to_code(), "(symbol: String(8), exchange: String(8), last_sale: f64)");
+        assert_eq!(model.to_code(), "symbol: String(8), exchange: String(8), last_sale: f64");
 
         let machine = Machine::new()
             .with_variable("symbol", StringValue("ABC".into()))
@@ -1784,10 +2012,10 @@ mod tests {
             // iff(n <= 1, 1, n * f(n - 1))
             code: Box::new(If {
                 // n <= 1
-                condition: Box::new(LessOrEqual(
-                    Box::from(Variable("n".into())),
-                    Box::from(Literal(Number(I64Value(1)))),
-                )),
+                condition: Box::new(Conditional(LessOrEqual(
+                    Box::new(Variable("n".into())),
+                    Box::new(Literal(Number(I64Value(1)))),
+                ))),
                 // 1
                 a: Box::new(Literal(Number(I64Value(1)))),
                 // n * f(n - 1)
@@ -1823,10 +2051,10 @@ mod tests {
     #[test]
     fn test_if_else_flow_1() {
         let model = If {
-            condition: Box::new(GreaterThan(
+            condition: Box::new(Conditional(GreaterThan(
                 Box::new(Variable("num".into())),
                 Box::new(Literal(Number(I64Value(25)))),
-            )),
+            ))),
             a: Box::new(Literal(StringValue("Yes".into()))),
             b: Some(Box::new(Literal(StringValue("No".into())))),
         };
@@ -1844,10 +2072,10 @@ mod tests {
     #[test]
     fn test_if_else_flow_2() {
         let model = If {
-            condition: Box::new(LessThan(
+            condition: Box::new(Conditional(LessThan(
                 Box::new(Variable("num".into())),
                 Box::new(Literal(Number(I64Value(10)))),
-            )),
+            ))),
             a: Box::new(Literal(StringValue("Yes".into()))),
             b: Some(Box::new(Literal(StringValue("No".into())))),
         };
@@ -1948,13 +2176,13 @@ mod tests {
 
     #[test]
     fn test_create_table() {
-        let model = Perform(Infrastructure::Create {
+        let model = Quarry(Excavation::Construct(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue("machine.create.stocks".into()))))),
             entity: TableEntity {
                 columns: make_quote_columns(),
                 from: None,
             },
-        });
+        }));
 
         // create the table
         let machine = Machine::new();
@@ -1974,22 +2202,22 @@ mod tests {
         let machine = Machine::new();
 
         // drop table if exists ns("machine.index.stocks")
-        let (machine, _) = machine.evaluate(&Perform(Infrastructure::Drop(TableTarget {
+        let (machine, _) = machine.evaluate(&Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget {
             path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
-        }))).unwrap();
+        })))).unwrap();
 
         // create table ns("machine.index.stocks") (...)
-        let (machine, result) = machine.evaluate(&Perform(Infrastructure::Create {
+        let (machine, result) = machine.evaluate(&Quarry(Excavation::Construct(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
             entity: TableEntity {
                 columns: make_quote_columns(),
                 from: None,
             },
-        })).unwrap();
+        }))).unwrap();
         assert_eq!(result, Ack);
 
         // create index ns("machine.index.stocks") [symbol, exchange]
-        let model = Perform(Infrastructure::Create {
+        let model = Quarry(Excavation::Construct(Infrastructure::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
             entity: IndexEntity {
                 columns: vec![
@@ -1997,7 +2225,7 @@ mod tests {
                     Variable("exchange".into()),
                 ],
             },
-        });
+        }));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Ack);
 
@@ -2010,14 +2238,14 @@ mod tests {
 
     #[test]
     fn test_declare_table() {
-        let model = Perform(Infrastructure::Declare(TableEntity {
+        let model = Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
             columns: vec![
                 ColumnJs::new("symbol", "String(8)", None),
                 ColumnJs::new("exchange", "String(8)", None),
                 ColumnJs::new("last_sale", "f64", None),
             ],
             from: None,
-        }));
+        })));
 
         let machine = Machine::new();
         let (_, result) = machine.evaluate(&model).unwrap();
@@ -2033,7 +2261,7 @@ mod tests {
         let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
         create_dataframe(ns_path);
 
-        let model = Perform(Infrastructure::Drop(TableTarget { path: Box::new(ns) }));
+        let model = Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget { path: Box::new(ns) })));
         assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
 
         let machine = Machine::new();
@@ -2169,16 +2397,16 @@ mod tests {
                 make_quote(4, "XYZ", "NYSE", 0.0289),
             ])));
 
-        let model = Inquire(Queryable::Limit {
-            from: Box::new(Inquire(Queryable::Where {
+        let model = Quarry(Query(Queryable::Limit {
+            from: Box::new(Quarry(Query(Queryable::Where {
                 from: Box::new(From(Box::new(Variable("stocks".into())))),
-                condition: Box::new(GreaterOrEqual(
+                condition: GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
                     Box::new(Literal(Number(F64Value(1.0)))),
-                )),
-            })),
+                ),
+            }))),
             limit: Box::new(Literal(Number(I64Value(2)))),
-        });
+        }));
         assert_eq!(model.to_code(), "from stocks where last_sale >= 1 limit 2");
 
         let (_, result) = machine.evaluate(&model).unwrap();
@@ -2259,14 +2487,14 @@ mod tests {
 
         // insert some rows
         let machine = Machine::new();
-        let (_, result) = machine.evaluate(&Mutate(Mutation::Append {
+        let (_, result) = machine.evaluate(&Quarry(Excavation::Mutate(Mutation::Append {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
             source: Box::new(From(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("REX".into()))),
                 ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
                 ("last_sale".into(), Literal(Number(F64Value(16.99)))),
             ])))),
-        })).unwrap();
+        }))).unwrap();
         assert_eq!(result, RowsAffected(1));
 
         // verify the remaining rows
@@ -2284,19 +2512,19 @@ mod tests {
     #[test]
     fn test_overwrite_rows_in_namespace() {
         let ns_path = "machine.overwrite.stocks";
-        let model = Mutate(Mutation::Overwrite {
+        let model = Quarry(Excavation::Mutate(Mutation::Overwrite {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("symbol".into(), Literal(StringValue("BOOM".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
                 ("last_sale".into(), Literal(Number(F64Value(56.99)))),
             ])))),
-            condition: Some(Box::new(Equal(
+            condition: Some(Equal(
                 Box::new(Variable("symbol".into())),
                 Box::new(Literal(StringValue("BOOM".into()))),
-            ))),
+            )),
             limit: None,
-        });
+        }));
         assert_eq!(model.to_code(), r#"overwrite ns("machine.overwrite.stocks") via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99} where symbol == "BOOM""#);
 
         // create a table with test data
@@ -2334,7 +2562,7 @@ mod tests {
 
     #[test]
     fn test_reverse_from_variable() {
-        let model = Inquire(Queryable::Reverse(Box::new(From(Box::new(Variable("stocks".to_string()))))));
+        let model = Quarry(Excavation::Query(Queryable::Reverse(Box::new(From(Box::new(Variable("stocks".to_string())))))));
         let phys_columns = make_table_columns();
         let machine = Machine::new()
             .with_variable("stocks", TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
@@ -2362,22 +2590,22 @@ mod tests {
 
         // execute the query
         let machine = Machine::new();
-        let (_, result) = machine.evaluate(&Inquire(Queryable::Select {
+        let (_, result) = machine.evaluate(&Quarry(Excavation::Query(Queryable::Select {
             fields: vec![
                 Variable("symbol".into()),
                 Variable("exchange".into()),
                 Variable("last_sale".into()),
             ],
             from: Some(Box::new(Ns(Box::new(Literal(StringValue("machine.select.stocks".into())))))),
-            condition: Some(Box::new(GreaterThan(
+            condition: Some(GreaterThan(
                 Box::new(Variable("last_sale".into())),
                 Box::new(Literal(Number(F64Value(1.0)))),
-            ))),
+            )),
             group_by: None,
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
             limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        })).unwrap();
+        }))).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(2, "BIZ", "NYSE", 23.66),
@@ -2392,22 +2620,22 @@ mod tests {
             .with_variable("stocks", TableValue(mrc));
 
         // execute the code
-        let (_, result) = machine.evaluate(&Inquire(Queryable::Select {
+        let (_, result) = machine.evaluate(&Quarry(Excavation::Query(Queryable::Select {
             fields: vec![
                 Variable("symbol".into()),
                 Variable("exchange".into()),
                 Variable("last_sale".into()),
             ],
             from: Some(Box::new(Variable("stocks".into()))),
-            condition: Some(Box::new(LessThan(
+            condition: Some(LessThan(
                 Box::new(Variable("last_sale".into())),
                 Box::new(Literal(Number(F64Value(1.0)))),
-            ))),
+            )),
             group_by: None,
             having: None,
             order_by: Some(vec![Variable("symbol".into())]),
             limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        })).unwrap();
+        }))).unwrap();
         assert_eq!(result, TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(3, "GOTO", "OTC", 0.1428),
@@ -2464,19 +2692,17 @@ SOFTWARE.
     #[test]
     fn test_update_rows_in_memory() {
         // build the update model
-        let model = Mutate(Mutation::Update {
+        let model = Quarry(Excavation::Mutate(Mutation::Update {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
             ])))),
-            condition: Some(
-                Box::new(Equal(
-                    Box::new(Variable("exchange".into())),
-                    Box::new(Literal(StringValue("OTC".into()))),
-                ))
-            ),
+            condition: Some(Equal(
+                Box::new(Variable("exchange".into())),
+                Box::new(Literal(StringValue("OTC".into()))),
+            )),
             limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        });
+        }));
         assert_eq!(model.to_code(), r#"update stocks via {exchange: "OTC_BB"} where exchange == "OTC" limit 5"#);
 
         // perform the update and verify
@@ -2504,19 +2730,17 @@ SOFTWARE.
         let (df, phys_columns) = create_dataframe(ns_path);
 
         // create the instruction model
-        let model = Mutate(Mutation::Update {
+        let model = Quarry(Excavation::Mutate(Mutation::Update {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
             source: Box::new(Via(Box::new(JSONLiteral(vec![
                 ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
             ])))),
-            condition: Some(
-                Box::new(Equal(
-                    Box::new(Variable("exchange".into())),
-                    Box::new(Literal(StringValue("OTC".into()))),
-                ))
-            ),
+            condition: Some(Equal(
+                Box::new(Variable("exchange".into())),
+                Box::new(Literal(StringValue("OTC".into()))),
+            )),
             limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        });
+        }));
 
         // update some rows
         let (_, delta) = Machine::new().evaluate(&model).unwrap();
@@ -2535,10 +2759,10 @@ SOFTWARE.
 
     #[test]
     fn test_truncate_table() {
-        let model = Mutate(Mutation::Truncate {
+        let model = Quarry(Excavation::Mutate(Mutation::Truncate {
             path: Box::new(Variable("stocks".into())),
             limit: Some(Box::new(Literal(Number(I64Value(0))))),
-        });
+        }));
 
         let (mrc, _) = create_memory_table();
         let machine = Machine::new().with_variable("stocks", TableValue(mrc));
@@ -2559,10 +2783,10 @@ SOFTWARE.
     fn test_while_loop() {
         let model = While {
             // num < 5
-            condition: Box::new(LessThan(
+            condition: Box::new(Conditional(LessThan(
                 Box::new(Variable("num".into())),
                 Box::new(Literal(Number(I64Value(5)))),
-            )),
+            ))),
             // num := num + 1
             code: Box::new(SetVariable("num".into(), Box::new(Plus(
                 Box::new(Variable("num".into())),

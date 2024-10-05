@@ -17,6 +17,7 @@ pub enum Mnemonic {
     ExBitwiseAnd = 24,
     ExBitwiseOr = 28,
     ExBitwiseXor = 32,
+    ExBoolean = 34,
     ExCodeBlock = 36,
     ExCompact = 40,
     ExContains = 44,
@@ -31,10 +32,11 @@ pub enum Mnemonic {
     ExDrop = 80,
     ExElemIndex = 82,
     ExEqual = 84,
+    ExExtract = 85,
     ExFactorial = 86,
     ExFeature = 88,
     ExFrom = 90,
-    ExFunction = 92,
+    ExFunctionCall = 92,
     ExGreaterThan = 94,
     ExGreaterOrEqual = 96,
     ExHTTP = 98,
@@ -67,11 +69,11 @@ pub enum Mnemonic {
     ExScan = 207,
     ExScenario = 209,
     ExSelect = 210,
-    ExSERVE = 215,
-    ExShiftLeft = 225,
-    ExShiftRight = 230,
+    ExBitwiseShiftLeft = 225,
+    ExBitwiseShiftRight = 230,
     ExStderr = 233,
     ExStdout = 235,
+    ExStructureImpl = 236,
     ExTruncate = 237,
     ExTuple = 239,
     ExUndelete = 243,
@@ -86,7 +88,7 @@ pub enum Mnemonic {
 impl Mnemonic {
     pub fn from_u8(value: u8) -> Mnemonic {
         for op in Self::values() {
-            if op.to_u8() == value { return op }
+            if op.to_u8() == value { return op.to_owned(); }
         }
         panic!("missing Mnemonic::from_u8({})", value);
     }
@@ -95,17 +97,18 @@ impl Mnemonic {
         *self as u8
     }
 
-    pub fn values() -> Vec<Mnemonic> {
+    /// Returns all values of Mnemonic as an array.
+    pub fn values() -> &'static [Mnemonic] {
         use Mnemonic::*;
-        vec![
+        &[
             ExAnd, ExAppend, ExArrayLit, ExAsValue,
-            ExBetween, ExBetwixt, ExBitwiseAnd, ExBitwiseOr, ExBitwiseXor,
+            ExBetween, ExBetwixt, ExBitwiseAnd, ExBitwiseOr, ExBitwiseXor, ExBoolean,
             ExCodeBlock, ExCompact, ExContains, ExCSV,
             ExCreateIndex, ExCreateTable,
             ExDeclareIndex, ExDeclareTable, ExDelete, ExDescribe,
             ExDivide, ExDrop,
-            ExElemIndex, ExEqual,
-            ExFactorial, ExFeature, ExFrom, ExFunction,
+            ExElemIndex, ExEqual, ExExtract,
+            ExFactorial, ExFeature, ExFrom, ExFunctionCall,
             ExGreaterThan, ExGreaterOrEqual,
             ExHTTP,
             ExIf, ExInclude, ExIntoNS,
@@ -116,7 +119,7 @@ impl Mnemonic {
             ExOr, ExOverwrite,
             ExPlus, ExPow,
             ExRange, ExReturn, ExReverse,
-            ExScan, ExScenario, ExSelect, ExSERVE, ExShiftLeft, ExShiftRight, ExStderr, ExStdout,
+            ExScan, ExScenario, ExSelect, ExBitwiseShiftLeft, ExBitwiseShiftRight, ExStderr, ExStdout, ExStructureImpl,
             ExTruncate, ExTuple,
             ExUndelete, ExUpdate,
             ExVarGet, ExVarSet, ExVia,

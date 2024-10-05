@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use shared_lib::RowJs;
 
 use crate::codec;
+use crate::decompiler::Decompiler;
 use crate::rows::Row;
 use crate::table_columns::TableColumn;
 use crate::typed_values::TypedValue;
@@ -78,7 +79,7 @@ impl ColumnJs {
     }
 
     pub fn to_code(&self) -> String {
-        format!("{}: {}", self.name, self.column_type)
+        Decompiler::new().decompile_column(self)
     }
 }
 

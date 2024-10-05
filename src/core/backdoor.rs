@@ -15,14 +15,17 @@ pub enum BackDoorFunction {
     BxMatches = 4,
     BxReset = 5,
     BxRight = 6,
-    BxStdErr = 7,
-    BxStdOut = 8,
-    BxSubstring = 9,
-    BxSysCall = 10,
-    BxToCSV = 11,
-    BxToJSON = 12,
-    BxTypeOf = 13,
-    BxVariables = 14,
+    BxServe = 7,
+    BxStdErr = 8,
+    BxStdOut = 9,
+    BxSubstring = 10,
+    BxSysCall = 11,
+    BxTimestamp = 12,
+    BxToCSV = 13,
+    BxToJSON = 14,
+    BxTypeOf = 15,
+    BxUUID = 16,
+    BxVariables = 17,
 }
 
 impl BackDoorFunction {
@@ -38,8 +41,8 @@ impl BackDoorFunction {
         use BackDoorFunction::*;
         vec![
             BxAssert, BxEval, BxFormat, BxLeft, BxMatches, BxReset, BxRight,
-            BxStdErr, BxStdOut, BxSysCall, BxToCSV, BxToJSON,
-            BxSubstring, BxTypeOf, BxVariables,
+            BxServe, BxStdErr, BxStdOut, BxSubstring, BxSysCall,
+            BxTimestamp, BxToCSV, BxToJSON, BxTypeOf, BxUUID, BxVariables,
         ]
     }
 }

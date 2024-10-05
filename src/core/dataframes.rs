@@ -9,7 +9,7 @@ use shared_lib::fail;
 
 use crate::compiler::fail_value;
 use crate::dataframe_config::DataFrameConfig;
-use crate::expression::Expression;
+use crate::expression::{Condition, Expression};
 use crate::field_metadata::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
@@ -73,7 +73,7 @@ impl DataFrame {
     pub fn delete_where(
         &mut self,
         machine: &Machine,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: TypedValue,
     ) -> std::io::Result<usize> {
         let mut deleted = 0;
@@ -164,7 +164,7 @@ impl DataFrame {
         machine: &Machine,
         fields: &Vec<Expression>,
         values: &Vec<Expression>,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: TypedValue,
     ) -> std::io::Result<usize> {
         let mut overwritten = 0;
@@ -226,7 +226,7 @@ impl DataFrame {
     pub fn read_where(
         &self,
         machine: &Machine,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: TypedValue,
     ) -> std::io::Result<Vec<Row>> {
         let mut out = Vec::new();
@@ -297,7 +297,7 @@ impl DataFrame {
     pub fn undelete_where(
         &mut self,
         machine: &Machine,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: TypedValue,
     ) -> std::io::Result<usize> {
         let mut restored = 0;
@@ -337,7 +337,7 @@ impl DataFrame {
         machine: &Machine,
         fields: &Vec<Expression>,
         values: &Vec<Expression>,
-        condition: &Option<Box<Expression>>,
+        condition: &Option<Condition>,
         limit: TypedValue,
     ) -> std::io::Result<usize> {
         let mut updated = 0;
@@ -450,6 +450,7 @@ mod tests {
 
     use crate::data_types::DataType::*;
     use crate::dataframes::DataFrame;
+    use crate::expression::Condition::Equal;
     use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::namespaces::Namespace;
@@ -642,10 +643,10 @@ mod tests {
         let values = vec![
             Literal(StringValue("XXX".into())), Literal(StringValue("YYY".into())), Literal(Number(F64Value(0.))),
         ];
-        let condition = Some(Box::new(Equal(
+        let condition = Some(Equal(
             Box::new(Variable("exchange".into())),
             Box::new(Literal(StringValue("NYSE".into()))),
-        )));
+        ));
         assert_eq!(df.overwrite_where(&machine, &fields, &values, &condition, Number(I64Value(2))).unwrap(), 2);
 
         // verify the rows
@@ -803,10 +804,10 @@ mod tests {
         let machine = Machine::new();
         let fields = vec![Variable("last_sale".into())];
         let values = vec![Literal(Number(F64Value(11.1111)))];
-        let condition = Some(Box::new(Equal(
+        let condition = Some(Equal(
             Box::new(Variable("exchange".into())),
             Box::new(Literal(StringValue("NYSE".into()))),
-        )));
+        ));
         assert_eq!(df.update_where(&machine, &fields, &values, &condition, Number(I64Value(2))).unwrap(), 2);
 
         // verify the rows,

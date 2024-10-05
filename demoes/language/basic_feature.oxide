@@ -1,0 +1,22 @@
+////////////////////////////////////////////////////////////////////
+// basic feature/scenario demo
+////////////////////////////////////////////////////////////////////
+
+feature "Matches function" {
+    scenario "Compare Array contents" {
+        assert(matches(
+            [ 1 "a" "b" "c" ],
+            [ 1 "a" "b" "c" ]
+        ))
+    }
+    scenario "Compare JSON contents (in sequence)" {
+        assert(matches(
+                { first: "Tom" last: "Lane" },
+                { first: "Tom" last: "Lane" }))
+    }
+    scenario "Compare JSON contents (out of sequence)" {
+        assert(matches(
+                { scores: [82 78 99], id: "A1537" },
+                { id: "A1537", scores: [82 78 99] }))
+    }
+}
