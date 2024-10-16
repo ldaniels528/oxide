@@ -5,6 +5,7 @@
 use std::mem::size_of;
 
 use uuid::Uuid;
+
 use shared_lib::fail;
 
 pub fn decode_row_id(buffer: &Vec<u8>, offset: usize) -> usize {

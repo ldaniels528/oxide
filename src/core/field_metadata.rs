@@ -1,9 +1,10 @@
 ////////////////////////////////////////////////////////////////////
-// field metadata module
+// FieldMetadata class
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
 
+/// Represents the metadata of a field
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct FieldMetadata {
     pub(crate) is_active: bool,

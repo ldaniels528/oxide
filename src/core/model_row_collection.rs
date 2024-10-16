@@ -5,18 +5,19 @@
 use serde::{Deserialize, Serialize};
 
 use crate::field_metadata::FieldMetadata;
+use crate::outcomes::Outcomes;
+use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
-use crate::server::ColumnJs;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Null, RowsAffected};
+use crate::typed_values::TypedValue::{Null, Outcome};
 
-/// Row-model-vector-based RowCollection implementation
+/// Row-model-vector-based [RowCollection] implementation
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModelRowCollection {
-    columns: Vec<TableColumn>,
+    columns: Vec<Column>,
     row_data: Vec<(Row, RowMetadata)>,
     record_size: usize,
     watermark: usize,
@@ -24,7 +25,7 @@ pub struct ModelRowCollection {
 
 impl ModelRowCollection {
     /// Creates a new [ModelRowCollection] prefilled with all rows from the given tables.
-    pub fn combine(columns: Vec<TableColumn>, tables: Vec<&ModelRowCollection>) -> std::io::Result<ModelRowCollection> {
+    pub fn combine(columns: Vec<Column>, tables: Vec<&ModelRowCollection>) -> std::io::Result<ModelRowCollection> {
         let mut mrc = ModelRowCollection::new(columns);
         for table in tables {
             mrc.append_rows(table.get_rows());
@@ -33,15 +34,15 @@ impl ModelRowCollection {
     }
 
     /// Creates a new [ModelRowCollection] from abstract columns
-    pub fn construct(columns: &Vec<ColumnJs>) -> ModelRowCollection {
-        match TableColumn::from_columns(columns) {
+    pub fn construct(columns: &Vec<Parameter>) -> ModelRowCollection {
+        match Column::from_parameters(columns) {
             Ok(columns) => ModelRowCollection::with_rows(columns, Vec::new()),
             Err(err) => panic!("{}", err.to_string())
         }
     }
 
     /// Decodes a byte vector into a [ModelRowCollection]
-    pub fn decode(columns: Vec<TableColumn>, bytes: Vec<u8>) -> Self {
+    pub fn decode(columns: Vec<Column>, bytes: Vec<u8>) -> Self {
         let record_size = Row::compute_record_size(&columns);
         let row_data = bytes.chunks(record_size)
             .map(|chunk| Row::decode(&chunk.to_vec(), &columns))
@@ -59,7 +60,7 @@ impl ModelRowCollection {
     }
 
     /// Creates a new [ModelRowCollection] prefilled with the given rows.
-    pub fn from_rows(columns: Vec<TableColumn>, rows: Vec<Row>) -> ModelRowCollection {
+    pub fn from_rows(columns: Vec<Column>, rows: Vec<Row>) -> ModelRowCollection {
         let row_data = rows.iter()
             .map(|r| (r.to_owned(), RowMetadata::new(true)))
             .collect();
@@ -87,7 +88,7 @@ impl ModelRowCollection {
     }
 
     /// Creates a new [ModelRowCollection] from abstract columns
-    pub fn new(columns: Vec<TableColumn>) -> ModelRowCollection {
+    pub fn new(columns: Vec<Column>) -> ModelRowCollection {
         ModelRowCollection {
             record_size: Row::compute_record_size(&columns),
             watermark: 0,
@@ -97,7 +98,7 @@ impl ModelRowCollection {
     }
 
     /// Creates a new [ModelRowCollection] prefilled with rows
-    pub fn with_rows(columns: Vec<TableColumn>, row_data: Vec<(Row, RowMetadata)>) -> ModelRowCollection {
+    pub fn with_rows(columns: Vec<Column>, row_data: Vec<(Row, RowMetadata)>) -> ModelRowCollection {
         ModelRowCollection {
             record_size: Row::compute_record_size(&columns),
             watermark: row_data.len(),
@@ -108,7 +109,7 @@ impl ModelRowCollection {
 }
 
 impl RowCollection for ModelRowCollection {
-    fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
+    fn get_columns(&self) -> &Vec<Column> { &self.columns }
 
     fn get_record_size(&self) -> usize { self.record_size }
 
@@ -130,15 +131,15 @@ impl RowCollection for ModelRowCollection {
         let (row, meta) = &self.row_data[id];
         let rows_affected = if meta.is_allocated {
             let old_values = row.get_values();
-            let new_values = old_values.iter().zip(0..old_values.len())
-                .map(|(v, n)| {
+            let new_values = old_values.iter().enumerate()
+                .map(|( n, v)| {
                     if n == column_id { new_value.to_owned() } else { v.to_owned() }
                 }).collect();
             let new_row = Row::new(row.get_id(), new_values);
             self.row_data[id] = (new_row, meta.to_owned());
             1
         } else { 0 };
-        RowsAffected(rows_affected)
+        Outcome(Outcomes::RowsAffected(rows_affected))
     }
 
     fn overwrite_field_metadata(
@@ -159,7 +160,7 @@ impl RowCollection for ModelRowCollection {
 
         // update the row to reflect enabling/disabling a field
         self.row_data[id] = (new_row, rmd.to_owned());
-        RowsAffected(1)
+        Outcome(Outcomes::RowsAffected(1))
     }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
@@ -171,13 +172,13 @@ impl RowCollection for ModelRowCollection {
         // set the block, update the watermark
         self.row_data[id] = (row.with_row_id(id), RowMetadata::new(true));
         if self.watermark <= id { self.watermark = id + 1; }
-        RowsAffected(1)
+        Outcome(Outcomes::RowsAffected(1))
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
         let (row, _) = self.row_data[id].to_owned();
         self.row_data[id] = (row, metadata.to_owned());
-        RowsAffected(1)
+        Outcome(Outcomes::RowsAffected(1))
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
@@ -216,7 +217,7 @@ impl RowCollection for ModelRowCollection {
     fn resize(&mut self, new_size: usize) -> TypedValue {
         self.row_data.resize(new_size, (Row::empty(&self.columns), RowMetadata::new(true)));
         self.watermark = new_size;
-        TypedValue::Ack
+        Outcome(Outcomes::Ack)
     }
 }
 
@@ -226,9 +227,10 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::NumberValue::U64Value;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::table_columns::Column;
+    use crate::testdata::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
+    use std::ops::Deref;
 
     #[test]
     fn test_contains() {
@@ -242,6 +244,13 @@ mod tests {
         let (mrc, phys_columns) = create_data_set();
         let encoded = mrc.encode();
         assert_eq!(ModelRowCollection::decode(phys_columns, encoded), mrc)
+    }
+
+    #[test]
+    fn test_from_table() {
+        let rc: Box<dyn RowCollection> = Box::new(create_data_set().0);
+        let mrc = ModelRowCollection::from_table(Box::from(rc.deref())).unwrap();
+        assert_eq!(mrc.get_rows(), rc.read_active_rows().unwrap());
     }
 
     #[test]
@@ -263,9 +272,9 @@ mod tests {
         assert_eq!(mrc.index_of(&row), Number(U64Value(3)));
     }
 
-    fn create_data_set() -> (ModelRowCollection, Vec<TableColumn>) {
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+    fn create_data_set() -> (ModelRowCollection, Vec<Column>) {
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns).unwrap();
         let mrc = ModelRowCollection::from_rows(phys_columns.clone(),vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),

@@ -16,7 +16,7 @@ use crate::number_kind::NumberKind::*;
 use crate::numbers::NumberValue::*;
 
 /// Represents a numeric value
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum NumberValue {
     F32Value(f32),
     F64Value(f64),
@@ -71,12 +71,6 @@ impl NumberValue {
             U128Value(number) => number.to_be_bytes().to_vec(),
             NaNValue => Vec::new(),
         }
-    }
-
-    pub fn encode_with_type(&self) -> Vec<u8> {
-        let mut code = vec![self.kind().to_u8()];
-        code.extend(self.encode());
-        code
     }
 
     pub fn from_string(number_str: String) -> NumberValue {

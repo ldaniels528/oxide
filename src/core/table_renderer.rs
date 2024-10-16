@@ -8,7 +8,7 @@ use crate::cursor::Cursor;
 use crate::model_row_collection::ModelRowCollection;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 
 /// Table renderer
 pub struct TableRenderer;
@@ -23,14 +23,14 @@ impl TableRenderer {
     }
 
     /// Transforms the [Cursor] into a textual table
-    pub fn from_cursor(cursor: &mut Cursor, columns: &Vec<TableColumn>) -> Vec<String> {
+    pub fn from_cursor(cursor: &mut Cursor, columns: &Vec<Column>) -> Vec<String> {
         let header_cells = Self::tabulate_header_cells(columns);
         let body_cells = Self::tabulate_body_cells_from_cursor(cursor);
         tabulate_cells(header_cells, body_cells)
     }
 
     /// Transforms the [Vec<Row>] into a textual table
-    pub fn from_rows(columns: Vec<TableColumn>, rows: Vec<Row>) -> Vec<String> {
+    pub fn from_rows(columns: Vec<Column>, rows: Vec<Row>) -> Vec<String> {
         Self::from_collection(Box::new(ModelRowCollection::from_rows(columns, rows)))
     }
 
@@ -50,7 +50,7 @@ impl TableRenderer {
         body_cells
     }
 
-    fn tabulate_header_cells(columns: &Vec<TableColumn>) -> Vec<Vec<String>> {
+    fn tabulate_header_cells(columns: &Vec<Column>) -> Vec<Vec<String>> {
         let mut header_cells = Vec::new();
         let headers = columns.iter()
             .map(|c| format!(" {} ", c.get_name()))
@@ -65,9 +65,9 @@ impl TableRenderer {
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
     use crate::cursor::Cursor;
-    use crate::table_columns::TableColumn;
+    use crate::table_columns::Column;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_quote, make_table_columns};
+    use crate::testdata::{make_quote, make_quote_columns};
 
     #[test]
     fn test_from_collection() {
@@ -105,8 +105,8 @@ mod tests {
         ])
     }
 
-    fn create_collection() -> (ByteRowCollection, Vec<TableColumn>) {
-        let phys_columns = make_table_columns();
+    fn create_collection() -> (ByteRowCollection, Vec<Column>) {
+        let phys_columns = make_quote_columns();
         let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "NASDAQ", 0.2456),

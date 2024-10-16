@@ -2,7 +2,9 @@
 // table writer module
 ////////////////////////////////////////////////////////////////////
 
-use shared_lib::{RowJs, tabulate_body_cells_from_rows, tabulate_cells, tabulate_header_cells};
+use shared_lib::tabulate_cells;
+
+use crate::rows::RowJs;
 
 /// Table Writer
 pub struct TableWriter;
@@ -10,8 +12,8 @@ pub struct TableWriter;
 impl TableWriter {
     /// Transforms the vector of [RowJs] into a textual table
     pub fn from_rows(rows: &Vec<RowJs>) -> Vec<String> {
-        let header_cells = tabulate_header_cells(rows);
-        let body_cells = tabulate_body_cells_from_rows(rows);
+        let header_cells = RowJs::tabulate_header_cells(rows);
+        let body_cells = RowJs::tabulate_body_cells_from_rows(rows);
         tabulate_cells(header_cells, body_cells)
     }
 }
@@ -19,8 +21,6 @@ impl TableWriter {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use shared_lib::RowJs;
-
     use super::*;
 
     #[test]

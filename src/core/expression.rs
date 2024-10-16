@@ -6,27 +6,46 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
-use crate::byte_code_compiler::ByteCodeCompiler;
+use crate::data_types::DataType;
+use crate::data_types::DataType::*;
 use crate::decompiler::Decompiler;
+use crate::errors::Errors::IllegalOperator;
 use crate::expression::Expression::*;
-use crate::expression_support::{Directives, Excavation, Mutation, Queryable};
-use crate::machine::Machine;
+use crate::neocodec::Codec;
 use crate::numbers::NumberValue;
-use crate::server::ColumnJs;
+use crate::outcomes::{OutcomeKind, Outcomes};
+use crate::parameter::Parameter;
 use crate::tokens::Token;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Number, StringValue};
+use crate::typed_values::TypedValue::{ErrorValue, Number, Outcome, StringValue};
 
 // constants
-pub const ACK: Expression = Literal(TypedValue::Ack);
-pub const FALSE: Expression = Conditional(Condition::False);
-pub const TRUE: Expression = Conditional(Condition::True);
+pub const ACK: Expression = Literal(Outcome(Outcomes::Ack));
+pub const FALSE: Expression = Condition(Conditions::False);
+pub const TRUE: Expression = Condition(Conditions::True);
 pub const NULL: Expression = Literal(TypedValue::Null);
 pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
 
-/// Represents a Logical Condition
+/// Represents Bitwise Operations
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Condition {
+pub enum BitwiseOps {
+    And(Box<Expression>, Box<Expression>),
+    Or(Box<Expression>, Box<Expression>),
+    ShiftLeft(Box<Expression>, Box<Expression>),
+    ShiftRight(Box<Expression>, Box<Expression>),
+    Xor(Box<Expression>, Box<Expression>),
+}
+
+impl BitwiseOps {
+    /// Returns a string representation of this object
+    pub fn to_code(&self) -> String {
+        Decompiler::new().decompile_bitwise(self)
+    }
+}
+
+/// Represents Logical Conditions
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Conditions {
     And(Box<Expression>, Box<Expression>),
     Between(Box<Expression>, Box<Expression>, Box<Expression>),
     Betwixt(Box<Expression>, Box<Expression>, Box<Expression>),
@@ -43,26 +62,129 @@ pub enum Condition {
     True,
 }
 
-impl Condition {
+impl Conditions {
     /// Returns a string representation of this object
     pub fn to_code(&self) -> String {
         Decompiler::new().decompile_cond(self)
     }
 }
 
+/// Represents the set of all Directives
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Directives {
+    MustAck(Box<Expression>),
+    MustDie(Box<Expression>),
+    MustIgnoreAck(Box<Expression>),
+    MustNotAck(Box<Expression>),
+}
+
+/// Represents the set of all Quarry Activities
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Excavation {
+    Construct(Infrastructure),
+    Query(Queryable),
+    Mutate(Mutation),
+}
+
+/// Represents a Creation Entity
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum CreationEntity {
+    IndexEntity {
+        columns: Vec<Expression>,
+    },
+    TableEntity {
+        columns: Vec<Parameter>,
+        from: Option<Box<Expression>>,
+    },
+}
+
+/// Represents an infrastructure construction/deconstruction event
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Infrastructure {
+    Create { path: Box<Expression>, entity: CreationEntity },
+    Declare(CreationEntity),
+    Drop(MutateTarget),
+}
+
+/// Represents a data modification event
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Mutation {
+    Append {
+        path: Box<Expression>,
+        source: Box<Expression>,
+    },
+    Compact {
+        path: Box<Expression>,
+    },
+    Delete {
+        path: Box<Expression>,
+        condition: Option<Conditions>,
+        limit: Option<Box<Expression>>,
+    },
+    IntoNs(Box<Expression>, Box<Expression>),
+    Overwrite {
+        path: Box<Expression>,
+        source: Box<Expression>,
+        condition: Option<Conditions>,
+        limit: Option<Box<Expression>>,
+    },
+    Scan {
+        path: Box<Expression>,
+    },
+    Truncate {
+        path: Box<Expression>,
+        limit: Option<Box<Expression>>,
+    },
+    Undelete {
+        path: Box<Expression>,
+        condition: Option<Conditions>,
+        limit: Option<Box<Expression>>,
+    },
+    Update {
+        path: Box<Expression>,
+        source: Box<Expression>,
+        condition: Option<Conditions>,
+        limit: Option<Box<Expression>>,
+    },
+}
+
+/// Represents a Mutation Target
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum MutateTarget {
+    IndexTarget {
+        path: Box<Expression>,
+    },
+    TableTarget {
+        path: Box<Expression>,
+    },
+}
+
+/// Represents a queryable
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum Queryable {
+    Describe(Box<Expression>),
+    Limit { from: Box<Expression>, limit: Box<Expression> },
+    Reverse(Box<Expression>),
+    Select {
+        fields: Vec<Expression>,
+        from: Option<Box<Expression>>,
+        condition: Option<Conditions>,
+        group_by: Option<Vec<Expression>>,
+        having: Option<Box<Expression>>,
+        order_by: Option<Vec<Expression>>,
+        limit: Option<Box<Expression>>,
+    },
+    Where { from: Box<Expression>, condition: Conditions },
+}
+
 /// Represents an Expression
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Expression {
-    ArrayLiteral(Vec<Expression>),
+    ArrayExpression(Vec<Expression>),
     AsValue(String, Box<Expression>),
-    BitwiseAnd(Box<Expression>, Box<Expression>),
-    BitwiseOr(Box<Expression>, Box<Expression>),
-    BitwiseShiftLeft(Box<Expression>, Box<Expression>),
-    BitwiseShiftRight(Box<Expression>, Box<Expression>),
-    BitwiseXor(Box<Expression>, Box<Expression>),
+    BitwiseOp(BitwiseOps),
     CodeBlock(Vec<Expression>),
-    ColumnSet(Vec<ColumnJs>),
-    Conditional(Condition),
+    Condition(Conditions),
     Directive(Directives),
     Divide(Box<Expression>, Box<Expression>),
     ElementAt(Box<Expression>, Box<Expression>),
@@ -84,13 +206,14 @@ pub enum Expression {
         b: Option<Box<Expression>>,
     },
     Include(Box<Expression>),
-    JSONLiteral(Vec<(String, Expression)>),
+    JSONExpression(Vec<(String, Expression)>),
     Literal(TypedValue),
     Minus(Box<Expression>, Box<Expression>),
     Modulo(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
     Neg(Box<Expression>),
     Ns(Box<Expression>),
+    Parameters(Vec<Parameter>),
     Plus(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
     Quarry(Excavation),
@@ -103,7 +226,6 @@ pub enum Expression {
     },
     SetVariable(String, Box<Expression>),
     StructureImpl(String, Vec<Expression>),
-    TupleLiteral(Vec<Expression>),
     Variable(String),
     Via(Box<Expression>),
     While {
@@ -119,23 +241,87 @@ impl Expression {
     ////////////////////////////////////////////////////////////////
 
     pub fn encode(&self) -> Vec<u8> {
-        ByteCodeCompiler::assemble(&self)
+        Codec::encode(&self).unwrap_or_else(|e| panic!("{}", e))
     }
 
     pub fn from_token(token: Token) -> Self {
-        match token {
+        match token.to_owned() {
             Token::Atom { text, .. } => Variable(text),
             Token::Backticks { text, .. } => Variable(text),
             Token::DoubleQuoted { text, .. } => Literal(StringValue(text)),
             Token::Numeric { text, .. } => Literal(Number(NumberValue::from_string(text))),
-            Token::Operator { text, .. } => Literal(ErrorValue(format!("Illegal use of operator '{}'", text))),
+            Token::Operator { .. } => Literal(ErrorValue(IllegalOperator(token))),
             Token::SingleQuoted { text, .. } => Literal(StringValue(text)),
         }
     }
 
+    pub fn infer_type(&self) -> DataType {
+        fn infer_a_or_b(a: &Expression, b: &Expression) -> DataType {
+            match (a.infer_type(), b.infer_type()) {
+                (a, b) if a == b => a,
+                (a, BackDoorType | NullType | UndefinedType) => a,
+                (BackDoorType | NullType | UndefinedType, b) => b,
+                (a, _) => a
+            }
+        }
+        fn recurse(expr: &Expression) -> DataType {
+            match expr {
+                ArrayExpression(..) => ArrayType,
+                AsValue(_, e) => e.infer_type(),
+                BitwiseOp(bwo) => match bwo {
+                    BitwiseOps::And(a, b) => infer_a_or_b(a, b),
+                    BitwiseOps::Or(a, b) => infer_a_or_b(a, b),
+                    BitwiseOps::ShiftLeft(a, b) => infer_a_or_b(a, b),
+                    BitwiseOps::ShiftRight(a, b) => infer_a_or_b(a, b),
+                    BitwiseOps::Xor(a, b) => infer_a_or_b(a, b),
+                },
+                CodeBlock(_) => UndefinedType,
+                Parameters(_) => ArrayType,
+                Condition(_) => BooleanType,
+                Directive(_) => OutcomeType(OutcomeKind::Acked),
+                Divide(a, b) => infer_a_or_b(a, b),
+                ElementAt(_, _) => UndefinedType,
+                Extract(_, _) => UndefinedType,
+                Factorial(a) => a.infer_type(),
+                Feature { .. } => OutcomeType(OutcomeKind::Acked),
+                From(_) => UndefinedType,
+                FunctionCall { .. } => UndefinedType,
+                HTTP { .. } => UndefinedType,
+                If { a, .. } => a.infer_type(),
+                Include(_) => OutcomeType(OutcomeKind::Acked),
+                JSONExpression(_) => JSONType,
+                Literal(v) => v.get_type(),
+                Minus(a, b) => infer_a_or_b(a, b),
+                Modulo(a, b) => infer_a_or_b(a, b),
+                Multiply(a, b) => infer_a_or_b(a, b),
+                Neg(a) => a.infer_type(),
+                Ns(_) => OutcomeType(OutcomeKind::Acked),
+                Plus(a, b) => infer_a_or_b(a, b),
+                Pow(a, b) => infer_a_or_b(a, b),
+                Quarry(a) => match a {
+                    Excavation::Construct(_) => OutcomeType(OutcomeKind::Acked),
+                    Excavation::Query(_) => OutcomeType(OutcomeKind::Acked),
+                    Excavation::Mutate(m) => match m {
+                        Mutation::Append { .. } => OutcomeType(OutcomeKind::RowInserted),
+                        _ => OutcomeType(OutcomeKind::RowsUpdated),
+                    }
+                },
+                Range(a, b) => infer_a_or_b(a, b),
+                Return(_) => UndefinedType,
+                Scenario { .. } => OutcomeType(OutcomeKind::Acked),
+                SetVariable(_, _) => OutcomeType(OutcomeKind::Acked),
+                StructureImpl(_, _) => OutcomeType(OutcomeKind::Acked),
+                Variable(_) => UndefinedType,
+                Via(_) => UndefinedType,
+                While { .. } => UndefinedType,
+            }
+        }
+        recurse(self)
+    }
+
     /// Indicates whether the expression is a conditional expression
     pub fn is_conditional(&self) -> bool {
-        matches!(self, Conditional(..))
+        matches!(self, Condition(..))
     }
 
     /// Indicates whether the expression is a control flow expression
@@ -156,17 +342,27 @@ impl Expression {
 
 impl Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_code())
+        write!(f, "{}", self.to_code().as_str())
     }
+}
+
+fn fx(name: &str, path: Expression) -> Expression {
+    FunctionCall {
+        fx: Box::new(Variable(name.into())),
+        args: vec![path],
+    }
+}
+
+fn to_ns(path: Expression) -> Expression {
+    fx("ns", path)
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::expression::*;
-    use crate::expression::Condition::*;
+    use crate::expression::Conditions::*;
     use crate::expression::Excavation::{Mutate, Query};
-    use crate::expression_support::{Mutation, Queryable};
+    use crate::expression::*;
     use crate::machine::Machine;
     use crate::numbers::NumberValue::*;
     use crate::tokenizer;
@@ -372,11 +568,11 @@ mod tests {
 
     #[test]
     fn test_is_conditional() {
-        let model = Conditional(And(Box::new(TRUE), Box::new(FALSE)));
+        let model = Condition(And(Box::new(TRUE), Box::new(FALSE)));
         assert_eq!(model.to_code(), "true && false");
         assert!(model.is_conditional());
 
-        let model = Conditional(Between(
+        let model = Condition(Between(
             Box::new(Variable("x".into())),
             Box::new(Literal(Number(I32Value(1)))),
             Box::new(Literal(Number(I32Value(10)))),
@@ -384,7 +580,7 @@ mod tests {
         assert_eq!(model.to_code(), "x between 1 and 10");
         assert!(model.is_conditional());
 
-        let model = Conditional(Or(Box::new(TRUE), Box::new(FALSE)));
+        let model = Condition(Or(Box::new(TRUE), Box::new(FALSE)));
         assert_eq!(model.to_code(), "true || false");
         assert!(model.is_conditional());
     }
@@ -392,7 +588,7 @@ mod tests {
     #[test]
     fn test_if_is_control_flow() {
         let op = If {
-            condition: Box::new(Conditional(LessThan(
+            condition: Box::new(Condition(LessThan(
                 Box::new(Variable("x".into())),
                 Box::new(Variable("y".into())),
             ))),
@@ -429,7 +625,7 @@ mod tests {
     fn test_overwrite() {
         let model = Quarry(Mutate(Mutation::Overwrite {
             path: Box::new(Variable("stocks".into())),
-            source: Box::new(Via(Box::new(JSONLiteral(vec![
+            source: Box::new(Via(Box::new(JSONExpression(vec![
                 ("symbol".into(), Literal(StringValue("BOX".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
                 ("last_sale".into(), Literal(Number(F64Value(21.77)))),
@@ -449,7 +645,7 @@ mod tests {
     fn test_while_is_control_flow() {
         // CodeBlock(..) | If(..) | Return(..) | While { .. }
         let op = While {
-            condition: Box::new(Conditional(LessThan(
+            condition: Box::new(Condition(LessThan(
                 Box::new(Variable("x".into())),
                 Box::new(Variable("y".into())))
             )),

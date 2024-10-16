@@ -55,7 +55,7 @@ impl Template {
             "%a" => self.capture_params(ts),
             // is it a conditional tag?
             "%c" => self.capture_params(ts),
-            // is it a expression tag?
+            // is it an expression tag?
             "%e" => self.capture_params(ts),
             // is it a query tag?
             "%q" => self.capture_params(ts),

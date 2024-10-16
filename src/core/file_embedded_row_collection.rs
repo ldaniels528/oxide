@@ -2,6 +2,7 @@
 // file column row-collection module
 ////////////////////////////////////////////////////////////////////
 
+use crate::errors::Errors::Exact;
 use std::fmt::{Debug, Formatter};
 
 use crate::field_metadata::FieldMetadata;
@@ -9,7 +10,7 @@ use crate::file_row_collection::FileRowCollection;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::ErrorValue;
 
@@ -19,7 +20,7 @@ pub struct FileEmbeddedRowCollection {
     frc: FileRowCollection,
     embedded_row_id: usize,
     embedded_column_id: usize,
-    columns: Vec<TableColumn>,
+    columns: Vec<Column>,
     record_size: usize,
 }
 
@@ -32,7 +33,7 @@ impl FileEmbeddedRowCollection {
         frc: FileRowCollection,
         embedded_row_id: usize,
         embedded_column_id: usize,
-        columns: Vec<TableColumn>,
+        columns: Vec<Column>,
     ) -> Self {
         let record_size = Row::compute_record_size(&columns);
         Self { frc, embedded_row_id, embedded_column_id, columns, record_size }
@@ -55,7 +56,7 @@ impl Debug for FileEmbeddedRowCollection {
 }
 
 impl RowCollection for FileEmbeddedRowCollection {
-    fn get_columns(&self) -> &Vec<TableColumn> {
+    fn get_columns(&self) -> &Vec<Column> {
         &self.columns
     }
 
@@ -70,7 +71,7 @@ impl RowCollection for FileEmbeddedRowCollection {
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
         self.get_embedded_table()
             .map(|mut rc| rc.overwrite_row(id, row))
-            .unwrap_or_else(|err| ErrorValue(err.to_string()))
+            .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
     }
 
     fn overwrite_field(
@@ -81,7 +82,7 @@ impl RowCollection for FileEmbeddedRowCollection {
     ) -> TypedValue {
         self.get_embedded_table()
             .map(|mut t| t.overwrite_field(id, column_id, new_value))
-            .unwrap_or_else(|err| ErrorValue(err.to_string()))
+            .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
     }
 
     fn overwrite_field_metadata(
@@ -92,19 +93,19 @@ impl RowCollection for FileEmbeddedRowCollection {
     ) -> TypedValue {
         self.get_embedded_table()
             .map(|mut t| t.overwrite_field_metadata(id, column_id, metadata))
-            .unwrap_or_else(|err| ErrorValue(err.to_string()))
+            .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
         self.get_embedded_table()
             .map(|mut t| t.overwrite_row_metadata(id, metadata))
-            .unwrap_or_else(|err| ErrorValue(err.to_string()))
+            .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
         self.get_embedded_table()
             .map(|rc| rc.read_field(id, column_id))
-            .unwrap_or_else(|err| ErrorValue(err.to_string()))
+            .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
     }
 
     fn read_field_metadata(
@@ -126,7 +127,7 @@ impl RowCollection for FileEmbeddedRowCollection {
     fn resize(&mut self, new_size: usize) -> TypedValue {
         self.get_embedded_table()
             .map(|mut rc| rc.resize(new_size))
-            .unwrap_or_else(|err| ErrorValue(err.to_string()))
+            .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
     }
 }
 
@@ -135,13 +136,13 @@ mod tests {
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::TableColumn;
-    use crate::testdata::make_quote_columns;
+    use crate::table_columns::Column;
+    use crate::testdata::make_quote_parameters;
 
     #[test]
     fn test_get_columns() {
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns).unwrap();
         let ns = Namespace::new("file_row_collection", "get_columns", "stocks");
         let frc = FileRowCollection::create_table(&ns, phys_columns.to_owned()).unwrap();
         assert_eq!(frc.get_columns().to_owned(), phys_columns)

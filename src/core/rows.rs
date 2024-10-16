@@ -8,19 +8,19 @@ use std::mem::size_of;
 use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use shared_lib::{FieldJs, RowJs};
+use shared_lib::cnv_error;
 
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::codec;
 use crate::data_types::DataType;
-use crate::expression::Condition;
+use crate::expression::Conditions;
 use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
 use crate::row_metadata::RowMetadata;
-use crate::server::determine_column_value;
 use crate::structure::Structure;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, Null, Undefined};
 
@@ -47,12 +47,13 @@ impl Row {
     ////////////////////////////////////////////////////////////////////
 
     /// Computes the total record size (in bytes)
-    pub fn compute_record_size(columns: &Vec<TableColumn>) -> usize {
-        Row::overhead() + columns.iter().map(|c| c.max_physical_size).sum::<usize>()
+    pub fn compute_record_size(columns: &Vec<Column>) -> usize {
+        Row::overhead() + columns.iter()
+            .map(|c| c.get_max_physical_size()).sum::<usize>()
     }
 
     /// Decodes the supplied buffer returning a row and its metadata
-    pub fn decode(buffer: &Vec<u8>, columns: &Vec<TableColumn>) -> (Self, RowMetadata) {
+    pub fn decode(buffer: &Vec<u8>, columns: &Vec<Column>) -> (Self, RowMetadata) {
         // if the buffer is empty, just return an empty row
         if buffer.len() == 0 {
             return (Self::empty(columns), RowMetadata::new(false));
@@ -60,7 +61,7 @@ impl Row {
         let metadata = RowMetadata::from_bytes(buffer, 0);
         let id = codec::decode_row_id(buffer, 1);
         let values: Vec<TypedValue> = columns.iter().map(|t| {
-            Self::decode_value(&t.data_type, &buffer, t.offset)
+            Self::decode_value(&t.get_data_type(), &buffer, t.get_offset())
         }).collect();
         (Self::new(id, values), metadata)
     }
@@ -73,7 +74,7 @@ impl Row {
     }
 
     /// Decodes the supplied buffer returning a collection of rows.
-    pub fn decode_rows(columns: &Vec<TableColumn>, row_data: Vec<Vec<u8>>) -> Vec<Self> {
+    pub fn decode_rows(columns: &Vec<Column>, row_data: Vec<Vec<u8>>) -> Vec<Self> {
         let mut rows = Vec::new();
         for row_bytes in row_data {
             let (row, metadata) = Self::decode(&row_bytes, &columns);
@@ -83,7 +84,7 @@ impl Row {
     }
 
     /// Returns an empty row.
-    pub fn empty(columns: &Vec<TableColumn>) -> Self {
+    pub fn empty(columns: &Vec<Column>) -> Self {
         Self::new(0, columns.iter().map(|_| Null).collect())
     }
 
@@ -100,7 +101,7 @@ impl Row {
     }
 
     pub fn from_buffer(
-        columns: &Vec<TableColumn>,
+        columns: &Vec<Column>,
         buffer: &mut ByteCodeCompiler,
     ) -> std::io::Result<(Self, RowMetadata)> {
         // if the buffer is empty, just return an empty row
@@ -112,7 +113,7 @@ impl Row {
         let id = buffer.next_row_id();
         let mut values = Vec::new();
         for col in columns {
-            let field = Self::from_buffer_to_value(&col.data_type, buffer, col.offset)?;
+            let field = Self::from_buffer_to_value(&col.get_data_type(), buffer, col.get_offset())?;
             values.push(field);
         }
         Ok((Self::new(id, values), metadata))
@@ -126,17 +127,17 @@ impl Row {
         Ok(value)
     }
 
-    pub fn from_row_js(columns: &Vec<TableColumn>, form: &RowJs) -> Self {
+    pub fn from_row_js(columns: &Vec<Column>, form: &RowJs) -> Self {
         let mut values = Vec::new();
         for tc in columns {
-            values.push(determine_column_value(form, tc.get_name()));
+            values.push(form.determine_column_value(tc.get_name()));
         }
         Row::new(form.id.unwrap_or(0), values)
     }
 
     pub fn from_tuples(
         id: usize,
-        columns: &Vec<TableColumn>,
+        columns: &Vec<Column>,
         tuples: &Vec<(String, TypedValue)>,
     ) -> Self {
         // build a cache of the tuples as a hashmap
@@ -165,7 +166,7 @@ impl Row {
     ////////////////////////////////////////////////////////////////////
 
     /// Returns the binary-encoded equivalent of the row.
-    pub fn encode(&self, phys_columns: &Vec<TableColumn>) -> Vec<u8> {
+    pub fn encode(&self, phys_columns: &Vec<Column>) -> Vec<u8> {
         let capacity = Self::compute_record_size(phys_columns);
         let mut buf = Vec::with_capacity(capacity);
         // include the field metadata and row ID
@@ -173,7 +174,8 @@ impl Row {
         buf.extend(codec::encode_row_id(self.id));
         // include the fields
         let bb: Vec<u8> = self.values.iter().zip(phys_columns.iter())
-            .flat_map(|(v, c)| Self::encode_value(v, &FieldMetadata::new(true), c.max_physical_size))
+            .flat_map(|(v, c)|
+                Self::encode_value(v, &FieldMetadata::new(true), c.get_max_physical_size()))
             .collect();
         buf.extend(bb);
         buf.resize(capacity, 0u8);
@@ -185,7 +187,7 @@ impl Row {
         if index < value_len { self.values[index].to_owned() } else { Undefined }
     }
 
-    fn get_row_offset(&self, columns: &Vec<TableColumn>, id: usize) -> u64 {
+    fn get_row_offset(&self, columns: &Vec<Column>, id: usize) -> u64 {
         (id as u64) * (Self::compute_record_size(columns) as u64)
     }
 
@@ -196,8 +198,8 @@ impl Row {
     pub fn matches(
         &self,
         machine: &Machine,
-        condition: &Option<Condition>,
-        columns: &Vec<TableColumn>,
+        condition: &Option<Conditions>,
+        columns: &Vec<Column>,
     ) -> bool {
         if let Some(condition) = condition {
             let machine = machine.with_row(columns, &self);
@@ -212,33 +214,33 @@ impl Row {
     /// Transforms the row into CSV
     pub fn to_csv(&self) -> String {
         self.get_values().iter()
-            .map(|v| v.get_raw_value())
+            .map(|v| v.to_code())
             .collect::<Vec<_>>().join(",")
     }
 
     /// Transforms the row into JSON
-    pub fn to_json(&self, columns: &Vec<TableColumn>) -> String {
+    pub fn to_json(&self, columns: &Vec<Column>) -> String {
         let inside = columns.iter().zip(self.values.iter())
             .map(|(k, v)|
-                format!(r#""{}":{}"#, k.get_name(), v.get_raw_value()))
+                format!(r#""{}":{}"#, k.get_name(), v.to_code()))
             .collect::<Vec<_>>()
             .join(",");
         format!("{{{}}}", inside)
     }
 
     /// Transforms the row into a Row model
-    pub fn to_row_js(&self, columns: &Vec<TableColumn>) -> RowJs {
+    pub fn to_row_js(&self, columns: &Vec<Column>) -> RowJs {
         RowJs::new(Some(self.get_id()), self.get_values().iter().zip(columns)
             .map(|(v, c)| FieldJs::new(c.get_name(), v.to_json())).collect())
     }
 
     pub fn to_string(&self) -> String {
         format!("[{}]", self.values.iter()
-            .map(|tv| tv.get_raw_value())
+            .map(|tv| tv.to_code())
             .collect::<Vec<_>>().join(", "))
     }
 
-    pub fn to_struct(&self, columns: &Vec<TableColumn>) -> Structure {
+    pub fn to_struct(&self, columns: &Vec<Column>) -> Structure {
         Structure::new(columns.to_owned(), self.values.to_owned())
     }
 
@@ -272,13 +274,92 @@ impl Index<usize> for Row {
     }
 }
 
+// JSON representation of a field
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct FieldJs {
+    name: String,
+    value: Value,
+}
+
+impl FieldJs {
+    pub fn new(name: &str, value: Value) -> Self {
+        Self { name: name.into(), value }
+    }
+
+    pub fn get_name(&self) -> &String {
+        &self.name
+    }
+
+    pub fn get_value(&self) -> Value {
+        self.value.to_owned()
+    }
+}
+
+// JSON representation of a row
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RowJs {
+    pub id: Option<usize>,
+    pub fields: Vec<FieldJs>,
+}
+
+impl RowJs {
+
+    pub fn determine_column_value(&self, name: &str) -> TypedValue {
+        for c in &self.fields {
+            if *c.get_name() == *name { return TypedValue::from_json(c.get_value()); }
+        }
+        Undefined
+    }
+
+    pub fn from_string(json_string: &str) -> std::io::Result<Self> {
+        serde_json::from_str(json_string).map_err(|e| cnv_error!(e))
+    }
+
+    pub fn vec_from_string(json_string: &str) -> std::io::Result<Vec<Self>> {
+        serde_json::from_str(json_string).map_err(|e| cnv_error!(e))
+    }
+
+    pub fn new(id: Option<usize>, fields: Vec<FieldJs>) -> Self { Self { id, fields } }
+
+    pub fn get_id(&self) -> Option<usize> { self.id }
+
+    pub fn get_fields(&self) -> &Vec<FieldJs> { &self.fields }
+
+    pub fn tabulate_body_cells_from_rows(rows: &Vec<RowJs>) -> Vec<Vec<String>> {
+        let mut body_cells = Vec::new();
+        for row in rows {
+            let mut row_vec = Vec::new();
+            for field in row.get_fields() {
+                row_vec.push(format!(" {} ", field.get_value()))
+            }
+            body_cells.push(row_vec)
+        }
+        body_cells
+    }
+
+    pub fn tabulate_header_cells(rows: &Vec<RowJs>) -> Vec<Vec<String>> {
+        let mut headers = Vec::new();
+        for field in rows[0].get_fields() {
+            headers.push(format!(" {} ", field.get_name()))
+        }
+
+        let mut header_cells = Vec::new();
+        header_cells.push(headers);
+        header_cells
+    }
+
+    pub fn to_json_string(&self) -> String { serde_json::to_string(self).unwrap() }
+
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::data_types::DataType::*;
-    use crate::number_kind::NumberKind::*;
+    use shared_lib::tabulate_cells;
+    use crate::data_types::DataType::{NumberType, StringType};
+    use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::*;
-    use crate::testdata::{make_quote, make_table_columns};
+    use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::*;
 
     use super::*;
@@ -304,14 +385,14 @@ mod tests {
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
             0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
         ];
-        let (row, rmd) = Row::decode(&buf, &make_table_columns());
+        let (row, rmd) = Row::decode(&buf, &make_quote_columns());
         assert!(rmd.is_allocated);
         assert_eq!(row, make_quote(187, "MANA", "NYSE", 78.35));
     }
 
     #[test]
     fn test_decode_rows() {
-        let columns = make_table_columns();
+        let columns = make_quote_columns();
         let rows_a = vec![
             make_quote(0, "BEAM", "NYSE", 11.99),
             make_quote(1, "LITE", "AMEX", 78.35),
@@ -332,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_empty() {
-        let columns = make_table_columns();
+        let columns = make_quote_columns();
         let row_a = Row::empty(&columns);
         let row_b = Row::new(0, vec![Null, Null, Null]);
         assert_eq!(row_a, row_b);
@@ -340,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_encode() {
-        let phys_columns = make_table_columns();
+        let phys_columns = make_quote_columns();
         let row = make_quote(255, "RED", "NYSE", 78.35);
         assert_eq!(row.encode(&phys_columns), vec![
             0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 255,
@@ -383,7 +464,7 @@ mod tests {
 
     #[test]
     fn test_to_row_offset() {
-        let phys_columns = make_table_columns();
+        let phys_columns = make_quote_columns();
         let row = Row::new(111, vec![
             StringValue("GE".into()), StringValue("NYSE".into()), Number(F64Value(48.88)),
         ]);
@@ -404,4 +485,63 @@ mod tests {
             &StringValue("ZZZ".into()), &StringValue("AMEX".into()), &Number(F64Value(0.9876)),
         ]);
     }
+
+    #[test]
+    fn test_tabulate_cells() {
+        let rows = RowJs::vec_from_string(r#"
+            [{"fields":[{"name":"symbol","value":"ABC"},{"name":"exchange","value":"AMEX"},
+            {"name":"last_sale","value":11.77}],"id":0},{"fields":[{"name":"symbol","value":"BIZ"},
+            {"name":"exchange","value":"NYSE"},{"name":"last_sale","value":23.66}],"id":2},
+            {"fields":[{"name":"symbol","value":"BOOM"},{"name":"exchange","value":"NASDAQ"},
+            {"name":"last_sale","value":56.87}],"id":4}]
+        "#).unwrap();
+        let header_cells = RowJs::tabulate_header_cells(&rows);
+        let body_cells = RowJs::tabulate_body_cells_from_rows(&rows);
+        let lines = tabulate_cells(header_cells, body_cells);
+        assert_eq!(lines, vec![
+            "|-------------------------------|".to_string(),
+            "| symbol | exchange | last_sale |".to_string(),
+            "|-------------------------------|".to_string(),
+            "| \"ABC\"  | \"AMEX\"   | 11.77     |".to_string(),
+            "| \"BIZ\"  | \"NYSE\"   | 23.66     |".to_string(),
+            "| \"BOOM\" | \"NASDAQ\" | 56.87     |".to_string(),
+            "|-------------------------------|".to_string(),
+        ])
+    }
+
+    #[test]
+    fn test_transformations_between_row_and_row_json() {
+        // define a row
+        let columns = vec![
+            Column::new("symbol", StringType(4), Null, 9),
+            Column::new("exchange", StringType(4), Null, 22),
+            Column::new("last_sale", NumberType(F64Kind), Null, 35),
+        ];
+        let row = Row::new(123, vec![
+            StringValue("FOX".into()), StringValue("NYSE".into()), Number(F64Value(37.65)),
+        ]);
+        // define a row-js
+        let fields_js = vec![
+            FieldJs::new("symbol", serde_json::json!("FOX")),
+            FieldJs::new("exchange", serde_json::json!("NYSE")),
+            FieldJs::new("last_sale", serde_json::json!(37.65)),
+        ];
+        let row_js = RowJs::new(Some(123), fields_js.to_owned());
+        // verify the accessors
+        assert_eq!(row_js.get_id(), Some(123));
+        assert_eq!(row_js.get_fields(), &vec![
+            FieldJs::new("symbol", serde_json::json!("FOX")),
+            FieldJs::new("exchange", serde_json::json!("NYSE")),
+            FieldJs::new("last_sale", serde_json::json!(37.65)),
+        ]);
+        assert_eq!(row_js, RowJs::new(Some(123), fields_js));
+        // verify the value extraction
+        assert_eq!(row_js.determine_column_value("symbol"), StringValue("FOX".into()));
+        assert_eq!(row_js.determine_column_value("exchange"), StringValue("NYSE".into()));
+        assert_eq!(row_js.determine_column_value("last_sale"), Number(F64Value(37.65)));
+        // cross-convert and verify
+        assert_eq!(row.to_row_js(&columns), row_js.to_owned());
+        assert_eq!(Row::from_row_js(&columns, &row_js), row);
+    }
+
 }

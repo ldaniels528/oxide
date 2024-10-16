@@ -76,16 +76,16 @@ pub enum Direction {
 #[cfg(test)]
 mod tests {
     use crate::rows::Row;
-    use crate::table_columns::TableColumn;
+    use crate::table_columns::Column;
     use crate::table_view::{TableIterator, TableView};
-    use crate::testdata::{make_dataframe, make_quote, make_quote_columns};
+    use crate::testdata::{make_dataframe, make_quote, make_quote_parameters};
 
     #[test]
     fn test_forward_iterator() {
         // create a dataframe with 3 rows, 3 columns
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
-        let mut df = make_dataframe("dataframes", "forward_iterator", "quotes", columns).unwrap();
+        let parameters = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&parameters).unwrap();
+        let mut df = make_dataframe("dataframes", "forward_iterator", "quotes", parameters).unwrap();
         df.resize(0).unwrap();
         df.append(make_quote(0, "AAPL", "NYSE", 118.77)).unwrap();
         df.append(make_quote(1, "AMD", "NYSE", 93.22)).unwrap();
@@ -101,8 +101,8 @@ mod tests {
     #[test]
     fn test_reverse_iterator() {
         // create a dataframe with 3 rows, 3 columns
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns).unwrap();
         let mut df = make_dataframe("dataframes", "reverse_iterator", "quotes", columns).unwrap();
         df.append(make_quote(0, "AAPL", "NYSE", 118.77)).unwrap();
         df.append(make_quote(1, "AMD", "NYSE", 93.22)).unwrap();
@@ -116,7 +116,7 @@ mod tests {
     }
 
     fn inline(id: usize,
-              phys_columns: &Vec<TableColumn>,
+              phys_columns: &Vec<Column>,
               symbol: &str,
               exchange: &str,
               last_sale: f64) -> Option<Row> {

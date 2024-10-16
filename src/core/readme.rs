@@ -179,15 +179,15 @@ curl -X POST \
      -d '{
       "columns": [{
           "name": "symbol",
-          "column_type": "String(4)",
+          "param_type": "String(4)",
           "default_value": null
         }, {
           "name": "exchange",
-          "column_type": "String(4)",
+          "param_type": "String(4)",
           "default_value": null
         }, {
           "name": "lastSale",
-          "column_type": "f64",
+          "param_type": "f64",
           "default_value": null
         }],
       "indices": [],

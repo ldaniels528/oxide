@@ -2,9 +2,7 @@
 // REPL module
 ////////////////////////////////////////////////////////////////////
 
-use std::error::Error;
-use std::io::{BufRead, Read, stdout, Write};
-use std::ops::Sub;
+use std::io::{stdout, Write};
 
 use chrono::Local;
 use crossterm::execute;
@@ -13,15 +11,17 @@ use crossterm::terminal::{Clear, ClearType};
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
-use shared_lib::{cnv_error, RemoteCallRequest, RemoteCallResponse, RowJs};
+use crate::errors::Errors::Exact;
+use shared_lib::{cnv_error, RemoteCallRequest, RemoteCallResponse};
 
 use crate::expression::ACK;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
+use crate::outcomes::Outcomes;
+use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
-use crate::rows::Row;
-use crate::server::ColumnJs;
-use crate::table_columns::TableColumn;
+use crate::rows::{Row, RowJs};
+use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
 use crate::table_writer::TableWriter;
 use crate::typed_values::TypedValue;
@@ -78,7 +78,7 @@ impl REPLState {
     pub fn attach_builtin_functions(mut interpreter: Interpreter) -> Interpreter {
         interpreter.with_variable("assert", Function {
             params: vec![
-                ColumnJs::new("condition", "Boolean", None)
+                Parameter::new("condition", Some("Boolean".into()), None)
             ],
             code: Box::new(ACK),
         });
@@ -93,9 +93,9 @@ impl REPLState {
     /// creates a new history table
     fn create_history_table() -> std::io::Result<ModelRowCollection> {
         Ok(ModelRowCollection::with_rows(
-            TableColumn::from_columns(&vec![
-                ColumnJs::new("pid", "i64", None),
-                ColumnJs::new("input", "String(65536)", None),
+            Column::from_parameters(&vec![
+                Parameter::new("pid", Some("i64".into()), None),
+                Parameter::new("input", Some("String(65536)".into()), None),
             ])?, Vec::new(),
         ))
     }
@@ -127,7 +127,7 @@ impl REPLState {
         // create a new row
         let id = mrc.len()?;
         let row = Row::new(id, vec![
-            TypedValue::RowsAffected(id),
+            TypedValue::Outcome(Outcomes::RowId(id)),
             TypedValue::StringValue(clean_input),
         ]);
         // write the row
@@ -167,7 +167,7 @@ pub async fn run(mut state: REPLState) -> std::io::Result<()> {
                     let t0 = Local::now();
                     let result = process_statement(&mut state, input)
                         .await
-                        .unwrap_or_else(|err| ErrorValue(err.to_string()));
+                        .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())));
                     let t1 = Local::now();
                     let t2 = t1 - t0;
 
@@ -261,7 +261,7 @@ pub async fn process_statement(state: &mut REPLState, user_input: &str) -> std::
             let response_body = response.text().await.map_err(|e| cnv_error!(e))?;
             let outcome = RemoteCallResponse::from_string(response_body.as_str())?;
             if let Some(message) = outcome.get_message() {
-                Ok(ErrorValue(message))
+                Ok(ErrorValue(Exact(message)))
             } else {
                 Ok(TypedValue::from_json(outcome.get_result()))
             }

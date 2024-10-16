@@ -2,13 +2,14 @@
 // view row-collection module
 ////////////////////////////////////////////////////////////////////
 
-use crate::expression::Condition;
+use crate::errors::Errors::{ViewsCannotBeResized, WriteProtected};
+use crate::expression::Conditions;
 use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::ErrorValue;
 
@@ -16,21 +17,19 @@ use crate::typed_values::TypedValue::ErrorValue;
 #[derive(Debug)]
 pub struct ViewRowCollection {
     host: Box<dyn RowCollection>,
-    condition: Condition,
+    condition: Conditions,
 }
 
 impl ViewRowCollection {
-    pub fn new(host: Box<dyn RowCollection>, condition: Condition) -> Self {
+    pub fn new(host: Box<dyn RowCollection>, condition: Conditions) -> Self {
         Self { host, condition }
     }
-
-    pub fn get_condition(&self) -> &Condition { &self.condition }
 
     pub fn get_host(&self) -> &Box<dyn RowCollection> { &self.host }
 }
 
 impl RowCollection for ViewRowCollection {
-    fn get_columns(&self) -> &Vec<TableColumn> { self.host.get_columns() }
+    fn get_columns(&self) -> &Vec<Column> { self.host.get_columns() }
 
     fn get_record_size(&self) -> usize { self.host.get_record_size() }
 
@@ -42,7 +41,7 @@ impl RowCollection for ViewRowCollection {
         _column_id: usize,
         _new_value: TypedValue,
     ) -> TypedValue {
-        ErrorValue("Write operations are not allowed.".into())
+        ErrorValue(WriteProtected)
     }
 
     fn overwrite_field_metadata(
@@ -51,15 +50,15 @@ impl RowCollection for ViewRowCollection {
         _column_id: usize,
         _metadata: FieldMetadata,
     ) -> TypedValue {
-        ErrorValue("Write operations are not allowed.".into())
+        ErrorValue(WriteProtected)
     }
 
     fn overwrite_row(&mut self, _id: usize, _row: Row) -> TypedValue {
-        ErrorValue("Write operations are not allowed.".into())
+        ErrorValue(WriteProtected)
     }
 
     fn overwrite_row_metadata(&mut self, _id: usize, _metadata: RowMetadata) -> TypedValue {
-        ErrorValue("Write operations are not allowed.".into())
+        ErrorValue(WriteProtected)
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
@@ -108,21 +107,21 @@ impl RowCollection for ViewRowCollection {
     }
 
     fn resize(&mut self, _new_size: usize) -> TypedValue {
-        ErrorValue("Views cannot be resized.".into())
+        ErrorValue(ViewsCannotBeResized)
     }
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::expression::Condition::{Equal, LessThan};
+    use crate::expression::Conditions::{Equal, LessThan};
     use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::NumberValue::F64Value;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::table_columns::Column;
+    use crate::testdata::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue::{Number, StringValue};
     use crate::view_row_collection::ViewRowCollection;
 
@@ -175,7 +174,7 @@ mod tests {
     fn test_out_of_band_rows() {
         let vrc = ViewRowCollection::new(Box::new(create_data_set()), Equal(
             Box::new(Variable("exchange".into())),
-            Box::new(Literal(StringValue("NASDAQ".into()))))
+            Box::new(Literal(StringValue("NASDAQ".into())))),
         );
 
         // attempt to retrieve out-of-band rows
@@ -189,8 +188,8 @@ mod tests {
     }
 
     fn create_data_set() -> ModelRowCollection {
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let parameters = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&parameters).unwrap();
         ModelRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "IBM", "NYSE", 21.22),
             make_quote(1, "ATT", "NYSE", 98.44),

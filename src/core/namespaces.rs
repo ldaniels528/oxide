@@ -86,10 +86,6 @@ impl Namespace {
         builder
     }
 
-    pub fn get_hash_index_file_path(&self, column_index: usize) -> String {
-        self.get_file_path(format!("{}", column_index).as_str())
-    }
-
     pub fn get_table_file_path(&self) -> String {
         self.get_file_path("table")
     }

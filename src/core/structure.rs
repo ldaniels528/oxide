@@ -3,23 +3,24 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::collections::HashMap;
-use std::fmt::Debug;
+use std::fmt::{Debug, Display, Formatter};
 
+use crate::errors::Errors::Exact;
 use serde::{Deserialize, Serialize};
 
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::NumberValue::U16Value;
+use crate::parameter::Parameter;
 use crate::rows::Row;
-use crate::server::ColumnJs;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
 /// Represents a user-defined record or data object
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Structure {
-    fields: Vec<TableColumn>,
+    fields: Vec<Column>,
     values: Vec<TypedValue>,
     variables: HashMap<String, TypedValue>,
 }
@@ -31,7 +32,7 @@ impl Structure {
     ////////////////////////////////////////////////////////////////////
 
     pub fn build(
-        fields: Vec<TableColumn>,
+        fields: Vec<Column>,
         values: Vec<TypedValue>,
         variables: HashMap<String, TypedValue>,
     ) -> Self {
@@ -50,7 +51,7 @@ impl Structure {
         Self { fields, values: my_values, variables }
     }
 
-    pub fn new(fields: Vec<TableColumn>, values: Vec<TypedValue>) -> Self {
+    pub fn new(fields: Vec<Column>, values: Vec<TypedValue>) -> Self {
         Self::build(fields, values, HashMap::new())
     }
 
@@ -58,28 +59,28 @@ impl Structure {
     //  Static Methods
     ////////////////////////////////////////////////////////////////////
 
-    pub fn from_columns(
-        columns: &Vec<ColumnJs>
+    pub fn from_parameters(
+        parameters: &Vec<Parameter>
     ) -> std::io::Result<Structure> {
-        let fields = TableColumn::from_columns(columns)?;
-        let values = columns.iter().map(|c|
+        let fields = Column::from_parameters(parameters)?;
+        let values = parameters.iter().map(|c|
             c.get_default_value().to_owned()
                 .map(|s| TypedValue::wrap_value(s.as_str())
-                    .unwrap_or_else(|err| ErrorValue(err.to_string())))
+                    .unwrap_or_else(|err| ErrorValue(Exact(err.to_string()))))
                 .unwrap_or(Null)
         ).collect();
         Ok(Self::new(fields, values))
     }
 
-    pub fn from_columns_and_values(
-        columns: &Vec<ColumnJs>,
+    pub fn from_parameters_and_values(
+        columns: &Vec<Parameter>,
         values: Vec<TypedValue>,
     ) -> std::io::Result<Structure> {
-        let fields = TableColumn::from_columns(columns)?;
+        let fields = Column::from_parameters(columns)?;
         Ok(Self::new(fields, values))
     }
 
-    pub fn from_row(columns: Vec<TableColumn>, row: &Row) -> Structure {
+    pub fn from_row(columns: Vec<Column>, row: &Row) -> Structure {
         Self::new(columns, row.get_values())
     }
 
@@ -102,7 +103,7 @@ impl Structure {
             .unwrap_or(Undefined)
     }
 
-    pub fn get_columns(&self) -> Vec<TableColumn> {
+    pub fn get_fields(&self) -> Vec<Column> {
         self.fields.to_owned()
     }
 
@@ -110,13 +111,15 @@ impl Structure {
         self.values.to_owned()
     }
 
-    pub fn inject(&self, ms: Machine) -> Machine {
+    pub fn pollute(&self, ms: Machine) -> Machine {
         // add all scope variables (includes functions)
-        let ms = self.variables.iter().fold(ms, |ms, (name, value)| {
+        let ms = self.variables.iter()
+            .fold(ms, |ms, (name, value)| {
             ms.with_variable(name, value.to_owned())
         });
         // add all structure fields
-        let ms = self.fields.iter().zip(self.values.iter()).fold(ms, |ms, (field, value)| {
+        let ms = self.fields.iter().zip(self.values.iter())
+            .fold(ms, |ms, (field, value)| {
             ms.with_variable(field.get_name(), value.to_owned())
         });
         // add self-reference
@@ -125,13 +128,6 @@ impl Structure {
 
     pub fn to_row(&self) -> Row {
         Row::new(0, self.values.to_owned())
-    }
-
-    pub fn to_string(&self) -> String {
-        let mapping = self.fields.iter().zip(self.values.iter())
-            .map(|(c, v)| format!("\"{}\":{}", c.get_name(), v.to_json().to_string()))
-            .collect::<Vec<_>>();
-        format!("{{{}}}", mapping.join(","))
     }
 
     pub fn to_table(&self) -> ModelRowCollection {
@@ -145,6 +141,15 @@ impl Structure {
     }
 }
 
+impl Display for Structure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let mapping = self.fields.iter().zip(self.values.iter())
+            .map(|(c, v)| format!("\"{}\":{}", c.get_name(), v.to_json()))
+            .collect::<Vec<_>>();
+        write!(f, "{{{}}}", mapping.join(","))
+    }
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
@@ -153,16 +158,15 @@ mod tests {
     use crate::data_types::DataType::*;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::F64Value;
-    use crate::row_collection::RowCollection;
     use crate::structure::Structure;
-    use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote, make_quote_columns, make_table_columns};
+    use crate::table_columns::Column;
+    use crate::testdata::{make_quote, make_quote_parameters, make_quote_columns};
     use crate::typed_values::TypedValue::*;
 
     #[test]
     fn test_encode() {
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns).unwrap();
         let structure = Structure::new(phys_columns, vec![
             StringValue("EDF".to_string()),
             StringValue("NYSE".to_string()),
@@ -180,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_from_logical_columns_and_values() {
-        let columns = make_table_columns();
+        let columns = make_quote_columns();
         let structure = Structure::new(columns, vec![
             StringValue("ABC".to_string()),
             StringValue("NYSE".to_string()),
@@ -199,8 +203,8 @@ mod tests {
 
     #[test]
     fn test_from_physical_columns_and_values() {
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns).unwrap();
         let structure = Structure::new(phys_columns, vec![
             StringValue("ABC".to_string()),
             StringValue("NYSE".to_string()),
@@ -219,8 +223,8 @@ mod tests {
 
     #[test]
     fn test_from_row() {
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns).unwrap();
         let structure = Structure::from_row(phys_columns.clone(),
                                             &make_quote(0, "ABC", "AMEX", 11.77),
         );
@@ -237,11 +241,11 @@ mod tests {
 
     #[test]
     fn test_new() {
-        let structure = Structure::new(make_table_columns(), Vec::new());
-        assert_eq!(structure.get_columns(), vec![
-            TableColumn::new("symbol", StringType(8), Null, 9),
-            TableColumn::new("exchange", StringType(8), Null, 26),
-            TableColumn::new("last_sale", NumberType(F64Kind), Null, 43),
+        let structure = Structure::new(make_quote_columns(), Vec::new());
+        assert_eq!(structure.get_fields(), vec![
+            Column::new("symbol", StringType(8), Null, 9),
+            Column::new("exchange", StringType(8), Null, 26),
+            Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ]);
         assert_eq!(structure.get("symbol"), Null);
         assert_eq!(structure.get("exchange"), Null);
@@ -252,7 +256,7 @@ mod tests {
 
     #[test]
     fn test_structure_from_columns() {
-        let structure = Structure::from_columns(&make_quote_columns()).unwrap();
+        let structure = Structure::from_parameters(&make_quote_parameters()).unwrap();
         assert_eq!(structure.get("symbol"), Null);
         assert_eq!(structure.get("exchange"), Null);
         assert_eq!(structure.get("last_sale"), Null);
@@ -262,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_to_row() {
-        let phys_columns = make_table_columns();
+        let phys_columns = make_quote_columns();
         let structure = Structure::new(phys_columns.clone(), vec![
             StringValue("ZZY".to_string()),
             StringValue("NYSE".to_string()),
@@ -278,7 +282,7 @@ mod tests {
 
     #[test]
     fn test_to_table() {
-        let phys_columns = make_table_columns();
+        let phys_columns = make_quote_columns();
         let structure = Structure::new(phys_columns.clone(), vec![
             StringValue("ABB".to_string()),
             StringValue("NYSE".to_string()),
@@ -299,7 +303,7 @@ mod tests {
 
     #[test]
     fn test_with_variable() {
-        let phys_columns = make_table_columns();
+        let phys_columns = make_quote_columns();
         let structure = Structure::new(phys_columns.clone(), vec![
             StringValue("ICE".to_string()),
             StringValue("NASDAQ".to_string()),

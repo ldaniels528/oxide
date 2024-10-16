@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-// data types module
+// DataType class
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::Debug;
@@ -9,24 +9,25 @@ use serde::{Deserialize, Serialize};
 
 use shared_lib::fail;
 
-use crate::compiler::{Compiler, fail_expr, fail_near};
+use crate::compiler::{fail_expr, fail_near, Compiler};
 use crate::data_type_kind::DataTypeKind::*;
 use crate::data_type_kind::T_NUMBER_START;
 use crate::data_types::DataType::*;
 use crate::expression::Expression;
-use crate::expression::Expression::{ColumnSet, Literal};
-use crate::number_kind::NumberKind::*;
+use crate::expression::Expression::{Literal, Parameters};
 use crate::number_kind::NumberKind;
-use crate::server::ColumnJs;
+use crate::number_kind::NumberKind::*;
+use crate::outcomes::OutcomeKind;
+use crate::parameter::Parameter;
 use crate::token_slice::TokenSlice;
-use crate::tokens::Token;
 use crate::tokens::Token::Atom;
-use crate::typed_values::*;
 use crate::typed_values::TypedValue::Number;
+use crate::typed_values::*;
 
+/// Represents a Type
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
-    AckType,
+    ArrayType,
     BackDoorType,
     BLOBType(usize),
     BooleanType,
@@ -34,24 +35,26 @@ pub enum DataType {
     DateType,
     EnumType(Vec<String>),
     ErrorType,
-    FunctionType(Vec<ColumnJs>),
+    FunctionType(Vec<Parameter>),
     JSONType,
+    NullType,
     NumberType(NumberKind),
-    RowsAffectedType,
+    OutcomeType(OutcomeKind),
     StringType(usize),
-    StructureType(Vec<ColumnJs>),
-    TableType(Vec<ColumnJs>),
+    StructureType(Vec<Parameter>),
+    TableType(Vec<Parameter>),
+    UndefinedType,
     UUIDType,
 }
 
 impl DataType {
     /// parses a datatype expression (e.g. "String(20)")
-    pub fn compile(column_type: &str) -> io::Result<DataType> {
-        let ts = TokenSlice::from_string(column_type);
+    pub fn compile(param_type: &str) -> io::Result<DataType> {
+        let ts = TokenSlice::from_string(param_type);
 
-        fn column_parameters(ts: TokenSlice, f: fn(Vec<ColumnJs>) -> DataType) -> io::Result<DataType> {
+        fn column_parameters(ts: TokenSlice, f: fn(Vec<Parameter>) -> DataType) -> io::Result<DataType> {
             let mut compiler = Compiler::new();
-            if let (ColumnSet(params), _) = compiler.expect_parameters(ts)? {
+            if let (Parameters(params), _) = compiler.expect_parameters(ts)? {
                 //assert!(ts.is_empty());
                 Ok(f(params))
             } else { fail("parameters are expected for this type") }
@@ -83,7 +86,8 @@ impl DataType {
 
         if let (Some(Atom { text: name, .. }), ts) = ts.next() {
             match name.as_str() {
-                "Ack" => Ok(AckType),
+                "Ack" => Ok(OutcomeType(OutcomeKind::Acked)),
+                "Array" => Ok(ArrayType),
                 "BackDoor" => Ok(BackDoorType),
                 "BLOB" => size_parameter(ts, |size| BLOBType(size)),
                 "Boolean" => Ok(BooleanType),
@@ -100,7 +104,8 @@ impl DataType {
                 "i64" => Ok(NumberType(I64Kind)),
                 "i128" => Ok(NumberType(I128Kind)),
                 "JSON" => Ok(JSONType),
-                "RowsAffected" => Ok(RowsAffectedType),
+                "RowId" => Ok(OutcomeType(OutcomeKind::RowInserted)),
+                "RowsAffected" => Ok(OutcomeType(OutcomeKind::RowsUpdated)),
                 "String" => size_parameter(ts, |size| StringType(size)),
                 "Struct" => column_parameters(ts, |columns| StructureType(columns)),
                 "Table" => column_parameters(ts, |columns| TableType(columns)),
@@ -110,7 +115,7 @@ impl DataType {
                 "u64" => Ok(NumberType(U64Kind)),
                 "u128" => Ok(NumberType(U128Kind)),
                 "UUID" => Ok(UUIDType),
-                type_name => Err(io::Error::new(io::ErrorKind::Other, format!("unrecognized type {}", type_name)))
+                type_name => fail(format!("unrecognized type {}", type_name))
             }
         } else {
             fail_near("identifier expected", &ts)
@@ -121,7 +126,7 @@ impl DataType {
     pub fn compute_max_physical_size(&self) -> usize {
         use crate::data_types::DataType::*;
         let width: usize = match self {
-            AckType => 0,
+            ArrayType => 1024,
             BackDoorType => 1,
             BLOBType(size) => *size,
             BooleanType => 1,
@@ -131,6 +136,7 @@ impl DataType {
             ErrorType => 256,
             FunctionType(columns) => columns.len() * 8,
             JSONType => 512,
+            NullType => 0,
             NumberType(kind) => match kind {
                 I8Kind | U8Kind => 1,
                 I16Kind | U16Kind => 2,
@@ -139,10 +145,15 @@ impl DataType {
                 I128Kind | U128Kind => 16,
                 NaNKind => 0,
             },
-            RowsAffectedType => 8,
+            OutcomeType(kind) => match kind {
+                OutcomeKind::Acked => 8,
+                OutcomeKind::RowInserted => 16,
+                OutcomeKind::RowsUpdated => 16,
+            },
             StringType(size) => *size + size.to_be_bytes().len(),
             StructureType(columns) => columns.len() * 8,
             TableType(columns) => columns.len() * 8,
+            UndefinedType => 0,
             UUIDType => 16
         };
         width + 1 // +1 for field metadata
@@ -150,7 +161,7 @@ impl DataType {
 
     pub fn ordinal(&self) -> u8 {
         match self {
-            AckType => TxAck.to_u8(),
+            ArrayType => TxArray.to_u8(),
             BackDoorType => TxBackDoor.to_u8(),
             BLOBType(..) => TxBlob.to_u8(),
             BooleanType => TxBoolean.to_u8(),
@@ -160,69 +171,61 @@ impl DataType {
             ErrorType => TxError.to_u8(),
             FunctionType(..) => TxFunction.to_u8(),
             JSONType => TxJsonObject.to_u8(),
+            NullType => TxNull.to_u8(),
             NumberType(kind) => T_NUMBER_START + kind.to_u8(),
-            RowsAffectedType => TxRowsAffected.to_u8(),
+            OutcomeType(kind) => match kind {
+                OutcomeKind::Acked => TxAck.to_u8(),
+                OutcomeKind::RowInserted => TxRowId.to_u8(),
+                OutcomeKind::RowsUpdated => TxRowsAffected.to_u8(),
+            },
             StringType(..) => TxString.to_u8(),
             StructureType(..) => TxStructure.to_u8(),
             TableType(..) => TxTableValue.to_u8(),
+            UndefinedType => TxUndefined.to_u8(),
             UUIDType => TxUUID.to_u8()
         }
     }
 
-    pub fn to_column_type(&self) -> String {
-        match self {
-            AckType => "Ack".into(),
+    pub fn to_type_declaration(&self) -> Option<String> {
+        let type_name = match self {
+            ArrayType => "Array".into(),
             BackDoorType => "BackDoor".into(),
             BLOBType(size) => format!("BLOB({})", size),
             BooleanType => "Boolean".into(),
             CLOBType(size) => format!("CLOB({})", size),
             DateType => "Date".into(),
-            EnumType(labels) => format!("Enum({:?})", labels),
+            EnumType(labels) => format!("Enum({})", labels.join(", ")),
             ErrorType => "Error".into(),
-            FunctionType(columns) => format!("fn({})", ColumnJs::render_columns(columns)),
+            FunctionType(columns) => format!("fn({})", Parameter::render_columns(columns)),
             JSONType => "struct".into(),
-            NumberType(index) => {
-                match *index {
-                    F32Kind => "f32".into(),
-                    F64Kind => "f64".into(),
-                    I8Kind => "i8".into(),
-                    I16Kind => "i16".into(),
-                    I32Kind => "i32".into(),
-                    I64Kind => "i64".into(),
-                    I128Kind => "i128".into(),
-                    U8Kind => "u8".into(),
-                    U16Kind => "u16".into(),
-                    U32Kind => "u32".into(),
-                    U64Kind => "u64".into(),
-                    U128Kind => "u128".into(),
-                    NaNKind => "NaN".into()
-                }
-            }
-            RowsAffectedType => "RowsAffected".into(),
+            NullType => "null".into(),
+            NumberType(index) => match *index {
+                F32Kind => "f32".into(),
+                F64Kind => "f64".into(),
+                I8Kind => "i8".into(),
+                I16Kind => "i16".into(),
+                I32Kind => "i32".into(),
+                I64Kind => "i64".into(),
+                I128Kind => "i128".into(),
+                U8Kind => "u8".into(),
+                U16Kind => "u16".into(),
+                U32Kind => "u32".into(),
+                U64Kind => "u64".into(),
+                U128Kind => "u128".into(),
+                NaNKind => "NaN".into()
+            },
+            OutcomeType(kind) => match kind {
+                OutcomeKind::Acked => "Ack".into(),
+                OutcomeKind::RowInserted => "RowId".into(),
+                OutcomeKind::RowsUpdated => "RowsAffected".into(),
+            },
             StringType(size) => format!("String({})", size),
-            StructureType(columns) => format!("struct({})", ColumnJs::render_columns(columns)),
-            TableType(columns) => format!("Table({})", ColumnJs::render_columns(columns)),
-            UUIDType => "UUID".into()
-        }
-    }
-
-    fn transfer_to_string_array(token_slice: &[Token]) -> Vec<&str> {
-        use Token::*;
-        token_slice.into_iter()
-            .fold(Vec::new(), |mut acc, t| {
-                match t {
-                    Operator { text: value, .. } if value == "," => acc,
-                    Atom { text: value, .. } => {
-                        acc.push(value);
-                        acc
-                    }
-                    Numeric { text: value, .. } => {
-                        acc.push(value);
-                        acc
-                    }
-                    _ => acc
-                }
-            })
+            StructureType(columns) => format!("struct({})", Parameter::render_columns(columns)),
+            TableType(columns) => format!("Table({})", Parameter::render_columns(columns)),
+            UUIDType => "UUID".into(),
+            UndefinedType => "".into()
+        };
+        if type_name.is_empty() { None } else { Some(type_name) }
     }
 }
 
@@ -232,7 +235,8 @@ mod tests {
     use crate::data_types::DataType;
     use crate::data_types::DataType::*;
     use crate::number_kind::NumberKind::*;
-    use crate::testdata::make_quote_columns;
+    use crate::outcomes::OutcomeKind;
+    use crate::testdata::make_quote_parameters;
 
     #[test]
     fn test_blob() {
@@ -275,7 +279,7 @@ mod tests {
     fn test_fn() {
         verify_type_construction(
             "fn(symbol: String(8), exchange: String(8), last_sale: f64)",
-            FunctionType(make_quote_columns()));
+            FunctionType(make_quote_parameters()));
     }
 
     #[test]
@@ -304,13 +308,15 @@ mod tests {
     }
 
     #[test]
-    fn test_json_object() {
+    fn test_json_type() {
         verify_type_construction("JSON", JSONType);
     }
 
     #[test]
-    fn test_rows_affected() {
-        verify_type_construction("RowsAffected", RowsAffectedType);
+    fn test_outcome() {
+        verify_type_construction("Ack", OutcomeType(OutcomeKind::Acked));
+        verify_type_construction("RowId", OutcomeType(OutcomeKind::RowInserted));
+        verify_type_construction("RowsAffected", OutcomeType(OutcomeKind::RowsUpdated));
     }
 
     #[test]
@@ -322,14 +328,14 @@ mod tests {
     fn test_struct() {
         verify_type_construction(
             "Struct(symbol: String(8), exchange: String(8), last_sale: f64)",
-            StructureType(make_quote_columns()));
+            StructureType(make_quote_parameters()));
     }
 
     #[test]
     fn test_table() {
         verify_type_construction(
             "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
-            TableType(make_quote_columns()));
+            TableType(make_quote_parameters()));
     }
 
     #[test]

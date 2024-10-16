@@ -3,12 +3,11 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::fs::File;
-use std::io::Write;
 
 use chrono::Utc;
-use rand::{Rng, RngCore, thread_rng};
 use rand::distributions::Uniform;
 use rand::prelude::ThreadRng;
+use rand::{thread_rng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
 
 use crate::dataframe_config::DataFrameConfig;
@@ -16,28 +15,20 @@ use crate::dataframes::DataFrame;
 use crate::file_row_collection::FileRowCollection;
 use crate::namespaces::Namespace;
 use crate::numbers::NumberValue::{F64Value, U64Value};
+use crate::parameter::Parameter;
 use crate::rows::Row;
-use crate::server::ColumnJs;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue::*;
 
-pub fn make_quote_columns() -> Vec<ColumnJs> {
-    vec![
-        ColumnJs::new("symbol", "String(8)", None),
-        ColumnJs::new("exchange", "String(8)", None),
-        ColumnJs::new("last_sale", "f64", None),
-    ]
-}
-
-pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<ColumnJs>) -> std::io::Result<DataFrame> {
+pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<DataFrame> {
     make_dataframe_ns(Namespace::new(database, schema, name), columns)
 }
 
-pub fn make_dataframe_ns(ns: Namespace, columns: Vec<ColumnJs>) -> std::io::Result<DataFrame> {
+pub fn make_dataframe_ns(ns: Namespace, columns: Vec<Parameter>) -> std::io::Result<DataFrame> {
     DataFrame::create(ns, make_dataframe_config(columns))
 }
 
-pub fn make_dataframe_config(columns: Vec<ColumnJs>) -> DataFrameConfig {
+pub fn make_dataframe_config(columns: Vec<Parameter>) -> DataFrameConfig {
     DataFrameConfig::new(columns, Vec::new(), Vec::new())
 }
 
@@ -52,50 +43,45 @@ pub fn make_quote(id: usize,
     ])
 }
 
-pub fn make_scan_quote(id: usize,
-                       symbol: &str,
-                       exchange: &str,
-                       last_sale: f64,
-                       _active: bool) -> Row {
-    Row::new(id, vec![
-                StringValue(symbol.into()),
-                StringValue(exchange.into()),
-                Number(F64Value(last_sale)),
-                Number(U64Value(id as u64)),
-                Boolean(_active)
-            ])
+pub fn make_quote_columns() -> Vec<Column> {
+    Column::from_parameters(&make_quote_parameters()).unwrap()
 }
 
-pub fn make_table_columns() -> Vec<TableColumn> {
-    TableColumn::from_columns(&make_quote_columns()).unwrap()
+pub fn make_quote_parameters() -> Vec<Parameter> {
+    vec![
+        Parameter::new("symbol", Some("String(8)".into()), None),
+        Parameter::new("exchange", Some("String(8)".into()), None),
+        Parameter::new("last_sale", Some("f64".into()), None),
+    ]
+}
+
+pub fn make_scan_quote(
+    id: usize,
+    symbol: &str,
+    exchange: &str,
+    last_sale: f64,
+    _active: bool,
+) -> Row {
+    Row::new(id, vec![
+        StringValue(symbol.into()),
+        StringValue(exchange.into()),
+        Number(F64Value(last_sale)),
+        Number(U64Value(id as u64)),
+        Boolean(_active)
+    ])
 }
 
 pub fn make_table_file(
     database: &str,
     schema: &str,
     name: &str,
-    columns: Vec<ColumnJs>,
-) -> (String, File, Vec<TableColumn>, usize) {
-    let table_columns = TableColumn::from_columns(&columns).unwrap();
+    columns: Vec<Parameter>,
+) -> (String, File, Vec<Column>, usize) {
+    let table_columns = Column::from_parameters(&columns).unwrap();
     let record_size = Row::compute_record_size(&table_columns);
     let ns = Namespace::new(database, schema, name);
     let file = FileRowCollection::table_file_create(&ns).unwrap();
     (ns.get_table_file_path(), file, table_columns, record_size)
-}
-
-pub fn make_table_file_from_bytes(
-    database: &str,
-    schema: &str,
-    name: &str,
-    columns: Vec<ColumnJs>,
-    row_data: &[u8],
-) -> (File, Vec<TableColumn>, usize) {
-    let table_columns = TableColumn::from_columns(&columns).unwrap();
-    let record_size = Row::compute_record_size(&table_columns);
-    let ns = Namespace::new(database, schema, name);
-    let mut file = FileRowCollection::table_file_create(&ns).unwrap();
-    file.write_all(row_data).unwrap();
-    (file, table_columns, record_size)
 }
 
 /////////////////////////////////////////////////////////////
@@ -115,18 +101,6 @@ impl StockQuote {
         Self::generate_quote_from_symbol_and_exchange(
             Self::generate_random_symbol(),
             Self::generate_random_exchange())
-    }
-
-    fn generate_quote_array(symbol: String) -> Box<[StockQuote]> {
-        let mut rng: ThreadRng = thread_rng();
-        let count: usize = rng.sample(Uniform::new(2, 5));
-        (0..count).map(|index|
-            StockQuote {
-                symbol: symbol.to_string(),
-                exchange: Self::get_exchange_from_index(index),
-                last_sale: 400.0 * rng.sample(Uniform::new(0.0, 1.0)),
-                transaction_time: Utc::now().timestamp_millis() + rng.sample(Uniform::new(0, 1000)),
-            }).collect()
     }
 
     fn generate_quote_from_symbol(symbol: String) -> StockQuote {

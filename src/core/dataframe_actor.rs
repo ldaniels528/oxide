@@ -15,7 +15,7 @@ use crate::namespaces::Namespace;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 
 // define the Dataframe I/O actor
 #[derive(Debug)]
@@ -40,10 +40,10 @@ impl DataframeActor {
     }
 
     fn delete_row(&mut self, ns: Namespace, id: usize) -> std::io::Result<usize> {
-        Ok(self.get_or_load_dataframe(ns)?.delete(id))
+        self.get_or_load_dataframe(ns)?.delete(id)
     }
 
-    fn get_columns(&mut self, ns: Namespace) -> std::io::Result<&Vec<TableColumn>> {
+    fn get_columns(&mut self, ns: Namespace) -> std::io::Result<&Vec<Column>> {
         Ok(&self.get_or_load_dataframe(ns)?.get_columns())
     }
 
@@ -73,7 +73,7 @@ impl DataframeActor {
     fn read_fully(
         &mut self,
         ns: Namespace,
-    ) -> std::io::Result<(Vec<TableColumn>, Vec<Row>)> {
+    ) -> std::io::Result<(Vec<Column>, Vec<Row>)> {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = Vec::new();
         for id in 0..df.len()? {
@@ -86,7 +86,7 @@ impl DataframeActor {
         &mut self,
         ns: Namespace,
         range: Range<usize>,
-    ) -> std::io::Result<(Vec<TableColumn>, Vec<Row>)> {
+    ) -> std::io::Result<(Vec<Column>, Vec<Row>)> {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = Vec::new();
         for id in range {
@@ -99,7 +99,7 @@ impl DataframeActor {
         &mut self,
         ns: Namespace,
         id: usize,
-    ) -> std::io::Result<(Vec<TableColumn>, Option<Row>)> {
+    ) -> std::io::Result<(Vec<Column>, Option<Row>)> {
         let df = self.get_or_load_dataframe(ns)?;
         df.read_row(id).map(|(row, meta)| {
             let columns = df.get_columns().clone();
@@ -236,7 +236,7 @@ macro_rules! get_columns {
         $actor.send(crate::dataframe_actor::IORequest::GetColumns {
             ns: $ns.to_owned()
         }).await
-            .map(|s|serde_json::from_str::<Vec<TableColumn>>(&s).unwrap())
+            .map(|s|serde_json::from_str::<Vec<Column>>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
 }
@@ -268,7 +268,7 @@ macro_rules! read_fully {
         $actor.send(crate::dataframe_actor::IORequest::ReadFully {
             ns: $ns.to_owned()
         }).await
-            .map(|s|serde_json::from_str::<(Vec<TableColumn>, Vec<Row>)>(&s).unwrap())
+            .map(|s|serde_json::from_str::<(Vec<Column>, Vec<Row>)>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
 }
@@ -280,7 +280,7 @@ macro_rules! read_range {
             ns: $ns.to_owned(),
             range: $range
         }).await
-            .map(|s|serde_json::from_str::<(Vec<TableColumn>, Vec<Row>)>(&s).unwrap())
+            .map(|s|serde_json::from_str::<(Vec<Column>, Vec<Row>)>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
 }
@@ -292,7 +292,7 @@ macro_rules! read_row {
             ns: $ns.to_owned(),
             id: $id
         }).await
-            .map(|s|serde_json::from_str::<(Vec<TableColumn>, Option<Row>)>(&s).unwrap())
+            .map(|s|serde_json::from_str::<(Vec<Column>, Option<Row>)>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
     }
 }
@@ -334,7 +334,7 @@ mod tests {
     use crate::data_types::DataType::*;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::*;
-    use crate::testdata::{make_quote_columns, make_table_columns};
+    use crate::testdata::{make_quote_parameters, make_quote_columns};
     use crate::typed_values::TypedValue::*;
 
     use super::*;
@@ -343,11 +343,11 @@ mod tests {
     async fn test_get_columns() {
         let actor = DataframeActor::new().start();
         let ns = Namespace::parse("dataframe.columns.stocks").unwrap();
-        assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
+        assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
-            TableColumn::new("symbol", StringType(8), Null, 9),
-            TableColumn::new("exchange", StringType(8), Null, 26),
-            TableColumn::new("last_sale", NumberType(F64Kind), Null, 43),
+            Column::new("symbol", StringType(8), Null, 9),
+            Column::new("exchange", StringType(8), Null, 26),
+            Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ]);
     }
 
@@ -355,10 +355,10 @@ mod tests {
     async fn test_append_then_read() {
         let actor = DataframeActor::new().start();
         let ns = Namespace::parse("actors.append_then_read.stocks").unwrap();
-        let table_columns = make_table_columns();
+        let table_columns = make_quote_columns();
 
         // create the new empty table
-        assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
+        assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns, Row::new(0, vec![
@@ -376,10 +376,10 @@ mod tests {
     async fn test_dataframe_lifecycle() {
         let actor = DataframeActor::new().start();
         let ns = Namespace::parse("dataframe.actor_crud.stocks").unwrap();
-        let table_columns = make_table_columns();
+        let table_columns = make_quote_columns();
 
         // create the new empty table
-        assert_eq!(1, create_table!(actor, ns, make_quote_columns()).unwrap());
+        assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns, Row::new(111, vec![
@@ -443,8 +443,8 @@ mod tests {
         let ns1 = Namespace::parse("dataframe.namespaces2.stocks").unwrap();
 
         // create the new empty tables
-        assert_eq!(1, create_table!(actor, ns0, make_quote_columns()).unwrap());
-        assert_eq!(1, create_table!(actor, ns1, make_quote_columns()).unwrap());
+        assert_eq!(1, create_table!(actor, ns0, make_quote_parameters()).unwrap());
+        assert_eq!(1, create_table!(actor, ns1, make_quote_parameters()).unwrap());
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns0, Row::new(111, vec![

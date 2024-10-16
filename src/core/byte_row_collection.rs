@@ -5,17 +5,18 @@
 use serde::{Deserialize, Serialize};
 
 use crate::field_metadata::FieldMetadata;
+use crate::outcomes::Outcomes;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::Undefined;
+use crate::typed_values::TypedValue::{Outcome, Undefined};
 
 /// Byte-vector-based RowCollection implementation
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ByteRowCollection {
-    columns: Vec<TableColumn>,
+    columns: Vec<Column>,
     row_data: Vec<Vec<u8>>,
     record_size: usize,
     watermark: usize,
@@ -26,7 +27,7 @@ impl ByteRowCollection {
     pub fn contains(&self, item: &Row) -> bool { self.index_of(item) != Undefined }
 
     /// Decodes a byte vector into a [ByteRowCollection]
-    pub fn decode(columns: Vec<TableColumn>, bytes: Vec<u8>) -> Self {
+    pub fn decode(columns: Vec<Column>, bytes: Vec<u8>) -> Self {
         let record_size = Row::compute_record_size(&columns);
         let row_bytes = bytes.chunks(record_size)
             .map(|chunk| chunk.to_vec())
@@ -42,7 +43,7 @@ impl ByteRowCollection {
     }
 
     /// Creates a new [ByteRowCollection] from the specified rows
-    pub fn from_rows(columns: Vec<TableColumn>, rows: Vec<Row>) -> Self {
+    pub fn from_rows(columns: Vec<Column>, rows: Vec<Row>) -> Self {
         let mut encoded_rows = Vec::new();
         for row in rows { encoded_rows.push(row.encode(&columns)) }
         Self::new(columns, encoded_rows)
@@ -58,7 +59,7 @@ impl ByteRowCollection {
     }
 
     /// Creates a new [ByteRowCollection] from the specified row data
-    pub fn new(columns: Vec<TableColumn>, rows: Vec<Vec<u8>>) -> Self {
+    pub fn new(columns: Vec<Column>, rows: Vec<Vec<u8>>) -> Self {
         ByteRowCollection {
             record_size: Row::compute_record_size(&columns),
             watermark: rows.len(),
@@ -69,7 +70,7 @@ impl ByteRowCollection {
 }
 
 impl RowCollection for ByteRowCollection {
-    fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
+    fn get_columns(&self) -> &Vec<Column> { &self.columns }
 
     fn get_record_size(&self) -> usize { self.record_size }
 
@@ -82,18 +83,18 @@ impl RowCollection for ByteRowCollection {
         new_value: TypedValue,
     ) -> TypedValue {
         let column = &self.columns[column_id];
-        let offset = self.convert_rowid_to_offset(id) + column.offset as u64;
+        let offset = self.convert_rowid_to_offset(id) + column.get_offset() as u64;
         let buffer = Row::encode_value(
             &new_value,
             &FieldMetadata::new(true),
-            column.max_physical_size,
+            column.get_max_physical_size(),
         );
         let mut encoded_row = self.row_data[id].to_owned();
         let start = offset as usize;
         let end = start + buffer.len();
         encoded_row[start..end].copy_from_slice(buffer.as_slice());
         self.row_data[id] = encoded_row;
-        TypedValue::RowsAffected(1)
+        TypedValue::Outcome(Outcomes::RowsAffected(1))
     }
 
     fn overwrite_field_metadata(
@@ -103,8 +104,8 @@ impl RowCollection for ByteRowCollection {
         metadata: FieldMetadata,
     ) -> TypedValue {
         let column = &self.columns[column_id];
-        self.row_data[id][column.offset] = metadata.encode();
-        TypedValue::RowsAffected(1)
+        self.row_data[id][column.get_offset()] = metadata.encode();
+        TypedValue::Outcome(Outcomes::RowsAffected(1))
     }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
@@ -118,18 +119,18 @@ impl RowCollection for ByteRowCollection {
         if self.watermark <= id {
             self.watermark = id + 1;
         }
-        TypedValue::RowsAffected(1)
+        TypedValue::Outcome(Outcomes::RowsAffected(1))
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
         self.row_data[id][0] = metadata.encode();
-        TypedValue::RowsAffected(1)
+        TypedValue::Outcome(Outcomes::RowsAffected(1))
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
         let column = &self.columns[column_id];
-        let buffer = self.row_data[id][column.offset..(column.offset + column.max_physical_size)].to_vec();
-        Row::decode_value(&column.data_type, &buffer, 0)
+        let buffer = self.row_data[id][column.get_offset()..(column.get_offset() + column.get_max_physical_size())].to_vec();
+        Row::decode_value(&column.get_data_type(), &buffer, 0)
     }
 
     fn read_field_metadata(
@@ -138,7 +139,7 @@ impl RowCollection for ByteRowCollection {
         column_id: usize,
     ) -> std::io::Result<FieldMetadata> {
         let column = &self.columns[column_id];
-        let code = self.row_data[id][column.offset];
+        let code = self.row_data[id][column.get_offset()];
         let meta = FieldMetadata::decode(code);
         Ok(meta)
     }
@@ -161,7 +162,7 @@ impl RowCollection for ByteRowCollection {
     fn resize(&mut self, new_size: usize) -> TypedValue {
         self.row_data.resize(new_size, Vec::new());
         self.watermark = new_size;
-        TypedValue::Ack
+        Outcome(Outcomes::Ack)
     }
 }
 
@@ -171,13 +172,13 @@ mod tests {
     use crate::byte_row_collection::ByteRowCollection;
     use crate::numbers::NumberValue::U64Value;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote, make_table_columns};
+    use crate::table_columns::Column;
+    use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::Number;
 
     #[test]
     fn test_contains() {
-        let (brc, phys_columns) = create_data_set();
+        let (brc, _) = create_data_set();
         let row = make_quote(4, "XYZ", "NYSE", 0.0289);
         assert!(brc.contains(&row));
     }
@@ -191,7 +192,7 @@ mod tests {
 
     #[test]
     fn test_get_rows() {
-        let (brc, phys_columns) = create_data_set();
+        let (brc, _) = create_data_set();
         assert_eq!(brc.get_rows(), vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),
@@ -203,13 +204,13 @@ mod tests {
 
     #[test]
     fn test_index_of() {
-        let (brc, phys_columns) = create_data_set();
+        let (brc, _) = create_data_set();
         let row = make_quote(4, "XYZ", "NYSE", 0.0289);
         assert_eq!(brc.index_of(&row), Number(U64Value(4)));
     }
 
-    fn create_data_set() -> (ByteRowCollection, Vec<TableColumn>) {
-        let phys_columns = make_table_columns();
+    fn create_data_set() -> (ByteRowCollection, Vec<Column>) {
+        let phys_columns = make_quote_columns();
         let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),

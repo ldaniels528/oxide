@@ -4,6 +4,19 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::data_type_kind::DataTypeKind::*;
+
+pub const DATA_TYPE_KINDS: [DataTypeKind; 33] = [
+    TxAck, TxArray, TxBackDoor, TxBlob, TxBoolean,
+    TxClob, TxDate, TxError, TxEnum, TxFunction, TxJsonObject,
+    TxNamespace, TxNull,
+    TxNumberF32, TxNumberF64,
+    TxNumberI8, TxNumberI16, TxNumberI32, TxNumberI64, TxNumberI128,
+    TxNumberU8, TxNumberU16, TxNumberU32, TxNumberU64, TxNumberU128, TxNumberNaN,
+    TxRowId, TxRowsAffected, TxString, TxStructure, TxTableValue,
+    TxUndefined, TxUUID,
+];
+
 pub const T_NUMBER_START: u8 = 56;
 
 // Represents a data type kind or class
@@ -36,19 +49,18 @@ pub enum DataTypeKind {
     TxNumberU64 = T_NUMBER_START + 10,
     TxNumberU128 = T_NUMBER_START + 11,
     TxNumberNaN = T_NUMBER_START + 12,
-    TxRowsAffected = 70,
+    TxRowId = 70,
+    TxRowsAffected = 72,
     TxString = 74,
     TxStructure = 78,
     TxTableValue = 82,
-    TxTuple = 86,
     TxUndefined = 90,
     TxUUID = 94,
-
 }
 
 impl DataTypeKind {
     pub fn from_u8(value: u8) -> DataTypeKind {
-        for dtk in Self::values() {
+        for dtk in DATA_TYPE_KINDS {
             if dtk.to_u8() == value { return  dtk }
         }
         panic!("missing DataTypeKind::from_u8({})", value);
@@ -56,19 +68,5 @@ impl DataTypeKind {
 
     pub fn to_u8(&self) -> u8 {
         *self as u8
-    }
-
-    pub fn values() -> Vec<DataTypeKind> {
-        use DataTypeKind::*;
-        vec![
-            TxAck, TxArray, TxBackDoor, TxBlob, TxBoolean,
-            TxClob, TxDate, TxError, TxEnum, TxFunction, TxJsonObject,
-            TxNamespace, TxNull,
-            TxNumberF32, TxNumberF64,
-            TxNumberI8, TxNumberI16, TxNumberI32, TxNumberI64, TxNumberI128,
-            TxNumberU8, TxNumberU16, TxNumberU32, TxNumberU64, TxNumberU128,
-            TxNumberNaN, TxRowsAffected, TxString, TxStructure, TxTableValue, TxTuple,
-            TxUndefined, TxUUID,
-        ]
     }
 }

@@ -14,52 +14,6 @@ macro_rules! cnv_error {
     }
 }
 
-// JSON representation of a field
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct FieldJs {
-    name: String,
-    value: Value,
-}
-
-impl FieldJs {
-    pub fn new(name: &str, value: Value) -> Self {
-        Self { name: name.into(), value }
-    }
-
-    pub fn get_name(&self) -> &String {
-        &self.name
-    }
-
-    pub fn get_value(&self) -> Value {
-        self.value.to_owned()
-    }
-}
-
-// JSON representation of a row
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RowJs {
-    pub id: Option<usize>,
-    pub fields: Vec<FieldJs>,
-}
-
-impl RowJs {
-    pub fn from_string(json_string: &str) -> std::io::Result<Self> {
-        serde_json::from_str(json_string).map_err(|e| cnv_error!(e))
-    }
-
-    pub fn vec_from_string(json_string: &str) -> std::io::Result<Vec<Self>> {
-        serde_json::from_str(json_string).map_err(|e| cnv_error!(e))
-    }
-
-    pub fn new(id: Option<usize>, fields: Vec<FieldJs>) -> Self { Self { id, fields } }
-
-    pub fn get_id(&self) -> Option<usize> { self.id }
-
-    pub fn get_fields(&self) -> &Vec<FieldJs> { &self.fields }
-
-    pub fn to_json_string(&self) -> String { serde_json::to_string(self).unwrap() }
-}
-
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct RemoteCallRequest {
     code: String,
@@ -124,29 +78,6 @@ pub fn tabulate_cells(
 
     // produce formatted lines
     tabulate_table(header_cells, body_cells, column_widths)
-}
-
-pub fn tabulate_body_cells_from_rows(rows: &Vec<RowJs>) -> Vec<Vec<String>> {
-    let mut body_cells = Vec::new();
-    for row in rows {
-        let mut row_vec = Vec::new();
-        for field in row.get_fields() {
-            row_vec.push(format!(" {} ", field.get_value()))
-        }
-        body_cells.push(row_vec)
-    }
-    body_cells
-}
-
-pub fn tabulate_header_cells(rows: &Vec<RowJs>) -> Vec<Vec<String>> {
-    let mut headers = Vec::new();
-    for field in rows[0].get_fields() {
-        headers.push(format!(" {} ", field.get_name()))
-    }
-
-    let mut header_cells = Vec::new();
-    header_cells.push(headers);
-    header_cells
 }
 
 pub fn tabulate_table(
@@ -248,26 +179,4 @@ mod tests {
                    ("127.0.0.1".to_string(), "3333".to_string()));
     }
 
-    #[test]
-    fn test_tabulate_cells() {
-        let rows = RowJs::vec_from_string(r#"
-            [{"fields":[{"name":"symbol","value":"ABC"},{"name":"exchange","value":"AMEX"},
-            {"name":"last_sale","value":11.77}],"id":0},{"fields":[{"name":"symbol","value":"BIZ"},
-            {"name":"exchange","value":"NYSE"},{"name":"last_sale","value":23.66}],"id":2},
-            {"fields":[{"name":"symbol","value":"BOOM"},{"name":"exchange","value":"NASDAQ"},
-            {"name":"last_sale","value":56.87}],"id":4}]
-        "#).unwrap();
-        let header_cells = tabulate_header_cells(&rows);
-        let body_cells = tabulate_body_cells_from_rows(&rows);
-        let lines = tabulate_cells(header_cells, body_cells);
-        assert_eq!(lines, vec![
-            "|-------------------------------|".to_string(),
-            "| symbol | exchange | last_sale |".to_string(),
-            "|-------------------------------|".to_string(),
-            "|\"ABC\"   |\"AMEX\"    |11.77      |".to_string(),
-            "|\"BIZ\"   |\"NYSE\"    |23.66      |".to_string(),
-            "|\"BOOM\"  |\"NASDAQ\"  |56.87      |".to_string(),
-            "|-------------------------------|".to_string(),
-        ])
-    }
 }

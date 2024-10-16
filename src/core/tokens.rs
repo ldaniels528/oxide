@@ -3,12 +3,8 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::Display;
-use std::io;
-use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
-
-use shared_lib::fail;
 
 use crate::tokens::Token::*;
 
@@ -188,19 +184,6 @@ impl Token {
         }
     }
 
-    /// Returns the numeric value of the [Token]
-    pub fn to_numeric<A: FromStr>(&self) -> io::Result<A> {
-        match self {
-            Atom { text, .. } | Numeric { text, .. } => {
-                let s: String = text.chars().filter(|c| *c != '_').collect();
-                match s.parse::<A>() {
-                    Ok(number) => Ok(number),
-                    Err(_) => fail(format!("Cannot convert '{}' to numeric", s))
-                }
-            }
-            t => fail(format!("Cannot convert {} to numeric", t.get_raw_value()))
-        }
-    }
 }
 
 impl Display for Token {

@@ -29,6 +29,8 @@ mod dataframe_config;
 mod dataframes;
 mod data_type_kind;
 mod data_types;
+mod decompiler;
+mod errors;
 mod expression;
 mod field_metadata;
 mod file_embedded_row_collection;
@@ -36,11 +38,13 @@ mod file_row_collection;
 mod hash_table_row_collection;
 mod interpreter;
 mod machine;
-mod mnemonic;
 mod model_row_collection;
 mod namespaces;
+mod native;
 mod number_kind;
 mod numbers;
+mod outcomes;
+mod parameter;
 mod readme;
 mod repl;
 mod rest_server;
@@ -61,9 +65,7 @@ mod tokens;
 mod typed_values;
 mod view_row_collection;
 mod websockets;
-mod expression_support;
-mod decompiler;
-mod native;
+mod neocodec;
 
 /// Starts the Oxide server
 #[actix_web::main]

@@ -10,19 +10,21 @@ use std::path::Path;
 use std::sync::Arc;
 
 use crate::dataframe_config::DataFrameConfig;
+use crate::errors::Errors;
 use crate::field_metadata::FieldMetadata;
 use crate::namespaces::Namespace;
+use crate::outcomes::Outcomes;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::ErrorValue;
+use crate::typed_values::TypedValue::{ErrorValue, Outcome};
 
 /// File-based RowCollection implementation
 #[derive(Clone)]
 pub struct FileRowCollection {
-    columns: Vec<TableColumn>,
+    columns: Vec<Column>,
     file: Arc<File>,
     path: String,
     record_size: usize,
@@ -30,7 +32,7 @@ pub struct FileRowCollection {
 
 impl FileRowCollection {
     /// Creates a new table within the specified namespace and having the specified columns
-    pub fn create_table(ns: &Namespace, columns: Vec<TableColumn>) -> std::io::Result<Self> {
+    pub fn create_table(ns: &Namespace, columns: Vec<Column>) -> std::io::Result<Self> {
         let path = ns.get_table_file_path();
         let file = Arc::new(Self::table_file_create(ns)?);
         Ok(Self::new(columns, file, path.as_str()))
@@ -56,7 +58,7 @@ impl FileRowCollection {
     }
 
     pub fn new(
-        columns: Vec<TableColumn>,
+        columns: Vec<Column>,
         file: Arc<File>,
         path: &str,
     ) -> Self {
@@ -70,14 +72,10 @@ impl FileRowCollection {
 
     pub fn open(ns: &Namespace) -> std::io::Result<Self> {
         let cfg = DataFrameConfig::load(&ns)?;
-        let columns = TableColumn::from_columns(cfg.get_columns())?;
+        let columns = Column::from_parameters(cfg.get_columns())?;
         let path = ns.get_table_file_path();
         let file = Arc::new(Self::table_file_open(&ns)?);
         Ok(Self::new(columns, file, path.as_str()))
-    }
-
-    pub fn open_path(path: &str) -> std::io::Result<Self> {
-        Self::open(&Namespace::parse(path)?)
     }
 
     /// convenience function to create, read or write a table file
@@ -103,7 +101,7 @@ impl Debug for FileRowCollection {
 impl RowCollection for FileRowCollection {
     fn create_related_structure(
         &self,
-        columns: Vec<TableColumn>,
+        columns: Vec<Column>,
         extension: &str,
     ) -> std::io::Result<Box<dyn RowCollection>> {
         // determine the base_path and full_path
@@ -120,7 +118,7 @@ impl RowCollection for FileRowCollection {
         Ok(Box::new(frc))
     }
 
-    fn get_columns(&self) -> &Vec<TableColumn> { &self.columns }
+    fn get_columns(&self) -> &Vec<Column> { &self.columns }
 
     fn get_record_size(&self) -> usize { self.record_size }
 
@@ -135,15 +133,15 @@ impl RowCollection for FileRowCollection {
         new_value: TypedValue,
     ) -> TypedValue {
         let column = &self.columns[column_id];
-        let offset = self.convert_rowid_to_offset(id) + column.offset as u64;
+        let offset = self.convert_rowid_to_offset(id) + column.get_offset() as u64;
         let buffer = Row::encode_value(
             &new_value,
             &FieldMetadata::new(true),
-            column.max_physical_size,
+            column.get_max_physical_size(),
         );
         match &self.file.write_at(&buffer, offset) {
-            Ok(_) => TypedValue::RowsAffected(1),
-            Err(err) => ErrorValue(err.to_string())
+            Ok(_) => TypedValue::Outcome(Outcomes::RowsAffected(1)),
+            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
 
@@ -155,39 +153,39 @@ impl RowCollection for FileRowCollection {
     ) -> TypedValue {
         let row_offset = self.convert_rowid_to_offset(id);
         let column = &self.columns[column_id];
-        let column_offset = column.offset as u64;
+        let column_offset = column.get_offset() as u64;
         let offset = row_offset + column_offset;
         match &self.file.write_at(&[metadata.encode()], offset) {
-            Ok(_) => TypedValue::RowsAffected(1),
-            Err(err) => ErrorValue(err.to_string())
+            Ok(_) => TypedValue::Outcome(Outcomes::RowsAffected(1)),
+            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
         let offset = self.convert_rowid_to_offset(id);
         match &self.file.write_at(&row.encode(&self.columns), offset) {
-            Ok(_) => TypedValue::RowsAffected(1),
-            Err(err) => ErrorValue(err.to_string())
+            Ok(_) => TypedValue::Outcome(Outcomes::RowsAffected(1)),
+            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
         let offset = self.convert_rowid_to_offset(id);
         match &self.file.write_at(&[metadata.encode()], offset) {
-            Ok(_) => TypedValue::RowsAffected(1),
-            Err(err) => ErrorValue(err.to_string())
+            Ok(_) => TypedValue::Outcome(Outcomes::RowsAffected(1)),
+            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
         let column = &self.columns[column_id];
         let row_offset = self.convert_rowid_to_offset(id);
-        let mut buffer: Vec<u8> = vec![0; column.max_physical_size];
-        match &self.file.read_at(&mut buffer, row_offset + column.offset as u64) {
+        let mut buffer: Vec<u8> = vec![0; column.get_max_physical_size()];
+        match &self.file.read_at(&mut buffer, row_offset + column.get_offset() as u64) {
             Ok(_) => {}
-            Err(err) => return ErrorValue(err.to_string())
+            Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
         }
-        Row::decode_value(&column.data_type, &buffer, 0)
+        Row::decode_value(&column.get_data_type(), &buffer, 0)
     }
 
     fn read_field_metadata(
@@ -197,7 +195,7 @@ impl RowCollection for FileRowCollection {
     ) -> std::io::Result<FieldMetadata> {
         let column = &self.columns[column_id];
         let row_offset = self.convert_rowid_to_offset(id);
-        let offset = row_offset + column.offset as u64;
+        let offset = row_offset + column.get_offset() as u64;
         let mut buffer: Vec<u8> = vec![0u8; 1];
         let _ = &self.file.read_at(&mut buffer, offset)?;
         let meta = FieldMetadata::decode(buffer[0]);
@@ -221,8 +219,8 @@ impl RowCollection for FileRowCollection {
     fn resize(&mut self, new_size: usize) -> TypedValue {
         let new_length = new_size as u64 * self.record_size as u64;
         match self.file.set_len(new_length) {
-            Ok(..) => TypedValue::Ack,
-            Err(err) => ErrorValue(err.to_string())
+            Ok(..) => Outcome(Outcomes::Ack),
+            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
 }
@@ -232,13 +230,13 @@ mod tests {
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::TableColumn;
-    use crate::testdata::make_quote_columns;
+    use crate::table_columns::Column;
+    use crate::testdata::make_quote_parameters;
 
     #[test]
     fn test_get_columns() {
-        let columns = make_quote_columns();
-        let phys_columns = TableColumn::from_columns(&columns).unwrap();
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns).unwrap();
         let ns = Namespace::new("file_row_collection", "get_columns", "stocks");
         let frc = FileRowCollection::create_table(&ns, phys_columns.to_owned()).unwrap();
         assert_eq!(frc.get_columns().to_owned(), phys_columns)

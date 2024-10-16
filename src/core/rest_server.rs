@@ -6,22 +6,22 @@ use std::error::Error;
 
 use actix::{Actor, Addr};
 use actix_session::Session;
-use actix_web::{HttpRequest, HttpResponse, Responder, web};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws;
 use log::{error, info};
 
-use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse, RowJs};
+use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse};
 
-use crate::{append_row, create_table_from_config, delete_row, get_columns, overwrite_row, read_range, read_row, read_row_metadata, update_row};
 use crate::dataframe_actor::DataframeActor;
 use crate::dataframe_config::DataFrameConfig;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
+use crate::rows::{Row, RowJs};
 use crate::server::SystemInfoJs;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::websockets::OxideWebSocket;
+use crate::{append_row, create_table_from_config, delete_row, get_columns, overwrite_row, read_range, read_row, read_row_metadata, update_row};
 
 pub const SECS_IN_WEEK: i64 = 60 * 60 * 24 * 7;
 
@@ -331,7 +331,7 @@ fn get_shared_state(
 async fn get_range_by_id(
     req: HttpRequest,
     path: web::Path<(String, String, String, usize, usize)>,
-) -> std::io::Result<(Vec<TableColumn>, Vec<Row>)> {
+) -> std::io::Result<(Vec<Column>, Vec<Row>)> {
     let (ns, a, b) = (Namespace::new(&path.0, &path.1, &path.2), path.3, path.4);
     let actor = get_shared_state(&req)?.actor.to_owned();
     read_range!(actor, ns, a..b)
@@ -340,7 +340,7 @@ async fn get_range_by_id(
 async fn get_row_by_id(
     req: HttpRequest,
     path: web::Path<(String, String, String, usize)>,
-) -> std::io::Result<(Vec<TableColumn>, Option<Row>)> {
+) -> std::io::Result<(Vec<Column>, Option<Row>)> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.to_owned();
     read_row!(actor, ns, id)
@@ -399,9 +399,9 @@ mod tests {
         let (database, schema, name) = ("web", "rest", "config");
         let req = test::TestRequest::post().uri(&ns_uri(database, schema, name))
             .set_json(&json!({"columns":[
-                {"name":"symbol","column_type":"String(4)","default_value":null},
-                {"name":"exchange","column_type":"String(4)","default_value":null},
-                {"name":"last_sale","column_type":"f64","default_value":null}],
+                {"name":"symbol","param_type":"String(4)","default_value":null},
+                {"name":"exchange","param_type":"String(4)","default_value":null},
+                {"name":"last_sale","param_type":"f64","default_value":null}],
                 "indices":[],"partitions":[]}))
             .to_request();
         let resp = test::call_service(&mut app, req).await;
@@ -412,7 +412,7 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"columns":[{"name":"symbol","column_type":"String(4)","default_value":null},{"name":"exchange","column_type":"String(4)","default_value":null},{"name":"last_sale","column_type":"f64","default_value":null}],"indices":[],"partitions":[]}"#);
+        assert_eq!(body, r#"{"columns":[{"name":"symbol","param_type":"String(4)","default_value":null},{"name":"exchange","param_type":"String(4)","default_value":null},{"name":"last_sale","param_type":"f64","default_value":null}],"indices":[],"partitions":[]}"#);
 
         // DELETE the config
         let req = test::TestRequest::delete().uri(&ns_uri(database, schema, name)).to_request();
@@ -447,9 +447,9 @@ mod tests {
         let req = test::TestRequest::post()
             .uri(&ns_uri(database, schema, name))
             .set_json(&json!({"columns":[
-                {"name":"symbol","column_type":"String(8)","default_value":null},
-                {"name":"exchange","column_type":"String(8)","default_value":null},
-                {"name":"last_sale","column_type":"f64","default_value":null}],
+                {"name":"symbol","param_type":"String(8)","default_value":null},
+                {"name":"exchange","param_type":"String(8)","default_value":null},
+                {"name":"last_sale","param_type":"f64","default_value":null}],
                 "indices":[],"partitions":[]})).to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());

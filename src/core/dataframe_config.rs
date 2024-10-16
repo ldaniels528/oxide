@@ -8,23 +8,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::cnv_error;
 use crate::namespaces::Namespace;
-use crate::server::ColumnJs;
+use crate::parameter::Parameter;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DataFrameConfig {
-    columns: Vec<ColumnJs>,
+    columns: Vec<Parameter>,
     indices: Vec<HashIndexConfig>,
     partitions: Vec<String>,
 }
 
 impl DataFrameConfig {
     /// instantiates a new dataframe configuration.
-    pub fn build(columns: Vec<ColumnJs>) -> Self {
-        DataFrameConfig { columns, indices: Vec::new(), partitions: Vec::new() }
+    pub fn build(parameters: Vec<Parameter>) -> Self {
+        DataFrameConfig {
+            columns: parameters,
+            indices: Vec::new(),
+            partitions: Vec::new() 
+        }
     }
 
     /// instantiates a new dataframe configuration.
-    pub fn new(columns: Vec<ColumnJs>,
+    pub fn new(columns: Vec<Parameter>,
                indices: Vec<HashIndexConfig>,
                partitions: Vec<String>) -> Self {
         DataFrameConfig { columns, indices, partitions }
@@ -35,7 +39,7 @@ impl DataFrameConfig {
         fs::remove_file(ns.get_config_file_path())
     }
 
-    pub fn get_columns(&self) -> &Vec<ColumnJs> { &self.columns }
+    pub fn get_columns(&self) -> &Vec<Parameter> { &self.columns }
 
     pub fn get_indices(&self) -> &Vec<HashIndexConfig> { &self.indices }
 
@@ -67,9 +71,6 @@ impl HashIndexConfig {
         HashIndexConfig { indexed_column_names, is_unique }
     }
 
-    pub fn get_indexed_column_name(&self) -> Vec<String> { self.indexed_column_names.to_owned() }
-
-    pub fn is_unique(&self) -> bool { self.is_unique }
 }
 
 // Unit tests
@@ -79,14 +80,14 @@ mod tests {
 
     use crate::dataframe_config::DataFrameConfig;
     use crate::namespaces::Namespace;
-    use crate::server::ColumnJs;
+    use crate::parameter::Parameter;
 
     #[test]
     fn test_load_and_save_config() -> io::Result<()> {
-        let columns: Vec<ColumnJs> = vec![
-            ColumnJs::new("symbol", "String(10)", None),
-            ColumnJs::new("exchange", "String(10)", None),
-            ColumnJs::new("last_sale", "f64", Some("0.00".into())),
+        let columns: Vec<Parameter> = vec![
+            Parameter::new("symbol", Some("String(8)".into()), None),
+            Parameter::new("exchange", Some("String(8)".into()), None),
+            Parameter::new("last_sale", Some("f64".into()), Some("0.0".into())),
         ];
         let indices = Vec::with_capacity(0);
         let partitions = Vec::with_capacity(0);
@@ -98,9 +99,9 @@ mod tests {
         let cfg = DataFrameConfig::load(&ns)?;
         assert_eq!(cfg, DataFrameConfig {
             columns: vec![
-                ColumnJs::new("symbol", "String(10)", None),
-                ColumnJs::new("exchange", "String(10)", None),
-                ColumnJs::new("last_sale", "f64", Some("0.00".into())),
+                Parameter::new("symbol", Some("String(8)".into()), None),
+                Parameter::new("exchange", Some("String(8)".into()), None),
+                Parameter::new("last_sale", Some("f64".into()), Some("0.0".into())),
             ],
             indices: Vec::new(),
             partitions: Vec::new(),

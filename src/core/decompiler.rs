@@ -4,11 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::expression::{Condition, Expression};
-use crate::expression::Condition::False;
 use crate::expression::Expression::*;
-use crate::expression_support::*;
-use crate::server::ColumnJs;
+use crate::expression::*;
+use crate::expression::{BitwiseOps, Conditions, Expression};
+use crate::parameter::Parameter;
 
 /// Oxide language decompiler - converts an [Expression] to source code.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -17,29 +16,20 @@ pub struct Decompiler;
 impl Decompiler {
     /// Default constructor
     pub fn new() -> Self {
-        Decompiler
+        Self
     }
 
     pub fn decompile(&self, expr: &Expression) -> String {
         use crate::expression::Expression::*;
         match expr {
-            ArrayLiteral(items) =>
+            ArrayExpression(items) =>
                 format!("[{}]", items.iter().map(|i| self.decompile(i)).collect::<Vec<String>>().join(", ")),
             AsValue(name, expr) =>
                 format!("{}: {}", name, self.decompile(expr)),
-            BitwiseAnd(a, b) =>
-                format!("{} & {}", self.decompile(a), self.decompile(b)),
-            BitwiseOr(a, b) =>
-                format!("{} | {}", self.decompile(a), self.decompile(b)),
-            BitwiseXor(a, b) =>
-                format!("{} ^ {}", self.decompile(a), self.decompile(b)),
-            BitwiseShiftLeft(a, b) =>
-                format!("{} << {}", self.decompile(a), self.decompile(b)),
-            BitwiseShiftRight(a, b) =>
-                format!("{} >> {}", self.decompile(a), self.decompile(b)),
+            BitwiseOp(bitwise) => self.decompile_bitwise(bitwise),
             CodeBlock(items) => self.decompile_code_blocks(items),
-            ColumnSet(columns) => self.decompile_columns(columns),
-            Conditional(cond) => self.decompile_cond(cond),
+            Parameters(parameters) => self.decompile_parameters(parameters),
+            Condition(cond) => self.decompile_cond(cond),
             Directive(d) => self.decompile_directives(d),
             Divide(a, b) =>
                 format!("{} / {}", self.decompile(a), self.decompile(b)),
@@ -61,7 +51,7 @@ impl Decompiler {
                     .map(|x| format!(" else {}", self.decompile(&x)))
                     .unwrap_or("".into())),
             Include(path) => format!("include {}", self.decompile(path)),
-            JSONLiteral(items) =>
+            JSONExpression(items) =>
                 format!("{{{}}}", items.iter()
                     .map(|(k, v)| format!("{}: {}", k, v))
                     .collect::<Vec<String>>()
@@ -102,8 +92,6 @@ impl Decompiler {
                 format!("{} := {}", name, self.decompile(value)),
             StructureImpl(name, ops) =>
                 format!("{} {}", name, self.decompile_code_blocks(ops)),
-            TupleLiteral(items) =>
-                format!("({})", self.decompile_list(items)),
             Variable(name) => name.to_string(),
             Via(expr) => format!("via {}", self.decompile(expr)),
             While { condition, code } =>
@@ -119,8 +107,23 @@ impl Decompiler {
             .join("\n"))
     }
 
-    pub fn decompile_cond(&self, cond: &Condition) -> String {
-        use crate::expression::Condition::*;
+    pub fn decompile_bitwise(&self, bitwise: &BitwiseOps) -> String {
+        match bitwise {
+            BitwiseOps::And(a, b) =>
+                format!("{} & {}", self.decompile(a), self.decompile(b)),
+            BitwiseOps::Or(a, b) =>
+                format!("{} | {}", self.decompile(a), self.decompile(b)),
+            BitwiseOps::Xor(a, b) =>
+                format!("{} ^ {}", self.decompile(a), self.decompile(b)),
+            BitwiseOps::ShiftLeft(a, b) =>
+                format!("{} << {}", self.decompile(a), self.decompile(b)),
+            BitwiseOps::ShiftRight(a, b) =>
+                format!("{} >> {}", self.decompile(a), self.decompile(b)),
+        }
+    }
+
+    pub fn decompile_cond(&self, cond: &Conditions) -> String {
+        use crate::expression::Conditions::*;
         match cond {
             And(a, b) =>
                 format!("{} && {}", self.decompile(a), self.decompile(b)),
@@ -150,14 +153,15 @@ impl Decompiler {
         }
     }
 
-    pub fn decompile_column(&self, column: &ColumnJs) -> String {
-        match column.get_column_type() {
-            type_name if type_name.trim().is_empty() => column.get_name().to_owned(),
-            type_name => format!("{}: {}", column.get_name(), type_name)
+    pub fn decompile_column(&self, column: &Parameter) -> String {
+        match column.get_param_type() {
+            Some(type_decl) if type_decl.trim().is_empty() => column.get_name().to_owned(),
+            Some(type_decl) => format!("{}: {}", column.get_name(), type_decl),
+            None => column.get_name().to_string()
         }
     }
 
-    pub fn decompile_columns(&self, columns: &Vec<ColumnJs>) -> String {
+    pub fn decompile_parameters(&self, columns: &Vec<Parameter>) -> String {
         columns.iter().map(|c| self.decompile_column(c))
             .collect::<Vec<String>>().join(", ")
     }
@@ -189,7 +193,7 @@ impl Decompiler {
         fields.iter().map(|x| self.decompile(x)).collect::<Vec<String>>().join(", ".into())
     }
 
-    pub fn decompile_cond_opt(&self, opt: &Option<Condition>) -> String {
+    pub fn decompile_cond_opt(&self, opt: &Option<Conditions>) -> String {
         opt.to_owned().map(|i| self.decompile_cond(&i)).unwrap_or("".into())
     }
 
@@ -217,14 +221,14 @@ impl Decompiler {
                     CreationEntity::IndexEntity { columns } =>
                         format!("create index {} [{}]", self.decompile(path), self.decompile_list(columns)),
                     CreationEntity::TableEntity { columns, from } =>
-                        format!("create table {} ({})", self.decompile(path), self.decompile_columns(columns)),
+                        format!("create table {} ({})", self.decompile(path), self.decompile_parameters(columns)),
                 }
             Infrastructure::Declare(entity) =>
                 match entity {
                     CreationEntity::IndexEntity { columns } =>
                         format!("index [{}]", self.decompile_list(columns)),
                     CreationEntity::TableEntity { columns, from } =>
-                        format!("table({})", self.decompile_columns(columns)),
+                        format!("table({})", self.decompile_parameters(columns)),
                 }
             Infrastructure::Drop(target) => {
                 let (kind, path) = match target {
@@ -288,8 +292,8 @@ impl Decompiler {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::expression::CreationEntity::{IndexEntity, TableEntity};
     use crate::expression::Expression::{AsValue, Literal};
-    use crate::expression_support::CreationEntity::{IndexEntity, TableEntity};
     use crate::numbers::NumberValue::I64Value;
     use crate::typed_values::TypedValue::{Function, Number, StringValue};
 
@@ -303,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_array_declaration() {
-        let model = ArrayLiteral(vec![
+        let model = ArrayExpression(vec![
             Literal(Number(I64Value(2))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
             Literal(Number(I64Value(7))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
         ]);
@@ -313,7 +317,7 @@ mod tests {
     #[test]
     fn test_array_indexing() {
         let model = ElementAt(
-            Box::new(ArrayLiteral(vec![
+            Box::new(ArrayExpression(vec![
                 Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
                 Literal(Number(I64Value(2))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
             ])),
@@ -323,26 +327,55 @@ mod tests {
 
     #[test]
     fn test_bitwise_and() {
-        let model = BitwiseAnd(
+        let model = BitwiseOp(BitwiseOps::And(
             Box::new(Literal(Number(I64Value(20)))),
-            Box::new(Literal(Number(I64Value(3)))));
+            Box::new(Literal(Number(I64Value(3))))
+        ));
         assert_eq!(Decompiler::new().decompile(&model), "20 & 3")
     }
 
     #[test]
     fn test_bitwise_or() {
-        let model = BitwiseOr(
+        let model = BitwiseOp(BitwiseOps::Or(
             Box::new(Literal(Number(I64Value(20)))),
-            Box::new(Literal(Number(I64Value(3)))));
+            Box::new(Literal(Number(I64Value(3))))
+        ));
         assert_eq!(Decompiler::new().decompile(&model), "20 | 3")
+    }
+
+    #[test]
+    fn test_bitwise_shl() {
+        let model = BitwiseOp(BitwiseOps::ShiftLeft(
+            Box::new(Literal(Number(I64Value(20)))),
+            Box::new(Literal(Number(I64Value(3))))
+        ));
+        assert_eq!(Decompiler::new().decompile(&model), "20 << 3")
+    }
+
+    #[test]
+    fn test_bitwise_shr() {
+        let model = BitwiseOp(BitwiseOps::ShiftRight(
+            Box::new(Literal(Number(I64Value(20)))),
+            Box::new(Literal(Number(I64Value(3))))
+        ));
+        assert_eq!(Decompiler::new().decompile(&model), "20 >> 3")
+    }
+
+    #[test]
+    fn test_bitwise_xor() {
+        let model = BitwiseOp(BitwiseOps::Xor(
+            Box::new(Literal(Number(I64Value(20)))),
+            Box::new(Literal(Number(I64Value(3))))
+        ));
+        assert_eq!(Decompiler::new().decompile(&model), "20 ^ 3")
     }
 
     #[test]
     fn test_define_anonymous_function() {
         let model = Literal(Function {
             params: vec![
-                ColumnJs::new("a", "", None),
-                ColumnJs::new("b", "", None),
+                Parameter::new("a", None, None),
+                Parameter::new("b", None, None),
             ],
             code: Box::new(Multiply(Box::new(
                 Variable("a".into())
@@ -358,8 +391,8 @@ mod tests {
         let model = SetVariable("add".to_string(), Box::new(
             Literal(Function {
                 params: vec![
-                    ColumnJs::new("a", "", None),
-                    ColumnJs::new("b", "", None),
+                    Parameter::new("a", None, None),
+                    Parameter::new("b", None, None),
                 ],
                 code: Box::new(Plus(Box::new(
                     Variable("a".into())
@@ -406,9 +439,9 @@ mod tests {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
             entity: TableEntity {
                 columns: vec![
-                    ColumnJs::new("symbol", "String(8)", Some("ABC".into())),
-                    ColumnJs::new("exchange", "String(8)", Some("NYSE".into())),
-                    ColumnJs::new("last_sale", "f64", Some("23.54".into())),
+                    Parameter::new("symbol", Some("String(8)".into()), Some("ABC".into())),
+                    Parameter::new("exchange", Some("String(8)".into()), Some("NYSE".into())),
+                    Parameter::new("last_sale", Some("f64".into()), Some("23.54".into())),
                 ],
                 from: None,
             },
@@ -422,9 +455,9 @@ mod tests {
     fn test_declare_table() {
         let model = Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
             columns: vec![
-                ColumnJs::new("symbol", "String(8)", None),
-                ColumnJs::new("exchange", "String(8)", None),
-                ColumnJs::new("last_sale", "f64", None),
+                Parameter::new("symbol", Some("String(8)".into()), None),
+                Parameter::new("exchange", Some("String(8)".into()), None),
+                Parameter::new("last_sale", Some("f64".into()), None),
             ],
             from: None,
         })));

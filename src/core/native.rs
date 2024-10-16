@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::sync::Arc;
+
 use crate::machine::Machine;
 use crate::typed_values::TypedValue;
 
@@ -37,5 +38,26 @@ impl PartialEq for NativeFeature {
                 Arc::ptr_eq(code1, code2)
             }
         }
+    }
+}
+
+// Unit tests
+#[cfg(test)]
+mod tests {
+    use crate::machine::Machine;
+    use crate::native::NativeFeature;
+
+    use super::*;
+
+    #[test]
+    fn test_dynamic_dispatch() {
+        let executor = NativeFeature::NativeCode(Arc::new(|ms: Machine, args: Vec<TypedValue>| {
+            println!("Executing native code! {:?}", ms);
+        }));
+
+        // Execute the closure
+        let ms = Machine::new();
+        let args = vec![];
+        executor.execute(ms, args);
     }
 }

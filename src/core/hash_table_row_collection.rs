@@ -1,5 +1,5 @@
 ////////////////////////////////////////////////////////////////////
-// Hash Key Row Collection
+// HashTableRowCollection class
 ////////////////////////////////////////////////////////////////////
 
 use std::ops::Range;
@@ -7,14 +7,17 @@ use std::ops::Range;
 use log::warn;
 
 use crate::data_types::DataType::NumberType;
+use crate::errors::Errors;
+use crate::errors::Errors::{Exact, HashTableOverflow, OutcomeExpected};
 use crate::field_metadata::FieldMetadata;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::NumberValue::U64Value;
+use crate::outcomes::Outcomes;
+use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
-use crate::server::ColumnJs;
-use crate::table_columns::TableColumn;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
@@ -34,17 +37,23 @@ impl HashTableRowCollection {
     //////////////////////////////////////////////////////////
 
     /// Generates the columns for the index base on the source column
-    fn create_hash_keys_columns(src_column: &TableColumn) -> std::io::Result<Vec<TableColumn>> {
-        TableColumn::from_columns(&vec![
-            ColumnJs::new("__row_id__", NumberType(U64Kind).to_column_type(), Some("null".into())),
-            ColumnJs::new(src_column.get_name(), src_column.data_type.to_column_type(), Some(src_column.default_value.unwrap_value())),
+    fn create_hash_keys_columns(src_column: &Column) -> std::io::Result<Vec<Column>> {
+        Column::from_parameters(&vec![
+            Parameter::new(
+                "__row_id__",
+                NumberType(U64Kind).to_type_declaration(),
+                Some("null".into())),
+            Parameter::new(
+                src_column.get_name(),
+                src_column.get_data_type().to_type_declaration(),
+                Some(src_column.get_default_value().unwrap_value())),
         ])
     }
 
     fn create_hash_keys_row(
         data_row_id: usize,
         keys_row_id: usize,
-        keys_columns: &Vec<TableColumn>,
+        keys_columns: &Vec<Column>,
         new_value: &TypedValue,
     ) -> Row {
         Row::new(keys_row_id, vec![
@@ -123,7 +132,7 @@ impl HashTableRowCollection {
         let mut collisions = Vec::new();
         let data_table_row_id_range = match self.data_table.get_indices() {
             Ok(r) => r,
-            Err(err) => return ErrorValue(err.to_string())
+            Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
         };
         for row_id in data_table_row_id_range {
             // attempt to read the data row ...
@@ -139,7 +148,7 @@ impl HashTableRowCollection {
                         }
                     }
                     Ok(None) => collisions.push(key_a.to_owned()),
-                    Err(err) => return ErrorValue(err.to_string())
+                    Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
                 }
             }
         }
@@ -182,7 +191,7 @@ impl HashTableRowCollection {
         Ok(None)
     }
 
-    pub fn get_key_column(&self) -> &TableColumn {
+    pub fn get_key_column(&self) -> &Column {
         &self.get_columns()[self.key_column_index]
     }
 
@@ -204,11 +213,10 @@ impl HashTableRowCollection {
                     return self.keys_table.overwrite_row(
                         my_keys_row_id,
                         Self::create_hash_keys_row(data_row_id, my_keys_row_id, keys_columns, key_value), ),
-                Err(err) => return ErrorValue(err.to_string())
+                Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
             }
         }
-        ErrorValue(format!("Hash table overflow detected (rid: {}, key: {})",
-                           data_row_id, key_value.unwrap_value()))
+        ErrorValue(HashTableOverflow(data_row_id, key_value.unwrap_value()))
     }
 
     fn move_key_value(
@@ -233,15 +241,15 @@ impl HashTableRowCollection {
         let keys_columns = self.keys_table.get_columns();
         let mut keys_table = match self.create_related_structure(keys_columns.to_owned(), self.key_column_index.to_string().as_str()) {
             Ok(table) => table,
-            Err(err) => return ErrorValue(err.to_string())
+            Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
         };
-        if keys_table.resize(0) != Ack {
+        if keys_table.resize(0) != Outcome(Outcomes::Ack) {
             warn!("Failed to truncate index for column {}", self.get_key_column().get_name());
         }
         let mut inserted_rows = 0;
         let data_table_len = match self.data_table.len() {
             Ok(len) => len,
-            Err(err) => return ErrorValue(err.to_string())
+            Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
         };
         for data_row_id in 0..data_table_len {
             // attempt to read a row ...
@@ -254,13 +262,13 @@ impl HashTableRowCollection {
                 // attempt to overwrite the row
                 match keys_table.overwrite_row(keys_row_id, keys_row) {
                     ErrorValue(message) => return ErrorValue(message),
-                    RowsAffected(n) => inserted_rows += n,
+                    Outcome(oc) => inserted_rows += oc.to_update_count(),
                     _ => {}
                 }
             }
         }
         self.keys_table = keys_table;
-        RowsAffected(inserted_rows)
+        Outcome(Outcomes::RowsAffected(inserted_rows))
     }
 }
 
@@ -275,14 +283,14 @@ impl RowCollection for HashTableRowCollection {
             // delete the hash key value
             _ =>
                 match self.keys_table.delete_row(keys_row_id) {
-                    RowsAffected(..) => self.data_table.delete_row(id),
+                    Outcome(..) => self.data_table.delete_row(id),
                     ErrorValue(msg) => ErrorValue(msg),
-                    other => ErrorValue(format!("Internal error: expected RowsAffected(..) near {}", other))
+                    other => ErrorValue(OutcomeExpected(other.to_code()))
                 }
         }
     }
 
-    fn get_columns(&self) -> &Vec<TableColumn> {
+    fn get_columns(&self) -> &Vec<Column> {
         self.data_table.get_columns()
     }
 
@@ -301,9 +309,9 @@ impl RowCollection for HashTableRowCollection {
         new_value: TypedValue,
     ) -> TypedValue {
         match self.link_key_value(id, &new_value) {
-            RowsAffected(..) => self.data_table.overwrite_field(id, column_id, new_value),
+            Outcome(..) => self.data_table.overwrite_field(id, column_id, new_value),
             ErrorValue(msg) => return ErrorValue(msg),
-            other => return ErrorValue(format!("Internal error: expected RowsAffected(..) near {}", other))
+            other => return ErrorValue(OutcomeExpected(other.to_code()))
         }
     }
 
@@ -319,9 +327,10 @@ impl RowCollection for HashTableRowCollection {
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
         let new_value = &row[self.key_column_index];
         match self.link_key_value(id, new_value) {
-            RowsAffected(..) => self.data_table.overwrite_row(id, row),
-            ErrorValue(msg) => ErrorValue(msg),
-            other => ErrorValue(format!("Internal error: expected RowsAffected(..) near {}", other))
+            Outcome(oc) if oc.to_update_count() > 0 => self.data_table.overwrite_row(id, row),
+            Outcome(oc) => Outcome(oc),
+            ErrorValue(err) => ErrorValue(err),
+            other => ErrorValue(OutcomeExpected(other.to_code()))
         }
     }
 
@@ -377,9 +386,9 @@ impl RowCollection for HashTableRowCollection {
             Undefined => self.data_table.update_row(id, row),
             _ =>
                 match self.move_key_value(id, &old_value, new_value) {
-                    RowsAffected(..) => self.data_table.update_row(id, row),
+                    Outcome(..) => self.data_table.update_row(id, row),
                     ErrorValue(msg) => ErrorValue(msg),
-                    other => ErrorValue(format!("Internal error: expected RowsAffected(..) near {}", other))
+                    other => ErrorValue(Exact(format!("expected RowsAffected(..) near {}", other)))
                 }
         }
     }
@@ -395,7 +404,7 @@ mod tests {
     use crate::row_collection::RowCollection;
     use crate::rows::Row;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_table_columns, StockQuote};
+    use crate::testdata::{make_quote_columns, StockQuote};
 
     use super::*;
 
@@ -403,7 +412,7 @@ mod tests {
     fn test_append_then_find_row_by_key() {
         // create a table and write some rows to it
         let ns = Namespace::new("hash_key", "create", "stocks");
-        let columns = make_table_columns();
+        let columns = make_quote_columns();
         let (symbol, exchange, last_sale) =
             (StringValue("ABC".into()), StringValue("NASDAQ".into()), Number(F64Value(5.04)));
 
@@ -426,7 +435,7 @@ mod tests {
     fn test_append_modify_then_find_row_by_key() {
         // create a table and write some rows to it
         let ns = Namespace::new("hash_key", "append_modify", "stocks");
-        let columns = make_table_columns();
+        let columns = make_quote_columns();
         let (symbol, exchange, last_sale) =
             (StringValue("CRT".into()), StringValue("OTC_BB".into()), Number(F64Value(1.2582)));
 
@@ -439,7 +448,7 @@ mod tests {
 
         // overwrite 'CRT' with 'CRT.Q' in the hash index
         assert_eq!(
-            RowsAffected(1),
+            Outcome(Outcomes::RowsAffected(1)),
             hkrc.overwrite_row(2, Row::new(2, vec![
                 StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Number(F64Value(1.2598)),
             ])));
@@ -485,13 +494,13 @@ mod tests {
         ns: Namespace,
         max_count: u64,
         bucket_count: u64,
-        bucket_depth: u64
+        bucket_depth: u64,
     ) {
-        let columns = make_table_columns();
+        let columns = make_quote_columns();
         let bucket_count = max_count / 10;
         let bucket_depth = bucket_count / 10;
         let mut stocks = build_hash_key_table(&ns, 0, bucket_count, bucket_depth);
-        assert_eq!(Ack, stocks.resize(0));
+        assert_eq!(Outcome(Outcomes::Ack), stocks.resize(0));
 
         let mut timings = Vec::new();
         for n in 0..max_count {
@@ -504,7 +513,7 @@ mod tests {
                     Number(F64Value(q.last_sale)),
                 ])));
             timings.push(msec);
-            assert_eq!(RowsAffected(1), outcome);
+            assert_eq!(Outcome(Outcomes::RowsAffected(1)), outcome);
         }
 
         let (msec_min, msec_max, msec_total) = timings.iter()
@@ -586,7 +595,7 @@ mod tests {
         bucket_depth: u64,
     ) -> HashTableRowCollection {
         // create a table and write some rows to it
-        let columns = make_table_columns();
+        let columns = make_quote_columns();
         let frc = FileRowCollection::create_table(&ns, columns.to_owned()).unwrap();
         let mut hkrc = HashTableRowCollection::create_with_options(column_index, bucket_count, bucket_depth, Box::new(frc)).unwrap();
         //assert_eq!(RowsAffected(9), hkrc.rebuild());
@@ -600,7 +609,7 @@ mod tests {
         bucket_depth: u64,
     ) -> HashTableRowCollection {
         // create a table and write some rows to it
-        let columns = make_table_columns();
+        let columns = make_quote_columns();
         let mut frc = FileRowCollection::create_table(&ns, columns.to_owned()).unwrap();
         let quote_data = vec![
             ("ACT", "AMEX", 0.0021), ("ATT", "NYSE", 98.44), ("CRT", "OTC_BB", 1.2582),
@@ -615,7 +624,7 @@ mod tests {
                     Number(F64Value(*last_sale)),
                 ])
             }).collect();
-        assert_eq!(RowsAffected(9), frc.append_rows(rows));
+        assert_eq!(Outcome(Outcomes::RowsAffected(9)), frc.append_rows(rows));
         // show the contents of the table
         // |-------------------------------|
         // | symbol | exchange | last_sale |
@@ -634,7 +643,7 @@ mod tests {
 
         // create and query the hash index
         let mut hkrc = HashTableRowCollection::new(column_index, Box::new(frc)).unwrap();
-        assert_eq!(RowsAffected(9), hkrc.rebuild());
+        assert_eq!(Outcome(Outcomes::RowsAffected(9)), hkrc.rebuild());
 
         // show the contents of the hash table
         // |---------------------|

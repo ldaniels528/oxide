@@ -4,7 +4,7 @@
 
 use std::fmt::Debug;
 
-use crate::expression::Condition;
+use crate::expression::Conditions;
 use crate::machine::Machine;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
@@ -13,7 +13,7 @@ use crate::rows::Row;
 #[derive(Debug)]
 pub struct Cursor {
     rc: Box<dyn RowCollection>,
-    condition: Option<Condition>,
+    condition: Option<Conditions>,
     is_forward: bool,
     position: usize,
 }
@@ -27,7 +27,7 @@ impl Cursor {
     /// Full constructor
     pub fn construct(
         rc: Box<dyn RowCollection>,
-        condition: Option<Condition>,
+        condition: Option<Conditions>,
         is_forward: bool,
         position: usize,
     ) -> Self {
@@ -35,7 +35,7 @@ impl Cursor {
     }
 
     /// Creates a new cursor that returns rows which satisfy a given condition
-    pub fn filter(rc: Box<dyn RowCollection>, condition: Condition) -> Self {
+    pub fn filter(rc: Box<dyn RowCollection>, condition: Conditions) -> Self {
         Self::construct(rc, Some(condition), true, 0)
     }
 
@@ -81,10 +81,6 @@ impl Cursor {
             }
         }
         Ok(None)
-    }
-
-    pub fn get_collection(&self) -> &Box<dyn RowCollection> {
-        &self.rc
     }
 
     /// Transforms all rows from the current position to the end-of-file (EOF)
@@ -169,10 +165,10 @@ impl Cursor {
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
     use crate::cursor::Cursor;
-    use crate::expression::Condition::Equal;
+    use crate::expression::Conditions::Equal;
     use crate::expression::Expression::{Literal, Variable};
-    use crate::table_columns::TableColumn;
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::table_columns::Column;
+    use crate::testdata::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue::StringValue;
 
     #[test]
@@ -293,8 +289,8 @@ mod tests {
         ])
     }
 
-    fn create_sample_data_1() -> (ByteRowCollection, Vec<TableColumn>) {
-        let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
+    fn create_sample_data_1() -> (ByteRowCollection, Vec<Column>) {
+        let phys_columns = Column::from_parameters(&make_quote_parameters()).unwrap();
         let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "NASDAQ", 0.2456),
@@ -305,8 +301,8 @@ mod tests {
         (brc, phys_columns)
     }
 
-    fn create_sample_data_2() -> (ByteRowCollection, Vec<TableColumn>) {
-        let phys_columns = TableColumn::from_columns(&make_quote_columns()).unwrap();
+    fn create_sample_data_2() -> (ByteRowCollection, Vec<Column>) {
+        let phys_columns = Column::from_parameters(&make_quote_parameters()).unwrap();
         let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "NYSE", 11.77),
             make_quote(1, "UNO", "NASDAQ", 0.2456),

@@ -4,10 +4,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use BackDoorKey::*;
+
 /// Represents a backdoor (hook) for calling native functions
 #[repr(u8)]
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub enum BackDoorFunction {
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum BackDoorKey {
     BxAssert = 0,
     BxEval = 1,
     BxFormat = 2,
@@ -28,21 +30,18 @@ pub enum BackDoorFunction {
     BxVariables = 17,
 }
 
-impl BackDoorFunction {
+pub const BACK_DOOR_KEYS: [BackDoorKey; 18] = [
+    BxAssert, BxEval, BxFormat, BxLeft, BxMatches, BxReset, BxRight,
+    BxServe, BxStdErr, BxStdOut, BxSubstring, BxSysCall,
+    BxTimestamp, BxToCSV, BxToJSON, BxTypeOf, BxUUID, BxVariables,
+];
+
+impl BackDoorKey {
     pub fn from_u8(code: u8) -> Self {
-        Self::from(Self::values()[code as usize].to_owned())
+        Self::from(BACK_DOOR_KEYS[code as usize].to_owned())
     }
 
     pub fn to_u8(&self) -> u8 {
         *self as u8
-    }
-
-    pub fn values() -> Vec<BackDoorFunction> {
-        use BackDoorFunction::*;
-        vec![
-            BxAssert, BxEval, BxFormat, BxLeft, BxMatches, BxReset, BxRight,
-            BxServe, BxStdErr, BxStdOut, BxSubstring, BxSysCall,
-            BxTimestamp, BxToCSV, BxToJSON, BxTypeOf, BxUUID, BxVariables,
-        ]
     }
 }

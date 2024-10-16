@@ -1,10 +1,11 @@
 ////////////////////////////////////////////////////////////////////
-// row metadata module
+// RowMetadata class
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+/// Represents the metadata of a [Row]
+#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct RowMetadata {
     pub(crate) is_allocated: bool,
     pub(crate) is_blob: bool,
@@ -13,15 +14,6 @@ pub struct RowMetadata {
 }
 
 impl RowMetadata {
-    pub fn as_delete(&self) -> RowMetadata {
-        RowMetadata {
-            is_allocated: false,
-            is_blob: self.is_blob,
-            is_encrypted: self.is_encrypted,
-            is_replicated: self.is_replicated,
-        }
-    }
-
     pub fn as_undelete(&self) -> RowMetadata {
         RowMetadata {
             is_allocated: true,
