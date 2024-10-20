@@ -43,17 +43,14 @@ impl HashTableRowCollection {
                 "__row_id__",
                 NumberType(U64Kind).to_type_declaration(),
                 Some("null".into())),
-            Parameter::new(
-                src_column.get_name(),
-                src_column.get_data_type().to_type_declaration(),
-                Some(src_column.get_default_value().unwrap_value())),
+            src_column.to_parameter()
         ])
     }
 
     fn create_hash_keys_row(
         data_row_id: usize,
         keys_row_id: usize,
-        keys_columns: &Vec<Column>,
+        _keys_columns: &Vec<Column>,
         new_value: &TypedValue,
     ) -> Row {
         Row::new(keys_row_id, vec![
@@ -310,8 +307,8 @@ impl RowCollection for HashTableRowCollection {
     ) -> TypedValue {
         match self.link_key_value(id, &new_value) {
             Outcome(..) => self.data_table.overwrite_field(id, column_id, new_value),
-            ErrorValue(msg) => return ErrorValue(msg),
-            other => return ErrorValue(OutcomeExpected(other.to_code()))
+            ErrorValue(msg) => ErrorValue(msg),
+            other => ErrorValue(OutcomeExpected(other.to_code()))
         }
     }
 
@@ -480,16 +477,6 @@ mod tests {
         performance_test(ns, max_count, bucket_count, bucket_depth)
     }
 
-    #[ignore]
-    #[test]
-    fn test_performance_1million() {
-        let ns = Namespace::new("hash_key", "performance", "stocks_1m");
-        let max_count = 1_000_000;
-        let bucket_count = max_count;
-        let bucket_depth = bucket_count;
-        performance_test(ns, max_count, bucket_count, bucket_depth)
-    }
-
     fn performance_test(
         ns: Namespace,
         max_count: u64,
@@ -529,16 +516,20 @@ mod tests {
         println!("[{:.4} msec] read_field({}, {}) -> {}", msec, rand_row_id, column_id, symbol.unwrap_value());
 
         let (row_b, msec_b) = measure_time(|| stocks.find_row_by_key(&symbol).unwrap());
-        println!("[{:.4} msec] find_row_by_key({}) -> {:?}", msec_b, symbol.unwrap_value(), row_b.to_owned().map(|r| r.to_string()));
+        println!("[{:.4} msec] find_row_by_key({}) -> {}", msec_b, symbol.unwrap_value(), row_b.clone()
+            .map(|r| r.to_string()).unwrap_or(String::new()));
 
         let (row_b, msec_b) = measure_time(|| stocks.find_row_by_key(&symbol).unwrap());
-        println!("[{:.4} msec] find_row_by_key({}) -> {:?}", msec_b, symbol.unwrap_value(), row_b.to_owned().map(|r| r.to_string()));
+        println!("[{:.4} msec] find_row_by_key({}) -> {}", msec_b, symbol.unwrap_value(), row_b.clone()
+            .map(|r| r.to_string()).unwrap_or(String::new()));
 
         let (row_b, msec_b) = measure_time(|| stocks.find_row_by_key(&symbol).unwrap());
-        println!("[{:.4} msec] find_row_by_key({}) -> {:?}", msec_b, symbol.unwrap_value(), row_b.to_owned().map(|r| r.to_string()));
+        println!("[{:.4} msec] find_row_by_key({}) -> {}", msec_b, symbol.unwrap_value(), row_b.clone()
+            .map(|r| r.to_string()).unwrap_or(String::new()));
 
         let (row_a, msec_a) = measure_time(|| stocks.data_table.scan_first(column_id, &symbol).unwrap());
-        println!("[{:.4} msec] find_row({}, {}) -> {:?}", msec_a, column_id, symbol.unwrap_value(), row_a.to_owned().map(|r| r.to_string()));
+        println!("[{:.4} msec] find_row({}, {}) -> {}", msec_a, column_id, symbol.unwrap_value(), row_a.clone()
+            .map(|r| r.to_string()).unwrap_or(String::new()));
 
         // Insert-into-index timings (msec) - avg: 0.0225, min: 0.0124, max: 0.4536
         // [0.0017 msec] read_field(24999, 0) -> UWYH
@@ -569,8 +560,8 @@ mod tests {
     }
 
     fn measure_time<F, R>(process: F) -> (R, f64)
-        where
-            F: FnOnce() -> R,
+    where
+        F: FnOnce() -> R,
     {
         // record the start time
         let start = Instant::now();

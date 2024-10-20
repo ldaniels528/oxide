@@ -450,6 +450,7 @@ mod tests {
     use shared_lib::cnv_error;
 
     use crate::data_types::DataType::*;
+    use crate::data_types::SizeTypes;
     use crate::dataframes::DataFrame;
     use crate::expression::Conditions::Equal;
     use crate::expression::Expression::*;
@@ -488,10 +489,10 @@ mod tests {
             "dataframes", "create", "stocks", make_quote_parameters()).unwrap();
         let columns = df.get_columns();
         assert_eq!(columns[0].get_name(), "symbol");
-        assert_eq!(columns[0].get_data_type().to_owned(), StringType(8));
+        assert_eq!(columns[0].get_data_type().to_owned(), StringType(SizeTypes::Fixed(8)));
         assert_eq!(columns[0].get_default_value(), Null);
         assert_eq!(columns[1].get_name(), "exchange");
-        assert_eq!(columns[1].get_data_type().to_owned(), StringType(8));
+        assert_eq!(columns[1].get_data_type().to_owned(), StringType(SizeTypes::Fixed(8)));
         assert_eq!(columns[1].get_default_value(), Null);
         assert_eq!(columns[2].get_name(), "last_sale");
         assert_eq!(columns[2].get_data_type().to_owned(), NumberType(F64Kind));

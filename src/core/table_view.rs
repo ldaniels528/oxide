@@ -3,7 +3,8 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::io;
-
+use log::error;
+use serde::{Deserialize, Serialize};
 use crate::dataframes::DataFrame;
 use crate::rows::Row;
 use crate::table_view::Direction::{Backward, Forward};
@@ -14,6 +15,7 @@ pub trait TableView {
 }
 
 /// represents a forward/reverse dataframe iterator
+#[derive(Debug)]
 pub struct TableIterator {
     data_frame: DataFrame,
     direction: Direction,
@@ -61,12 +63,21 @@ impl TableIterator {
                 direction: Backward,
                 position: size,
             },
-            Err(err) => panic!("{}", err.to_string())
+            Err(err) => {
+                error!("reverse: {}", err);
+                TableIterator {
+                    data_frame,
+                    direction: Backward,
+                    position: 0,
+                }
+            }
         }
     }
 }
 
 /// represents the iterator movement direction
+#[repr(u8)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Direction {
     Forward = 0,
     Backward = 1,

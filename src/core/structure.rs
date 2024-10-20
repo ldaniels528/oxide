@@ -6,8 +6,6 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 
 use crate::errors::Errors::Exact;
-use serde::{Deserialize, Serialize};
-
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::NumberValue::U16Value;
@@ -16,6 +14,7 @@ use crate::rows::Row;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use serde::{Deserialize, Serialize};
 
 /// Represents a user-defined record or data object
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -31,7 +30,19 @@ impl Structure {
     //  Constructors
     ////////////////////////////////////////////////////////////////////
 
-    pub fn build(
+    pub fn empty() -> Self {
+        Self::from_fields(Vec::new(), Vec::new(), HashMap::new())
+    }
+
+    pub fn new(fields: Vec<Column>, values: Vec<TypedValue>) -> Self {
+        Self::from_fields(fields, values, HashMap::new())
+    }
+
+    ////////////////////////////////////////////////////////////////////
+    //  Static Methods
+    ////////////////////////////////////////////////////////////////////
+
+    pub fn from_fields(
         fields: Vec<Column>,
         values: Vec<TypedValue>,
         variables: HashMap<String, TypedValue>,
@@ -50,14 +61,6 @@ impl Structure {
         };
         Self { fields, values: my_values, variables }
     }
-
-    pub fn new(fields: Vec<Column>, values: Vec<TypedValue>) -> Self {
-        Self::build(fields, values, HashMap::new())
-    }
-
-    ////////////////////////////////////////////////////////////////////
-    //  Static Methods
-    ////////////////////////////////////////////////////////////////////
 
     pub fn from_parameters(
         parameters: &Vec<Parameter>
@@ -144,7 +147,7 @@ impl Structure {
 impl Display for Structure {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let mapping = self.fields.iter().zip(self.values.iter())
-            .map(|(c, v)| format!("\"{}\":{}", c.get_name(), v.to_json()))
+            .map(|(c, v)| format!("\"{}\":{}", c.get_name(), v.to_code()))
             .collect::<Vec<_>>();
         write!(f, "{{{}}}", mapping.join(","))
     }
@@ -156,11 +159,12 @@ mod tests {
     use std::collections::HashMap;
 
     use crate::data_types::DataType::*;
+    use crate::data_types::SizeTypes;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::F64Value;
     use crate::structure::Structure;
     use crate::table_columns::Column;
-    use crate::testdata::{make_quote, make_quote_parameters, make_quote_columns};
+    use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
 
     #[test]
@@ -243,8 +247,8 @@ mod tests {
     fn test_new() {
         let structure = Structure::new(make_quote_columns(), Vec::new());
         assert_eq!(structure.get_fields(), vec![
-            Column::new("symbol", StringType(8), Null, 9),
-            Column::new("exchange", StringType(8), Null, 26),
+            Column::new("symbol", StringType(SizeTypes::Fixed(8)), Null, 9),
+            Column::new("exchange", StringType(SizeTypes::Fixed(8)), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ]);
         assert_eq!(structure.get("symbol"), Null);
@@ -313,7 +317,7 @@ mod tests {
         let actual =
             structure.with_variable("name", StringValue("Oxide".into()));
 
-        let expected = Structure::build(phys_columns, vec![
+        let expected = Structure::from_fields(phys_columns, vec![
             StringValue("ICE".to_string()),
             StringValue("NASDAQ".to_string()),
             Number(F64Value(22.11)),

@@ -16,6 +16,7 @@ pub enum Errors {
     AsynchronousContextRequired,
     CollectionExpected(String),
     ColumnExpected(String),
+    DateExpected(String),
     Exact(String),
     ExactNear(String, String),
     HashTableOverflow(usize, String),
@@ -24,6 +25,7 @@ pub enum Errors {
     InvalidNamespace(String),
     NotImplemented,
     OutcomeExpected(String),
+    PackageNotFound(String),
     ParameterExpected(String),
     QueryableExpected(String),
     StringExpected(String),
@@ -51,6 +53,8 @@ impl Display for Errors {
                 write!(f, "Iterable expected near {a}"),
             ColumnExpected(expr) =>
                 write!(f, "Expected a column, got \"{}\" instead", expr),
+            DateExpected(expr) =>
+                write!(f, "Expected a timestamp, got \"{}\" instead", expr),
             Exact(message) =>
                 write!(f, "{message}"),
             ExactNear(message, here) =>
@@ -67,6 +71,8 @@ impl Display for Errors {
                 write!(f, "Not yet implemented"),
             OutcomeExpected(expr) =>
                 write!(f, "Expected an outcome (Ack, RowId or RowsAffected) near {expr}"),
+            PackageNotFound(name) =>
+                write!(f, "Package '{name}' not found"),
             ParameterExpected(expr) =>
                 write!(f, "Expected a parameter, got \"{}\" instead", expr),
             QueryableExpected(expr) =>

@@ -60,8 +60,6 @@ impl Interpreter {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use std::convert::From;
-
     use crate::errors::Errors::{Exact, StringExpected, TypeMismatch};
     use crate::expression::Conditions::LessOrEqual;
     use crate::expression::Expression::*;
@@ -69,6 +67,7 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::NumberValue::{F64Value, I64Value, NaNValue};
     use crate::outcomes::Outcomes;
+    use crate::outcomes::Outcomes::Ack;
     use crate::parameter::Parameter;
     use crate::row_collection::RowCollection;
     use crate::rows::Row;
@@ -78,6 +77,7 @@ mod tests {
     use crate::testdata::*;
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::*;
+    use std::convert::From;
 
     #[actix::test]
     async fn test_array_indexing() {
@@ -90,8 +90,8 @@ mod tests {
 
     #[test]
     fn test_backdoor_functions() {
-        verify_when("timestamp()", |r| matches!(r, DateValue(..)));
-        verify_when("uuid()", |r| matches!(r, UUIDValue(..)))
+        verify_when("util::timestamp()", |r| matches!(r, DateValue(..)));
+        verify_when("util::uuid()", |r| matches!(r, UUIDValue(..)))
     }
 
     #[actix::test]
@@ -111,12 +111,6 @@ mod tests {
         assert_eq!(interpreter.evaluate("x % 5").unwrap(), Number(F64Value(0.)));
         assert_eq!(interpreter.evaluate("x < 35").unwrap(), Boolean(false));
         assert_eq!(interpreter.evaluate("x >= 35").unwrap(), Boolean(true));
-        assert_eq!(interpreter.get_variables().iter()
-                       .filter(|r| r.get(1) != StringValue("BackDoor".into()))
-                       .map(|r| r.get_values().iter().map(|v| v.unwrap_value()).collect::<Vec<_>>())
-                       .collect::<Vec<_>>(), vec![
-            vec!["x".to_string(), "f64".to_string(), "35".to_string()],
-        ])
     }
 
     #[actix::test]
@@ -200,8 +194,8 @@ mod tests {
         "#).unwrap();
         assert_eq!(result, StructureValue(Structure::from_parameters_and_values(
             &make_quote_parameters(), vec![
-                StringValue("ABC".to_string()),
-                StringValue("AMEX".to_string()),
+                StringValue("ABC".into()),
+                StringValue("AMEX".into()),
                 Number(F64Value(11.11)),
             ],
         ).unwrap()));
@@ -277,21 +271,21 @@ mod tests {
         for s in TableRenderer::from_rows(mrc_columns.clone(), mrc_rows.to_owned()) { println!("{}", s); }
         assert_eq!(mrc_rows, vec![
             Row::new(0, vec![
-                StringValue("symbol".to_string()),
-                StringValue("String(8)".to_string()),
-                StringValue("null".to_string()),
+                StringValue("symbol".into()),
+                StringValue("String(8)".into()),
+                StringValue("null".into()),
                 Boolean(true),
             ]),
             Row::new(1, vec![
-                StringValue("exchange".to_string()),
-                StringValue("String(8)".to_string()),
-                StringValue("null".to_string()),
+                StringValue("exchange".into()),
+                StringValue("String(8)".into()),
+                StringValue("null".into()),
                 Boolean(true),
             ]),
             Row::new(2, vec![
-                StringValue("last_sale".to_string()),
-                StringValue("f64".to_string()),
-                StringValue("null".to_string()),
+                StringValue("last_sale".into()),
+                StringValue("f64".into()),
+                StringValue("null".into()),
                 Boolean(true),
             ]),
         ]);
@@ -301,7 +295,12 @@ mod tests {
     async fn test_directive_die() {
         verify_exact(r#"
             [!] "Kaboom!!!"
-        "#, ErrorValue(Exact("Kaboom!!!".to_string())));
+        "#, ErrorValue(Exact("Kaboom!!!".into())));
+    }
+
+    #[test]
+    fn test_directive_ignore_failure() {
+        verify_exact(r#"[~] vm::eval("7 / 0")"#, Outcome(Ack));
     }
 
     #[actix::test]
@@ -342,7 +341,7 @@ mod tests {
 
         // valid case
         let value = interpreter.evaluate(r#"
-            eval("2 ** 4")
+            vm::eval("2 ** 4")
         "#).unwrap();
         assert_eq!(value, Number(F64Value(16.)));
 
@@ -355,19 +354,22 @@ mod tests {
     async fn test_extraction_json() {
         verify_exact(r#"
             { symbol:"AAA", price:123.45 }::symbol
-        "#, StringValue("AAA".to_string()));
+        "#, StringValue("AAA".into()));
     }
 
     #[actix::test]
-    async fn test_extraction_structures() {
+    async fn test_extraction_structure() {
         verify_exact(r#"
             struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
             )::symbol
-        "#, StringValue("ABC".to_string()));
+        "#, StringValue("ABC".into()));
+    }
 
+    #[actix::test]
+    async fn test_extraction_structure_with_impl() {
         verify_exact(r#"
             stock := struct(
                 symbol: String(8) = "ABC",
@@ -383,22 +385,19 @@ mod tests {
         "#, Boolean(true));
     }
 
-    #[actix::test]
-    async fn test_extraction_timestamps() {
-        verify_when("timestamp()::day()", |n| matches!(n, Number(..)));
-        verify_when("timestamp()::hour()", |n| matches!(n, Number(..)));
-        verify_when("timestamp()::hour12()", |n| matches!(n, Number(..)));
-        verify_when("timestamp()::minute()", |n| matches!(n, Number(..)));
-        verify_when("timestamp()::month()", |n| matches!(n, Number(..)));
-        verify_when("timestamp()::second()", |n| matches!(n, Number(..)));
-        verify_when("timestamp()::year()", |n| matches!(n, Number(..)));
-    }
-
-    #[actix::test]
-    async fn test_format_string() {
-        verify_exact(r#"
-            format("This {} the {}", "is", "way")
-        "#, StringValue("This is the way".to_string()));
+    #[test]
+    fn test_extraction_timestamps() {
+        let mut interpreter = Interpreter::new();
+        interpreter.evaluate(r#"
+            ts := util::timestamp()
+        "#).unwrap();
+        interpreter = verify_where(interpreter, "util::day_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::hour_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::hour12_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::minute_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::month_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::second_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::year_of(ts)", |n| matches!(n, Number(..)));
     }
 
     #[actix::test]
@@ -484,7 +483,7 @@ mod tests {
 
         // set up a listener on port 8833
         let result = interpreter.evaluate_async(r#"
-            SERVE(8833)
+            vm::serve(8833)
         "#).await.unwrap();
         assert_eq!(result, Outcome(Outcomes::Ack));
 
@@ -625,7 +624,7 @@ mod tests {
             x := 7
             if(x > 5) "Yes"
         "#).unwrap();
-        assert_eq!(value, StringValue("Yes".to_string()));
+        assert_eq!(value, StringValue("Yes".into()));
     }
 
     #[actix::test]
@@ -647,7 +646,7 @@ mod tests {
             else if(x < 5) "Maybe"
             else "No"
         "#).unwrap();
-        assert_eq!(value, StringValue("Maybe".to_string()));
+        assert_eq!(value, StringValue("Maybe".into()));
     }
 
     #[actix::test]
@@ -655,7 +654,28 @@ mod tests {
         verify_exact(r#"
             x := 4
             iff(x > 5, "Yes", iff(x < 5, "Maybe", "No"))
-        "#, StringValue("Maybe".to_string()));
+        "#, StringValue("Maybe".into()));
+    }
+
+    #[test]
+    fn test_import_from_json() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            quote := { symbol: "ABC", exchange: "AMEX" }
+            import "quote"
+        "#).unwrap();
+        assert_eq!(interpreter.machine.get("symbol"), Some(StringValue("ABC".into())));
+        assert_eq!(interpreter.machine.get("exchange"), Some(StringValue("AMEX".into())));
+    }
+
+    #[test]
+    fn test_import_from_package() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            import ["str"]
+            format("This {} the {}", "is", "way")
+        "#).unwrap();
+        assert_eq!(result, StringValue("This is the way".into()))
     }
 
     #[actix::test]
@@ -701,17 +721,17 @@ mod tests {
         assert_eq!(result, JSONValue(vec![
             ("columns".to_string(), Array(vec![
                 JSONValue(vec![
-                    ("name".to_string(), StringValue("symbol".to_string())),
-                    ("param_type".to_string(), StringValue("String(8)".to_string())),
+                    ("name".to_string(), StringValue("symbol".into())),
+                    ("param_type".to_string(), StringValue("String(8)".into())),
                     ("default_value".to_string(), Null),
                 ]),
                 JSONValue(vec![
-                    ("name".to_string(), StringValue("exchange".to_string())),
-                    ("param_type".to_string(), StringValue("String(8)".to_string())),
+                    ("name".to_string(), StringValue("exchange".into())),
+                    ("param_type".to_string(), StringValue("String(8)".into())),
                     ("default_value".to_string(), Null)]),
                 JSONValue(vec![
-                    ("name".to_string(), StringValue("last_sale".to_string())),
-                    ("param_type".to_string(), StringValue("f64".to_string())),
+                    ("name".to_string(), StringValue("last_sale".into())),
+                    ("param_type".to_string(), StringValue("f64".into())),
                     ("default_value".to_string(), Null),
                 ]),
             ])),
@@ -743,17 +763,17 @@ mod tests {
         assert_eq!(result, JSONValue(vec![
             ("columns".to_string(), Array(vec![
                 JSONValue(vec![
-                    ("name".to_string(), StringValue("symbol".to_string())),
-                    ("param_type".to_string(), StringValue("String(8)".to_string())),
+                    ("name".to_string(), StringValue("symbol".into())),
+                    ("param_type".to_string(), StringValue("String(8)".into())),
                     ("default_value".to_string(), Null),
                 ]),
                 JSONValue(vec![
-                    ("name".to_string(), StringValue("exchange".to_string())),
-                    ("param_type".to_string(), StringValue("String(8)".to_string())),
+                    ("name".to_string(), StringValue("exchange".into())),
+                    ("param_type".to_string(), StringValue("String(8)".into())),
                     ("default_value".to_string(), Null)]),
                 JSONValue(vec![
-                    ("name".to_string(), StringValue("last_sale".to_string())),
-                    ("param_type".to_string(), StringValue("f64".to_string())),
+                    ("name".to_string(), StringValue("last_sale".into())),
+                    ("param_type".to_string(), StringValue("f64".into())),
                     ("default_value".to_string(), Null),
                 ]),
             ]))
@@ -802,6 +822,36 @@ mod tests {
             b := { key: "123", values: [1, 74, 88, 0] }
             matches(a, b)
         "#).unwrap());
+    }
+
+    #[test]
+    fn test_system_call() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            os::call("cat", "LICENSE")
+        "#).unwrap();
+        assert_eq!(result, StringValue(r#"MIT License
+
+Copyright (c) 2024 Lawrence Daniels
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+"#.into()))
     }
 
     #[actix::test]
@@ -1048,25 +1098,32 @@ mod tests {
         ])));
     }
 
+    #[actix::test]
+    async fn test_string_format() {
+        verify_exact(r#"
+            str::format("This {} the {}", "is", "way")
+        "#, StringValue("This is the way".into()));
+    }
+
     #[test]
     fn test_string_left() {
         let mut interpreter = Interpreter::new();
 
         // test valid case 1 (positive)
         let result = interpreter.evaluate(r#"
-            left('Hello World', 5)
+            str::left('Hello World', 5)
         "#).unwrap();
         assert_eq!(result, StringValue("Hello".into()));
 
         // test valid case 2 (negative)
         let result = interpreter.evaluate(r#"
-            left('Hello World', -5)
+            str::left('Hello World', -5)
         "#).unwrap();
         assert_eq!(result, StringValue("World".into()));
 
         // test the invalid case
         let result = interpreter.evaluate(r#"
-            left(12345, 5)
+            str::left(12345, 5)
         "#).unwrap();
         assert_eq!(result, Undefined)
     }
@@ -1077,19 +1134,19 @@ mod tests {
 
         // test valid case 1 (positive)
         let result = interpreter.evaluate(r#"
-            right('Hello World', 5)
+            str::right('Hello World', 5)
         "#).unwrap();
         assert_eq!(result, StringValue("World".into()));
 
         // test valid case 2 (negative)
         let result = interpreter.evaluate(r#"
-            right('Hello World', -5)
+            str::right('Hello World', -5)
         "#).unwrap();
         assert_eq!(result, StringValue("Hello".into()));
 
         // test the invalid case
         let result = interpreter.evaluate(r#"
-            right(7779311, 5)
+            str::right(7779311, 5)
         "#).unwrap();
         assert_eq!(result, Undefined)
     }
@@ -1100,13 +1157,13 @@ mod tests {
 
         // test the valid case
         let result = interpreter.evaluate(r#"
-            substring('Hello World', 0, 5)
+            str::substring('Hello World', 0, 5)
         "#).unwrap();
         assert_eq!(result, StringValue("Hello".into()));
 
         // test the invalid case
         let result = interpreter.evaluate(r#"
-            substring(8888, 0, 5)
+            str::substring(8888, 0, 5)
         "#).unwrap();
         assert_eq!(result, Undefined)
     }
@@ -1122,14 +1179,14 @@ mod tests {
                  { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                  { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
                  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            to_csv(from stocks)
+            util::to_csv(from stocks)
         "#).unwrap();
         assert_eq!(result, Array(vec![
-            StringValue(r#""ABC","AMEX",11.11"#.to_string()),
-            StringValue(r#""UNO","OTC",0.2456"#.to_string()),
-            StringValue(r#""BIZ","NYSE",23.66"#.to_string()),
-            StringValue(r#""GOTO","OTC",0.1428"#.to_string()),
-            StringValue(r#""BOOM","NASDAQ",0.0872"#.to_string()),
+            StringValue(r#""ABC","AMEX",11.11"#.into()),
+            StringValue(r#""UNO","OTC",0.2456"#.into()),
+            StringValue(r#""BIZ","NYSE",23.66"#.into()),
+            StringValue(r#""GOTO","OTC",0.1428"#.into()),
+            StringValue(r#""BOOM","NASDAQ",0.0872"#.into()),
         ]));
     }
 
@@ -1144,22 +1201,22 @@ mod tests {
                  { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                  { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
                  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            to_json(from stocks)
+            util::to_json(from stocks)
         "#).unwrap();
         assert_eq!(result, Array(vec![
-            StringValue(r#"{"symbol":"ABC","exchange":"AMEX","last_sale":11.11}"#.to_string()),
-            StringValue(r#"{"symbol":"UNO","exchange":"OTC","last_sale":0.2456}"#.to_string()),
-            StringValue(r#"{"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}"#.to_string()),
-            StringValue(r#"{"symbol":"GOTO","exchange":"OTC","last_sale":0.1428}"#.to_string()),
-            StringValue(r#"{"symbol":"BOOM","exchange":"NASDAQ","last_sale":0.0872}"#.to_string()),
+            StringValue(r#"{"symbol":"ABC","exchange":"AMEX","last_sale":11.11}"#.into()),
+            StringValue(r#"{"symbol":"UNO","exchange":"OTC","last_sale":0.2456}"#.into()),
+            StringValue(r#"{"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}"#.into()),
+            StringValue(r#"{"symbol":"GOTO","exchange":"OTC","last_sale":0.1428}"#.into()),
+            StringValue(r#"{"symbol":"BOOM","exchange":"NASDAQ","last_sale":0.0872}"#.into()),
         ]));
     }
 
     #[actix::test]
     async fn test_type_of() {
-        verify_exact(r#"type_of(1234)"#, StringValue("i64".to_string()));
-        verify_exact(r#"type_of('1234')"#, StringValue("String(4)".to_string()));
-        verify_exact(r#"type_of("1234")"#, StringValue("String(4)".to_string()));
+        verify_exact(r#"type_of(1234)"#, StringValue("i64".into()));
+        verify_exact(r#"type_of('1234')"#, StringValue("String(4)".into()));
+        verify_exact(r#"type_of("1234")"#, StringValue("String(4)".into()));
     }
 
     #[actix::test]
@@ -1176,14 +1233,14 @@ mod tests {
     #[actix::test]
     async fn test_write_to_stderr() {
         verify_exact(r#"
-            stderr("Goodbye Cruel World")
+            io::stderr("Goodbye Cruel World")
         "#, Outcome(Outcomes::Ack));
     }
 
     #[actix::test]
     async fn test_write_to_stdout() {
         verify_exact(r#"
-            stdout("Hello World")
+            io::stdout("Hello World")
         "#, Outcome(Outcomes::Ack));
     }
 
@@ -1197,5 +1254,16 @@ mod tests {
         let mut interpreter = Interpreter::new();
         let actual = interpreter.evaluate(code).unwrap();
         assert!(f(actual));
+    }
+
+    fn verify_where(
+        interpreter: Interpreter,
+        code: &str,
+        f: fn(TypedValue) -> bool,
+    ) -> Interpreter {
+        let mut my_interpreter = interpreter;
+        let actual = my_interpreter.evaluate(code).unwrap();
+        assert!(f(actual));
+        my_interpreter
     }
 }

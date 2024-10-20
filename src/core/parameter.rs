@@ -2,10 +2,12 @@
 // Parameter class
 ////////////////////////////////////////////////////////////////////
 
+use std::fmt::{Display, Formatter};
 use log::error;
 use serde::{Deserialize, Serialize};
 
 use crate::decompiler::Decompiler;
+use crate::structure::Structure;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Undefined;
@@ -56,8 +58,10 @@ impl Parameter {
         Parameter { name: name.into(), param_type, default_value }
     }
 
-    pub fn render_columns(columns: &Vec<Parameter>) -> String {
-        columns.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", ")
+    pub fn render(columns: &Vec<Parameter>) -> String {
+        columns.iter().map(|c| c.to_code())
+            .collect::<Vec<String>>()
+            .join(", ")
     }
 
     pub fn to_json(&self) -> serde_json::Value {
@@ -65,7 +69,22 @@ impl Parameter {
     }
 
     pub fn to_code(&self) -> String {
-        Decompiler::new().decompile_column(self)
+        let mut buf = self.get_name().to_string();
+        if let Some(type_decl) = self.get_param_type() {
+            if !type_decl.trim().is_empty() {
+                buf = format!("{}: {}", buf, type_decl)
+            }
+        }
+        if let Some(value) = self.get_default_value() {
+            buf = format!("{} = {}", buf, value)
+        }
+        buf
+    }
+}
+
+impl Display for Parameter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_code())
     }
 }
 

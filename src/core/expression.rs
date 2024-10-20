@@ -188,7 +188,7 @@ pub enum Expression {
     Directive(Directives),
     Divide(Box<Expression>, Box<Expression>),
     ElementAt(Box<Expression>, Box<Expression>),
-    Extract(Box<Expression>, Box<Expression>),
+    Extraction(Box<Expression>, Box<Expression>),
     Factorial(Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
     From(Box<Expression>),
@@ -205,6 +205,7 @@ pub enum Expression {
         a: Box<Expression>,
         b: Option<Box<Expression>>,
     },
+    Import(Box<Expression>),
     Include(Box<Expression>),
     JSONExpression(Vec<(String, Expression)>),
     Literal(TypedValue),
@@ -257,17 +258,17 @@ impl Expression {
 
     pub fn infer_type(&self) -> DataType {
         fn infer_a_or_b(a: &Expression, b: &Expression) -> DataType {
-            match (a.infer_type(), b.infer_type()) {
+            match (infer_a(a), infer_a(b)) {
                 (a, b) if a == b => a,
-                (a, BackDoorType | NullType | UndefinedType) => a,
-                (BackDoorType | NullType | UndefinedType, b) => b,
+                (a, BackDoorType | InferredType) => a,
+                (BackDoorType | InferredType, b) => b,
                 (a, _) => a
             }
         }
-        fn recurse(expr: &Expression) -> DataType {
+        fn infer_a(expr: &Expression) -> DataType {
             match expr {
                 ArrayExpression(..) => ArrayType,
-                AsValue(_, e) => e.infer_type(),
+                AsValue(_, e) => infer_a(e),
                 BitwiseOp(bwo) => match bwo {
                     BitwiseOps::And(a, b) => infer_a_or_b(a, b),
                     BitwiseOps::Or(a, b) => infer_a_or_b(a, b),
@@ -275,26 +276,27 @@ impl Expression {
                     BitwiseOps::ShiftRight(a, b) => infer_a_or_b(a, b),
                     BitwiseOps::Xor(a, b) => infer_a_or_b(a, b),
                 },
-                CodeBlock(_) => UndefinedType,
+                CodeBlock(_) => InferredType,
                 Parameters(_) => ArrayType,
                 Condition(_) => BooleanType,
                 Directive(_) => OutcomeType(OutcomeKind::Acked),
                 Divide(a, b) => infer_a_or_b(a, b),
-                ElementAt(_, _) => UndefinedType,
-                Extract(_, _) => UndefinedType,
-                Factorial(a) => a.infer_type(),
+                ElementAt(_, _) => InferredType,
+                Extraction(_, _) => InferredType,
+                Factorial(a) => infer_a(a),
                 Feature { .. } => OutcomeType(OutcomeKind::Acked),
-                From(_) => UndefinedType,
-                FunctionCall { .. } => UndefinedType,
-                HTTP { .. } => UndefinedType,
-                If { a, .. } => a.infer_type(),
+                From(_) => InferredType,
+                FunctionCall { .. } => InferredType,
+                HTTP { .. } => InferredType,
+                If { a, .. } => infer_a(a),
+                Import(..) => OutcomeType(OutcomeKind::Acked),
                 Include(_) => OutcomeType(OutcomeKind::Acked),
                 JSONExpression(_) => JSONType,
                 Literal(v) => v.get_type(),
                 Minus(a, b) => infer_a_or_b(a, b),
                 Modulo(a, b) => infer_a_or_b(a, b),
                 Multiply(a, b) => infer_a_or_b(a, b),
-                Neg(a) => a.infer_type(),
+                Neg(a) => infer_a(a),
                 Ns(_) => OutcomeType(OutcomeKind::Acked),
                 Plus(a, b) => infer_a_or_b(a, b),
                 Pow(a, b) => infer_a_or_b(a, b),
@@ -307,16 +309,16 @@ impl Expression {
                     }
                 },
                 Range(a, b) => infer_a_or_b(a, b),
-                Return(_) => UndefinedType,
+                Return(_) => InferredType,
                 Scenario { .. } => OutcomeType(OutcomeKind::Acked),
                 SetVariable(_, _) => OutcomeType(OutcomeKind::Acked),
                 StructureImpl(_, _) => OutcomeType(OutcomeKind::Acked),
-                Variable(_) => UndefinedType,
-                Via(_) => UndefinedType,
-                While { .. } => UndefinedType,
+                Variable(_) => InferredType,
+                Via(_) => InferredType,
+                While { .. } => InferredType,
             }
         }
-        recurse(self)
+        infer_a(self)
     }
 
     /// Indicates whether the expression is a conditional expression

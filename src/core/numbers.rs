@@ -576,6 +576,7 @@ impl Sub for NumberValue {
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::StringType;
+    use crate::data_types::SizeTypes;
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::StringValue;
 
@@ -656,7 +657,7 @@ mod tests {
     #[test]
     fn test_decode() {
         let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
-        assert_eq!(TypedValue::decode(&StringType(5), &buf, 0), StringValue("Hello".into()))
+        assert_eq!(TypedValue::decode(&StringType(SizeTypes::Fixed(5)), &buf, 0), StringValue("Hello".into()))
     }
 
 }

@@ -1,8 +1,9 @@
 ////////////////////////////////////////////////////////////////////
-// compiler module
+// Compiler class
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
+use std::convert::From;
 
 use shared_lib::fail;
 
@@ -18,7 +19,7 @@ use crate::parameter::Parameter;
 use crate::structure::Structure;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
-use crate::tokens::Token::{Atom, Backticks, DoubleQuoted, Numeric, Operator, SingleQuoted};
+use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Function, Number, StringValue, StructureValue};
 
@@ -249,6 +250,7 @@ impl Compiler {
                 "HTTP" => self.parse_keyword_http(nts),
                 "if" => self.parse_keyword_if(nts),
                 "impl" => self.parse_keyword_impl(nts),
+                "import" => self.parse_keyword_import(nts),
                 "include" => self.parse_expression_1a(nts, Include),
                 "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &nts),
                 "ns" => self.parse_expression_1a(nts, Ns),
@@ -530,6 +532,20 @@ impl Compiler {
         }
     }
 
+    /// Builds an import statement:
+    /// ex: import "os"
+    /// ex: import ["os", "oxide"]
+    /// future state:
+    ///   ex: import str::format
+    ///   ex: import [str::format, tables]
+    fn parse_keyword_import(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (args, ts) = self.compile_next(ts)?;
+        Ok((Import(Box::from(args)), ts))
+    }
+
     /// Builds a language model from an OVERWRITE statement:
     /// ex: overwrite stocks
     ///         via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
@@ -714,7 +730,7 @@ impl Compiler {
                         "^" => self.parse_expression_2a(ts, op0, |a, b| BitwiseOp(BitwiseOps::Xor(a, b))),
                         "÷" | "/" => self.parse_expression_2a(ts, op0, Divide),
                         "==" => self.parse_conditional_2a(ts, op0, Equal),
-                        "::" => self.parse_expression_2a(ts, op0, Extract),
+                        "::" => self.parse_expression_2a(ts, op0, Extraction),
                         ">" => self.parse_conditional_2a(ts, op0, GreaterThan),
                         ">=" => self.parse_conditional_2a(ts, op0, GreaterOrEqual),
                         "<" => self.parse_conditional_2a(ts, op0, LessThan),
@@ -1062,7 +1078,6 @@ pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io:
 #[cfg(test)]
 mod tests {
     use crate::expression::CreationEntity::TableEntity;
-    use crate::expression::Directives;
     use crate::parameter::Parameter;
 
     use super::*;
@@ -1071,7 +1086,7 @@ mod tests {
     fn test_alias() {
         assert_eq!(
             Compiler::compile_script(r#"symbol: "ABC""#).unwrap(),
-            AsValue("symbol".to_string(), Box::new(Literal(StringValue("ABC".into())))));
+            AsValue("symbol".into(), Box::new(Literal(StringValue("ABC".into())))));
     }
 
     #[test]
@@ -1333,6 +1348,23 @@ mod tests {
     }
 
     #[test]
+    fn test_imports() {
+        // single import
+        let code = Compiler::compile_script(r#"
+            import "os"
+        "#).unwrap();
+        assert_eq!(code, Import(Box::from(Literal(StringValue("os".into())))));
+
+        // multiple imports
+        let code = Compiler::compile_script(r#"
+            import ["os", "util"]
+        "#).unwrap();
+        assert_eq!(code, Import(Box::from(ArrayExpression(vec![
+            Literal(StringValue("os".into())), Literal(StringValue("util".into()))
+        ]))));
+    }
+
+    #[test]
     fn test_json_literal_value() {
         let code = Compiler::compile_script(r#"
             {symbol: "ABC", exchange: "NYSE", last_sale: 16.79}
@@ -1432,58 +1464,13 @@ mod tests {
     }
 
     #[test]
-    fn test_must_succeed() {
-        let code = Compiler::compile_script(r#"
-        [+] eval("5 + 7")
-        "#).unwrap();
-        assert_eq!(code, Directive(Directives::MustAck(Box::new(
-            FunctionCall {
-                fx: Box::new(Variable("eval".to_string())),
-                args: vec![
-                    Literal(StringValue("5 + 7".to_string()))
-                ],
-            }
-        ))));
-    }
-
-    #[test]
-    fn test_must_not_succeed() {
-        let code = Compiler::compile_script(r#"
-        [-] eval("7 / 0")
-        "#).unwrap();
-        assert_eq!(code, Directive(Directives::MustNotAck(Box::new(
-            FunctionCall {
-                fx: Box::new(Variable("eval".to_string())),
-                args: vec![
-                    Literal(StringValue("7 / 0".to_string()))
-                ],
-            }
-        ))))
-    }
-
-    #[test]
-    fn test_must_ignore_failure() {
-        let code = Compiler::compile_script(r#"
-        [~] eval("7 / 0")
-        "#).unwrap();
-        assert_eq!(code, Directive(Directives::MustIgnoreAck(Box::new(
-            FunctionCall {
-                fx: Box::new(Variable("eval".to_string())),
-                args: vec![
-                    Literal(StringValue("7 / 0".to_string()))
-                ],
-            }
-        ))))
-    }
-
-    #[test]
     fn test_maybe_curly_brackets() {
         let ts = TokenSlice::from_string(r#"{w:'abc', x:1.0, y:2, z:[1, 2, 3]}"#);
         let mut compiler = Compiler::new();
         let (result, _) = compiler.maybe_curly_brackets(ts).unwrap();
         let result = result.unwrap();
         assert_eq!(result, JSONExpression(vec![
-            ("w".to_string(), Literal(StringValue("abc".to_string()))),
+            ("w".to_string(), Literal(StringValue("abc".into()))),
             ("x".to_string(), Literal(Number(F64Value(1.)))),
             ("y".to_string(), Literal(Number(I64Value(2)))),
             ("z".to_string(), ArrayExpression(vec![

@@ -136,7 +136,7 @@ mod tests {
         let rows = vrc.read_active_rows().unwrap();
         Machine::show(vrc.get_columns().clone(), rows.to_owned());
 
-        let results = rows.to_owned().iter()
+        let results = rows.iter()
             .map(|row| row.get_values())
             .collect::<Vec<_>>();
 
@@ -158,9 +158,9 @@ mod tests {
             Box::new(Variable("last_sale".into())),
             Box::new(Literal(Number(F64Value(20.)))),
         )).unwrap();
-        Machine::show(vrc.get_columns().clone(), rows.to_owned());
+        Machine::show(vrc.get_columns().to_owned(), rows.to_owned());
 
-        let results = rows.to_owned().iter()
+        let results = rows.iter()
             .map(|row| row.get_values())
             .collect::<Vec<_>>();
 

@@ -357,6 +357,7 @@ impl RowJs {
 mod tests {
     use shared_lib::tabulate_cells;
     use crate::data_types::DataType::{NumberType, StringType};
+    use crate::data_types::SizeTypes;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::*;
     use crate::testdata::{make_quote, make_quote_columns};
@@ -513,8 +514,8 @@ mod tests {
     fn test_transformations_between_row_and_row_json() {
         // define a row
         let columns = vec![
-            Column::new("symbol", StringType(4), Null, 9),
-            Column::new("exchange", StringType(4), Null, 22),
+            Column::new("symbol", StringType(SizeTypes::Fixed(4)), Null, 9),
+            Column::new("exchange", StringType(SizeTypes::Fixed(4)), Null, 22),
             Column::new("last_sale", NumberType(F64Kind), Null, 35),
         ];
         let row = Row::new(123, vec![

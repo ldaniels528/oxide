@@ -3,7 +3,6 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
-
 use crate::expression::Expression::*;
 use crate::expression::*;
 use crate::expression::{BitwiseOps, Conditions, Expression};
@@ -35,7 +34,7 @@ impl Decompiler {
                 format!("{} / {}", self.decompile(a), self.decompile(b)),
             ElementAt(a, b) =>
                 format!("{}[{}]", self.decompile(a), self.decompile(b)),
-            Extract(a, b) =>
+            Extraction(a, b) =>
                 format!("{}::{}", self.decompile(a), self.decompile(b)),
             Factorial(a) => format!("¡{}", self.decompile(a)),
             Feature { title, scenarios } =>
@@ -50,6 +49,7 @@ impl Decompiler {
                 format!("if {} {}{}", self.decompile(condition), self.decompile(a), b.to_owned()
                     .map(|x| format!(" else {}", self.decompile(&x)))
                     .unwrap_or("".into())),
+            Import(args) => format!("import {}", self.decompile(args)),
             Include(path) => format!("include {}", self.decompile(path)),
             JSONExpression(items) =>
                 format!("{{{}}}", items.iter()
@@ -153,17 +153,10 @@ impl Decompiler {
         }
     }
 
-    pub fn decompile_column(&self, column: &Parameter) -> String {
-        match column.get_param_type() {
-            Some(type_decl) if type_decl.trim().is_empty() => column.get_name().to_owned(),
-            Some(type_decl) => format!("{}: {}", column.get_name(), type_decl),
-            None => column.get_name().to_string()
-        }
-    }
-
-    pub fn decompile_parameters(&self, columns: &Vec<Parameter>) -> String {
-        columns.iter().map(|c| self.decompile_column(c))
-            .collect::<Vec<String>>().join(", ")
+    pub fn decompile_parameters(&self, params: &Vec<Parameter>) -> String {
+        params.iter().map(|p| p.to_code())
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     pub fn decompile_directives(&self, directive: &Directives) -> String {
@@ -301,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_alias() {
-        let model = AsValue("symbol".to_string(), Box::new(Literal(StringValue("ABC".into()))));
+        let model = AsValue("symbol".into(), Box::new(Literal(StringValue("ABC".into()))));
         assert_eq!(Decompiler::new().decompile(&model), r#"symbol: "ABC""#);
     }
 
@@ -329,7 +322,7 @@ mod tests {
     fn test_bitwise_and() {
         let model = BitwiseOp(BitwiseOps::And(
             Box::new(Literal(Number(I64Value(20)))),
-            Box::new(Literal(Number(I64Value(3))))
+            Box::new(Literal(Number(I64Value(3)))),
         ));
         assert_eq!(Decompiler::new().decompile(&model), "20 & 3")
     }
@@ -338,7 +331,7 @@ mod tests {
     fn test_bitwise_or() {
         let model = BitwiseOp(BitwiseOps::Or(
             Box::new(Literal(Number(I64Value(20)))),
-            Box::new(Literal(Number(I64Value(3))))
+            Box::new(Literal(Number(I64Value(3)))),
         ));
         assert_eq!(Decompiler::new().decompile(&model), "20 | 3")
     }
@@ -347,7 +340,7 @@ mod tests {
     fn test_bitwise_shl() {
         let model = BitwiseOp(BitwiseOps::ShiftLeft(
             Box::new(Literal(Number(I64Value(20)))),
-            Box::new(Literal(Number(I64Value(3))))
+            Box::new(Literal(Number(I64Value(3)))),
         ));
         assert_eq!(Decompiler::new().decompile(&model), "20 << 3")
     }
@@ -356,7 +349,7 @@ mod tests {
     fn test_bitwise_shr() {
         let model = BitwiseOp(BitwiseOps::ShiftRight(
             Box::new(Literal(Number(I64Value(20)))),
-            Box::new(Literal(Number(I64Value(3))))
+            Box::new(Literal(Number(I64Value(3)))),
         ));
         assert_eq!(Decompiler::new().decompile(&model), "20 >> 3")
     }
@@ -365,7 +358,7 @@ mod tests {
     fn test_bitwise_xor() {
         let model = BitwiseOp(BitwiseOps::Xor(
             Box::new(Literal(Number(I64Value(20)))),
-            Box::new(Literal(Number(I64Value(3))))
+            Box::new(Literal(Number(I64Value(3)))),
         ));
         assert_eq!(Decompiler::new().decompile(&model), "20 ^ 3")
     }
@@ -388,7 +381,7 @@ mod tests {
 
     #[test]
     fn test_define_named_function() {
-        let model = SetVariable("add".to_string(), Box::new(
+        let model = SetVariable("add".into(), Box::new(
             Literal(Function {
                 params: vec![
                     Parameter::new("a", None, None),
@@ -439,16 +432,16 @@ mod tests {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
             entity: TableEntity {
                 columns: vec![
-                    Parameter::new("symbol", Some("String(8)".into()), Some("ABC".into())),
-                    Parameter::new("exchange", Some("String(8)".into()), Some("NYSE".into())),
-                    Parameter::new("last_sale", Some("f64".into()), Some("23.54".into())),
+                    Parameter::new("symbol", Some("String(8)".into()), Some("\"ABC\"".into())),
+                    Parameter::new("exchange", Some("String(8)".into()), Some("\"NYSE\"".into())),
+                    Parameter::new("last_sale", Some("f64".into()), Some("0.00".into())),
                 ],
                 from: None,
             },
         }));
         assert_eq!(
             Decompiler::new().decompile(&model),
-            r#"create table ns("compiler.create.stocks") (symbol: String(8), exchange: String(8), last_sale: f64)"#)
+            r#"create table ns("compiler.create.stocks") (symbol: String(8) = "ABC", exchange: String(8) = "NYSE", last_sale: f64 = 0.00)"#)
     }
 
     #[test]

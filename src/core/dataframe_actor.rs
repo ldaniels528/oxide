@@ -332,6 +332,7 @@ mod tests {
     use actix::prelude::*;
 
     use crate::data_types::DataType::*;
+    use crate::data_types::SizeTypes;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::*;
     use crate::testdata::{make_quote_parameters, make_quote_columns};
@@ -345,8 +346,8 @@ mod tests {
         let ns = Namespace::parse("dataframe.columns.stocks").unwrap();
         assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
-            Column::new("symbol", StringType(8), Null, 9),
-            Column::new("exchange", StringType(8), Null, 26),
+            Column::new("symbol", StringType(SizeTypes::Fixed(8)), Null, 9),
+            Column::new("exchange", StringType(SizeTypes::Fixed(8)), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ]);
     }

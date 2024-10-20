@@ -14,9 +14,12 @@ use rest_server::*;
 use shared_lib::{cnv_error, get_host_and_port};
 
 use crate::interpreter::Interpreter;
+use crate::machine::Machine;
 use crate::repl::REPLState;
 use crate::rest_server::SharedState;
+use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::TableValue;
 
 mod backdoor;
 mod byte_code_compiler;
@@ -27,7 +30,6 @@ mod cursor;
 mod dataframe_actor;
 mod dataframe_config;
 mod dataframes;
-mod data_type_kind;
 mod data_types;
 mod decompiler;
 mod errors;
@@ -78,6 +80,9 @@ async fn main() -> std::io::Result<()> {
     // process the commandline arguments
     let args: Vec<String> = env::args().collect();
     match args.as_slice() {
+        // no arguments: start the REPL
+        // ex: ./target/debug/oxide
+        [_] => repl::run(REPLState::new()).await,
         // listen: start a dedicated server?
         // ex: ./target/debug/oxide -listen 0.0.0.0 8080
         [_, cmd, ..] if cmd == "-l" || cmd == "-listen" =>
@@ -97,12 +102,29 @@ async fn main() -> std::io::Result<()> {
             run_script(path).await?;
             Ok(())
         }
-        // default: start the REPL
-        // ex: ./target/debug/oxide
-        _ => repl::run(REPLState::new()).await
+        // execute the command
+        // ex: ./target/debug/oxide 5 + 7
+        args => run_command(args[1..].join(" ").as_str())
     }
 }
 
+/// Executes a single command
+fn run_command(command: &str) -> std::io::Result<()> {
+    let mut interpreter = Interpreter::new();
+    let result = interpreter.evaluate(command)?;
+    match result {
+        TableValue(mrc) => {
+            let lines =
+                TableRenderer::from_collection(Box::new(mrc.to_owned()));
+            for line in lines { println!("{}", line); }
+        }
+        z =>
+            println!("{}", z.unwrap_value())
+    }
+    Ok(())
+}
+
+/// Executes a script
 async fn run_script(script_path: &str) -> std::io::Result<TypedValue> {
     // read the script file contents into the string
     let mut file = File::open(script_path)?;
@@ -114,6 +136,7 @@ async fn run_script(script_path: &str) -> std::io::Result<TypedValue> {
     interpreter.evaluate_async(script_code.as_str()).await
 }
 
+/// Starts the listener server
 async fn start_server(args: Vec<String>) -> std::io::Result<()> {
     // get the commandline arguments
     let (host, port) = get_host_and_port(args)?;

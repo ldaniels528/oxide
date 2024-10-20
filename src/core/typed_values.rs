@@ -23,9 +23,8 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::cnv_error;
 use crate::codec;
 use crate::compiler::fail_value;
-use crate::data_type_kind::DataTypeKind;
-use crate::data_type_kind::DataTypeKind::*;
 use crate::data_types::DataType::*;
+use crate::data_types::SizeTypes::Fixed;
 use crate::data_types::*;
 use crate::errors::Errors;
 use crate::errors::Errors::{Exact, TypeMismatch, Various};
@@ -42,6 +41,7 @@ use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::structure::Structure;
+use crate::table_columns::Column;
 use crate::typed_values::TypedValue::*;
 
 const ISO_DATE_FORMAT: &str =
@@ -58,7 +58,6 @@ pub enum TypedValue {
     BackDoor(BackDoorKey),
     BLOB(Vec<u8>),
     Boolean(bool),
-    CLOB(Vec<char>),
     DateValue(i64),
     ErrorValue(Errors),
     Function { params: Vec<Parameter>, code: Box<Expression> },
@@ -87,7 +86,6 @@ impl TypedValue {
             BackDoorType => codec::decode_u8(buffer, offset, |b| BackDoor(BackDoorKey::from_u8(b))),
             BLOBType(_size) => BLOB(Vec::new()),
             BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
-            CLOBType(_size) => CLOB(Vec::new()),
             DateType => codec::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
             // EnumType(labels) => {
             //     let index = codec::decode_u8x4(buffer, offset, |b| i32::from_be_bytes(b));
@@ -96,21 +94,21 @@ impl TypedValue {
             ErrorType => ErrorValue(Exact(codec::decode_string(buffer, offset, 255).to_string())),
             //FunctionType(_columns) => Codec::decode_value(&buffer[offset..].to_vec()),
             //JSONType => Codec::decode_value(&buffer[offset..].to_vec()),
-            NullType => Null,
+            InferredType => Null,
             NumberType(kind) => Number(NumberValue::decode(buffer, offset, *kind)),
             // OutcomeType(kind) => match kind {
             //     OutcomeKind::Acked => Outcome(Outcomes::Ack),
             //     OutcomeKind::RowInserted => Outcome(Outcomes::RowId(codec::decode_row_id(&buffer, 1))),
             //     OutcomeKind::RowsUpdated => Outcome(Outcomes::RowsAffected(codec::decode_row_id(&buffer, 1))),
             // },
-            StringType(size) => StringValue(codec::decode_string(buffer, offset, *size).to_string()),
+            StringType(size) => StringValue(codec::decode_string(buffer, offset, size.to_size()).to_string()),
             StructureType(columns) =>
                 match Structure::from_parameters(columns) {
                     Ok(structure) => StructureValue(structure),
                     Err(err) => ErrorValue(Errors::Exact(err.to_string()))
                 }
             TableType(columns) => TableValue(ModelRowCollection::construct(columns)),
-            UndefinedType => Undefined,
+            InferredType => Undefined,
             UUIDType => codec::decode_u8x16(buffer, offset, |b| UUIDValue(u128::from_be_bytes(b))),
             _ => Codec::decode_value(&buffer[offset..].to_vec())
         }
@@ -134,11 +132,10 @@ impl TypedValue {
             BackDoorType => BackDoor(buffer.next_backdoor_fn()),
             BLOBType(..) => BLOB(buffer.next_blob()),
             BooleanType => Boolean(buffer.next_bool()),
-            CLOBType(..) => CLOB(buffer.next_clob()),
             DateType => DateValue(buffer.next_i64()),
             EnumType(labels) => {
-                let index = buffer.next_u32();
-                StringValue(labels[index as usize].to_string())
+                let index = buffer.next_u32() as usize;
+                StringValue(labels[index].get_name().to_string())
             }
             ErrorType => ErrorValue(Exact(buffer.next_string())),
             FunctionType(columns) => Function {
@@ -146,7 +143,7 @@ impl TypedValue {
                 code: Box::new(ByteCodeCompiler::disassemble(buffer)?),
             },
             JSONType => JSONValue(buffer.next_json()?),
-            NullType => Null,
+            InferredType => Null,
             NumberType(kind) =>
                 Number(match *kind {
                     F32Kind => F32Value(buffer.next_f32()),
@@ -171,7 +168,7 @@ impl TypedValue {
             StringType(..) => StringValue(buffer.next_string()),
             StructureType(columns) => StructureValue(buffer.next_struct_with_parameters(columns)?),
             TableType(columns) => TableValue(buffer.next_table_with_columns(columns)?),
-            UndefinedType => Undefined,
+            InferredType => Undefined,
             UUIDType => UUIDValue(buffer.next_u128()),
         };
         Ok(tv)
@@ -184,7 +181,16 @@ impl TypedValue {
             serde_json::Value::Number(n) => n.as_f64().map(|v| Number(F64Value(v))).unwrap_or(Null),
             serde_json::Value::String(s) => StringValue(s),
             serde_json::Value::Array(a) => Array(a.iter().map(|v| Self::from_json(v.to_owned())).collect()),
-            serde_json::Value::Object(..) => todo!()
+            serde_json::Value::Object(args) =>
+                match Structure::from_parameters(&args.iter()
+                    .map(|(name, value)| {
+                        let value = TypedValue::from_json(value.to_owned());
+                        let data_type = value.get_type().to_type_declaration();
+                        Parameter::new(name, data_type, Some(value.to_code()))
+                    }).collect::<Vec<_>>()) {
+                    Ok(structure) => StructureValue(structure),
+                    Err(err) => ErrorValue(Exact(err.to_string()))
+                }
         }
     }
 
@@ -283,7 +289,6 @@ impl TypedValue {
             BackDoor(nf) => vec![nf.to_u8()],
             BLOB(bytes) => codec::encode_u8x_n(bytes.to_vec()),
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
-            CLOB(chars) => codec::encode_chars(chars.to_vec()),
             DateValue(number) => number.to_be_bytes().to_vec(),
             ErrorValue(err) => codec::encode_string(err.to_string().as_str()),
             // Function { params, code } =>
@@ -317,24 +322,23 @@ impl TypedValue {
             Array(..) => ArrayType,
             BackDoor(..) => BackDoorType,
             Function { .. } => FunctionType(vec![]),
-            BLOB(v) => BLOBType(v.len()),
+            BLOB(v) => BLOBType(Fixed(v.len())),
             Boolean(..) => BooleanType,
-            CLOB(c) => CLOBType(c.len()),
             DateValue(..) => DateType,
             ErrorValue(..) => ErrorType,
             JSONValue(..) => JSONType,
-            Null => NullType,
+            Null => InferredType,
             Number(nv) => NumberType(nv.kind()),
             Outcome(oc) => match oc {
                 Outcomes::Ack => OutcomeType(OutcomeKind::Acked),
                 Outcomes::RowId(..) => OutcomeType(OutcomeKind::RowInserted),
                 Outcomes::RowsAffected(..) => OutcomeType(OutcomeKind::RowsUpdated),
             },
-            StringValue(s) => StringType(s.len()),
+            StringValue(s) => StringType(Fixed(s.len())),
             StructureValue(..) => StructureType(vec![]),
             NamespaceValue(..) => TableType(vec![]),
             TableValue(mrc) => TableType(Parameter::from_columns(mrc.get_columns())),
-            Undefined => UndefinedType,
+            Undefined => InferredType,
             UUIDValue(..) => UUIDType,
         }
     }
@@ -443,7 +447,6 @@ impl TypedValue {
             BackDoor(nf) => serde_json::json!(nf),
             BLOB(bytes) => serde_json::json!(bytes),
             Boolean(b) => serde_json::json!(b),
-            CLOB(chars) => serde_json::json!(chars),
             DateValue(millis) => serde_json::json!(Self::millis_to_iso_date(*millis)),
             ErrorValue(message) => serde_json::json!(message),
             Function { params, code } => {
@@ -466,47 +469,6 @@ impl TypedValue {
             }
             Undefined => serde_json::Value::Null,
             UUIDValue(guid) => serde_json::json!(Uuid::from_u128(*guid).to_string()),
-        }
-    }
-
-    pub fn to_kind(&self) -> DataTypeKind {
-        match self {
-            Array(..) => TxArray,
-            BackDoor(..) => TxBackDoor,
-            BLOB(..) => TxBlob,
-            Boolean(..) => TxBoolean,
-            CLOB(..) => TxClob,
-            DateValue(..) => TxDate,
-            ErrorValue(..) => TxError,
-            Function { .. } => TxFunction,
-            JSONValue(..) => TxJsonObject,
-            NamespaceValue(..) => TxNamespace,
-            Null => TxNull,
-            Number(nv) => match nv {
-                F32Value(..) => TxNumberF32,
-                F64Value(..) => TxNumberF64,
-                I8Value(..) => TxNumberI8,
-                I16Value(..) => TxNumberI16,
-                I32Value(..) => TxNumberI32,
-                I64Value(..) => TxNumberI64,
-                I128Value(..) => TxNumberI128,
-                U8Value(..) => TxNumberU8,
-                U16Value(..) => TxNumberU16,
-                U32Value(..) => TxNumberU32,
-                U64Value(..) => TxNumberU64,
-                U128Value(..) => TxNumberU128,
-                NaNValue => TxNumberNaN
-            },
-            Outcome(oc) => match oc {
-                Outcomes::Ack => TxAck,
-                Outcomes::RowId(..) => TxRowId,
-                Outcomes::RowsAffected(..) => TxRowsAffected,
-            },
-            StringValue(..) => TxString,
-            StructureValue(..) => TxStructure,
-            TableValue(..) => TxTableValue,
-            Undefined => TxUndefined,
-            UUIDValue(..) => TxUUID,
         }
     }
 
@@ -553,7 +515,6 @@ impl TypedValue {
             BackDoor(nf) => format!("{:?}", nf),
             BLOB(bytes) => hex::encode(bytes),
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
-            CLOB(chars) => chars.into_iter().collect(),
             DateValue(millis) => Self::millis_to_iso_date(*millis).unwrap_or("".into()),
             ErrorValue(message) => message.to_string(),
             Function { params, code } =>
@@ -764,7 +725,6 @@ impl Neg for TypedValue {
             BackDoor(..) => error("BackDoor".into()),
             BLOB(..) => error("BLOB".into()),
             Boolean(n) => Boolean(!n),
-            CLOB(..) => error("CLOB".into()),
             DateValue(v) => Number(I64Value(-v)),
             ErrorValue(msg) => ErrorValue(msg),
             Function { .. } => error("Function".into()),
@@ -835,7 +795,6 @@ impl PartialOrd for TypedValue {
             (Array(a), Array(b)) => a.partial_cmp(b),
             (BLOB(a), BLOB(b)) => a.partial_cmp(b),
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
-            (CLOB(a), CLOB(b)) => a.partial_cmp(b),
             (DateValue(a), DateValue(b)) => a.partial_cmp(b),
             (Number(a), Number(b)) => a.partial_cmp(b),
             (Outcome(a), Outcome(b)) => a.partial_cmp(b),
@@ -893,6 +852,7 @@ impl Sub for TypedValue {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
     use crate::testdata::{make_quote, make_quote_columns};
 
     use super::*;
@@ -942,6 +902,17 @@ mod tests {
             StringValue("Hello".into()),
         ]);
         assert_eq!(array.contains(&StringValue("123".into())), Boolean(true))
+    }
+
+    #[test]
+    fn test_from_json() {
+        let structure = Structure::from_parameters(&vec![
+            Parameter::new("name", Some("String(4)".into()), Some("John".into())),
+            Parameter::new("age", Some("i64".into()), Some("40".into()))
+        ]).unwrap();
+        let js_value0: Value = serde_json::from_str(r##"{"name":"John","age":40}"##).unwrap();
+        let js_value1: Value = serde_json::from_str(structure.to_string().as_str()).unwrap();
+        assert_eq!(js_value1, js_value0)
     }
 
     #[test]

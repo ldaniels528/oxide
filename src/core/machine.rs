@@ -21,13 +21,15 @@ use uuid::Uuid;
 use shared_lib::fail;
 
 use crate::backdoor::BackDoorKey;
+use crate::backdoor::BackDoorKey::BxEnvVars;
 use crate::compiler::Compiler;
 use crate::compiler::{fail_expr, fail_unexpected, fail_value};
 use crate::cursor::Cursor;
+use crate::data_types::DataType::OutcomeType;
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::dataframes::DataFrame;
 use crate::errors::Errors;
-use crate::errors::Errors::{ArgumentsMismatched, AssertionError, AsynchronousContextRequired, CollectionExpected, Exact, IllegalExpression, IndexOutOfRange, InvalidNamespace, NotImplemented, OutcomeExpected, ParameterExpected, QueryableExpected, StringExpected, StructExpected, TypeMismatch};
+use crate::errors::Errors::*;
 use crate::expression::Conditions::True;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
@@ -39,7 +41,8 @@ use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::numbers::NumberValue::*;
-use crate::outcomes::Outcomes;
+use crate::outcomes::Outcomes::Ack;
+use crate::outcomes::{OutcomeKind, Outcomes};
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
@@ -76,34 +79,70 @@ impl Machine {
         Self::construct(Vec::new(), HashMap::new())
     }
 
-    /// creates a new state machine prepopulated with platform functions
+    /// creates a new state machine prepopulated with platform packages
     pub fn new() -> Self {
         use BackDoorKey::*;
         Self::empty()
             .with_variable("assert", BackDoor(BxAssert))
-            .with_variable("eval", BackDoor(BxEval))
-            .with_variable("format", BackDoor(BxFormat))
-            .with_variable("left", BackDoor(BxLeft))
             .with_variable("matches", BackDoor(BxMatches))
-            .with_variable("__reset", BackDoor(BxReset))
-            .with_variable("right", BackDoor(BxRight))
             .with_variable("println", BackDoor(BxStdOut))
-            .with_variable("SERVE", BackDoor(BxServe))
-            .with_variable("stderr", BackDoor(BxStdErr))
-            .with_variable("stdout", BackDoor(BxStdOut))
-            .with_variable("substring", BackDoor(BxSubstring))
-            .with_variable("syscall", BackDoor(BxSysCall))
-            .with_variable("timestamp", BackDoor(BxTimestamp))
-            .with_variable("to_csv", BackDoor(BxToCSV))
-            .with_variable("to_json", BackDoor(BxToJSON))
             .with_variable("type_of", BackDoor(BxTypeOf))
-            .with_variable("uuid", BackDoor(BxUUID))
-            .with_variable("__variables", BackDoor(BxVariables))
+            //////////////////////// packages ////////////////////////
+            .with_package("io", vec![
+                ("stderr", BackDoor(BxStdErr)),
+                ("stdout", BackDoor(BxStdOut)),
+            ])
+            .with_package("os", vec![
+                ("call", BackDoor(BxSysCall)),
+                ("env", BackDoor(BxEnvVars)),
+            ])
+            .with_package("str", vec![
+                ("format", BackDoor(BxFormat)),
+                ("left", BackDoor(BxLeft)),
+                ("right", BackDoor(BxRight)),
+                ("substring", BackDoor(BxSubstring)),
+            ])
+            .with_package("util", vec![
+                ("day_of", BackDoor(BxTimestampDay)),
+                ("hour_of", BackDoor(BxTimestampHour)),
+                ("hour12_of", BackDoor(BxTimestampHour12)),
+                ("minute_of", BackDoor(BxTimestampMinute)),
+                ("month_of", BackDoor(BxTimestampMonth)),
+                ("second_of", BackDoor(BxTimestampSecond)),
+                ("timestamp", BackDoor(BxTimestamp)),
+                ("to_csv", BackDoor(BxToCSV)),
+                ("to_json", BackDoor(BxToJSON)),
+                ("uuid", BackDoor(BxUUID)),
+                ("year_of", BackDoor(BxTimestampYear)),
+            ])
+            .with_package("vm", vec![
+                ("eval", BackDoor(BxEval)),
+                ("reset", BackDoor(BxReset)),
+                ("serve", BackDoor(BxServe)),
+                ("vars", BackDoor(BxVariables)),
+            ])
     }
 
     ////////////////////////////////////////////////////////////////
     //  static methods
     ////////////////////////////////////////////////////////////////
+
+    fn create_env_table() -> TypedValue {
+        use std::env;
+        let mut mrc = ModelRowCollection::construct(&vec![
+            Parameter::new("key", Some("String(256)".into()), None),
+            Parameter::new("value", Some("String(8192)".into()), None)
+        ]);
+        for (key, value) in env::vars() {
+            if let ErrorValue(err) = mrc.append_row(Row::new(0, vec![
+                StringValue(key), StringValue(value)
+            ])) {
+                return ErrorValue(err);
+            }
+        }
+
+        TableValue(mrc)
+    }
 
     fn enrich_request(
         builder: RequestBuilder,
@@ -316,7 +355,7 @@ impl Machine {
             Divide(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.evaluate_index_of_collection(a, b),
-            Extract(a, b) => self.evaluate_extraction(a, b),
+            Extraction(a, b) => self.evaluate_extraction(a, b),
             Factorial(a) => self.evaluate_inline_1(a, |aa| aa.factorial().unwrap_or(Undefined)),
             Feature { title, scenarios } => self.evaluate_feature(title, scenarios),
             From(src) => self.evaluate_table_row_query(src, &True, Undefined),
@@ -326,6 +365,7 @@ impl Machine {
                 Ok((self.to_owned(), ErrorValue(AsynchronousContextRequired))),
             If { condition, a, b } =>
                 self.evaluate_if_then_else(condition, a, b),
+            Import(args) => self.evaluate_import(args),
             Include(path) => self.evaluate_include(path),
             JSONExpression(items) => self.evaluate_json(items),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
@@ -480,70 +520,106 @@ impl Machine {
 
     fn evaluate_back_door(
         &self,
-        bdf: &BackDoorKey,
+        bdk: &BackDoorKey,
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        fn do_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-            match value {
-                ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
-                Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
-                z => (ms, z.to_owned())
-            }
-        }
-
-        fn do_eval(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-            match value {
-                StringValue(ql) =>
-                    match Compiler::compile_script(ql.as_str()) {
-                        Ok(opcode) =>
-                            match ms.evaluate(&opcode) {
-                                Ok((machine, tv)) => (machine, tv),
-                                Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                            }
-                        Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                    }
-                x => (ms, ErrorValue(StringExpected(x.get_type_name())))
-            }
-        }
-
-        fn do_serve(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-            match ms.evaluate_serve(value) {
-                Ok(r) => r,
-                Err(err) => (ms.to_owned(), ErrorValue(Exact(err.to_string())))
-            }
-        }
-
-        fn do_stdout(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-            println!("{}", value.unwrap_value());
-            (ms, Outcome(Outcomes::Ack))
-        }
-
-        fn do_stderr(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-            println!("{}", value.unwrap_value());
-            (ms, Outcome(Outcomes::Ack))
-        }
-
         use BackDoorKey::*;
-        match bdf {
-            BxAssert => self.evaluate_back_door_fn1(args, do_assert),
-            BxEval => self.evaluate_back_door_fn1(args, do_eval),
+        match bdk {
+            BxAssert => self.evaluate_back_door_fn1(args, Machine::do_assert),
+            BxEnvVars => Ok((self.clone(), Self::create_env_table())),
+            BxEval => self.evaluate_back_door_fn1(args, Machine::do_eval),
             BxFormat => Ok(self.evaluate_format_string(args)),
             BxLeft => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_left(s, n)),
             BxMatches => self.evaluate_back_door_fn2(args, |ms, a, b| (ms, a.matches(b))),
-            BxReset => self.evaluate_back_door_fn0(args, |_ms| (Machine::new(), Outcome(Outcomes::Ack))),
+            BxReset => self.evaluate_back_door_fn0(args, |_| (Machine::new(), Outcome(Outcomes::Ack))),
             BxRight => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_right(s, n)),
-            BxServe => self.evaluate_back_door_fn1(args, do_serve),
-            BxStdErr => self.evaluate_back_door_fn1(args, do_stdout),
-            BxStdOut => self.evaluate_back_door_fn1(args, do_stdout),
+            BxServe => self.evaluate_back_door_fn1(args, Machine::do_serve),
+            BxStdErr => self.evaluate_back_door_fn1(args, Machine::do_stdout),
+            BxStdOut => self.evaluate_back_door_fn1(args, Machine::do_stdout),
             BxSubstring => self.evaluate_back_door_fn3(args, |ms, s, a, b| ms.evaluate_substring(s, a, b)),
             BxSysCall => self.evaluate_syscall(args),
             BxTimestamp => self.evaluate_timestamp(args),
+            BxTimestampDay => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BxTimestampHour => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BxTimestampHour12 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BxTimestampMinute => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BxTimestampMonth => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BxTimestampSecond => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BxTimestampYear => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
             BxToCSV => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, true)),
             BxToJSON => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, false)),
             BxTypeOf => self.evaluate_back_door_fn1(args, |ms, a| (ms, StringValue(a.get_type_name()))),
             BxUUID => self.evaluate_uuid(args),
-            BxVariables => self.evaluate_back_door_fn0(args, |ms| (ms.to_owned(), TableValue(ms.get_variables()))),
+            BxVariables => self.evaluate_back_door_fn0(args, |ms| (ms.clone(), TableValue(ms.get_variables()))),
         }
+    }
+
+    fn do_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        match value {
+            ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
+            Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
+            z => (ms, z.to_owned())
+        }
+    }
+
+    fn do_date_part(
+        ms: Machine,
+        value: &TypedValue,
+        bdk: &BackDoorKey,
+    ) -> (Machine, TypedValue) {
+        use BackDoorKey::*;
+        match value {
+            DateValue(epoch_millis) => {
+                let datetime = {
+                    let seconds = epoch_millis / 1000;
+                    let millis_part = epoch_millis % 1000;
+                    Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
+                };
+                match bdk {
+                    BxTimestampDay => (ms, Number(U32Value(datetime.day()))),
+                    BxTimestampHour => (ms, Number(U32Value(datetime.hour()))),
+                    BxTimestampHour12 => (ms, Number(U32Value(datetime.hour12().1))),
+                    BxTimestampMinute => (ms, Number(U32Value(datetime.minute()))),
+                    BxTimestampMonth => (ms, Number(U32Value(datetime.second()))),
+                    BxTimestampSecond => (ms, Number(U32Value(datetime.second()))),
+                    BxTimestampYear => (ms, Number(I32Value(datetime.year()))),
+                    other => (ms, ErrorValue(Syntax(format!("{:?}", other))))
+                }
+            }
+            other => (ms, ErrorValue(DateExpected(other.to_code())))
+        }
+    }
+
+    fn do_eval(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        match value {
+            StringValue(ql) =>
+                match Compiler::compile_script(ql.as_str()) {
+                    Ok(opcode) =>
+                        match ms.evaluate(&opcode) {
+                            Ok((machine, tv)) => (machine, tv),
+                            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+                        }
+                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+                }
+            x => (ms, ErrorValue(StringExpected(x.get_type_name())))
+        }
+    }
+
+    fn do_serve(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        match ms.evaluate_serve(value) {
+            Ok(mtv) => mtv,
+            Err(err) => (ms.to_owned(), ErrorValue(Exact(err.to_string())))
+        }
+    }
+
+    fn do_stdout(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        println!("{}", value.unwrap_value());
+        (ms, Outcome(Outcomes::Ack))
+    }
+
+    fn do_stderr(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        println!("{}", value.unwrap_value());
+        (ms, Outcome(Outcomes::Ack))
     }
 
     fn evaluate_back_door_fn0(
@@ -561,11 +637,24 @@ impl Machine {
     fn evaluate_back_door_fn1(
         &self,
         args: Vec<TypedValue>,
-        f: fn(Self, &TypedValue) -> (Self, TypedValue),
+        f: fn(Self, &TypedValue) -> (Machine, TypedValue),
     ) -> std::io::Result<(Self, TypedValue)> {
         let ms = self.to_owned();
         match args.as_slice() {
             [value] => Ok(f(ms, value)),
+            _ => Ok((ms, ErrorValue(ArgumentsMismatched(1, args.len()))))
+        }
+    }
+
+    fn evaluate_back_door_fn1bdk(
+        &self,
+        args: Vec<TypedValue>,
+        bdk: &BackDoorKey,
+        f: fn(Self, &TypedValue, &BackDoorKey) -> (Self, TypedValue),
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let ms = self.to_owned();
+        match args.as_slice() {
+            [a] => Ok(f(ms, a, bdk)),
             _ => Ok((ms, ErrorValue(ArgumentsMismatched(1, args.len()))))
         }
     }
@@ -687,41 +776,10 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let (ms, obj) = self.evaluate(object)?;
         match obj {
-            DateValue(timestamp) => self.evaluate_extraction_date(field, timestamp),
             ErrorValue(err) => Ok((ms, ErrorValue(err))),
             JSONValue(args) => self.evaluate_extraction_json(field, &args),
             StructureValue(structure) => self.evaluate_extraction_structure(field, &structure),
             z => fail(format!("Illegal object {}", z.to_code()))
-        }
-    }
-
-    fn evaluate_extraction_date(
-        &self,
-        field: &Expression,
-        epoch_millis: i64,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let datetime = {
-            let seconds = epoch_millis / 1000;
-            let millis_part = epoch_millis % 1000;
-            Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
-        };
-        let ms = self.to_owned();
-        match field {
-            FunctionCall { fx, args } if args.is_empty() =>
-                match fx.deref() {
-                    Variable(name) => match name.as_str() {
-                        "day" => Ok((ms, Number(U32Value(datetime.day())))),
-                        "hour" => Ok((ms, Number(U32Value(datetime.hour())))),
-                        "hour12" => Ok((ms, Number(U32Value(datetime.hour12().1)))),
-                        "minute" => Ok((ms, Number(U32Value(datetime.minute())))),
-                        "month" => Ok((ms, Number(U32Value(datetime.month())))),
-                        "second" => Ok((ms, Number(U32Value(datetime.second())))),
-                        "year" => Ok((ms, Number(I32Value(datetime.year())))),
-                        z => return fail(format!("Illegal field {} for object {}", z, datetime))
-                    }
-                    z => return fail(format!("Illegal field {} for object {}", z, datetime))
-                }
-            z => fail(format!("Illegal field {} for object {}", z, datetime))
         }
     }
 
@@ -1025,6 +1083,68 @@ impl Machine {
         }
     }
 
+    /// Evaluates an if-then-else expression
+    fn evaluate_if_then_else(
+        &self,
+        condition: &Box<Expression>,
+        a: &Expression,
+        b: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        use TypedValue::*;
+        let ms0 = self.to_owned();
+        let (machine, result) = ms0.evaluate(condition)?;
+        if result.is_ok() {
+            machine.evaluate(a)
+        } else if let Some(b) = b {
+            machine.evaluate(b)
+        } else {
+            Ok((ms0, Undefined))
+        }
+    }
+
+    fn evaluate_import(
+        &self,
+        args: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match self.evaluate(args)? {
+            (ms, StringValue(pkg)) =>
+                ms.evaluate_import_fold(vec![StringValue(pkg)]),
+            (ms, Array(args)) =>
+                ms.evaluate_import_fold(args),
+            (ms, other) =>
+                Ok((ms, ErrorValue(StringExpected(other.to_code()))))
+        }
+    }
+
+    /// Produces an aggregate [Machine] instance containing
+    /// the specified imports
+    fn evaluate_import_fold(
+        &self,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let mut ms = self.to_owned();
+        for arg in args {
+            match arg {
+                StringValue(pkg) =>
+                    match ms.get(pkg.as_str()) {
+                        None =>
+                            return Ok((ms, ErrorValue(PackageNotFound(pkg)))),
+                        Some(JSONValue(tuples)) =>
+                            ms = tuples.iter().fold(ms, |ms, (name, value)| {
+                                ms.with_variable(name, value.to_owned())
+                            }),
+                        Some(StructureValue(structure)) =>
+                            ms = structure.pollute(ms),
+                        Some(other) =>
+                            return Ok((ms, ErrorValue(Syntax(other.to_code()))))
+                    }
+                other =>
+                    return Ok((ms, ErrorValue(Syntax(other.to_code()))))
+            }
+        }
+        Ok((ms, Outcome(Ack)))
+    }
+
     fn evaluate_infrastructure(
         &self,
         expression: &Infrastructure,
@@ -1063,65 +1183,13 @@ impl Machine {
         }
     }
 
-    fn evaluate_mutation(
-        &self,
-        expression: &Mutation,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use crate::expression::Mutation::*;
-        match expression {
-            Append { path, source } =>
-                self.evaluate_table_row_append(path, source),
-            Compact { path } =>
-                self.evaluate_table_compact(path),
-            Delete { path, condition, limit } =>
-                self.evaluate_table_row_delete(path, condition, limit),
-            IntoNs(source, target) =>
-                self.evaluate_table_into(target, source),
-            Overwrite { path, source, condition, limit } =>
-                self.evaluate_table_row_overwrite(path, source, condition, limit),
-            Scan { path } =>
-                self.evaluate_table_scan(path),
-            Truncate { path, limit } =>
-                match limit {
-                    None => self.evaluate_table_row_resize(path, Boolean(false)),
-                    Some(limit) => {
-                        let (machine, limit) = self.evaluate(limit)?;
-                        machine.evaluate_table_row_resize(path, limit)
-                    }
-                }
-            Undelete { path, condition, limit } =>
-                self.evaluate_table_row_undelete(path, condition, limit),
-            Update { path, source, condition, limit } =>
-                self.evaluate_table_row_update(path, source, condition, limit),
-        }
-    }
-
-    /// Evaluates an if-then-else expression
-    fn evaluate_if_then_else(
-        &self,
-        condition: &Box<Expression>,
-        a: &Expression,
-        b: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use TypedValue::*;
-        let ms0 = self.to_owned();
-        let (machine, result) = ms0.evaluate(condition)?;
-        if result.is_ok() {
-            machine.evaluate(a)
-        } else if let Some(b) = b {
-            machine.evaluate(b)
-        } else {
-            Ok((ms0, Undefined))
-        }
-    }
-
     fn evaluate_include(
         &self,
         path: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         // evaluate the script path
         let (machine, path_value) = self.evaluate(path)?;
-        if let TypedValue::StringValue(script_path) = path_value {
+        if let StringValue(script_path) = path_value {
             // read the script file contents into the string
             let mut file = File::open(script_path)?;
             let mut script_code = String::new();
@@ -1226,6 +1294,39 @@ impl Machine {
             elems.push((name.to_string(), value))
         }
         Ok((self.to_owned(), JSONValue(elems)))
+    }
+
+    fn evaluate_mutation(
+        &self,
+        expression: &Mutation,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        use crate::expression::Mutation::*;
+        match expression {
+            Append { path, source } =>
+                self.evaluate_table_row_append(path, source),
+            Compact { path } =>
+                self.evaluate_table_compact(path),
+            Delete { path, condition, limit } =>
+                self.evaluate_table_row_delete(path, condition, limit),
+            IntoNs(source, target) =>
+                self.evaluate_table_into(target, source),
+            Overwrite { path, source, condition, limit } =>
+                self.evaluate_table_row_overwrite(path, source, condition, limit),
+            Scan { path } =>
+                self.evaluate_table_scan(path),
+            Truncate { path, limit } =>
+                match limit {
+                    None => self.evaluate_table_row_resize(path, Boolean(false)),
+                    Some(limit) => {
+                        let (machine, limit) = self.evaluate(limit)?;
+                        machine.evaluate_table_row_resize(path, limit)
+                    }
+                }
+            Undelete { path, condition, limit } =>
+                self.evaluate_table_row_undelete(path, condition, limit),
+            Update { path, source, condition, limit } =>
+                self.evaluate_table_row_update(path, source, condition, limit),
+        }
     }
 
     /// evaluates the specified [Expression]; returning a negative [TypedValue] result.
@@ -1360,7 +1461,7 @@ impl Machine {
                                 SetVariable(name, expr) =>
                                     match self.evaluate(expr) {
                                         Ok((_, value)) => StructureValue(structure.with_variable(name, value)),
-                                        Err(err) => ErrorValue(Errors::Exact(err.to_string()))
+                                        Err(err) => ErrorValue(Exact(err.to_string()))
                                     },
                                 z => ErrorValue(IllegalExpression(z.to_code()))
                             },
@@ -1891,7 +1992,7 @@ impl Machine {
                 StringValue(name.to_owned()),
                 StringValue(value.get_type_name()),
                 match value {
-                    BackDoor(f) => StringValue(format!("oxide.native.{:?}", f)),
+                    BackDoor(key) => StringValue(format!("{}(???)", key.to_code())),
                     TableValue(rc) => StringValue(format!("{} row(s)", rc.len().unwrap_or(0))),
                     v => StringValue(v.to_code())
                 },
@@ -1910,6 +2011,19 @@ impl Machine {
         for s in TableRenderer::from_rows(columns, rows) {
             println!("{}", s)
         }
+    }
+
+    pub fn with_package(
+        &self,
+        name: &str,
+        variables: Vec<(&str, TypedValue)>,
+    ) -> Self {
+        let structure = variables.iter().fold(
+            Structure::empty(),
+            |structure, (name, value)| {
+                structure.with_variable(name, value.to_owned())
+            });
+        self.with_variable(name, StructureValue(structure))
     }
 
     pub fn with_row(&self, columns: &Vec<Column>, row: &Row) -> Self {
@@ -1941,7 +2055,7 @@ mod tests {
     use crate::outcomes::Outcomes;
     use crate::table_columns::Column;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_dataframe_ns, make_quote, make_quote_parameters, make_quote_columns};
+    use crate::testdata::{make_dataframe_ns, make_quote, make_quote_columns, make_quote_parameters};
 
     use super::*;
 
@@ -2647,40 +2761,6 @@ mod tests {
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(3, "GOTO", "OTC", 0.1428),
         ])));
-    }
-
-    #[test]
-    fn test_system_call() {
-        let model = FunctionCall {
-            fx: Box::new(Variable("syscall".into())),
-            args: vec![
-                Literal(StringValue("cat".into())),
-                Literal(StringValue("LICENSE".into())),
-            ],
-        };
-        let (_, result) = Machine::new().evaluate(&model).unwrap();
-        assert_eq!(result, StringValue(r#"MIT License
-
-Copyright (c) 2024 Lawrence Daniels
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-"#.into()))
     }
 
     #[test]

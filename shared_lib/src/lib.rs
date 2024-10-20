@@ -90,7 +90,7 @@ pub fn tabulate_table(
         n if n > 0 => n - 1,
         n => n
     };
-    let separator = format!("|{}|", "-".to_string().repeat(total_width));
+    let separator = format!("|{}|", "-".repeat(total_width));
 
     // produce formatted lines
     let mut lines = Vec::new();
