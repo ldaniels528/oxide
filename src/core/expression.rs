@@ -11,7 +11,7 @@ use crate::data_types::DataType::*;
 use crate::decompiler::Decompiler;
 use crate::errors::Errors::IllegalOperator;
 use crate::expression::Expression::*;
-use crate::neocodec::Codec;
+use crate::codec::Codec;
 use crate::numbers::NumberValue;
 use crate::outcomes::{OutcomeKind, Outcomes};
 use crate::parameter::Parameter;
@@ -210,6 +210,7 @@ pub enum Expression {
     JSONExpression(Vec<(String, Expression)>),
     Literal(TypedValue),
     Minus(Box<Expression>, Box<Expression>),
+    Module(String, Vec<Expression>),
     Modulo(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
     Neg(Box<Expression>),
@@ -281,8 +282,8 @@ impl Expression {
                 Condition(_) => BooleanType,
                 Directive(_) => OutcomeType(OutcomeKind::Acked),
                 Divide(a, b) => infer_a_or_b(a, b),
-                ElementAt(_, _) => InferredType,
-                Extraction(_, _) => InferredType,
+                ElementAt(..) => InferredType,
+                Extraction(..) => InferredType,
                 Factorial(a) => infer_a(a),
                 Feature { .. } => OutcomeType(OutcomeKind::Acked),
                 From(_) => InferredType,
@@ -291,9 +292,10 @@ impl Expression {
                 If { a, .. } => infer_a(a),
                 Import(..) => OutcomeType(OutcomeKind::Acked),
                 Include(_) => OutcomeType(OutcomeKind::Acked),
-                JSONExpression(_) => JSONType,
+                JSONExpression(_) => StructureType(vec![]), // todo can we infer?
                 Literal(v) => v.get_type(),
                 Minus(a, b) => infer_a_or_b(a, b),
+                Module(..) => OutcomeType(OutcomeKind::Acked),
                 Modulo(a, b) => infer_a_or_b(a, b),
                 Multiply(a, b) => infer_a_or_b(a, b),
                 Neg(a) => infer_a(a),
@@ -311,8 +313,8 @@ impl Expression {
                 Range(a, b) => infer_a_or_b(a, b),
                 Return(_) => InferredType,
                 Scenario { .. } => OutcomeType(OutcomeKind::Acked),
-                SetVariable(_, _) => OutcomeType(OutcomeKind::Acked),
-                StructureImpl(_, _) => OutcomeType(OutcomeKind::Acked),
+                SetVariable(..) => OutcomeType(OutcomeKind::Acked),
+                StructureImpl(..) => OutcomeType(OutcomeKind::Acked),
                 Variable(_) => InferredType,
                 Via(_) => InferredType,
                 While { .. } => InferredType,
@@ -359,7 +361,7 @@ fn to_ns(path: Expression) -> Expression {
     fx("ns", path)
 }
 
-// Unit tests
+/// Unit tests
 #[cfg(test)]
 mod tests {
     use crate::expression::Conditions::*;
@@ -466,12 +468,12 @@ mod tests {
     fn test_equality_floats() {
         let machine = Machine::new();
         let model = Equal(
-            Box::new(Literal(Number(F64Value(5.)))),
-            Box::new(Literal(Number(F64Value(5.)))),
+            Box::new(Literal(Number(F64Value(5.1)))),
+            Box::new(Literal(Number(F64Value(5.1)))),
         );
         let (_, result) = machine.evaluate_cond(&model).unwrap();
         assert_eq!(result, Boolean(true));
-        assert_eq!(model.to_code(), "5 == 5")
+        assert_eq!(model.to_code(), "5.1 == 5.1")
     }
 
     #[test]

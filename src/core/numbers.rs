@@ -34,6 +34,11 @@ pub enum NumberValue {
 }
 
 impl NumberValue {
+
+    ////////////////////////////////////////////////////////////////////
+    //  STATIC METHODS
+    ////////////////////////////////////////////////////////////////////
+
     /// decodes the typed value based on the supplied data type and buffer
     pub fn decode(buffer: &Vec<u8>, offset: usize, kind: NumberKind) -> NumberValue {
         match kind {
@@ -53,6 +58,20 @@ impl NumberValue {
         }
     }
 
+    pub fn from_string(number_str: String) -> NumberValue {
+        match number_str.parse::<f64>() {
+            Ok(num) => match number_str.parse::<i64>() {
+                Ok(num) => I64Value(num),
+                Err(_) => F64Value(num),
+            }
+            Err(_) => NaNValue,
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////
+    //  INSTANCE METHODS
+    ////////////////////////////////////////////////////////////////////
+
     /// encodes the numeric value
     pub fn encode(&self) -> Vec<u8> {
         use NumberValue::*;
@@ -70,16 +89,6 @@ impl NumberValue {
             U64Value(number) => number.to_be_bytes().to_vec(),
             U128Value(number) => number.to_be_bytes().to_vec(),
             NaNValue => Vec::new(),
-        }
-    }
-
-    pub fn from_string(number_str: String) -> NumberValue {
-        match number_str.parse::<f64>() {
-            Ok(num) => match number_str.parse::<i64>() {
-                Ok(num) => I64Value(num),
-                Err(_) => F64Value(num),
-            }
-            Err(_) => NaNValue,
         }
     }
 
@@ -575,89 +584,273 @@ impl Sub for NumberValue {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::data_types::DataType::StringType;
-    use crate::data_types::SizeTypes;
-    use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::StringValue;
-
     use super::*;
 
     #[test]
-    fn test_add() {
+    fn test_addition() {
         assert_eq!(F64Value(45.0) + F64Value(32.7), F64Value(77.7));
         assert_eq!(F32Value(45.7) + F32Value(32.0), F32Value(77.7));
-        assert_eq!(I64Value(45) + I64Value(32), I64Value(77));
-        assert_eq!(I32Value(45) + I32Value(32), I32Value(77));
+
+        assert_eq!(I8Value(45) + I8Value(32), I8Value(77));
         assert_eq!(I16Value(45) + I16Value(32), I16Value(77));
+        assert_eq!(I32Value(45) + I32Value(32), I32Value(77));
+        assert_eq!(I64Value(45) + I64Value(32), I64Value(77));
+        assert_eq!(I128Value(45) + I128Value(32), I128Value(77));
+
         assert_eq!(U8Value(45) + U8Value(32), U8Value(77));
+        assert_eq!(U16Value(45) + U16Value(32), U16Value(77));
+        assert_eq!(U32Value(45) + U32Value(32), U32Value(77));
+        assert_eq!(U64Value(45) + U64Value(32), U64Value(77));
+        assert_eq!(U128Value(45) + U128Value(32), U128Value(77));
     }
 
     #[test]
-    fn test_eq() {
-        assert_eq!(U8Value(0xCE), U8Value(0xCE));
+    fn test_division() {
+        assert_eq!(F64Value(53.2) / F64Value(8.), F64Value(6.65));
+        assert_eq!(F32Value(13.8) / F32Value(4.6), F32Value(3.));
+
+        assert_eq!(I8Value(15) / I8Value(7), I8Value(2));
+        assert_eq!(I16Value(33) / I16Value(3), I16Value(11));
+        assert_eq!(I32Value(66) / I32Value(6), I32Value(11));
+        assert_eq!(I64Value(45) / I64Value(5), I64Value(9));
+        assert_eq!(I128Value(45) / I128Value(2), I128Value(22));
+
+        assert_eq!(U8Value(13) / U8Value(2), U8Value(6));
+        assert_eq!(U16Value(45) / U16Value(3), U16Value(15));
+        assert_eq!(U32Value(40) / U32Value(4), U32Value(10));
+        assert_eq!(U64Value(22) / U64Value(2), U64Value(11));
+        assert_eq!(U128Value(22) / U128Value(3), U128Value(7));
+    }
+
+    #[test]
+    fn test_equal() {
+        assert_eq!(F32Value(45.0), F32Value(45.0));
+        assert_eq!(F64Value(45.0), F64Value(45.0));
+
+        assert_eq!(I8Value(0x3A), I8Value(0x3A));
         assert_eq!(I16Value(0x7ACE), I16Value(0x7ACE));
         assert_eq!(I32Value(0x1111_BEEF), I32Value(0x1111_BEEF));
         assert_eq!(I64Value(0x5555_FACE_CAFE_BABE), I64Value(0x5555_FACE_CAFE_BABE));
-        assert_eq!(F32Value(45.0), F32Value(45.0));
-        assert_eq!(F64Value(45.0), F64Value(45.0));
+        assert_eq!(I128Value(0x5555_FACE_CAFE_BABE), I128Value(0x5555_FACE_CAFE_BABE));
+
+        assert_eq!(U8Value(0xCE), U8Value(0xCE));
+        assert_eq!(U16Value(0x7ACE), U16Value(0x7ACE));
+        assert_eq!(U32Value(0x1111_BEEF), U32Value(0x1111_BEEF));
+        assert_eq!(U64Value(0x5555_FACE_CAFE_BABE), U64Value(0x5555_FACE_CAFE_BABE));
+        assert_eq!(U128Value(0x5555_FACE_CAFE_BABE), U128Value(0x5555_FACE_CAFE_BABE));
     }
 
     #[test]
-    fn test_ne() {
-        assert_ne!(U8Value(0xCE), U8Value(0x00));
-        assert_ne!(I16Value(0x7ACE), I16Value(0xACE));
-        assert_ne!(I32Value(0x1111_BEEF), I32Value(0xBEEF));
-        assert_ne!(I64Value(0x5555_FACE_CAFE_BABE), I64Value(0xFACE_CAFE_BABE));
-        assert_ne!(F32Value(45.0), F32Value(45.7));
-        assert_ne!(F64Value(99.142857), F64Value(19.48));
+    fn test_encode_decode() {
+
+        fn verify_codec(expected: NumberValue) {
+            let actual = NumberValue::decode(&expected.encode(), 0, expected.kind());
+            assert_eq!(actual, expected)
+        }
+
+        verify_codec(F32Value(126.0));
+        verify_codec(F64Value(747.7));
+
+        verify_codec(I8Value(126));
+        verify_codec(I16Value(1445));
+        verify_codec(I32Value(65535));
+        verify_codec(I64Value(0xCafeBabe));
+        verify_codec(I128Value(0xDeadFacedBabe));
+
+        verify_codec(U8Value(255));
+        verify_codec(U16Value(1445));
+        verify_codec(U32Value(65535));
+        verify_codec(U64Value(0xDeadBeef));
+        verify_codec(U128Value(0xDefaceDaCafeBabe));
     }
 
     #[test]
-    fn test_gt() {
-        assert!(U8Value(0xCE) > U8Value(0xAA));
+    fn test_exponent() {
+        assert_eq!(F32Value(5.).pow(&F32Value(2.)), F64Value(25.));
+        assert_eq!(F64Value(5.).pow(&F64Value(2.)), F64Value(25.));
+
+        assert_eq!(I8Value(5).pow(&I8Value(2)), F64Value(25.));
+        assert_eq!(I16Value(5).pow(&I16Value(2)), F64Value(25.));
+        assert_eq!(I32Value(5).pow(&I32Value(2)), F64Value(25.));
+        assert_eq!(I64Value(5).pow(&I64Value(2)), F64Value(25.));
+        assert_eq!(I128Value(5).pow(&I128Value(2)), F64Value(25.));
+
+        assert_eq!(U8Value(5).pow(&U8Value(2)), F64Value(25.));
+        assert_eq!(U16Value(5).pow(&U16Value(2)), F64Value(25.));
+        assert_eq!(U32Value(5).pow(&U32Value(2)), F64Value(25.));
+        assert_eq!(U64Value(5).pow(&U64Value(2)), F64Value(25.));
+        assert_eq!(U128Value(5).pow(&U128Value(2)), F64Value(25.));
+    }
+
+    #[test]
+    fn test_greater_than() {
+        assert!(F32Value(287.11) > F32Value(45.3867));
+        assert!(F64Value(359.7854) > F64Value(99.992));
+
+        assert!(I8Value(0x7E) > I8Value(0x33));
         assert!(I16Value(0x7ACE) > I16Value(0x1111));
         assert!(I32Value(0x1111_BEEF) > I32Value(0x0ABC_BEEF));
         assert!(I64Value(0x5555_FACE_CAFE_BABE) > I64Value(0x0000_FACE_CAFE_BABE));
-        assert!(F32Value(287.11) > F32Value(45.3867));
-        assert!(F64Value(359.7854) > F64Value(99.992));
+        assert!(I128Value(0x1111_FACE_CAFE_BABE) > I128Value(0x0000_FACE_CAFE_BABE));
+
+        assert!(U8Value(0xCE) > U8Value(0xAA));
+        assert!(U16Value(0x7ACE) > U16Value(0x1111));
+        assert!(U32Value(0x1111_BEEF) > U32Value(0x0ABC_BEEF));
+        assert!(U64Value(0x5555_FACE_CAFE_BABE) > U64Value(0x0000_FACE_CAFE_BABE));
+        assert!(U128Value(0x7654_FACE_CAFE_BABE) > U128Value(0x0000_FACE_CAFE_BABE));
     }
 
     #[test]
-    fn test_rem() {
+    fn test_greater_than_or_equal() {
+        assert!(F32Value(287.11) >= F32Value(45.3867));
+        assert!(F64Value(359.7854) >= F64Value(99.992));
+
+        assert!(I8Value(0x7E) >= I8Value(0x33));
+        assert!(I16Value(0x7ACE) >= I16Value(0x1111));
+        assert!(I32Value(0x1111_BEEF) >= I32Value(0x0ABC_BEEF));
+        assert!(I64Value(0x5555_FACE_CAFE_BABE) >= I64Value(0x0000_FACE_CAFE_BABE));
+        assert!(I128Value(0x1111_FACE_CAFE_BABE) >= I128Value(0x0000_FACE_CAFE_BABE));
+
+        assert!(U8Value(0xCE) >= U8Value(0xAA));
+        assert!(U16Value(0x7ACE) >= U16Value(0x1111));
+        assert!(U32Value(0x1111_BEEF) >= U32Value(0x0ABC_BEEF));
+        assert!(U64Value(0x5555_FACE_CAFE_BABE) >= U64Value(0x0000_FACE_CAFE_BABE));
+        assert!(U128Value(0x7654_FACE_CAFE_BABE) >= U128Value(0x0000_FACE_CAFE_BABE));
+    }
+
+    #[test]
+    fn test_less_than() {
+        assert!(F32Value(27.11) < F32Value(45.3867));
+        assert!(F64Value(39.7854) < F64Value(99.992));
+
+        assert!(I8Value(0x06) < I8Value(0x43));
+        assert!(I16Value(0x0ACE) < I16Value(0x1111));
+        assert!(I32Value(0x0111_BEEF) < I32Value(0x0ABC_BEEF));
+        assert!(I64Value(0x0000_FACE_CAFE_BABE) < I64Value(0x5555_FACE_CAFE_BABE));
+        assert!(I128Value(0x0000_FACE_CAFE_BABE) < I128Value(0x1111_FACE_CAFE_BABE));
+
+        assert!(U8Value(0x71) < U8Value(0xAA));
+        assert!(U16Value(0xDCE) < U16Value(0x1111));
+        assert!(U32Value(0x0000_BEEF) < U32Value(0x1111_BEEF));
+        assert!(U64Value(0x0000_FACE_CAFE_BABE) < U64Value(0xA111_FACE_CAFE_BABE));
+        assert!(U128Value(0x0000_FACE_CAFE_BABE) < U128Value(0x2233_FACE_CAFE_BABE));
+    }
+
+    #[test]
+    fn test_less_than_or_equal() {
+        assert!(F32Value(27.11) <= F32Value(45.3867));
+        assert!(F64Value(39.7854) <= F64Value(99.992));
+
+        assert!(I8Value(0x06) <= I8Value(0x43));
+        assert!(I16Value(0x0ACE) <= I16Value(0x1111));
+        assert!(I32Value(0x0111_BEEF) <= I32Value(0x0ABC_BEEF));
+        assert!(I64Value(0x0000_FACE_CAFE_BABE) <= I64Value(0x5555_FACE_CAFE_BABE));
+        assert!(I128Value(0x0000_FACE_CAFE_BABE) <= I128Value(0x1111_FACE_CAFE_BABE));
+
+        assert!(U8Value(0x71) <= U8Value(0xAA));
+        assert!(U16Value(0xDCE) <= U16Value(0x1111));
+        assert!(U32Value(0x0000_BEEF) <= U32Value(0x1111_BEEF));
+        assert!(U64Value(0x0000_FACE_CAFE_BABE) <= U64Value(0xA111_FACE_CAFE_BABE));
+        assert!(U128Value(0x0000_FACE_CAFE_BABE) <= U128Value(0x2233_FACE_CAFE_BABE));
+    }
+
+    #[test]
+    fn test_modulus() {
+        assert_eq!(I8Value(10) % I8Value(3), I8Value(1));
+        assert_eq!(I16Value(10) % I16Value(3), I16Value(1));
+        assert_eq!(I32Value(10) % I32Value(3), I32Value(1));
         assert_eq!(I64Value(10) % I64Value(3), I64Value(1));
+        assert_eq!(I128Value(10) % I128Value(3), I128Value(1));
+
+        assert_eq!(U8Value(10) % U8Value(3), U8Value(1));
+        assert_eq!(U16Value(10) % U16Value(3), U16Value(1));
+        assert_eq!(U32Value(10) % U32Value(3), U32Value(1));
+        assert_eq!(U64Value(10) % U64Value(3), U64Value(1));
+        assert_eq!(U128Value(10) % U128Value(3), U128Value(1));
     }
 
     #[test]
-    fn test_pow() {
-        let a = I64Value(5);
-        let b = I64Value(2);
-        assert_eq!(a.pow(&b), F64Value(25.))
+    fn test_multiplication() {
+        assert_eq!(F64Value(53.2) * F64Value(32.8), F64Value(1744.96));
+        assert_eq!(F32Value(13.8) * F32Value(4.6), F32Value(63.48));
+
+        assert_eq!(I8Value(5) * I8Value(7), I8Value(35));
+        assert_eq!(I16Value(11) * I16Value(3), I16Value(33));
+        assert_eq!(I32Value(45) * I32Value(10), I32Value(450));
+        assert_eq!(I64Value(45) * I64Value(5), I64Value(225));
+        assert_eq!(I128Value(45) * I128Value(2), I128Value(90));
+
+        assert_eq!(U8Value(13) * U8Value(2), U8Value(26));
+        assert_eq!(U16Value(45) * U16Value(3), U16Value(135));
+        assert_eq!(U32Value(45) * U32Value(4), U32Value(180));
+        assert_eq!(U64Value(22) * U64Value(2), U64Value(44));
+        assert_eq!(U128Value(22) * U128Value(3), U128Value(66));
     }
 
     #[test]
-    fn test_shl() {
+    fn test_not_equal() {
+        assert_ne!(F32Value(45.0), F32Value(45.7));
+        assert_ne!(F64Value(99.142857), F64Value(19.48));
+
+        assert_ne!(I8Value(0x7E), I8Value(0x23));
+        assert_ne!(I16Value(0x7ACE), I16Value(0xACE));
+        assert_ne!(I32Value(0x1111_BEEF), I32Value(0xBEEF));
+        assert_ne!(I64Value(0x5555_FACE_CAFE_BABE), I64Value(0xFACE_CAFE_BABE));
+        assert_ne!(I128Value(0x5555_FACE_CAFE_BABE), I128Value(0xFACE_CAFE_BABE));
+
+        assert_ne!(U8Value(0xCE), U8Value(0x00));
+        assert_ne!(U16Value(0x7ACE), U16Value(0xACE));
+        assert_ne!(U32Value(0x1111_BEEF), U32Value(0xBEEF));
+        assert_ne!(U64Value(0x5555_FACE_CAFE_BABE), U64Value(0xFACE_CAFE_BABE));
+        assert_ne!(U128Value(0x5555_FACE_CAFE_BABE), U128Value(0xFACE_CAFE_BABE));
+    }
+
+    #[test]
+    fn test_shift_left() {
+        assert_eq!(I8Value(1) << I8Value(5), I8Value(32));
+        assert_eq!(I16Value(1) << I16Value(5), I16Value(32));
+        assert_eq!(I32Value(1) << I32Value(5), I32Value(32));
         assert_eq!(I64Value(1) << I64Value(5), I64Value(32));
+        assert_eq!(I128Value(1) << I128Value(5), I128Value(32));
+
+        assert_eq!(U8Value(1) << U8Value(5), U8Value(32));
+        assert_eq!(U16Value(1) << U16Value(5), U16Value(32));
+        assert_eq!(U32Value(1) << U32Value(5), U32Value(32));
+        assert_eq!(U64Value(1) << U64Value(5), U64Value(32));
+        assert_eq!(U128Value(1) << U128Value(5), U128Value(32));
     }
 
     #[test]
-    fn test_shr() {
+    fn test_shift_right() {
+        assert_eq!(I8Value(32) >> I8Value(5), I8Value(1));
+        assert_eq!(I16Value(32) >> I16Value(5), I16Value(1));
+        assert_eq!(I32Value(32) >> I32Value(5), I32Value(1));
         assert_eq!(I64Value(32) >> I64Value(5), I64Value(1));
+        assert_eq!(I128Value(32) >> I128Value(5), I128Value(1));
+
+        assert_eq!(U8Value(32) >> U8Value(5), U8Value(1));
+        assert_eq!(U16Value(32) >> U16Value(5), U16Value(1));
+        assert_eq!(U32Value(32) >> U32Value(5), U32Value(1));
+        assert_eq!(U64Value(32) >> U64Value(5), U64Value(1));
+        assert_eq!(U128Value(32) >> U128Value(5), U128Value(1));
     }
 
     #[test]
-    fn test_sub() {
+    fn test_subtraction() {
         assert_eq!(F64Value(45.0) - F64Value(32.0), F64Value(13.0));
         assert_eq!(F32Value(45.0) - F32Value(32.0), F32Value(13.0));
-        assert_eq!(I64Value(45) - I64Value(32), I64Value(13));
-        assert_eq!(I32Value(45) - I32Value(32), I32Value(13));
-        assert_eq!(I16Value(45) - I16Value(32), I16Value(13));
-        assert_eq!(U8Value(45) - U8Value(32), U8Value(13));
-    }
 
-    #[test]
-    fn test_decode() {
-        let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
-        assert_eq!(TypedValue::decode(&StringType(SizeTypes::Fixed(5)), &buf, 0), StringValue("Hello".into()))
+        assert_eq!(I8Value(45) - I8Value(32), I8Value(13));
+        assert_eq!(I16Value(45) - I16Value(32), I16Value(13));
+        assert_eq!(I32Value(45) - I32Value(32), I32Value(13));
+        assert_eq!(I64Value(45) - I64Value(32), I64Value(13));
+        assert_eq!(I128Value(45) - I128Value(32), I128Value(13));
+
+        assert_eq!(U8Value(45) - U8Value(32), U8Value(13));
+        assert_eq!(U16Value(45) - U16Value(32), U16Value(13));
+        assert_eq!(U32Value(45) - U32Value(32), U32Value(13));
+        assert_eq!(U64Value(45) - U64Value(32), U64Value(13));
+        assert_eq!(U128Value(45) - U128Value(32), U128Value(13));
     }
 
 }

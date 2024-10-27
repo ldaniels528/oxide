@@ -61,7 +61,6 @@ pub enum DataType {
     ErrorType,
     FunctionType(Vec<Parameter>),
     InferredType,
-    JSONType,
     NumberType(NumberKind),
     OutcomeType(OutcomeKind),
     StringType(SizeTypes),
@@ -71,6 +70,11 @@ pub enum DataType {
 }
 
 impl DataType {
+
+    ////////////////////////////////////////////////////////////////////
+    //  STATIC METHODS
+    ////////////////////////////////////////////////////////////////////
+
     /// parses a datatype expression (e.g. "String(20)")
     pub fn compile(param_type: &str) -> io::Result<DataType> {
         let ts = TokenSlice::from_string(param_type);
@@ -92,7 +96,6 @@ impl DataType {
                 "i32" => Ok(NumberType(I32Kind)),
                 "i64" => Ok(NumberType(I64Kind)),
                 "i128" => Ok(NumberType(I128Kind)),
-                "JSON" => Ok(JSONType),
                 "RowId" => Ok(OutcomeType(OutcomeKind::RowInserted)),
                 "RowsAffected" => Ok(OutcomeType(OutcomeKind::RowsUpdated)),
                 "String" => DataType::compile_size(ts, |size| StringType(size)),
@@ -138,6 +141,10 @@ impl DataType {
         Ok(f(kind))
     }
 
+    ////////////////////////////////////////////////////////////////////
+    //  INSTANCE METHODS
+    ////////////////////////////////////////////////////////////////////
+
     /// computes and returns the maximum physical size of the value of this datatype
     pub fn compute_max_physical_size(&self) -> usize {
         use crate::data_types::DataType::*;
@@ -150,7 +157,6 @@ impl DataType {
             EnumType(..) => 2,
             ErrorType => 256,
             FunctionType(columns) => columns.len() * 8,
-            JSONType => 512,
             InferredType => 0,
             NumberType(kind) => match kind {
                 I8Kind | U8Kind => 1,
@@ -187,7 +193,6 @@ impl DataType {
             EnumType(labels) => format!("enum({})", Parameter::render(labels)),
             ErrorType => "Error".into(),
             FunctionType(columns) => format!("fn({})", Parameter::render(columns)),
-            JSONType => "JSON".into(),
             InferredType => "".into(),
             NumberType(index) => match *index {
                 F32Kind => "f32".into(),
@@ -310,11 +315,6 @@ mod tests {
     #[test]
     fn test_i128() {
         verify_type_construction("i128", NumberType(I128Kind));
-    }
-
-    #[test]
-    fn test_json_type() {
-        verify_type_construction("JSON", JSONType);
     }
 
     #[test]

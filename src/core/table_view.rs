@@ -25,22 +25,20 @@ pub struct TableIterator {
 impl TableView for TableIterator {
     fn next(&mut self) -> io::Result<Option<Row>> {
         let result: Option<Row> = match &self.direction {
-            Backward => {
+            Backward =>
                 if self.position > 0 {
                     let new_position = self.position - 1;
                     self.position = new_position;
                     let (row, metadata) = self.data_frame.read_row(self.position)?;
                     if metadata.is_allocated { Some(row) } else { None }
-                } else { None }
-            }
-            Forward => {
+                } else { None },
+            Forward =>
                 if self.position < self.data_frame.len()? {
                     let (row, metadata) = self.data_frame.read_row(self.position)?;
                     let new_position = self.position + 1;
                     self.position = new_position;
                     if metadata.is_allocated { Some(row) } else { None }
                 } else { None }
-            }
         };
         Ok(result)
     }

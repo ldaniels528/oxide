@@ -16,12 +16,12 @@ use crate::expression::{BitwiseOps, Conditions, Expression, ACK, FALSE, NULL, TR
 use crate::expression::{Directives, Excavation, Infrastructure, MutateTarget, Mutation, Queryable};
 use crate::numbers::NumberValue::*;
 use crate::parameter::Parameter;
-use crate::structure::Structure;
+use crate::structures::HardStructure;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Function, Number, StringValue, StructureValue};
+use crate::typed_values::TypedValue::{Function, Number, StringValue, HardStructureValue};
 
 /// Oxide language compiler - converts source code into [Expression]s.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -253,6 +253,7 @@ impl Compiler {
                 "import" => self.parse_keyword_import(nts),
                 "include" => self.parse_expression_1a(nts, Include),
                 "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &nts),
+                "mod" => self.parse_keyword_mod(nts),
                 "ns" => self.parse_expression_1a(nts, Ns),
                 "null" => Ok((NULL, nts)),
                 "overwrite" => self.parse_keyword_overwrite(nts),
@@ -546,6 +547,26 @@ impl Compiler {
         Ok((Import(Box::from(args)), ts))
     }
 
+    /// Translates a `mod` expression into an [Expression]
+    /// ex:
+    /// mod abc {
+    ///     fn hello() => "hello"
+    /// }
+    /// abc::hello()
+    fn parse_keyword_mod(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (name, ts) = match self.compile_next(ts)? {
+            (Variable(name), ts) => (name, ts),
+            (_, ts) => return fail_near("Variable expected", &ts)
+        };
+        match self.compile_next(ts)? {
+            (CodeBlock(ops), ts) => Ok((Module(name, ops), ts)),
+            (_, ts) => fail_near("Code block expected", &ts)
+        }
+    }
+
     /// Builds a language model from an OVERWRITE statement:
     /// ex: overwrite stocks
     ///         via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
@@ -597,7 +618,7 @@ impl Compiler {
     /// ex: struct(symbol: String(8) = "TRX", exchange: String(8) = "AMEX", last_sale: f64 = 17.69)
     fn parse_keyword_struct(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Parameters(fields), ts) = self.expect_parameters(ts.to_owned())? {
-            Ok((Literal(StructureValue(Structure::from_parameters(&fields)?)), ts))
+            Ok((Literal(HardStructureValue(HardStructure::from_parameters(&fields)?)), ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }

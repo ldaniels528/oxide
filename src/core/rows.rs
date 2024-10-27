@@ -19,7 +19,7 @@ use crate::expression::Conditions;
 use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
 use crate::row_metadata::RowMetadata;
-use crate::structure::Structure;
+use crate::structures::HardStructure;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, Null, Undefined};
@@ -240,8 +240,8 @@ impl Row {
             .collect::<Vec<_>>().join(", "))
     }
 
-    pub fn to_struct(&self, columns: &Vec<Column>) -> Structure {
-        Structure::new(columns.to_owned(), self.values.to_owned())
+    pub fn to_struct(&self, columns: &Vec<Column>) -> HardStructure {
+        HardStructure::new(columns.to_owned(), self.values.to_owned())
     }
 
     /// Returns a [Vec] containing the values in order of the fields within the row.

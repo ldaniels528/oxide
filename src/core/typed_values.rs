@@ -22,6 +22,7 @@ use crate::backdoor::BackDoorKey;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::cnv_error;
 use crate::codec;
+use crate::codec::Codec;
 use crate::compiler::fail_value;
 use crate::data_types::DataType::*;
 use crate::data_types::SizeTypes::Fixed;
@@ -32,7 +33,6 @@ use crate::expression::Expression;
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
-use crate::neocodec::Codec;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::NumberValue;
 use crate::numbers::NumberValue::*;
@@ -40,7 +40,7 @@ use crate::outcomes::{OutcomeKind, Outcomes};
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
-use crate::structure::Structure;
+use crate::structures::*;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue::*;
 
@@ -61,13 +61,13 @@ pub enum TypedValue {
     DateValue(i64),
     ErrorValue(Errors),
     Function { params: Vec<Parameter>, code: Box<Expression> },
-    JSONValue(Vec<(String, TypedValue)>),
     NamespaceValue(String, String, String),
     Null,
     Number(NumberValue),
     Outcome(Outcomes),
+    SoftStructureValue(SoftStructure),
     StringValue(String),
-    StructureValue(Structure),
+    HardStructureValue(HardStructure),
     TableValue(ModelRowCollection),
     UUIDValue(u128),
     Undefined,
@@ -103,8 +103,8 @@ impl TypedValue {
             // },
             StringType(size) => StringValue(codec::decode_string(buffer, offset, size.to_size()).to_string()),
             StructureType(columns) =>
-                match Structure::from_parameters(columns) {
-                    Ok(structure) => StructureValue(structure),
+                match HardStructure::from_parameters(columns) {
+                    Ok(structure) => HardStructureValue(structure),
                     Err(err) => ErrorValue(Errors::Exact(err.to_string()))
                 }
             TableType(columns) => TableValue(ModelRowCollection::construct(columns)),
@@ -142,7 +142,6 @@ impl TypedValue {
                 params: columns.to_owned(),
                 code: Box::new(ByteCodeCompiler::disassemble(buffer)?),
             },
-            JSONType => JSONValue(buffer.next_json()?),
             InferredType => Null,
             NumberType(kind) =>
                 Number(match *kind {
@@ -166,7 +165,7 @@ impl TypedValue {
                 OutcomeKind::RowsUpdated => Outcome(Outcomes::RowsAffected(buffer.next_row_id())),
             },
             StringType(..) => StringValue(buffer.next_string()),
-            StructureType(columns) => StructureValue(buffer.next_struct_with_parameters(columns)?),
+            StructureType(params) => HardStructureValue(buffer.next_struct_with_parameters(params)?),
             TableType(columns) => TableValue(buffer.next_table_with_columns(columns)?),
             InferredType => Undefined,
             UUIDType => UUIDValue(buffer.next_u128()),
@@ -182,13 +181,13 @@ impl TypedValue {
             serde_json::Value::String(s) => StringValue(s),
             serde_json::Value::Array(a) => Array(a.iter().map(|v| Self::from_json(v.to_owned())).collect()),
             serde_json::Value::Object(args) =>
-                match Structure::from_parameters(&args.iter()
+                match HardStructure::from_parameters(&args.iter()
                     .map(|(name, value)| {
                         let value = TypedValue::from_json(value.to_owned());
                         let data_type = value.get_type().to_type_declaration();
                         Parameter::new(name, data_type, Some(value.to_code()))
                     }).collect::<Vec<_>>()) {
-                    Ok(structure) => StructureValue(structure),
+                    Ok(structure) => HardStructureValue(structure),
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 }
         }
@@ -258,22 +257,19 @@ impl TypedValue {
     pub fn contains(&self, value: &TypedValue) -> TypedValue {
         match &self {
             Array(items) => Boolean(items.contains(value)),
-            JSONValue(items) =>
-                match value {
-                    StringValue(name) => items.iter()
-                        .find(|(k, v)| k == name)
-                        .map(|_| Boolean(true))
-                        .unwrap_or(Boolean(false)),
-                    _ => Boolean(false)
-                },
-            TableValue(mrc) =>
-                match value {
-                    JSONValue(tuples) =>
-                        mrc.contains(&Row::from_tuples(0, mrc.get_columns(), tuples)),
-                    StructureValue(structure) =>
-                        mrc.contains(&structure.to_row()),
-                    _ => Boolean(false)
-                }
+            SoftStructureValue(soft) => match value {
+                StringValue(name) => Boolean(soft.contains(name)),
+                _ => Boolean(false)
+            },
+            HardStructureValue(hard) => match value {
+                StringValue(name) => Boolean(hard.contains(name)),
+                _ => Boolean(false)
+            },
+            TableValue(mrc) => match value {
+                SoftStructureValue(soft) => mrc.contains(&soft.to_row()),
+                HardStructureValue(hard) => mrc.contains(&hard.to_row()),
+                _ => Boolean(false)
+            }
             _ => Boolean(false)
         }
     }
@@ -307,7 +303,7 @@ impl TypedValue {
             // Outcome(Outcomes::Ack) | Null | Undefined => [0u8; 0].to_vec(),
             // Outcome(oc) => oc.encode().unwrap(),
             StringValue(string) => codec::encode_string(string),
-            StructureValue(structure) => codec::encode_string(structure.to_string().as_str()),
+            HardStructureValue(structure) => codec::encode_string(structure.to_string().as_str()),
             TableValue(rc) => rc.encode(),
             UUIDValue(guid) => guid.to_be_bytes().to_vec(),
             other => Codec::encode_value(other).unwrap_or_else(|err| {
@@ -326,7 +322,7 @@ impl TypedValue {
             Boolean(..) => BooleanType,
             DateValue(..) => DateType,
             ErrorValue(..) => ErrorType,
-            JSONValue(..) => JSONType,
+            NamespaceValue(..) => TableType(vec![]),
             Null => InferredType,
             Number(nv) => NumberType(nv.kind()),
             Outcome(oc) => match oc {
@@ -334,9 +330,9 @@ impl TypedValue {
                 Outcomes::RowId(..) => OutcomeType(OutcomeKind::RowInserted),
                 Outcomes::RowsAffected(..) => OutcomeType(OutcomeKind::RowsUpdated),
             },
+            SoftStructureValue(soft) => StructureType(soft.get_parameters()),
             StringValue(s) => StringType(Fixed(s.len())),
-            StructureValue(..) => StructureType(vec![]),
-            NamespaceValue(..) => TableType(vec![]),
+            HardStructureValue(hard) => StructureType(hard.get_parameters()),
             TableValue(mrc) => TableType(Parameter::from_columns(mrc.get_columns())),
             Undefined => InferredType,
             UUIDValue(..) => UUIDType,
@@ -386,11 +382,10 @@ impl TypedValue {
     pub fn matches(&self, other: &Self) -> TypedValue {
         match (self, other) {
             (a, b) if *a == *b => Boolean(true),
-            (JSONValue(aa), JSONValue(bb)) => {
-                let ha: HashMap<_, _> = aa.to_owned().into_iter().collect();
-                let hb: HashMap<_, _> = bb.to_owned().into_iter().collect();
-                Boolean(ha == hb)
-            }
+            (SoftStructureValue(a), SoftStructureValue(b)) => {
+                Boolean(a.to_hash_map() == b.to_hash_map())
+            },
+            (HardStructureValue(a), HardStructureValue(b)) => Boolean(a == b),
             _ => Boolean(false)
         }
     }
@@ -410,10 +405,8 @@ impl TypedValue {
                 format!("[{}]", items.iter()
                     .map(|v| v.to_code())
                     .collect::<Vec<_>>().join(", ")),
-            JSONValue(pairs) =>
-                format!("{{{}}}", pairs.iter()
-                    .map(|(k, v)| format!("\"{}\":{}", k, v.to_code()))
-                    .collect::<Vec<_>>().join(", ")),
+            SoftStructureValue(s) => s.to_code(),
+            HardStructureValue(s) => s.to_code(),
             StringValue(s) => format!("\"{s}\""),
             other => other.unwrap_value()
         }
@@ -454,13 +447,13 @@ impl TypedValue {
                     .map(|c| c.to_json()).collect());
                 serde_json::json!({ "params": my_params, "code": code.to_code() })
             }
-            JSONValue(pairs) => serde_json::json!(pairs),
+            SoftStructureValue(s) => s.to_json(),
             NamespaceValue(d, s, n) => serde_json::json!(format!("{d}.{s}.{n}")),
             Null => serde_json::Value::Null,
             Number(value) => value.to_json(),
             Outcome(oc) => serde_json::json!(oc.to_u64()),
             StringValue(string) => serde_json::json!(string),
-            StructureValue(structure) => serde_json::json!(structure),
+            HardStructureValue(s) => s.to_json(),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
                     .map(|r| r.to_row_js(mrc.get_columns()))
@@ -521,19 +514,14 @@ impl TypedValue {
                 format!("(fn({}) => {})",
                         params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
                         code.to_code()),
-            JSONValue(pairs) => {
-                let values: Vec<String> = pairs.iter()
-                    .map(|(k, v)| format!("{}:{}", k, v.unwrap_value()))
-                    .collect();
-                format!("{{{}}}", values.join(", "))
-            }
+            SoftStructureValue(schemaless) => schemaless.to_code(),
             TableValue(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
             NamespaceValue(d, s, n) => format!("{d}.{s}.{n}"),
             Null => "null".into(),
             Number(number) => number.unwrap_value(),
             Outcome(outcome) => outcome.to_string(),
             StringValue(string) => string.into(),
-            StructureValue(structure) => structure.to_string(),
+            HardStructureValue(structure) => structure.to_string(),
             Undefined => "undefined".into(),
             UUIDValue(guid) => Uuid::from_u128(*guid).to_string(),
         }
@@ -605,7 +593,7 @@ impl Add for TypedValue {
             (Outcome(Outcomes::Ack), Boolean(..)) => Boolean(true),
             (Outcome(a), Outcome(b)) => Outcome(Outcomes::RowsAffected(a.to_update_count() + b.to_update_count())),
             (StringValue(a), StringValue(b)) => StringValue(a + b.as_str()),
-            (TableValue(a), StructureValue(b)) => {
+            (TableValue(a), HardStructureValue(b)) => {
                 let mut mrc = match ModelRowCollection::from_table(Box::new(&a)) {
                     Ok(mrc) => mrc,
                     Err(err) => return ErrorValue(Exact(err.to_string()))
@@ -695,7 +683,7 @@ fn fetch(mrc: &ModelRowCollection, index: usize) -> TypedValue {
     let columns = mrc.get_columns();
     match mrc.read_row(index) {
         Ok((row, meta)) => {
-            StructureValue(match meta.is_allocated {
+            HardStructureValue(match meta.is_allocated {
                 true => row.to_struct(columns),
                 false => Row::empty(columns).to_struct(columns),
             })
@@ -728,7 +716,6 @@ impl Neg for TypedValue {
             DateValue(v) => Number(I64Value(-v)),
             ErrorValue(msg) => ErrorValue(msg),
             Function { .. } => error("Function".into()),
-            JSONValue(..) => error("JSON".into()),
             NamespaceValue(a, b, c) => error(format!("ns({}, {}, {})", a, b, c)),
             Null => Null,
             Number(nv) => Number(match nv {
@@ -747,8 +734,10 @@ impl Neg for TypedValue {
                 U128Value(z) => I128Value(-(z as i128)),
             }),
             Outcome(oc) => Number(I64Value(-oc.to_i64())),
+            // Surfaces (Hard -> StructureValue | Soft -> ShapelessValue)
+            SoftStructureValue(..) => error("Schemaless".into()),
             StringValue(..) => error("String".into()),
-            StructureValue(_) => error("Structure".into()),
+            HardStructureValue(_) => error("Structure".into()),
             TableValue(..) => error("Table".into()),
             Undefined => Undefined,
             UUIDValue(..) => error("UUID".into()),
@@ -852,10 +841,16 @@ impl Sub for TypedValue {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
     use crate::testdata::{make_quote, make_quote_columns};
+    use serde_json::Value;
 
     use super::*;
+
+    #[test]
+    fn test_decode() {
+        let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
+        assert_eq!(TypedValue::decode(&StringType(SizeTypes::Fixed(5)), &buf, 0), StringValue("Hello".into()))
+    }
 
     #[test]
     fn test_addition() {
@@ -906,7 +901,7 @@ mod tests {
 
     #[test]
     fn test_from_json() {
-        let structure = Structure::from_parameters(&vec![
+        let structure = HardStructure::from_parameters(&vec![
             Parameter::new("name", Some("String(4)".into()), Some("John".into())),
             Parameter::new("age", Some("i64".into()), Some("40".into()))
         ]).unwrap();
@@ -917,11 +912,11 @@ mod tests {
 
     #[test]
     fn test_json_object_contains_string() {
-        let js_value = JSONValue(vec![
-            ("name".to_string(), StringValue("symbol".to_string())),
-            ("param_type".to_string(), StringValue("String(8)".to_string())),
-            ("default_value".to_string(), Null),
-        ]);
+        let js_value = SoftStructureValue(SoftStructure::new(&vec![
+            ("name", StringValue("symbol".to_string())),
+            ("param_type", StringValue("String(8)".to_string())),
+            ("default_value", Null),
+        ]));
         assert_eq!(js_value.contains(&StringValue("name".into())), Boolean(true))
     }
 
@@ -936,11 +931,11 @@ mod tests {
             make_quote(4, "BOOM", "NASDAQ", 56.87),
             make_quote(5, "TRX", "NASDAQ", 7.9311),
         ]));
-        let js_obj = JSONValue(vec![
-            ("symbol".to_string(), StringValue("BIZ".into())),
-            ("exchange".to_string(), StringValue("NYSE".into())),
-            ("last_sale".to_string(), Number(F64Value(23.67))),
-        ]);
+        let js_obj = SoftStructureValue(SoftStructure::new(&vec![
+            ("symbol", StringValue("BIZ".into())),
+            ("exchange", StringValue("NYSE".into())),
+            ("last_sale", Number(F64Value(23.67))),
+        ]));
         assert_eq!(table.contains(&js_obj), Boolean(true))
     }
 
@@ -955,7 +950,7 @@ mod tests {
             make_quote(4, "TRX", "NASDAQ", 7.9311),
             make_quote(5, "BIZ", "NYSE", 23.66),
         ]));
-        let obj = StructureValue(Structure::new(phys_columns, vec![
+        let obj = HardStructureValue(HardStructure::new(phys_columns, vec![
             StringValue("BIZ".into()),
             StringValue("NYSE".into()),
             Number(F64Value(23.66)),
@@ -972,7 +967,7 @@ mod tests {
             make_quote(2, "BIZ", "NYSE", 23.66),
             make_quote(3, "GOTO", "OTC", 0.1428),
             make_quote(4, "BOOM", "NASDAQ", 56.87)]);
-        assert_eq!(TableValue(mrc)[0], StructureValue(Structure::new(
+        assert_eq!(TableValue(mrc)[0], HardStructureValue(HardStructure::new(
             phys_columns, vec![
                 StringValue("ABC".into()),
                 StringValue("AMEX".into()),
@@ -984,12 +979,20 @@ mod tests {
     #[test]
     fn test_eq() {
         use NumberValue::*;
-        assert_eq!(U8Value(0xCE), U8Value(0xCE));
+        assert_eq!(F32Value(45.0), F32Value(45.0));
+        assert_eq!(F64Value(45.0), F64Value(45.0));
+
+        assert_eq!(I8Value(0x1B), I8Value(0x1B));
         assert_eq!(I16Value(0x7ACE), I16Value(0x7ACE));
         assert_eq!(I32Value(0x1111_BEEF), I32Value(0x1111_BEEF));
         assert_eq!(I64Value(0x5555_FACE_CAFE_BABE), I64Value(0x5555_FACE_CAFE_BABE));
-        assert_eq!(F32Value(45.0), F32Value(45.0));
-        assert_eq!(F64Value(45.0), F64Value(45.0));
+        assert_eq!(I128Value(0x5555_FACE_CAFE_BABE), I128Value(0x5555_FACE_CAFE_BABE));
+
+        assert_eq!(U8Value(0xCE), U8Value(0xCE));
+        assert_eq!(U16Value(0x7ACE), U16Value(0x7ACE));
+        assert_eq!(U32Value(0x1111_BEEF), U32Value(0x1111_BEEF));
+        assert_eq!(U64Value(0x5555_FACE_CAFE_BABE), U64Value(0x5555_FACE_CAFE_BABE));
+        assert_eq!(U128Value(0x5555_FACE_CAFE_BABE), U128Value(0x5555_FACE_CAFE_BABE));
     }
 
     #[test]
@@ -1051,6 +1054,12 @@ mod tests {
         verify_to_json(Undefined, serde_json::Value::Null);
         verify_to_json(UUIDValue(0x67452301_ABCD_EF89_1234_567890ABCDEFu128),
                        serde_json::Value::String("67452301-abcd-ef89-1234-567890abcdef".into()));
+    }
+
+    #[test]
+    fn test_to_string() {
+        assert_eq!(format!("{}", UUIDValue(0xDEADFACEBABE)), "00000000-0000-0000-0000-deadfacebabe");
+        assert_eq!(format!("{}", StringValue("Hello".into())), "Hello");
     }
 
     #[test]

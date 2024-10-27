@@ -11,6 +11,7 @@ use BackDoorKey::*;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum BackDoorKey {
     BxAssert = 0,
+    BxEnvVars = 25,
     BxEval = 1,
     BxFormat = 2,
     BxLeft = 3,
@@ -35,15 +36,15 @@ pub enum BackDoorKey {
     BxTypeOf = 22,
     BxUUID = 23,
     BxVariables = 24,
-    BxEnvVars = 25,
+    BxVersion = 26,
 }
 
-pub const BACK_DOOR_KEYS: [BackDoorKey; 26] = [
+const BACK_DOOR_KEYS: [BackDoorKey; 27] = [
     BxAssert, BxEval, BxFormat, BxLeft, BxMatches, BxReset, BxRight,
     BxServe, BxStdErr, BxStdOut, BxSubstring, BxSysCall,
     BxTimestamp, BxTimestampDay, BxTimestampHour, BxTimestampHour12,
     BxTimestampMinute, BxTimestampMonth, BxTimestampSecond, BxTimestampYear,
-    BxToCSV, BxToJSON, BxTypeOf, BxUUID, BxVariables, BxEnvVars,
+    BxToCSV, BxToJSON, BxTypeOf, BxUUID, BxVariables, BxEnvVars, BxVersion
 ];
 
 impl BackDoorKey {
@@ -54,6 +55,7 @@ impl BackDoorKey {
     pub fn to_code(&self) -> String {
         let result = match self {
             BxAssert => "assert",
+            BxEnvVars => "env",
             BxEval => "eval",
             BxFormat => "format",
             BxLeft => "left",
@@ -78,12 +80,31 @@ impl BackDoorKey {
             BxTypeOf => "type_of",
             BxUUID => "uuid",
             BxVariables => "vars",
-            BxEnvVars => "env",
+            BxVersion => "version",
         };
         result.to_string()
     }
 
     pub fn to_u8(&self) -> u8 {
         *self as u8
+    }
+}
+
+// Unit tests
+#[cfg(test)]
+mod tests {
+    use crate::backdoor::BackDoorKey;
+
+    #[test]
+    fn test_to_code() {
+        assert_eq!(BackDoorKey::BxAssert.to_code(), "assert".to_string());
+        assert_eq!(BackDoorKey::BxEnvVars.to_code(), "env".to_string());
+        assert_eq!(BackDoorKey::BxToCSV.to_code(), "to_csv".to_string())
+    }
+
+    #[test]
+    fn test_to_u8() {
+        let model = BackDoorKey::BxVersion;
+        assert_eq!(model, BackDoorKey::from_u8(model.to_u8()));
     }
 }

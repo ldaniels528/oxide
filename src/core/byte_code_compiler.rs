@@ -9,10 +9,10 @@ use crate::backdoor::BackDoorKey;
 use crate::codec;
 use crate::expression::*;
 use crate::model_row_collection::ModelRowCollection;
-use crate::neocodec::Codec;
+use crate::codec::Codec;
 use crate::parameter::Parameter;
 use crate::rows::Row;
-use crate::structure::Structure;
+use crate::structures::HardStructure;
 use crate::table_columns::Column;
 use crate::typed_values::*;
 
@@ -236,9 +236,9 @@ impl ByteCodeCompiler {
     pub fn next_struct_with_parameters(
         &mut self,
         parameters: &Vec<Parameter>,
-    ) -> std::io::Result<Structure> {
+    ) -> std::io::Result<HardStructure> {
         let fields = Column::from_parameters(parameters)?;
-        Ok(Structure::new(fields, self.next_array()?))
+        Ok(HardStructure::new(fields, self.next_array()?))
     }
 
     pub fn next_table_with_columns(
@@ -407,6 +407,10 @@ impl ByteCodeCompiler {
 
     /// returns a vector contains all bytes from the current position until the end of the buffer
     pub fn to_array(&self) -> Vec<u8> {
+        self.buf[self.offset..self.limit].to_vec()
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
         self.buf[self.offset..self.limit].to_vec()
     }
 

@@ -47,10 +47,10 @@ impl Column {
     pub fn from_parameters(parameters: &Vec<Parameter>) -> std::io::Result<Vec<Column>> {
         let mut offset: usize = Row::overhead();
         let mut physical_columns: Vec<Column> = Vec::with_capacity(parameters.len());
-        for column in parameters {
-            let physical_column = Self::from_parameter(&column, offset)?;
-            offset += physical_column.max_physical_size;
-            physical_columns.push(physical_column);
+        for parameter in parameters {
+            let column = Self::from_parameter(&parameter, offset)?;
+            offset += column.max_physical_size;
+            physical_columns.push(column);
         }
         Ok(physical_columns)
     }

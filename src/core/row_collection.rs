@@ -531,7 +531,7 @@ pub trait RowCollection: Debug {
         match self.find_last_active_row() {
             Ok(Some(row)) => {
                 let _ = self.delete_row(row.get_id());
-                StructureValue(row.to_struct(self.get_columns()))
+                HardStructureValue(row.to_struct(self.get_columns()))
             }
             Ok(None) => Undefined,
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
@@ -1378,10 +1378,10 @@ mod tests {
             assert_eq!(Outcome(RowsAffected(1)), rc.push_row(make_quote(1, "TED", "NYSE", 56.2456)));
             assert_eq!(
                 rc.pop_row(),
-                StructureValue(make_quote(1, "TED", "NYSE", 56.2456).to_struct(&phys_columns)));
+                HardStructureValue(make_quote(1, "TED", "NYSE", 56.2456).to_struct(&phys_columns)));
             assert_eq!(
                 rc.pop_row(),
-                StructureValue(make_quote(0, "BILL", "AMEX", 12.33).to_struct(&phys_columns)));
+                HardStructureValue(make_quote(0, "BILL", "AMEX", 12.33).to_struct(&phys_columns)));
             assert_eq!(rc.pop_row(), Undefined);
         }
 

@@ -3,7 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::collections::HashMap;
-use std::convert::From;
+use std::convert::{From, Into};
 use std::fs::File;
 use std::io::Read;
 use std::ops::{Deref, Neg};
@@ -21,7 +21,6 @@ use uuid::Uuid;
 use shared_lib::fail;
 
 use crate::backdoor::BackDoorKey;
-use crate::backdoor::BackDoorKey::BxEnvVars;
 use crate::compiler::Compiler;
 use crate::compiler::{fail_expr, fail_unexpected, fail_value};
 use crate::cursor::Cursor;
@@ -46,12 +45,15 @@ use crate::outcomes::{OutcomeKind, Outcomes};
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
-use crate::structure::Structure;
+use crate::structures::*;
 use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use crate::web_routes;
+
+pub const MAJOR_VERSION: u8 = 0;
+pub const MINOR_VERSION: u8 = 1;
 
 /// Represents the state of the machine.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -91,6 +93,9 @@ impl Machine {
             .with_package("io", vec![
                 ("stderr", BackDoor(BxStdErr)),
                 ("stdout", BackDoor(BxStdOut)),
+            ])
+            .with_package("lang", vec![
+                ("version", BackDoor(BxVersion)),
             ])
             .with_package("os", vec![
                 ("call", BackDoor(BxSysCall)),
@@ -166,13 +171,8 @@ impl Machine {
 
     fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
         match value {
-            JSONValue(values) => {
-                Ok(values.iter()
-                    .map(|(k, v)| (k.to_string(), v.to_owned()))
-                    .collect()
-                )
-            }
-            z => return fail_value("Type mismatch", &z),
+            SoftStructureValue(structure) => Ok(structure.get_tuples()),
+            z => fail_value(Errors::TypeMismatch("Schemaless".into(), z.to_code()).to_string(), &z),
         }
     }
 
@@ -295,6 +295,7 @@ impl Machine {
         }
     }
 
+    /// converts a [Response] to a [TypedValue]
     pub async fn convert_response(
         &self,
         response: Response,
@@ -306,20 +307,20 @@ impl Machine {
                     .map(|k| k.to_string())
                     .collect::<Vec<_>>();
                 let header_values = response.headers().values()
-                    .map(|v| match v.to_str() {
+                    .map(|hv| match hv.to_str() {
                         Ok(s) => TypedValue::wrap_value(s).unwrap_or(Undefined),
                         Err(e) => ErrorValue(Exact(e.to_string()))
                     }).collect::<Vec<_>>();
-                JSONValue(header_keys.iter().zip(header_values.iter())
+                SoftStructureValue(SoftStructure::from_tuples(header_keys.iter().zip(header_values.iter())
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect::<Vec<_>>())
+                    .collect::<Vec<_>>()))
             } else {
                 match response.text().await {
                     Ok(body) => {
                         match Compiler::compile_script(body.as_str()) {
                             Ok(expr) => {
                                 match self.evaluate(&expr) {
-                                    Ok((_, Undefined)) => JSONValue(vec![]),
+                                    Ok((_, Undefined)) => SoftStructureValue(SoftStructure::empty()),
                                     Ok((_, value)) => value,
                                     Err(_) => StringValue(body)
                                 }
@@ -332,6 +333,17 @@ impl Machine {
             }
         } else {
             ErrorValue(Exact(format!("Request failed with status: {}", response.status())))
+        }
+    }
+
+    /// converts a [std::io::Result<(Self, TypedValue)>] to a [(Self, TypedValue)]
+    pub fn convert_result(
+        &self,
+        result: std::io::Result<(Self, TypedValue)>,
+    ) -> (Self, TypedValue) {
+        match result {
+            Ok(value) => value,
+            Err(err) => (self.clone(), ErrorValue(Exact(err.to_string())))
         }
     }
 
@@ -371,6 +383,7 @@ impl Machine {
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
             Minus(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa - bb),
+            Module(name, ops) => self.evaluate_module(name, ops),
             Modulo(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) =>
@@ -522,13 +535,13 @@ impl Machine {
         &self,
         bdk: &BackDoorKey,
         args: Vec<TypedValue>,
-    ) -> std::io::Result<(Self, TypedValue)> {
+    ) -> (Self, TypedValue) {
         use BackDoorKey::*;
         match bdk {
             BxAssert => self.evaluate_back_door_fn1(args, Machine::do_assert),
-            BxEnvVars => Ok((self.clone(), Self::create_env_table())),
+            BxEnvVars => (self.clone(), Self::create_env_table()),
             BxEval => self.evaluate_back_door_fn1(args, Machine::do_eval),
-            BxFormat => Ok(self.evaluate_format_string(args)),
+            BxFormat => self.evaluate_format_string(args),
             BxLeft => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_left(s, n)),
             BxMatches => self.evaluate_back_door_fn2(args, |ms, a, b| (ms, a.matches(b))),
             BxReset => self.evaluate_back_door_fn0(args, |_| (Machine::new(), Outcome(Outcomes::Ack))),
@@ -537,8 +550,8 @@ impl Machine {
             BxStdErr => self.evaluate_back_door_fn1(args, Machine::do_stdout),
             BxStdOut => self.evaluate_back_door_fn1(args, Machine::do_stdout),
             BxSubstring => self.evaluate_back_door_fn3(args, |ms, s, a, b| ms.evaluate_substring(s, a, b)),
-            BxSysCall => self.evaluate_syscall(args),
-            BxTimestamp => self.evaluate_timestamp(args),
+            BxSysCall => self.convert_result(self.evaluate_syscall(args)),
+            BxTimestamp => self.convert_result(self.evaluate_timestamp(args)),
             BxTimestampDay => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
             BxTimestampHour => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
             BxTimestampHour12 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
@@ -549,8 +562,9 @@ impl Machine {
             BxToCSV => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, true)),
             BxToJSON => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, false)),
             BxTypeOf => self.evaluate_back_door_fn1(args, |ms, a| (ms, StringValue(a.get_type_name()))),
-            BxUUID => self.evaluate_uuid(args),
+            BxUUID => self.convert_result(self.evaluate_uuid(args)),
             BxVariables => self.evaluate_back_door_fn0(args, |ms| (ms.clone(), TableValue(ms.get_variables()))),
+            BxVersion => self.evaluate_back_door_fn0(args, |ms| (ms, StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))),
         }
     }
 
@@ -583,7 +597,7 @@ impl Machine {
                     BxTimestampMonth => (ms, Number(U32Value(datetime.second()))),
                     BxTimestampSecond => (ms, Number(U32Value(datetime.second()))),
                     BxTimestampYear => (ms, Number(I32Value(datetime.year()))),
-                    other => (ms, ErrorValue(Syntax(format!("{:?}", other))))
+                    other => (ms, ErrorValue(Syntax(other.to_code())))
                 }
             }
             other => (ms, ErrorValue(DateExpected(other.to_code())))
@@ -626,11 +640,11 @@ impl Machine {
         &self,
         args: Vec<TypedValue>,
         f: fn(Self) -> (Self, TypedValue),
-    ) -> std::io::Result<(Self, TypedValue)> {
+    ) -> (Self, TypedValue) {
         let ms = self.to_owned();
         match args.len() {
-            0 => Ok(f(ms)),
-            n => Ok((ms, ErrorValue(ArgumentsMismatched(0, n))))
+            0 => f(ms),
+            n => (ms, ErrorValue(ArgumentsMismatched(0, n)))
         }
     }
 
@@ -638,11 +652,11 @@ impl Machine {
         &self,
         args: Vec<TypedValue>,
         f: fn(Self, &TypedValue) -> (Machine, TypedValue),
-    ) -> std::io::Result<(Self, TypedValue)> {
+    ) -> (Self, TypedValue) {
         let ms = self.to_owned();
         match args.as_slice() {
-            [value] => Ok(f(ms, value)),
-            _ => Ok((ms, ErrorValue(ArgumentsMismatched(1, args.len()))))
+            [value] => f(ms, value),
+            _ => (ms, ErrorValue(ArgumentsMismatched(1, args.len())))
         }
     }
 
@@ -651,11 +665,11 @@ impl Machine {
         args: Vec<TypedValue>,
         bdk: &BackDoorKey,
         f: fn(Self, &TypedValue, &BackDoorKey) -> (Self, TypedValue),
-    ) -> std::io::Result<(Self, TypedValue)> {
+    ) -> (Self, TypedValue) {
         let ms = self.to_owned();
         match args.as_slice() {
-            [a] => Ok(f(ms, a, bdk)),
-            _ => Ok((ms, ErrorValue(ArgumentsMismatched(1, args.len()))))
+            [a] => f(ms, a, bdk),
+            _ => (ms, ErrorValue(ArgumentsMismatched(1, args.len())))
         }
     }
 
@@ -663,11 +677,11 @@ impl Machine {
         &self,
         args: Vec<TypedValue>,
         f: fn(Self, &TypedValue, &TypedValue) -> (Self, TypedValue),
-    ) -> std::io::Result<(Self, TypedValue)> {
+    ) -> (Self, TypedValue) {
         let ms = self.to_owned();
         match args.as_slice() {
-            [a, b] => Ok(f(ms, a, b)),
-            _ => Ok((ms, ErrorValue(ArgumentsMismatched(2, args.len()))))
+            [a, b] => f(ms, a, b),
+            _ => (ms, ErrorValue(ArgumentsMismatched(2, args.len())))
         }
     }
 
@@ -675,11 +689,11 @@ impl Machine {
         &self,
         args: Vec<TypedValue>,
         f: fn(Self, &TypedValue, &TypedValue, &TypedValue) -> (Self, TypedValue),
-    ) -> std::io::Result<(Self, TypedValue)> {
+    ) -> (Self, TypedValue) {
         let ms = self.to_owned();
         match args.as_slice() {
-            [a, b, c] => Ok(f(ms, a, b, c)),
-            _ => Ok((ms, ErrorValue(ArgumentsMismatched(3, args.len()))))
+            [a, b, c] => f(ms, a, b, c),
+            _ => (ms, ErrorValue(ArgumentsMismatched(3, args.len())))
         }
     }
 
@@ -777,34 +791,34 @@ impl Machine {
         let (ms, obj) = self.evaluate(object)?;
         match obj {
             ErrorValue(err) => Ok((ms, ErrorValue(err))),
-            JSONValue(args) => self.evaluate_extraction_json(field, &args),
-            StructureValue(structure) => self.evaluate_extraction_structure(field, &structure),
+            SoftStructureValue(s) => self.evaluate_extraction_schemaless(field, &s),
+            HardStructureValue(s) => self.evaluate_extraction_structure(field, &s),
             z => fail(format!("Illegal object {}", z.to_code()))
         }
     }
 
-    fn evaluate_extraction_json(
+    fn evaluate_extraction_schemaless(
         &self,
         field: &Expression,
-        args: &Vec<(String, TypedValue)>,
+        schemaless: &SoftStructure,
     ) -> std::io::Result<(Self, TypedValue)> {
         let ms = self.to_owned();
         match field {
+            // method call: math::compute(5, 8)
+            FunctionCall { fx, args } =>
+                schemaless.pollute(ms).evaluate_function_call(fx, args),
             // { symbol:"AAA", price:123.45 }::symbol
-            Variable(name) =>
-                match args.iter().find(|(k, _)| *name == *k) {
-                    Some((_, v)) => Ok((ms, v.to_owned())),
-                    None => Ok((ms, Undefined))
-                },
-            z => fail(format!("Illegal field {} for object {}",
-                              z.to_code(), JSONValue(args.to_owned()).to_code()))
+            Variable(name) => Ok((ms, schemaless.get(name))),
+            z =>
+                fail(format!("Illegal field {} for object {}",
+                             z.to_code(), schemaless.to_code()))
         }
     }
 
     fn evaluate_extraction_structure(
         &self,
         field: &Expression,
-        structure: &Structure,
+        structure: &HardStructure,
     ) -> std::io::Result<(Self, TypedValue)> {
         let ms = self.to_owned();
         match field {
@@ -814,7 +828,7 @@ impl Machine {
             // stock::symbol
             Variable(name) => Ok((ms, structure.get(name))),
             z => fail(format!("Illegal field {} for structure {}",
-                              z.to_code(), StructureValue(structure.to_owned()).to_code()))
+                              z.to_code(), HardStructureValue(structure.to_owned()).to_code()))
         }
     }
 
@@ -934,7 +948,7 @@ impl Machine {
             // evaluate the anonymous- or named-function
             match ms.evaluate(fx)? {
                 (ms, BackDoor(bdf)) =>
-                    ms.evaluate_back_door(&bdf, args),
+                    Ok(ms.evaluate_back_door(&bdf, args)),
                 (ms, Function { params, code }) =>
                     ms.evaluate_function_arguments(params, args).evaluate(&code),
                 (_, z) => fail(format!("'{}' is not a function ({})", fx.to_code(), z))
@@ -971,17 +985,21 @@ impl Machine {
         ms.evaluate_http_method_call(
             method.unwrap_value(),
             url.unwrap_value(),
-            body.map(|tv| tv.to_code()),
+            body.map(|tv| tv.to_json().to_string()),
             match headers {
                 Some(v) => Self::extract_string_tuples(v)?,
                 None => Vec::new()
             },
             match multipart {
-                Some(JSONValue(values)) =>
-                    Some(values.iter().fold(Form::new(), |form, (name, value)| {
+                Some(SoftStructureValue(soft)) =>
+                    Some(soft.get_tuples().iter().fold(Form::new(), |form, (name, value)| {
                         form.part(name.to_owned(), Part::text(value.unwrap_value()))
                     })),
-                Some(z) => return fail_value("Type mismatch", &z),
+                Some(HardStructureValue(hard)) =>
+                    Some(hard.get_tuples().iter().fold(Form::new(), |form, (name, value)| {
+                        form.part(name.to_owned(), Part::text(value.unwrap_value()))
+                    })),
+                Some(z) => return Ok((ms, ErrorValue(TypeMismatch("Object".into(), z.to_code())))),
                 None => None
             },
         ).await
@@ -1129,11 +1147,11 @@ impl Machine {
                     match ms.get(pkg.as_str()) {
                         None =>
                             return Ok((ms, ErrorValue(PackageNotFound(pkg)))),
-                        Some(JSONValue(tuples)) =>
-                            ms = tuples.iter().fold(ms, |ms, (name, value)| {
+                        Some(SoftStructureValue(schemaless)) =>
+                            ms = schemaless.get_tuples().iter().fold(ms, |ms, (name, value)| {
                                 ms.with_variable(name, value.to_owned())
                             }),
-                        Some(StructureValue(structure)) =>
+                        Some(HardStructureValue(structure)) =>
                             ms = structure.pollute(ms),
                         Some(other) =>
                             return Ok((ms, ErrorValue(Syntax(other.to_code()))))
@@ -1222,15 +1240,15 @@ impl Machine {
                 let ns = Namespace::new(d, s, n);
                 let frc = FileRowCollection::open(&ns)?;
                 match frc.read_one(id)? {
-                    Some(row) => StructureValue(Structure::from_row(frc.get_columns().clone(), &row)),
-                    None => StructureValue(Structure::new(frc.get_columns().to_owned(), Vec::new()))
+                    Some(row) => HardStructureValue(HardStructure::from_row(frc.get_columns().clone(), &row)),
+                    None => HardStructureValue(HardStructure::new(frc.get_columns().to_owned(), Vec::new()))
                 }
             }
             StringValue(string) => {
                 let idx = index.to_usize();
                 if idx < string.len() { StringValue(string[idx..idx].to_string()) } else { ErrorValue(IndexOutOfRange("String".to_string(), idx, string.len())) }
             }
-            StructureValue(structure) => {
+            HardStructureValue(structure) => {
                 let idx = index.to_usize();
                 let values = structure.get_values();
                 if idx < values.len() { values[idx].to_owned() } else { ErrorValue(IndexOutOfRange("Structure element".to_string(), idx, values.len())) }
@@ -1238,8 +1256,8 @@ impl Machine {
             TableValue(mrc) => {
                 let id = index.to_usize();
                 match mrc.read_one(id)? {
-                    Some(row) => StructureValue(Structure::from_row(mrc.get_columns().clone(), &row)),
-                    None => StructureValue(Structure::new(mrc.get_columns().to_owned(), Vec::new()))
+                    Some(row) => HardStructureValue(HardStructure::from_row(mrc.get_columns().clone(), &row)),
+                    None => HardStructureValue(HardStructure::new(mrc.get_columns().to_owned(), Vec::new()))
                 }
             }
             other =>
@@ -1293,7 +1311,30 @@ impl Machine {
             let (_, value) = self.evaluate(expr)?;
             elems.push((name.to_string(), value))
         }
-        Ok((self.to_owned(), JSONValue(elems)))
+        Ok((self.to_owned(), SoftStructureValue(SoftStructure::from_tuples(elems))))
+    }
+
+    fn evaluate_module(
+        &self,
+        name: &str,
+        ops: &Vec<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let structure = HardStructure::empty();
+        let result =
+            ops.iter().fold(HardStructureValue(structure), |tv, op| match tv {
+                ErrorValue(msg) => ErrorValue(msg),
+                HardStructureValue(structure) =>
+                    match op {
+                        SetVariable(name, expr) =>
+                            match self.evaluate(expr) {
+                                Ok((_, value)) => HardStructureValue(structure.with_variable(name, value)),
+                                Err(err) => ErrorValue(Exact(err.to_string()))
+                            },
+                        z => ErrorValue(IllegalExpression(z.to_code()))
+                    },
+                z => ErrorValue(StructExpected(name.to_string(), z.to_code()))
+            });
+        Ok((self.with_variable(name, result), Outcome(Outcomes::Ack)))
     }
 
     fn evaluate_mutation(
@@ -1452,15 +1493,15 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         match self.get(name) {
-            Some(StructureValue(structure)) => {
+            Some(HardStructureValue(structure)) => {
                 let result =
-                    ops.iter().fold(StructureValue(structure), |tv, op| match tv {
+                    ops.iter().fold(HardStructureValue(structure), |tv, op| match tv {
                         ErrorValue(msg) => ErrorValue(msg),
-                        StructureValue(structure) =>
+                        HardStructureValue(structure) =>
                             match op {
                                 SetVariable(name, expr) =>
                                     match self.evaluate(expr) {
-                                        Ok((_, value)) => StructureValue(structure.with_variable(name, value)),
+                                        Ok((_, value)) => HardStructureValue(structure.with_variable(name, value)),
                                         Err(err) => ErrorValue(Exact(err.to_string()))
                                     },
                                 z => ErrorValue(IllegalExpression(z.to_code()))
@@ -1896,13 +1937,14 @@ impl Machine {
             Array(items) => {
                 let mut rows = Vec::new();
                 for tuples in items {
-                    if let JSONValue(tuples) = tuples {
-                        rows.push(Row::from_tuples(0, columns, &tuples))
+                    if let SoftStructureValue(schemaless) = tuples {
+                        rows.push(Row::from_tuples(0, columns, &schemaless.get_tuples()))
                     }
                 }
                 Ok(rows)
             }
-            JSONValue(tuples) => Ok(vec![Row::from_tuples(0, columns, &tuples)]),
+            HardStructureValue(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
+            SoftStructureValue(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
             NamespaceValue(d, s, n) => {
                 let ns = Namespace::new(d, s, n);
                 let frc = FileRowCollection::open(&ns)?;
@@ -1921,9 +1963,9 @@ impl Machine {
         let writable = self.expect_row_collection(table)?;
         let (fields, values) = {
             if let Via(my_source) = source {
-                if let (_, JSONValue(tuples)) = self.evaluate(&my_source)? {
+                if let (_, SoftStructureValue(schemaless)) = self.evaluate(&my_source)? {
                     let columns = writable.get_columns();
-                    let row = Row::from_tuples(0, columns, &tuples);
+                    let row = Row::from_tuples(0, columns, &schemaless.get_tuples());
                     Self::split(columns, &row)
                 } else {
                     return fail_expr("Expected a data object".to_string(), &my_source);
@@ -2019,11 +2061,11 @@ impl Machine {
         variables: Vec<(&str, TypedValue)>,
     ) -> Self {
         let structure = variables.iter().fold(
-            Structure::empty(),
+            HardStructure::empty(),
             |structure, (name, value)| {
                 structure.with_variable(name, value.to_owned())
             });
-        self.with_variable(name, StructureValue(structure))
+        self.with_variable(name, HardStructureValue(structure))
     }
 
     pub fn with_row(&self, columns: &Vec<Column>, row: &Row) -> Self {
@@ -2260,8 +2302,8 @@ mod tests {
 
         // evaluate the instruction
         let (_, result) = Machine::new().evaluate(&model).unwrap();
-        assert_eq!(result, StructureValue(
-            Structure::from_row(
+        assert_eq!(result, HardStructureValue(
+            HardStructure::from_row(
                 phys_columns.clone(),
                 &make_quote(2, "BIZ", "NYSE", 23.66))
         ))
@@ -2289,9 +2331,9 @@ mod tests {
         let machine = Machine::new()
             .with_variable("stocks", TableValue(my_table));
         let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, StructureValue(
-            Structure::from_row(phys_columns.clone(),
-                                &make_quote(4, "VAPOR", "NYSE", 0.0289))
+        assert_eq!(result, HardStructureValue(
+            HardStructure::from_row(phys_columns.clone(),
+                                    &make_quote(4, "VAPOR", "NYSE", 0.0289))
         ))
     }
 

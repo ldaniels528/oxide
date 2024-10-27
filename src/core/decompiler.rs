@@ -2,11 +2,11 @@
 // Decompiler module
 ////////////////////////////////////////////////////////////////////
 
-use serde::{Deserialize, Serialize};
 use crate::expression::Expression::*;
 use crate::expression::*;
 use crate::expression::{BitwiseOps, Conditions, Expression};
 use crate::parameter::Parameter;
+use serde::{Deserialize, Serialize};
 
 /// Oxide language decompiler - converts an [Expression] to source code.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -59,6 +59,8 @@ impl Decompiler {
             Literal(value) => value.to_code(),
             Minus(a, b) =>
                 format!("{} - {}", self.decompile(a), self.decompile(b)),
+            Module(name, ops) =>
+                format!("{} {}", name, self.decompile_code_blocks(ops)),
             Modulo(a, b) =>
                 format!("{} % {}", self.decompile(a), self.decompile(b)),
             Multiply(a, b) =>

@@ -5,7 +5,7 @@
 use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
-use crate::neocodec::Codec;
+use crate::codec::Codec;
 
 /// Represents an Outcome type/kind
 #[repr(u8)]

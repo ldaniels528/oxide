@@ -7,7 +7,7 @@ use log::error;
 use serde::{Deserialize, Serialize};
 
 use crate::decompiler::Decompiler;
-use crate::structure::Structure;
+use crate::structures::HardStructure;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Undefined;
@@ -21,17 +21,15 @@ pub struct Parameter {
 }
 
 impl Parameter {
+
+    ////////////////////////////////////////////////////////////////////
+    //  STATIC METHODS
+    ////////////////////////////////////////////////////////////////////
+
     pub fn decode(buf: &Vec<u8>) -> Self {
         bincode::deserialize(buf).unwrap_or_else(|err| {
             error!("{}", err);
             Parameter::new(err.to_string(), Some("String(255)".into()), None)
-        })
-    }
-
-    pub fn encode(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap_or_else(|err| {
-            error!("{}", err);
-            Vec::new()
         })
     }
 
@@ -46,11 +44,13 @@ impl Parameter {
         phys_columns.iter().map(|c| Self::from_column(c)).collect()
     }
 
-    pub fn get_name(&self) -> &str { &self.name }
-
-    pub fn get_param_type(&self) -> &Option<String> { &self.param_type }
-
-    pub fn get_default_value(&self) -> &Option<String> { &self.default_value }
+    pub fn from_tuple(name: impl Into<String>, value: TypedValue) -> Self {
+        Self::new(
+            name.to_string(),
+            value.get_type().to_type_declaration(),
+            Some(value.to_code())
+        )
+    }
 
     pub fn new(name: impl Into<String>,
                param_type: Option<String>,
@@ -63,6 +63,23 @@ impl Parameter {
             .collect::<Vec<String>>()
             .join(", ")
     }
+
+    ////////////////////////////////////////////////////////////////////
+    //  INSTANCE METHODS
+    ////////////////////////////////////////////////////////////////////
+
+    pub fn encode(&self) -> Vec<u8> {
+        bincode::serialize(self).unwrap_or_else(|err| {
+            error!("{}", err);
+            Vec::new()
+        })
+    }
+
+    pub fn get_name(&self) -> &str { &self.name }
+
+    pub fn get_param_type(&self) -> &Option<String> { &self.param_type }
+
+    pub fn get_default_value(&self) -> &Option<String> { &self.default_value }
 
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!(self)

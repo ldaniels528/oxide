@@ -14,7 +14,6 @@ use rest_server::*;
 use shared_lib::{cnv_error, get_host_and_port};
 
 use crate::interpreter::Interpreter;
-use crate::machine::Machine;
 use crate::repl::REPLState;
 use crate::rest_server::SharedState;
 use crate::table_renderer::TableRenderer;
@@ -42,7 +41,6 @@ mod interpreter;
 mod machine;
 mod model_row_collection;
 mod namespaces;
-mod native;
 mod number_kind;
 mod numbers;
 mod outcomes;
@@ -54,7 +52,7 @@ mod row_collection;
 mod row_metadata;
 mod rows;
 mod server;
-mod structure;
+mod structures;
 mod table_columns;
 mod table_view;
 mod table_renderer;
@@ -67,7 +65,6 @@ mod tokens;
 mod typed_values;
 mod view_row_collection;
 mod websockets;
-mod neocodec;
 
 /// Starts the Oxide server
 #[actix_web::main]
