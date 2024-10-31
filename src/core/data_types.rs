@@ -53,7 +53,6 @@ impl Display for SizeTypes {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DataType {
     ArrayType,
-    BackDoorType,
     BLOBType(SizeTypes),
     BooleanType,
     DateType,
@@ -82,7 +81,6 @@ impl DataType {
             match name.as_str() {
                 "Ack" => Ok(OutcomeType(OutcomeKind::Acked)),
                 "Array" => Ok(ArrayType),
-                "BackDoor" => Ok(BackDoorType),
                 "BLOB" => DataType::compile_size(ts, |size| BLOBType(size)),
                 "Boolean" => Ok(BooleanType),
                 "Date" => Ok(DateType),
@@ -150,7 +148,6 @@ impl DataType {
         use crate::data_types::DataType::*;
         let width: usize = match self {
             ArrayType => 1024,
-            BackDoorType => 1,
             BLOBType(size) => size.to_size(),
             BooleanType => 1,
             DateType => 8,
@@ -186,7 +183,6 @@ impl DataType {
     pub fn to_type_declaration(&self) -> Option<String> {
         let type_name = match self {
             ArrayType => "Array".into(),
-            BackDoorType => "BackDoor".into(),
             BLOBType(size) => format!("BLOB({})", size),
             BooleanType => "Boolean".into(),
             DateType => "Date".into(),

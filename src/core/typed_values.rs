@@ -83,7 +83,6 @@ impl TypedValue {
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
         match data_type {
             ArrayType => Array(vec![]),
-            BackDoorType => codec::decode_u8(buffer, offset, |b| BackDoor(BackDoorKey::from_u8(b))),
             BLOBType(_size) => BLOB(Vec::new()),
             BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             DateType => codec::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
@@ -114,14 +113,6 @@ impl TypedValue {
         }
     }
 
-    fn encode_function(params: &Vec<Parameter>, code: &Expression) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend(params.len().to_be_bytes());
-        for param in params { bytes.extend(param.encode()); }
-        bytes.extend(code.encode());
-        bytes
-    }
-
     /// decodes the typed value based on the supplied data type and buffer
     pub fn from_buffer(
         data_type: &DataType,
@@ -129,7 +120,6 @@ impl TypedValue {
     ) -> std::io::Result<TypedValue> {
         let tv = match data_type {
             ArrayType => Array(buffer.next_array()?),
-            BackDoorType => BackDoor(buffer.next_backdoor_fn()),
             BLOBType(..) => BLOB(buffer.next_blob()),
             BooleanType => Boolean(buffer.next_bool()),
             DateType => DateValue(buffer.next_i64()),
@@ -316,8 +306,8 @@ impl TypedValue {
     pub fn get_type(&self) -> DataType {
         match self.to_owned() {
             Array(..) => ArrayType,
-            BackDoor(..) => BackDoorType,
-            Function { .. } => FunctionType(vec![]),
+            BackDoor(key) => key.get_type(),
+            Function { params, .. } => FunctionType(params),
             BLOB(v) => BLOBType(Fixed(v.len())),
             Boolean(..) => BooleanType,
             DateValue(..) => DateType,
@@ -330,9 +320,9 @@ impl TypedValue {
                 Outcomes::RowId(..) => OutcomeType(OutcomeKind::RowInserted),
                 Outcomes::RowsAffected(..) => OutcomeType(OutcomeKind::RowsUpdated),
             },
+            HardStructureValue(hard) => StructureType(hard.get_parameters()),
             SoftStructureValue(soft) => StructureType(soft.get_parameters()),
             StringValue(s) => StringType(Fixed(s.len())),
-            HardStructureValue(hard) => StructureType(hard.get_parameters()),
             TableValue(mrc) => TableType(Parameter::from_columns(mrc.get_columns())),
             Undefined => InferredType,
             UUIDValue(..) => UUIDType,
@@ -343,40 +333,18 @@ impl TypedValue {
         self.get_type().to_type_declaration().unwrap_or("".to_string())
     }
 
-    pub fn is_boolean(&self) -> bool {
-        matches!(self, Outcome(Outcomes::Ack) | Boolean(..))
-    }
-
-    pub fn is_compatible(&self, other: &TypedValue) -> bool {
-        let (a, b) = (self, other);
-        a == b
-            || a.unwrap_value() == b.unwrap_value()
-            || a.is_boolean() && b.is_boolean()
-            || a.is_numeric() && b.is_numeric()
-            || a.is_string() && b.is_string()
-    }
-
-    pub fn is_numeric(&self) -> bool {
-        use TypedValue::*;
-        matches!(self, Outcome(Outcomes::Ack) | Outcome(..) | Number(..))
+    pub fn hash_code(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        hasher.write(&self.encode());
+        hasher.finish()
     }
 
     pub fn is_ok(&self) -> bool {
         matches!(self, Outcome(Outcomes::Ack) | Boolean(true) | Outcome(..) | NamespaceValue(..) | TableValue(..))
     }
 
-    pub fn is_string(&self) -> bool {
-        matches!(self, StringValue(..))
-    }
-
     pub fn is_true(&self) -> bool {
         matches!(self, Outcome(Outcomes::Ack) | Boolean(true))
-    }
-
-    pub fn hash_code(&self) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        hasher.write(&self.encode());
-        hasher.finish()
     }
 
     pub fn matches(&self, other: &Self) -> TypedValue {
@@ -384,7 +352,7 @@ impl TypedValue {
             (a, b) if *a == *b => Boolean(true),
             (SoftStructureValue(a), SoftStructureValue(b)) => {
                 Boolean(a.to_hash_map() == b.to_hash_map())
-            },
+            }
             (HardStructureValue(a), HardStructureValue(b)) => Boolean(a == b),
             _ => Boolean(false)
         }
@@ -405,8 +373,8 @@ impl TypedValue {
                 format!("[{}]", items.iter()
                     .map(|v| v.to_code())
                     .collect::<Vec<_>>().join(", ")),
-            SoftStructureValue(s) => s.to_code(),
-            HardStructureValue(s) => s.to_code(),
+            SoftStructureValue(ss) => ss.to_code(),
+            HardStructureValue(hs) => hs.to_code(),
             StringValue(s) => format!("\"{s}\""),
             other => other.unwrap_value()
         }
@@ -447,13 +415,13 @@ impl TypedValue {
                     .map(|c| c.to_json()).collect());
                 serde_json::json!({ "params": my_params, "code": code.to_code() })
             }
-            SoftStructureValue(s) => s.to_json(),
+            HardStructureValue(s) => s.to_json(),
             NamespaceValue(d, s, n) => serde_json::json!(format!("{d}.{s}.{n}")),
             Null => serde_json::Value::Null,
             Number(value) => value.to_json(),
             Outcome(oc) => serde_json::json!(oc.to_u64()),
             StringValue(string) => serde_json::json!(string),
-            HardStructureValue(s) => s.to_json(),
+            SoftStructureValue(s) => s.to_json(),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
                     .map(|r| r.to_row_js(mrc.get_columns()))
@@ -488,6 +456,16 @@ impl TypedValue {
         }
     }
 
+    pub fn to_u128(&self) -> u128 {
+        match self {
+            Outcome(Outcomes::Ack) => 1,
+            Boolean(true) => 1,
+            Number(n) => n.to_u128(),
+            Outcome(oc) => oc.to_u64() as u128,
+            _ => 0
+        }
+    }
+
     pub fn to_usize(&self) -> usize {
         match self {
             Outcome(Outcomes::Ack) => 1,
@@ -514,14 +492,14 @@ impl TypedValue {
                 format!("(fn({}) => {})",
                         params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
                         code.to_code()),
-            SoftStructureValue(schemaless) => schemaless.to_code(),
+            HardStructureValue(structure) => structure.to_code(),
             TableValue(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
             NamespaceValue(d, s, n) => format!("{d}.{s}.{n}"),
             Null => "null".into(),
             Number(number) => number.unwrap_value(),
             Outcome(outcome) => outcome.to_string(),
             StringValue(string) => string.into(),
-            HardStructureValue(structure) => structure.to_string(),
+            SoftStructureValue(schemaless) => schemaless.to_code(),
             Undefined => "undefined".into(),
             UUIDValue(guid) => Uuid::from_u128(*guid).to_string(),
         }
@@ -535,12 +513,12 @@ impl TypedValue {
         Some(Boolean(self.to_bool() && rhs.to_bool()))
     }
 
-    pub fn factorial(&self) -> Option<TypedValue> {
-        fn fact_f64(n: f64) -> TypedValue {
-            fn fact_f(n: f64) -> f64 { if n <= 1. { 1. } else { n * fact_f(n - 1.) } }
-            Number(F64Value(fact_f(n)))
+    pub fn factorial(&self) -> TypedValue {
+        fn fact_u128(n: u128) -> TypedValue {
+            fn fact_f(n: u128) -> u128 { if n <= 1 { 1 } else { n * fact_f(n - 1) } }
+            Number(U128Value(fact_f(n)))
         }
-        Some(fact_f64(self.to_f64()))
+        fact_u128(self.to_u128())
     }
 
     pub fn ne(&self, rhs: &Self) -> Option<Self> {
@@ -842,7 +820,7 @@ impl Sub for TypedValue {
 #[cfg(test)]
 mod tests {
     use crate::testdata::{make_quote, make_quote_columns};
-    use serde_json::Value;
+    use serde_json::{json, Value};
 
     use super::*;
 
@@ -1016,6 +994,19 @@ mod tests {
         assert!(I64Value(0x5555_FACE_CAFE_BABE) > I64Value(0x0000_FACE_CAFE_BABE));
         assert!(F32Value(287.11) > F32Value(45.3867));
         assert!(F64Value(359.7854) > F64Value(99.992));
+    }
+
+    #[test]
+    fn test_numeric_conversion() {
+        let v0 = Number(F64Value(12.56));
+        assert_eq!(v0.to_bool(), false);
+        assert_eq!(v0.to_code(), "12.56".to_string());
+        assert_eq!(v0.to_f64(), 12.56);
+        assert_eq!(v0.to_i64(), 12);
+        assert_eq!(v0.to_json(), json!(12.56));
+        assert_eq!(v0.to_u64(), 12);
+        assert_eq!(v0.to_usize(), 12);
+        assert_eq!(v0.unwrap_value(), "12.56".to_string());
     }
 
     #[test]

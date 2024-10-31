@@ -223,6 +223,24 @@ impl NumberValue {
         }
     }
 
+    pub fn to_u128(&self) -> u128 {
+        match *self {
+            F32Value(n) => n as u128,
+            F64Value(n) => n as u128,
+            I8Value(n) => n as u128,
+            I16Value(n) => n as u128,
+            I32Value(n) => n as u128,
+            I64Value(n) => n as u128,
+            I128Value(n) => n as u128,
+            NaNValue => 0,
+            U8Value(n) => n as u128,
+            U16Value(n) => n as u128,
+            U32Value(n) => n as u128,
+            U64Value(n) => n as u128,
+            U128Value(n) => n,
+        }
+    }
+
     pub fn to_usize(&self) -> usize {
         match *self {
             F32Value(n) => n as usize,
@@ -642,7 +660,6 @@ mod tests {
 
     #[test]
     fn test_encode_decode() {
-
         fn verify_codec(expected: NumberValue) {
             let actual = NumberValue::decode(&expected.encode(), 0, expected.kind());
             assert_eq!(actual, expected)
@@ -852,5 +869,4 @@ mod tests {
         assert_eq!(U64Value(45) - U64Value(32), U64Value(13));
         assert_eq!(U128Value(45) - U128Value(32), U128Value(13));
     }
-
 }

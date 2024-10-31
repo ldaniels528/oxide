@@ -66,6 +66,8 @@ pub trait Structure {
             .unwrap_or(Vec::new());
         ModelRowCollection::from_rows(columns, vec![row])
     }
+
+    fn with_variable(&self, name: &str, value: TypedValue) -> Self;
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -154,12 +156,6 @@ impl HardStructure {
     pub fn get_columns(&self) -> Vec<Column> {
         self.columns.to_owned()
     }
-
-    pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
-        let mut ss = self.clone();
-        ss.variables.insert(name.into(), value);
-        ss
-    }
 }
 
 impl Display for HardStructure {
@@ -245,6 +241,12 @@ impl Structure for HardStructure {
 
     fn to_table(&self) -> ModelRowCollection {
         ModelRowCollection::from_rows(self.columns.clone(), vec![self.to_row()])
+    }
+
+    fn with_variable(&self, name: &str, value: TypedValue) -> Self {
+        let mut hs = self.clone();
+        hs.variables.insert(name.into(), value);
+        hs
     }
 }
 
@@ -333,6 +335,27 @@ impl Structure for SoftStructure {
                 m
             });
         Value::Object(mapping)
+    }
+
+    fn with_variable(&self, name: &str, value: TypedValue) -> Self {
+        let tup_maybe = self.tuples.iter()
+            .find(|(k, v)| *k == *name);
+        let new_tuples = match tup_maybe {
+            None => {
+                let mut new_tuples = self.tuples.clone();
+                new_tuples.push((name.into(), value));
+                new_tuples
+            }
+            Some(_) =>
+                self.tuples.iter().map(|(k, v)| if *k == *name {
+                    (k.to_string(), value.clone())
+                } else {
+                    (k.to_string(), v.to_owned())
+                }).collect::<Vec<_>>()
+        };
+        Self {
+            tuples: new_tuples,
+        }
     }
 }
 

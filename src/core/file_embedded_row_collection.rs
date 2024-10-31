@@ -68,12 +68,6 @@ impl RowCollection for FileEmbeddedRowCollection {
         self.get_embedded_table()?.len()
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
-        self.get_embedded_table()
-            .map(|mut rc| rc.overwrite_row(id, row))
-            .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
-    }
-
     fn overwrite_field(
         &mut self,
         id: usize,
@@ -93,6 +87,12 @@ impl RowCollection for FileEmbeddedRowCollection {
     ) -> TypedValue {
         self.get_embedded_table()
             .map(|mut t| t.overwrite_field_metadata(id, column_id, metadata))
+            .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
+    }
+
+    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
+        self.get_embedded_table()
+            .map(|mut rc| rc.overwrite_row(id, row))
             .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
     }
 

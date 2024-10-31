@@ -6,12 +6,12 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
+use crate::codec::Codec;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::decompiler::Decompiler;
 use crate::errors::Errors::IllegalOperator;
 use crate::expression::Expression::*;
-use crate::codec::Codec;
 use crate::numbers::NumberValue;
 use crate::outcomes::{OutcomeKind, Outcomes};
 use crate::parameter::Parameter;
@@ -261,8 +261,8 @@ impl Expression {
         fn infer_a_or_b(a: &Expression, b: &Expression) -> DataType {
             match (infer_a(a), infer_a(b)) {
                 (a, b) if a == b => a,
-                (a, BackDoorType | InferredType) => a,
-                (BackDoorType | InferredType, b) => b,
+                (a, InferredType) => a,
+                (InferredType, b) => b,
                 (a, _) => a
             }
         }

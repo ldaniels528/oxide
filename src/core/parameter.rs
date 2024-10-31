@@ -46,7 +46,7 @@ impl Parameter {
 
     pub fn from_tuple(name: impl Into<String>, value: TypedValue) -> Self {
         Self::new(
-            name.to_string(),
+            name.into(),
             value.get_type().to_type_declaration(),
             Some(value.to_code())
         )

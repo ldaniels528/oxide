@@ -23,7 +23,7 @@ impl Interpreter {
 
     /// Constructs a new Interpreter
     pub fn new() -> Self {
-        Self { machine: Machine::new() }
+        Self { machine: Machine::new_platform_with_default_imports() }
     }
 
     ////////////////////////////////////////////////////////////////
@@ -66,7 +66,7 @@ mod tests {
     use crate::interpreter::Interpreter;
     use crate::machine::{MAJOR_VERSION, MINOR_VERSION};
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::NumberValue::{F64Value, I64Value, NaNValue};
+    use crate::numbers::NumberValue::{F64Value, I64Value, NaNValue, U128Value};
     use crate::outcomes::Outcomes::{Ack, RowsAffected};
     use crate::parameter::Parameter;
     use crate::row_collection::RowCollection;
@@ -85,7 +85,7 @@ mod tests {
     }
 
     #[test]
-    fn test_backdoor_functions() {
+    fn test_platform_functions() {
         verify_when("util::timestamp()", |r| matches!(r, DateValue(..)));
         verify_when("util::uuid()", |r| matches!(r, UUIDValue(..)))
     }
@@ -96,7 +96,7 @@ mod tests {
         assert_eq!(interpreter.evaluate("x := 5").unwrap(), Outcome(Ack));
         assert_eq!(interpreter.evaluate("$x").unwrap(), Number(I64Value(5)));
         assert_eq!(interpreter.evaluate("-x").unwrap(), Number(I64Value(-5)));
-        assert_eq!(interpreter.evaluate("x¡").unwrap(), Number(F64Value(120.)));
+        assert_eq!(interpreter.evaluate("x¡").unwrap(), Number(U128Value(120)));
         assert_eq!(interpreter.evaluate("x := x + 1").unwrap(), Outcome(Ack));
         assert_eq!(interpreter.evaluate("x").unwrap(), Number(I64Value(6)));
         assert_eq!(interpreter.evaluate("x < 7").unwrap(), Boolean(true));
@@ -146,53 +146,6 @@ mod tests {
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "GOTO", "OTC", 0.1428),
         ]);
-    }
-
-    #[test]
-    fn test_create_structure_from_scratch() {
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate(r#"
-            struct(symbol: String(8), exchange: String(8), last_sale: f64)
-        "#).unwrap();
-        let phys_columns = make_quote_columns();
-        assert_eq!(result, HardStructureValue(HardStructure::new(phys_columns.clone(), Vec::new())));
-
-        let result = interpreter.evaluate(r#"
-            struct(
-                symbol: String(8) = "ABC",
-                exchange: String(8) = "NYSE",
-                last_sale: f64 = 23.67
-            )
-        "#).unwrap();
-        match result {
-            HardStructureValue(s) =>
-                assert_eq!(s.get_values(), vec![
-                    StringValue("ABC".into()),
-                    StringValue("NYSE".into()),
-                    Number(F64Value(23.67)),
-                ]),
-            x => assert_eq!(x, Undefined)
-        }
-    }
-
-    #[test]
-    fn test_create_structure_from_table() {
-        verify_exact(r#"
-            [+] stocks := ns("interpreter.struct.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            stocks[0]
-        "#, HardStructureValue(HardStructure::from_parameters_and_values(
-            &make_quote_parameters(), vec![
-                StringValue("ABC".into()),
-                StringValue("AMEX".into()),
-                Number(F64Value(11.11)),
-            ],
-        ).unwrap()));
     }
 
     #[test]
@@ -336,14 +289,61 @@ mod tests {
     }
 
     #[test]
-    fn test_extraction_schemaless() {
+    fn test_create_hard_structure() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            struct(symbol: String(8), exchange: String(8), last_sale: f64)
+        "#).unwrap();
+        let phys_columns = make_quote_columns();
+        assert_eq!(result, HardStructureValue(HardStructure::new(phys_columns.clone(), Vec::new())));
+
+        let result = interpreter.evaluate(r#"
+            struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+        "#).unwrap();
+        match result {
+            HardStructureValue(s) =>
+                assert_eq!(s.get_values(), vec![
+                    StringValue("ABC".into()),
+                    StringValue("NYSE".into()),
+                    Number(F64Value(23.67)),
+                ]),
+            x => assert_eq!(x, Undefined)
+        }
+    }
+
+    #[test]
+    fn test_extract_hard_structure_from_table() {
+        verify_exact(r#"
+            [+] stocks := ns("interpreter.struct.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+            stocks[0]
+        "#, HardStructureValue(HardStructure::from_parameters_and_values(
+            &make_quote_parameters(), vec![
+                StringValue("ABC".into()),
+                StringValue("AMEX".into()),
+                Number(F64Value(11.11)),
+            ],
+        ).unwrap()));
+    }
+
+    #[test]
+    fn test_extract_field_from_soft_structure() {
         verify_exact(r#"
             { symbol:"AAA", price:123.45 }::symbol
         "#, StringValue("AAA".into()));
     }
 
     #[test]
-    fn test_extraction_schemaless_with_lambda() {
+    fn test_access_lambda_within_soft_structure() {
         verify_exact(r#"
             stock := {
                 symbol:"ABC",
@@ -357,7 +357,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extraction_structure() {
+    fn test_extraction_hard_structure() {
         verify_exact(r#"
             struct(
                 symbol: String(8) = "ABC",
@@ -368,13 +368,30 @@ mod tests {
     }
 
     #[test]
-    fn test_extraction_structure_with_impl() {
+    fn test_define_lambda_within_hard_structure() {
         verify_exact(r#"
             stock := struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
             )
+
+            impl stock {
+                fn is_this_you(symbol) => symbol == self::symbol
+            }
+
+            stock::is_this_you('ABC')
+        "#, Boolean(true));
+    }
+
+    #[test]
+    fn test_define_lambda_within_soft_structure() {
+        verify_exact(r#"
+            stock := {
+                symbol: "ABC",
+                exchange: "NYSE",
+                last_sale: 23.67
+            }
 
             impl stock {
                 fn is_this_you(symbol) => symbol == self::symbol
@@ -818,7 +835,7 @@ mod tests {
     }
 
     #[test]
-    fn test_shapeless() {
+    fn test_soft_structure() {
         let code = r#"
             {
                 fields:[
@@ -1212,9 +1229,27 @@ mod tests {
 
     #[test]
     fn test_type_of() {
-        verify_exact(r#"type_of(1234)"#, StringValue("i64".into()));
-        verify_exact(r#"type_of('1234')"#, StringValue("String(4)".into()));
-        verify_exact(r#"type_of("1234")"#, StringValue("String(4)".into()));
+        verify_exact("type_of([1, 2, 3])", StringValue("Array".into()));
+        verify_exact("type_of(false)", StringValue("Boolean".into()));
+        verify_exact("type_of(true)", StringValue("Boolean".into()));
+        verify_exact("type_of(util::timestamp())", StringValue("Date".into()));
+        verify_exact("type_of(fn(a, b) => a + b)", StringValue("fn(a, b)".into()));
+        verify_exact("type_of(1234)", StringValue("i64".into()));
+        verify_exact("type_of(12.394)", StringValue("f64".into()));
+        verify_exact("type_of('1234')", StringValue("String(4)".into()));
+        verify_exact(r#"type_of("abcde")"#, StringValue("String(5)".into()));
+        verify_exact(r#"type_of({symbol:"ABC"})"#,
+                     StringValue(r#"struct(symbol: String(3) = "ABC")"#.into()));
+        verify_exact(r#"type_of(ns("a.b.c"))"#, StringValue("Table()".into()));
+        verify_exact(r#"type_of(table(
+            symbol: String(8),
+            exchange: String(8),
+            last_sale: f64
+        ))"#, StringValue("Table(symbol: String(8), exchange: String(8), last_sale: f64)".into()));
+        verify_exact("type_of(util::uuid())", StringValue("UUID".into()));
+        verify_exact("type_of(my_var)", StringValue("".into()));
+        verify_exact("type_of(null)", StringValue("".into()));
+        verify_exact("type_of(undefined)", StringValue("".into()));
     }
 
     #[test]
@@ -1245,7 +1280,7 @@ mod tests {
     #[test]
     fn test_version() {
         verify_exact(
-            "lang::version()",
+            "vm::version()",
             StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))
     }
 
