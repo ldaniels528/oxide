@@ -1,8 +1,8 @@
 ////////////////////////////////////////////////////////////////////
-// expression module
+// Expression class
 ////////////////////////////////////////////////////////////////////
 
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 
@@ -12,8 +12,9 @@ use crate::data_types::DataType::*;
 use crate::decompiler::Decompiler;
 use crate::errors::Errors::IllegalOperator;
 use crate::expression::Expression::*;
+use crate::inferences::Inferences;
 use crate::numbers::NumberValue;
-use crate::outcomes::{OutcomeKind, Outcomes};
+use crate::outcomes::Outcomes;
 use crate::parameter::Parameter;
 use crate::tokens::Token;
 use crate::typed_values::TypedValue;
@@ -96,6 +97,29 @@ pub enum CreationEntity {
         columns: Vec<Parameter>,
         from: Option<Box<Expression>>,
     },
+}
+
+/// Represents an import definition
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum ImportOps {
+    Everything(String),
+    Selection(String, Vec<String>)
+}
+
+impl ImportOps {
+    pub fn to_code(&self) -> String {
+        match self {
+            ImportOps::Everything(pkg) => pkg.to_string(),
+            ImportOps::Selection(pkg, items) =>
+                format!("{pkg}::{}", items.join(", "))
+        }
+    }
+}
+
+impl Display for ImportOps {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_code())
+    }
 }
 
 /// Represents an infrastructure construction/deconstruction event
@@ -205,7 +229,7 @@ pub enum Expression {
         a: Box<Expression>,
         b: Option<Box<Expression>>,
     },
-    Import(Box<Expression>),
+    Import(Vec<ImportOps>),
     Include(Box<Expression>),
     JSONExpression(Vec<(String, Expression)>),
     Literal(TypedValue),
@@ -258,69 +282,7 @@ impl Expression {
     }
 
     pub fn infer_type(&self) -> DataType {
-        fn infer_a_or_b(a: &Expression, b: &Expression) -> DataType {
-            match (infer_a(a), infer_a(b)) {
-                (a, b) if a == b => a,
-                (a, InferredType) => a,
-                (InferredType, b) => b,
-                (a, _) => a
-            }
-        }
-        fn infer_a(expr: &Expression) -> DataType {
-            match expr {
-                ArrayExpression(..) => ArrayType,
-                AsValue(_, e) => infer_a(e),
-                BitwiseOp(bwo) => match bwo {
-                    BitwiseOps::And(a, b) => infer_a_or_b(a, b),
-                    BitwiseOps::Or(a, b) => infer_a_or_b(a, b),
-                    BitwiseOps::ShiftLeft(a, b) => infer_a_or_b(a, b),
-                    BitwiseOps::ShiftRight(a, b) => infer_a_or_b(a, b),
-                    BitwiseOps::Xor(a, b) => infer_a_or_b(a, b),
-                },
-                CodeBlock(_) => InferredType,
-                Parameters(_) => ArrayType,
-                Condition(_) => BooleanType,
-                Directive(_) => OutcomeType(OutcomeKind::Acked),
-                Divide(a, b) => infer_a_or_b(a, b),
-                ElementAt(..) => InferredType,
-                Extraction(..) => InferredType,
-                Factorial(a) => infer_a(a),
-                Feature { .. } => OutcomeType(OutcomeKind::Acked),
-                From(_) => InferredType,
-                FunctionCall { .. } => InferredType,
-                HTTP { .. } => InferredType,
-                If { a, .. } => infer_a(a),
-                Import(..) => OutcomeType(OutcomeKind::Acked),
-                Include(_) => OutcomeType(OutcomeKind::Acked),
-                JSONExpression(_) => StructureType(vec![]), // todo can we infer?
-                Literal(v) => v.get_type(),
-                Minus(a, b) => infer_a_or_b(a, b),
-                Module(..) => OutcomeType(OutcomeKind::Acked),
-                Modulo(a, b) => infer_a_or_b(a, b),
-                Multiply(a, b) => infer_a_or_b(a, b),
-                Neg(a) => infer_a(a),
-                Ns(_) => OutcomeType(OutcomeKind::Acked),
-                Plus(a, b) => infer_a_or_b(a, b),
-                Pow(a, b) => infer_a_or_b(a, b),
-                Quarry(a) => match a {
-                    Excavation::Construct(_) => OutcomeType(OutcomeKind::Acked),
-                    Excavation::Query(_) => OutcomeType(OutcomeKind::Acked),
-                    Excavation::Mutate(m) => match m {
-                        Mutation::Append { .. } => OutcomeType(OutcomeKind::RowInserted),
-                        _ => OutcomeType(OutcomeKind::RowsUpdated),
-                    }
-                },
-                Range(a, b) => infer_a_or_b(a, b),
-                Return(_) => InferredType,
-                Scenario { .. } => OutcomeType(OutcomeKind::Acked),
-                SetVariable(..) => OutcomeType(OutcomeKind::Acked),
-                StructureImpl(..) => OutcomeType(OutcomeKind::Acked),
-                Variable(_) => InferredType,
-                Via(_) => InferredType,
-                While { .. } => InferredType,
-            }
-        }
-        infer_a(self)
+        Inferences::infer_expr(self)
     }
 
     /// Indicates whether the expression is a conditional expression
@@ -346,7 +308,7 @@ impl Expression {
 
 impl Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_code().as_str())
+        write!(f, "{}", self.to_code())
     }
 }
 

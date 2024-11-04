@@ -41,7 +41,16 @@ pub trait Structure {
 
     fn get_values(&self) -> Vec<TypedValue>;
 
-    fn pollute(&self, ms: Machine) -> Machine;
+    fn pollute(&self, ms0: Machine) -> Machine {
+        // add all scope variables (includes functions)
+        let tuples = self.get_tuples();
+        let ms1 = tuples.iter()
+            .fold(ms0, |ms, (name, value)| {
+                ms.with_variable(name, value.to_owned())
+            });
+        // add self-reference
+        ms1.with_variable("self", StructureSoft(SoftStructure::from_tuples(tuples)))
+    }
 
     fn to_code(&self) -> String;
 
@@ -66,8 +75,6 @@ pub trait Structure {
             .unwrap_or(Vec::new());
         ModelRowCollection::from_rows(columns, vec![row])
     }
-
-    fn with_variable(&self, name: &str, value: TypedValue) -> Self;
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -156,6 +163,12 @@ impl HardStructure {
     pub fn get_columns(&self) -> Vec<Column> {
         self.columns.to_owned()
     }
+
+    pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
+        let mut hs = self.clone();
+        hs.variables.insert(name.into(), value);
+        hs
+    }
 }
 
 impl Display for HardStructure {
@@ -178,28 +191,18 @@ impl Structure for HardStructure {
     }
 
     fn get_tuples(&self) -> Vec<(String, TypedValue)> {
-        self.columns.iter().zip(self.values.iter())
+        let mut tuples = Vec::new();
+        tuples.extend(self.variables.iter()
+            .map(|(c, v)| (c.to_string(), v.to_owned()))
+            .collect::<Vec<_>>());
+        tuples.extend(self.columns.iter().zip(self.values.iter())
             .map(|(c, v)| (c.get_name().to_string(), v.to_owned()))
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>());
+        tuples
     }
 
     fn get_values(&self) -> Vec<TypedValue> {
         self.values.to_owned()
-    }
-
-    fn pollute(&self, ms: Machine) -> Machine {
-        // add all scope variables (includes functions)
-        let ms = self.variables.iter()
-            .fold(ms, |ms, (name, value)| {
-                ms.with_variable(name, value.to_owned())
-            });
-        // add all structure fields
-        let ms = self.columns.iter().zip(self.values.iter())
-            .fold(ms, |ms, (field, value)| {
-                ms.with_variable(field.get_name(), value.to_owned())
-            });
-        // add self-reference
-        ms.with_variable("self", HardStructureValue(self.clone()))
     }
 
     /// ex: struct(symbol: String(8), exchange: String(8), last_sale: f64)
@@ -242,19 +245,13 @@ impl Structure for HardStructure {
     fn to_table(&self) -> ModelRowCollection {
         ModelRowCollection::from_rows(self.columns.clone(), vec![self.to_row()])
     }
-
-    fn with_variable(&self, name: &str, value: TypedValue) -> Self {
-        let mut hs = self.clone();
-        hs.variables.insert(name.into(), value);
-        hs
-    }
 }
 
 ////////////////////////////////////////////////////////////////////
 // SoftStructure class
 ////////////////////////////////////////////////////////////////////
 
-/// Represents a schemaless JSON-like data structure
+/// Represents a structure JSON-like data structure
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SoftStructure {
     tuples: Vec<(String, TypedValue)>,
@@ -278,6 +275,27 @@ impl SoftStructure {
             .map(|(k, v)| (k.to_string(), v.to_owned()))
             .collect::<Vec<_>>();
         Self { tuples }
+    }
+
+    pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
+        let tup_maybe = self.tuples.iter()
+            .find(|(k, v)| *k == *name);
+        let new_tuples = match tup_maybe {
+            None => {
+                let mut new_tuples = self.tuples.clone();
+                new_tuples.push((name.into(), value));
+                new_tuples
+            }
+            Some(_) =>
+                self.tuples.iter().map(|(k, v)| if *k == *name {
+                    (k.to_string(), value.clone())
+                } else {
+                    (k.to_string(), v.to_owned())
+                }).collect::<Vec<_>>()
+        };
+        Self {
+            tuples: new_tuples,
+        }
     }
 }
 
@@ -309,16 +327,6 @@ impl Structure for SoftStructure {
             .collect()
     }
 
-    fn pollute(&self, ms: Machine) -> Machine {
-        // add the object's tuples
-        let ms = self.tuples.iter()
-            .fold(ms, |ms, (name, value)| {
-                ms.with_variable(name, value.to_owned())
-            });
-        // add self-reference
-        ms.with_variable("self", SoftStructureValue(self.clone()))
-    }
-
     fn to_code(&self) -> String {
         format!("{{{}}}", self.tuples.iter()
             .map(|(name, value)| (name.to_string(), value.to_code()))
@@ -335,27 +343,6 @@ impl Structure for SoftStructure {
                 m
             });
         Value::Object(mapping)
-    }
-
-    fn with_variable(&self, name: &str, value: TypedValue) -> Self {
-        let tup_maybe = self.tuples.iter()
-            .find(|(k, v)| *k == *name);
-        let new_tuples = match tup_maybe {
-            None => {
-                let mut new_tuples = self.tuples.clone();
-                new_tuples.push((name.into(), value));
-                new_tuples
-            }
-            Some(_) =>
-                self.tuples.iter().map(|(k, v)| if *k == *name {
-                    (k.to_string(), value.clone())
-                } else {
-                    (k.to_string(), v.to_owned())
-                }).collect::<Vec<_>>()
-        };
-        Self {
-            tuples: new_tuples,
-        }
     }
 }
 
@@ -475,7 +462,7 @@ mod hard_structure_tests {
 
     #[test]
     fn test_to_code_1() {
-        let structure = HardStructure::from_fields(make_quote_columns(), vec![], HashMap::new());
+        let structure = HardStructure::from_fields(make_quote_columns(), Vec::new(), HashMap::new());
         assert_eq!(
             structure.to_code(),
             r#"struct(symbol: String(8), exchange: String(8), last_sale: f64)"#)

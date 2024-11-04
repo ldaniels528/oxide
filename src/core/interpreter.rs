@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::compiler::Compiler;
 use crate::machine::Machine;
-use crate::model_row_collection::ModelRowCollection;
 use crate::typed_values::TypedValue;
 
 /// Represents the Oxide language interpreter.
@@ -23,7 +22,7 @@ impl Interpreter {
 
     /// Constructs a new Interpreter
     pub fn new() -> Self {
-        Self { machine: Machine::new_platform_with_default_imports() }
+        Self { machine: Machine::new_platform_full() }
     }
 
     ////////////////////////////////////////////////////////////////
@@ -46,11 +45,6 @@ impl Interpreter {
         Ok(result)
     }
 
-    /// Returns current variables as a table
-    pub fn get_variables(&self) -> ModelRowCollection {
-        self.machine.get_variables()
-    }
-
     /// Sets the value of a variable
     pub fn with_variable(&mut self, name: &str, value: TypedValue) {
         self.machine = self.machine.with_variable(name, value);
@@ -60,15 +54,14 @@ impl Interpreter {
 /// Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::backdoor::BackDoorKey;
     use crate::errors::Errors::{Exact, StringExpected, TypeMismatch};
-    use crate::expression::Conditions::LessOrEqual;
     use crate::expression::Expression::*;
     use crate::interpreter::Interpreter;
     use crate::machine::{MAJOR_VERSION, MINOR_VERSION};
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::NumberValue::{F64Value, I64Value, NaNValue, U128Value};
+    use crate::numbers::NumberValue::{F64Value, I32Value, I64Value, NaNValue, U128Value};
     use crate::outcomes::Outcomes::{Ack, RowsAffected};
-    use crate::parameter::Parameter;
     use crate::row_collection::RowCollection;
     use crate::rows::Row;
     use crate::structures::*;
@@ -77,21 +70,20 @@ mod tests {
     use crate::testdata::*;
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::*;
-    use std::convert::From;
 
     #[test]
-    fn test_array_indexing() {
-        verify_exact("[0, 1, 3, 5][3]", Number(I64Value(5)))
+    fn test_arrays() {
+        use crate::numbers::NumberValue::*;
+        verify_exact("[0, 1, 3, 5]", Array(vec![
+            Number(I64Value(0)), Number(I64Value(1)),
+            Number(I64Value(3)), Number(I64Value(5)),
+        ]));
+        verify_exact("[0, 1, 3, 5][2]", Number(I64Value(3)));
     }
 
     #[test]
-    fn test_platform_functions() {
-        verify_when("util::timestamp()", |r| matches!(r, DateValue(..)));
-        verify_when("util::uuid()", |r| matches!(r, UUIDValue(..)))
-    }
-
-    #[test]
-    fn test_basic_state_retention() {
+    fn test_basic_state_manipulation() {
+        use crate::numbers::NumberValue::*;
         let mut interpreter = Interpreter::new();
         assert_eq!(interpreter.evaluate("x := 5").unwrap(), Outcome(Ack));
         assert_eq!(interpreter.evaluate("$x").unwrap(), Number(I64Value(5)));
@@ -107,6 +99,324 @@ mod tests {
         assert_eq!(interpreter.evaluate("x % 5").unwrap(), Number(F64Value(0.)));
         assert_eq!(interpreter.evaluate("x < 35").unwrap(), Boolean(false));
         assert_eq!(interpreter.evaluate("x >= 35").unwrap(), Boolean(true));
+    }
+
+    #[test]
+    fn test_platform_functions_cnv() {
+        use crate::numbers::NumberValue::*;
+        // floating-point kinds
+        verify_exact("cnv::to_f32(1015)", Number(F32Value(1015.)));
+        verify_exact("cnv::to_f64(7779311)", Number(F64Value(7779311.)));
+
+        // signed-integer kinds
+        verify_exact("cnv::to_i128(12345678987.43)", Number(I128Value(12345678987)));
+        verify_exact("cnv::to_i64(123456789.42)", Number(I64Value(123456789)));
+        verify_exact("cnv::to_i32(-765.65)", Number(I32Value(-765)));
+        verify_exact("cnv::to_i16(567.311)", Number(I16Value(567)));
+        verify_exact("cnv::to_i8(-125.089)", Number(I8Value(-125)));
+
+        // unsigned-integer kinds
+        verify_exact("cnv::to_u128(12789.43)", Number(U128Value(12789)));
+        verify_exact("cnv::to_u64(12.3)", Number(U64Value(12)));
+        verify_exact("cnv::to_u32(765.65)", Number(U32Value(765)));
+        verify_exact("cnv::to_u16(567.311)", Number(U16Value(567)));
+        verify_exact("cnv::to_u8(125.089)", Number(U8Value(125)));
+    }
+
+    #[test]
+    fn test_platform_functions_io() {
+        verify_exact(r#"io::stderr("Goodbye Cruel World")"#, Outcome(Ack));
+        verify_exact(r#"io::stdout("Hello World")"#, Outcome(Ack));
+    }
+
+    #[test]
+    fn test_platform_functions_os_system_call() {
+        verify_exact(r#"
+            create table ns("interpreter.os.call") (
+                symbol: String(8),
+                exchange: String(8),
+                last_sale: f64
+            )
+            os::call("chmod", "777", "oxide_db")
+        "#, StringValue(String::new()))
+    }
+
+    #[test]
+    fn test_platform_functions_str_format() {
+        verify_exact(r#"
+            str::format("This {} the {}", "is", "way")
+        "#, StringValue("This is the way".into()));
+    }
+
+    #[test]
+    fn test_platform_functions_str_left() {
+        // test valid case 1 (positive)
+        verify_exact(r#"
+            str::left('Hello World', 5)
+        "#, StringValue("Hello".into()));
+
+        // test valid case 2 (negative)
+        verify_exact(r#"
+            str::left('Hello World', -5)
+        "#, StringValue("World".into()));
+
+        // test the invalid case
+        verify_exact(r#"
+            str::left(12345, 5)
+        "#, Undefined)
+    }
+
+    #[test]
+    fn test_platform_functions_str_right() {
+        let mut interpreter = Interpreter::new();
+
+        // test valid case 1 (positive)
+        let result = interpreter.evaluate(r#"
+            str::right('Hello World', 5)
+        "#).unwrap();
+        assert_eq!(result, StringValue("World".into()));
+
+        // test valid case 2 (negative)
+        let result = interpreter.evaluate(r#"
+            str::right('Hello World', -5)
+        "#).unwrap();
+        assert_eq!(result, StringValue("Hello".into()));
+
+        // test the invalid case
+        let result = interpreter.evaluate(r#"
+            str::right(7779311, 5)
+        "#).unwrap();
+        assert_eq!(result, Undefined)
+    }
+
+    #[test]
+    fn test_platform_functions_str_substring() {
+        // test the valid case
+        verify_exact(r#"
+            str::substring('Hello World', 0, 5)
+        "#, StringValue("Hello".into()));
+
+        // test the invalid case
+        verify_exact(r#"
+            str::substring(8888, 0, 5)
+        "#, Undefined)
+    }
+
+    #[test]
+    fn test_platform_functions_util() {
+        verify_when("util::timestamp()", |r| matches!(r, DateValue(..)));
+        verify_when("util::uuid()", |r| matches!(r, UUIDValue(..)));
+
+        let mut interpreter = Interpreter::new();
+        interpreter.evaluate(r#"
+            ts := util::timestamp()
+        "#).unwrap();
+        interpreter = verify_where(interpreter, "util::day_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::hour_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::hour12_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::minute_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::month_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::second_of(ts)", |n| matches!(n, Number(..)));
+        interpreter = verify_where(interpreter, "util::year_of(ts)", |n| matches!(n, Number(..)));
+    }
+
+    #[test]
+    fn test_platform_functions_util_to_csv() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            [+] stocks := ns("interpreter.csv.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+            util::to_csv(from stocks)
+        "#).unwrap();
+        assert_eq!(result, Array(vec![
+            StringValue(r#""ABC","AMEX",11.11"#.into()),
+            StringValue(r#""UNO","OTC",0.2456"#.into()),
+            StringValue(r#""BIZ","NYSE",23.66"#.into()),
+            StringValue(r#""GOTO","OTC",0.1428"#.into()),
+            StringValue(r#""BOOM","NASDAQ",0.0872"#.into()),
+        ]));
+    }
+
+    #[test]
+    fn test_platform_functions_util_to_json() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            [+] stocks := ns("interpreter.json.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+            util::to_json(from stocks)
+        "#).unwrap();
+        assert_eq!(result, Array(vec![
+            StringValue(r#"{"symbol":"ABC","exchange":"AMEX","last_sale":11.11}"#.into()),
+            StringValue(r#"{"symbol":"UNO","exchange":"OTC","last_sale":0.2456}"#.into()),
+            StringValue(r#"{"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}"#.into()),
+            StringValue(r#"{"symbol":"GOTO","exchange":"OTC","last_sale":0.1428}"#.into()),
+            StringValue(r#"{"symbol":"BOOM","exchange":"NASDAQ","last_sale":0.0872}"#.into()),
+        ]));
+    }
+
+    #[test]
+    fn test_platform_functions_vm_eval() {
+        // valid case
+        verify_exact(r#"vm::eval("2 ** 4")"#, Number(F64Value(16.)));
+        // invalid case
+        verify_exact("vm::eval(123)", ErrorValue(StringExpected("i64".into())))
+    }
+
+    #[actix::test]
+    async fn test_platform_functions_vm_http() {
+        let mut interpreter = Interpreter::new();
+
+        // set up a listener on port 8833
+        let result = interpreter.evaluate_async(r#"
+            vm::serve(8833)
+        "#).await.unwrap();
+        assert_eq!(result, Outcome(Ack));
+
+        // create the table
+        let result = interpreter.evaluate(r#"
+            create table ns("interpreter.www.stocks") (
+                symbol: String(8),
+                exchange: String(8),
+                last_sale: f64
+            )"#).unwrap();
+        assert_eq!(result, Outcome(Ack));
+
+        // append a new row
+        let row_id = interpreter.evaluate_async(r#"
+            POST "http://localhost:8833/interpreter/www/stocks/0" FROM {
+                fields:[
+                    { name: "symbol", value: "ABC" },
+                    { name: "exchange", value: "AMEX" },
+                    { name: "last_sale", value: 11.77 }
+                ]
+            }"#).await.unwrap();
+        assert!(matches!(row_id, Number(I64Value(..))));
+
+        // fetch the previously created row
+        let row = interpreter.evaluate_async(format!(r#"
+            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        assert_eq!(row, StructureSoft(SoftStructure::new(&vec![
+            ("id".into(), Number(I64Value(0))),
+            ("fields".into(), Array(vec![
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("symbol".into())),
+                    ("value", StringValue("ABC".into())),
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("exchange".into())),
+                    ("value", StringValue("AMEX".into())),
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("last_sale".into())),
+                    ("value", Number(F64Value(11.77))),
+                ])),
+            ])),
+        ])));
+
+        // replace the previously created row
+        let result = interpreter.evaluate_async(r#"
+            PUT "http://localhost:8833/interpreter/www/stocks/:id" FROM {
+                fields:[
+                    { name: "symbol", value: "ABC" },
+                    { name: "exchange", value: "AMEX" },
+                    { name: "last_sale", value: 11.79 }
+                ]
+            }"#
+            .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
+            .as_str()).await.unwrap();
+        assert_eq!(result, Number(I64Value(1)));
+
+        // re-fetch the previously updated row
+        let row = interpreter.evaluate_async(format!(r#"
+            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        assert_eq!(row, StructureSoft(SoftStructure::new(&vec![
+            ("id".into(), Number(I64Value(0))),
+            ("fields".into(), Array(vec![
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("symbol".into())),
+                    ("value", StringValue("ABC".into())),
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("exchange".into())),
+                    ("value", StringValue("AMEX".into())),
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("last_sale".into())),
+                    ("value", Number(F64Value(11.79))),
+                ])),
+            ])),
+        ])));
+
+        // update the previously created row
+        let result = interpreter.evaluate_async(r#"
+            PATCH "http://localhost:8833/interpreter/www/stocks/:id" FROM {
+                fields:[
+                    { name: "last_sale", value: 11.81 }
+                ]
+            }"#
+            .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
+            .as_str()).await.unwrap();
+        assert_eq!(result, Number(I64Value(1)));
+
+        // re-fetch the previously updated row
+        let row = interpreter.evaluate_async(format!(r#"
+            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        assert_eq!(row, StructureSoft(SoftStructure::new(&vec![
+            ("id".into(), Number(I64Value(0))),
+            ("fields".into(), Array(vec![
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name".into(), StringValue("symbol".into())),
+                    ("value".into(), StringValue("ABC".into())),
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name".into(), StringValue("exchange".into())),
+                    ("value".into(), StringValue("AMEX".into())),
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name".into(), StringValue("last_sale".into())),
+                    ("value".into(), Number(F64Value(11.81))),
+                ])),
+            ])),
+        ])));
+
+        // fetch the headers for the previously updated row
+        let result = interpreter.evaluate_async(format!(r#"
+            HEAD "http://localhost:8833/interpreter/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        println!("HEAD: {}", result.to_string());
+        assert!(matches!(result, StructureSoft(..)));
+
+        // delete the previously updated row
+        let result = interpreter.evaluate_async(format!(r#"
+            DELETE "http://localhost:8833/interpreter/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        assert_eq!(result, Number(I64Value(1)));
+
+        // verify the deleted row is empty
+        let row = interpreter.evaluate_async(format!(r#"
+            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
+        "#).as_str()).await.unwrap();
+        assert_eq!(row, StructureSoft(SoftStructure::empty()));
+    }
+
+    #[test]
+    fn test_platform_functions_vm_version() {
+        verify_exact(
+            "vm::version()",
+            StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))
     }
 
     #[test]
@@ -281,22 +591,17 @@ mod tests {
     }
 
     #[test]
-    fn test_eval() {
-        // valid case
-        verify_exact(r#"vm::eval("2 ** 4")"#, Number(F64Value(16.)));
-        // invalid case
-        verify_exact("vm::eval(123)", ErrorValue(StringExpected("i64".into())))
-    }
-
-    #[test]
-    fn test_create_hard_structure() {
+    fn test_hard_structure() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             struct(symbol: String(8), exchange: String(8), last_sale: f64)
         "#).unwrap();
         let phys_columns = make_quote_columns();
-        assert_eq!(result, HardStructureValue(HardStructure::new(phys_columns.clone(), Vec::new())));
+        assert_eq!(result, StructureHard(HardStructure::new(phys_columns.clone(), Vec::new())));
+    }
 
+    fn test_hard_structure_with_default_values() {
+        let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
             struct(
                 symbol: String(8) = "ABC",
@@ -305,7 +610,7 @@ mod tests {
             )
         "#).unwrap();
         match result {
-            HardStructureValue(s) =>
+            StructureHard(s) =>
                 assert_eq!(s.get_values(), vec![
                     StringValue("ABC".into()),
                     StringValue("NYSE".into()),
@@ -316,48 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_hard_structure_from_table() {
-        verify_exact(r#"
-            [+] stocks := ns("interpreter.struct.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            stocks[0]
-        "#, HardStructureValue(HardStructure::from_parameters_and_values(
-            &make_quote_parameters(), vec![
-                StringValue("ABC".into()),
-                StringValue("AMEX".into()),
-                Number(F64Value(11.11)),
-            ],
-        ).unwrap()));
-    }
-
-    #[test]
-    fn test_extract_field_from_soft_structure() {
-        verify_exact(r#"
-            { symbol:"AAA", price:123.45 }::symbol
-        "#, StringValue("AAA".into()));
-    }
-
-    #[test]
-    fn test_access_lambda_within_soft_structure() {
-        verify_exact(r#"
-            stock := {
-                symbol:"ABC",
-                price:123.45,
-                last_sale: 23.67,
-                is_this_you: fn(symbol) => symbol == self::symbol
-            }
-
-            stock::is_this_you('ABC')
-        "#, Boolean(true));
-    }
-
-    #[test]
-    fn test_extraction_hard_structure() {
+    fn test_hard_structure_field() {
         verify_exact(r#"
             struct(
                 symbol: String(8) = "ABC",
@@ -368,7 +632,7 @@ mod tests {
     }
 
     #[test]
-    fn test_define_lambda_within_hard_structure() {
+    fn test_hard_structure_impl_method() {
         verify_exact(r#"
             stock := struct(
                 symbol: String(8) = "ABC",
@@ -385,7 +649,97 @@ mod tests {
     }
 
     #[test]
-    fn test_define_lambda_within_soft_structure() {
+    fn test_hard_structure_import() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            stock := struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+            import stock
+        "#).unwrap();
+        assert_eq!(interpreter.machine.get("symbol"), Some(StringValue("ABC".into())));
+        assert_eq!(interpreter.machine.get("exchange"), Some(StringValue("NYSE".into())));
+    }
+
+    #[test]
+    fn test_hard_structure_from_table() {
+        verify_exact(r#"
+            [+] stocks := ns("interpreter.struct.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+            stocks[0]
+        "#, StructureHard(HardStructure::from_parameters_and_values(
+            &make_quote_parameters(), vec![
+                StringValue("ABC".into()),
+                StringValue("AMEX".into()),
+                Number(F64Value(11.11)),
+            ],
+        ).unwrap()));
+    }
+
+    #[test]
+    fn test_soft_structure() {
+        let code = r#"
+            {
+                fields:[
+                    { name: "symbol", value: "ABC" },
+                    { name: "exchange", value: "AMEX" },
+                    { name: "last_sale", value: 11.77 }
+                ]
+            }"#;
+        let model = StructureSoft(SoftStructure::new(&vec![
+            ("fields", Array(vec![
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("symbol".into())),
+                    ("value", StringValue("ABC".into()))
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("exchange".into())),
+                    ("value", StringValue("AMEX".into()))
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("last_sale".into())),
+                    ("value", Number(F64Value(11.77)))
+                ])),
+            ]))
+        ]));
+        verify_exact(code, model.clone());
+        assert_eq!(
+            model.to_code().chars().filter(|c| !c.is_whitespace())
+                .collect::<String>(),
+            code.chars().filter(|c| !c.is_whitespace())
+                .collect::<String>())
+    }
+
+    #[test]
+    fn test_soft_structure_field() {
+        verify_exact(r#"
+            { symbol:"AAA", price:123.45 }::symbol
+        "#, StringValue("AAA".into()));
+    }
+
+    #[test]
+    fn test_soft_structure_method() {
+        verify_exact(r#"
+            stock := {
+                symbol:"ABC",
+                price:123.45,
+                last_sale: 23.67,
+                is_this_you: fn(symbol) => symbol == self::symbol
+            }
+
+            stock::is_this_you('ABC')
+        "#, Boolean(true));
+    }
+
+    #[test]
+    fn test_soft_structure_impl_method() {
         verify_exact(r#"
             stock := {
                 symbol: "ABC",
@@ -402,18 +756,106 @@ mod tests {
     }
 
     #[test]
-    fn test_extraction_timestamps() {
+    fn test_soft_structure_import() {
         let mut interpreter = Interpreter::new();
-        interpreter.evaluate(r#"
-            ts := util::timestamp()
+        let result = interpreter.evaluate(r#"
+            quote := { symbol: "ABC", exchange: "AMEX" }
+            import quote
         "#).unwrap();
-        interpreter = verify_where(interpreter, "util::day_of(ts)", |n| matches!(n, Number(..)));
-        interpreter = verify_where(interpreter, "util::hour_of(ts)", |n| matches!(n, Number(..)));
-        interpreter = verify_where(interpreter, "util::hour12_of(ts)", |n| matches!(n, Number(..)));
-        interpreter = verify_where(interpreter, "util::minute_of(ts)", |n| matches!(n, Number(..)));
-        interpreter = verify_where(interpreter, "util::month_of(ts)", |n| matches!(n, Number(..)));
-        interpreter = verify_where(interpreter, "util::second_of(ts)", |n| matches!(n, Number(..)));
-        interpreter = verify_where(interpreter, "util::year_of(ts)", |n| matches!(n, Number(..)));
+        assert_eq!(interpreter.machine.get("symbol"), Some(StringValue("ABC".into())));
+        assert_eq!(interpreter.machine.get("exchange"), Some(StringValue("AMEX".into())));
+    }
+
+    #[test]
+    fn test_soft_structure_json_literal_1() {
+        verify_exact(r#"
+            {
+              "columns": [{
+                  "name": "symbol",
+                  "param_type": "String(8)",
+                  "default_value": null
+                }, {
+                  "name": "exchange",
+                  "param_type": "String(8)",
+                  "default_value": null
+                }, {
+                  "name": "last_sale",
+                  "param_type": "f64",
+                  "default_value": null
+                }],
+              "indices": [],
+              "partitions": []
+            }
+        "#, StructureSoft(SoftStructure::new(&vec![
+            ("columns", Array(vec![
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("symbol".into())),
+                    ("param_type", StringValue("String(8)".into())),
+                    ("default_value", Null),
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("exchange".into())),
+                    ("param_type", StringValue("String(8)".into())),
+                    ("default_value", Null)
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("last_sale".into())),
+                    ("param_type", StringValue("f64".into())),
+                    ("default_value", Null),
+                ])),
+            ])),
+            ("indices", Array(Vec::new())),
+            ("partitions", Array(Vec::new())),
+        ])));
+    }
+
+    #[test]
+    fn test_soft_structure_json_literal_2() {
+        verify_exact(r#"
+            {
+              columns: [{
+                  name: "symbol",
+                  param_type: "String(8)",
+                  default_value: null
+                }, {
+                  name: "exchange",
+                  param_type: "String(8)",
+                  default_value: null
+                }, {
+                  name: "last_sale",
+                  param_type: "f64",
+                  default_value: null
+                }]
+            }
+        "#, StructureSoft(SoftStructure::new(&vec![
+            ("columns", Array(vec![
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("symbol".into())),
+                    ("param_type", StringValue("String(8)".into())),
+                    ("default_value", Null),
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("exchange".into())),
+                    ("param_type", StringValue("String(8)".into())),
+                    ("default_value", Null)
+                ])),
+                StructureSoft(SoftStructure::new(&vec![
+                    ("name", StringValue("last_sale".into())),
+                    ("param_type", StringValue("f64".into())),
+                    ("default_value", Null),
+                ])),
+            ]))
+        ])));
+    }
+
+    #[test]
+    fn test_module() {
+        verify_exact(r#"
+            mod abc {
+                fn hello(name) => str::format("hello {}", name)
+            }
+            abc::hello('world')
+        "#, StringValue("hello world".into()));
     }
 
     #[test]
@@ -442,45 +884,10 @@ mod tests {
 
     #[test]
     fn test_function_recursion_1() {
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate(r#"
+        verify_exact(r#"
             f := fn(n: i64) => if(n <= 1) 1 else n * f(n - 1)
-            f
-        "#).unwrap();
-        println!("function: {}", result.to_code());
-
-        let model = Function {
-            params: vec![
-                Parameter::new("n", Some("i64".into()), None)
-            ],
-            // iff(n <= 1, 1, n * f(n - 1))
-            code: Box::new(If {
-                // n <= 1
-                condition: Box::new(Condition(LessOrEqual(
-                    Box::new(Variable("n".into())),
-                    Box::new(Literal(Number(I64Value(1)))),
-                ))),
-                // 1
-                a: Box::new(Literal(Number(I64Value(1)))),
-                // n * f(n - 1)
-                b: Some(Box::from(Multiply(
-                    Box::from(Variable("n".into())),
-                    Box::from(FunctionCall {
-                        fx: Box::new(Variable("f".into())),
-                        args: vec![
-                            Minus(
-                                Box::from(Variable("n".into())),
-                                Box::from(Literal(Number(I64Value(1)))),
-                            ),
-                        ],
-                    }),
-                ))),
-            }),
-        };
-        assert_eq!(result, model);
-
-        let result = interpreter.evaluate("f(5)").unwrap();
-        assert_eq!(result, Number(I64Value(120)))
+            f(5)
+        "#, Number(I64Value(120)))
     }
 
     #[test]
@@ -489,146 +896,6 @@ mod tests {
             f := fn(n) => iff(n <= 1, 1, n * f(n - 1))
             f(6)
         "#, Number(I64Value(720)))
-    }
-
-    #[actix::test]
-    async fn test_http_workflow() {
-        let mut interpreter = Interpreter::new();
-
-        // set up a listener on port 8833
-        let result = interpreter.evaluate_async(r#"
-            vm::serve(8833)
-        "#).await.unwrap();
-        assert_eq!(result, Outcome(Ack));
-
-        // create the table
-        let result = interpreter.evaluate(r#"
-            create table ns("interpreter.www.stocks") (
-                symbol: String(8),
-                exchange: String(8),
-                last_sale: f64
-            )"#).unwrap();
-        assert_eq!(result, Outcome(Ack));
-
-        // append a new row
-        let row_id = interpreter.evaluate_async(r#"
-            POST "http://localhost:8833/interpreter/www/stocks/0" FROM {
-                fields:[
-                    { name: "symbol", value: "ABC" },
-                    { name: "exchange", value: "AMEX" },
-                    { name: "last_sale", value: 11.77 }
-                ]
-            }"#).await.unwrap();
-        assert!(matches!(row_id, Number(I64Value(..))));
-
-        // fetch the previously created row
-        let row = interpreter.evaluate_async(format!(r#"
-            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
-        assert_eq!(row, SoftStructureValue(SoftStructure::new(&vec![
-            ("id".into(), Number(I64Value(0))),
-            ("fields".into(), Array(vec![
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("symbol".into())),
-                    ("value", StringValue("ABC".into())),
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("exchange".into())),
-                    ("value", StringValue("AMEX".into())),
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("last_sale".into())),
-                    ("value", Number(F64Value(11.77))),
-                ])),
-            ])),
-        ])));
-
-        // replace the previously created row
-        let result = interpreter.evaluate_async(r#"
-            PUT "http://localhost:8833/interpreter/www/stocks/:id" FROM {
-                fields:[
-                    { name: "symbol", value: "ABC" },
-                    { name: "exchange", value: "AMEX" },
-                    { name: "last_sale", value: 11.79 }
-                ]
-            }"#
-            .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
-            .as_str()).await.unwrap();
-        assert_eq!(result, Number(I64Value(1)));
-
-        // re-fetch the previously updated row
-        let row = interpreter.evaluate_async(format!(r#"
-            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
-        assert_eq!(row, SoftStructureValue(SoftStructure::new(&vec![
-            ("id".into(), Number(I64Value(0))),
-            ("fields".into(), Array(vec![
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("symbol".into())),
-                    ("value", StringValue("ABC".into())),
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("exchange".into())),
-                    ("value", StringValue("AMEX".into())),
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("last_sale".into())),
-                    ("value", Number(F64Value(11.79))),
-                ])),
-            ])),
-        ])));
-
-        // update the previously created row
-        let result = interpreter.evaluate_async(r#"
-            PATCH "http://localhost:8833/interpreter/www/stocks/:id" FROM {
-                fields:[
-                    { name: "last_sale", value: 11.81 }
-                ]
-            }"#
-            .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
-            .as_str()).await.unwrap();
-        assert_eq!(result, Number(I64Value(1)));
-
-        // re-fetch the previously updated row
-        let row = interpreter.evaluate_async(format!(r#"
-            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
-        assert_eq!(row, SoftStructureValue(SoftStructure::new(&vec![
-            ("id".into(), Number(I64Value(0))),
-            ("fields".into(), Array(vec![
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name".into(), StringValue("symbol".into())),
-                    ("value".into(), StringValue("ABC".into())),
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name".into(), StringValue("exchange".into())),
-                    ("value".into(), StringValue("AMEX".into())),
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name".into(), StringValue("last_sale".into())),
-                    ("value".into(), Number(F64Value(11.81))),
-                ])),
-            ])),
-        ])));
-
-        // fetch the headers for the previously updated row
-        let result = interpreter.evaluate_async(format!(r#"
-            HEAD "http://localhost:8833/interpreter/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
-        println!("HEAD: {}", result.to_string());
-        assert!(matches!(result, SoftStructureValue(..)));
-
-        // delete the previously updated row
-        let result = interpreter.evaluate_async(format!(r#"
-            DELETE "http://localhost:8833/interpreter/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
-        assert_eq!(result, Number(I64Value(1)));
-
-        // verify the deleted row is empty
-        let row = interpreter.evaluate_async(format!(r#"
-            GET "http://localhost:8833/interpreter/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
-        assert_eq!(row, SoftStructureValue(SoftStructure::empty()));
     }
 
     #[test]
@@ -666,22 +933,39 @@ mod tests {
     }
 
     #[test]
-    fn test_import_from_json() {
+    fn test_import_function_from_package() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            quote := { symbol: "ABC", exchange: "AMEX" }
-            import "quote"
+            import str::format
+            format("This {} the {}", "is", "way")
         "#).unwrap();
-        assert_eq!(interpreter.machine.get("symbol"), Some(StringValue("ABC".into())));
-        assert_eq!(interpreter.machine.get("exchange"), Some(StringValue("AMEX".into())));
+        assert_eq!(result, StringValue("This is the way".into()));
+
+        // attempt a non-import function from the same package
+        let result = interpreter.evaluate(r#"
+            left('Hello World', -5)
+        "#);
+        assert!(matches!(result, Err(..)));
     }
 
     #[test]
-    fn test_import_from_package() {
-        verify_exact(r#"
-            import ["str"]
-            format("This {} the {}", "is", "way")
-        "#, StringValue("This is the way".into()))
+    fn test_import_all_from_package() {
+        let mut interpreter = Interpreter::new();
+
+        // initially 'to_u8' should not be in scope
+        assert_eq!(interpreter.machine.get("to_u8"), None);
+        assert_eq!(interpreter.machine.get("to_u16"), None);
+        assert_eq!(interpreter.machine.get("to_u32"), None);
+        assert_eq!(interpreter.machine.get("to_u64"), None);
+
+        // import all conversion members
+        interpreter.evaluate("import cnv").unwrap();
+
+        // after the import, 'to_u8' should be in scope
+        assert_eq!(interpreter.machine.get("to_u8"), Some(BackDoor(BackDoorKey::CnvToU8)));
+        assert_eq!(interpreter.machine.get("to_u16"), Some(BackDoor(BackDoorKey::CnvToU16)));
+        assert_eq!(interpreter.machine.get("to_u32"), Some(BackDoor(BackDoorKey::CnvToU32)));
+        assert_eq!(interpreter.machine.get("to_u64"), Some(BackDoor(BackDoorKey::CnvToU64)));
     }
 
     #[test]
@@ -700,88 +984,6 @@ mod tests {
             include 123
         "#).unwrap();
         assert_eq!(result, ErrorValue(TypeMismatch("String".into(), "i64".into())))
-    }
-
-    #[test]
-    fn test_json_literal_1() {
-        verify_exact(r#"
-            {
-              "columns": [{
-                  "name": "symbol",
-                  "param_type": "String(8)",
-                  "default_value": null
-                }, {
-                  "name": "exchange",
-                  "param_type": "String(8)",
-                  "default_value": null
-                }, {
-                  "name": "last_sale",
-                  "param_type": "f64",
-                  "default_value": null
-                }],
-              "indices": [],
-              "partitions": []
-            }
-        "#, SoftStructureValue(SoftStructure::new(&vec![
-            ("columns", Array(vec![
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("symbol".into())),
-                    ("param_type", StringValue("String(8)".into())),
-                    ("default_value", Null),
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("exchange".into())),
-                    ("param_type", StringValue("String(8)".into())),
-                    ("default_value", Null)
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("last_sale".into())),
-                    ("param_type", StringValue("f64".into())),
-                    ("default_value", Null),
-                ])),
-            ])),
-            ("indices", Array(vec![])),
-            ("partitions", Array(vec![])),
-        ])));
-    }
-
-    #[test]
-    fn test_json_literal_2() {
-        verify_exact(r#"
-            {
-              columns: [{
-                  name: "symbol",
-                  param_type: "String(8)",
-                  default_value: null
-                }, {
-                  name: "exchange",
-                  param_type: "String(8)",
-                  default_value: null
-                }, {
-                  name: "last_sale",
-                  param_type: "f64",
-                  default_value: null
-                }]
-            }
-        "#, SoftStructureValue(SoftStructure::new(&vec![
-            ("columns", Array(vec![
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("symbol".into())),
-                    ("param_type", StringValue("String(8)".into())),
-                    ("default_value", Null),
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("exchange".into())),
-                    ("param_type", StringValue("String(8)".into())),
-                    ("default_value", Null)
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("last_sale".into())),
-                    ("param_type", StringValue("f64".into())),
-                    ("default_value", Null),
-                ])),
-            ]))
-        ])));
     }
 
     #[test]
@@ -822,123 +1024,6 @@ mod tests {
             b := { key: "123", values: [1, 74, 88, 0] }
             matches(a, b)
         "#, Boolean(false));
-    }
-
-    #[test]
-    fn test_module() {
-        verify_exact(r#"
-            mod abc {
-                fn hello(name) => str::format("hello {}", name)
-            }
-            abc::hello('world')
-        "#, StringValue("hello world".into()));
-    }
-
-    #[test]
-    fn test_soft_structure() {
-        let code = r#"
-            {
-                fields:[
-                    { name: "symbol", value: "ABC" },
-                    { name: "exchange", value: "AMEX" },
-                    { name: "last_sale", value: 11.77 }
-                ]
-            }"#;
-        let model = SoftStructureValue(SoftStructure::new(&vec![
-            ("fields", Array(vec![
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("symbol".into())),
-                    ("value", StringValue("ABC".into()))
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("exchange".into())),
-                    ("value", StringValue("AMEX".into()))
-                ])),
-                SoftStructureValue(SoftStructure::new(&vec![
-                    ("name", StringValue("last_sale".into())),
-                    ("value", Number(F64Value(11.77)))
-                ])),
-            ]))
-        ]));
-        verify_exact(code, model.clone());
-        assert_eq!(
-            model.to_code().chars().filter(|c| !c.is_whitespace())
-                .collect::<String>(),
-            code.chars().filter(|c| !c.is_whitespace())
-                .collect::<String>())
-    }
-
-    #[test]
-    fn test_string_format() {
-        verify_exact(r#"
-            str::format("This {} the {}", "is", "way")
-        "#, StringValue("This is the way".into()));
-    }
-
-    #[test]
-    fn test_string_left() {
-        // test valid case 1 (positive)
-        verify_exact(r#"
-            str::left('Hello World', 5)
-        "#, StringValue("Hello".into()));
-
-        // test valid case 2 (negative)
-        verify_exact(r#"
-            str::left('Hello World', -5)
-        "#, StringValue("World".into()));
-
-        // test the invalid case
-        verify_exact(r#"
-            str::left(12345, 5)
-        "#, Undefined)
-    }
-
-    #[test]
-    fn test_string_right() {
-        let mut interpreter = Interpreter::new();
-
-        // test valid case 1 (positive)
-        let result = interpreter.evaluate(r#"
-            str::right('Hello World', 5)
-        "#).unwrap();
-        assert_eq!(result, StringValue("World".into()));
-
-        // test valid case 2 (negative)
-        let result = interpreter.evaluate(r#"
-            str::right('Hello World', -5)
-        "#).unwrap();
-        assert_eq!(result, StringValue("Hello".into()));
-
-        // test the invalid case
-        let result = interpreter.evaluate(r#"
-            str::right(7779311, 5)
-        "#).unwrap();
-        assert_eq!(result, Undefined)
-    }
-
-    #[test]
-    fn test_substring() {
-        // test the valid case
-        verify_exact(r#"
-            str::substring('Hello World', 0, 5)
-        "#, StringValue("Hello".into()));
-
-        // test the invalid case
-        verify_exact(r#"
-            str::substring(8888, 0, 5)
-        "#, Undefined)
-    }
-
-    #[test]
-    fn test_system_call() {
-        verify_exact(r#"
-            create table ns("interpreter.os.call") (
-                symbol: String(8),
-                exchange: String(8),
-                last_sale: f64
-            )
-            os::call("chmod", "777", "oxide_db")
-        "#, StringValue(String::new()))
     }
 
     #[test]
@@ -1184,52 +1269,10 @@ mod tests {
     }
 
     #[test]
-    fn test_to_csv() {
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate(r#"
-            [+] stocks := ns("interpreter.csv.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            util::to_csv(from stocks)
-        "#).unwrap();
-        assert_eq!(result, Array(vec![
-            StringValue(r#""ABC","AMEX",11.11"#.into()),
-            StringValue(r#""UNO","OTC",0.2456"#.into()),
-            StringValue(r#""BIZ","NYSE",23.66"#.into()),
-            StringValue(r#""GOTO","OTC",0.1428"#.into()),
-            StringValue(r#""BOOM","NASDAQ",0.0872"#.into()),
-        ]));
-    }
-
-    #[test]
-    fn test_to_json() {
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate(r#"
-            [+] stocks := ns("interpreter.json.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            util::to_json(from stocks)
-        "#).unwrap();
-        assert_eq!(result, Array(vec![
-            StringValue(r#"{"symbol":"ABC","exchange":"AMEX","last_sale":11.11}"#.into()),
-            StringValue(r#"{"symbol":"UNO","exchange":"OTC","last_sale":0.2456}"#.into()),
-            StringValue(r#"{"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}"#.into()),
-            StringValue(r#"{"symbol":"GOTO","exchange":"OTC","last_sale":0.1428}"#.into()),
-            StringValue(r#"{"symbol":"BOOM","exchange":"NASDAQ","last_sale":0.0872}"#.into()),
-        ]));
-    }
-
-    #[test]
     fn test_type_of() {
-        verify_exact("type_of([1, 2, 3])", StringValue("Array".into()));
+        verify_exact("type_of([true, false])", StringValue("Array<Boolean>".into()));
+        verify_exact("type_of([12, 76, 444])", StringValue("Array<i64>".into()));
+        verify_exact("type_of(['ciao', 'hello', 'world'])", StringValue("Array<String(5)>".into()));
         verify_exact("type_of(false)", StringValue("Boolean".into()));
         verify_exact("type_of(true)", StringValue("Boolean".into()));
         verify_exact("type_of(util::timestamp())", StringValue("Date".into()));
@@ -1263,25 +1306,10 @@ mod tests {
         assert_eq!(Number(I64Value(5)), interpreter.evaluate("x").unwrap());
     }
 
-    #[test]
-    fn test_write_to_stderr() {
-        verify_exact(r#"
-            io::stderr("Goodbye Cruel World")
-        "#, Outcome(Ack));
-    }
-
-    #[test]
-    fn test_write_to_stdout() {
-        verify_exact(r#"
-            io::stdout("Hello World")
-        "#, Outcome(Ack));
-    }
-
-    #[test]
-    fn test_version() {
-        verify_exact(
-            "vm::version()",
-            StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))
+    fn verify_whence(mut interpreter: Interpreter, code: &str, expected: TypedValue) -> Interpreter {
+        let actual = interpreter.evaluate(code).unwrap();
+        assert_eq!(actual, expected);
+        interpreter
     }
 
     fn verify_exact(code: &str, expected: TypedValue) {

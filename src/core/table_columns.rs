@@ -40,7 +40,7 @@ impl Column {
     pub fn from_parameter(parameter: &Parameter, offset: usize) -> std::io::Result<Column> {
         Ok(Self::new(
             parameter.get_name(),
-            DataType::compile(parameter.get_param_type().clone().unwrap_or("".to_string()).as_str())?,
+            DataType::compile(parameter.get_param_type().unwrap_or("".to_string()).as_str())?,
             TypedValue::wrap_value_opt(&parameter.get_default_value())?, offset))
     }
 
@@ -124,7 +124,7 @@ mod tests {
         assert_eq!(column.name, "exchange");
         assert_eq!(column.data_type, StringType(SizeTypes::Fixed(10)));
         assert_eq!(column.default_value, StringValue("N/A".into()));
-        assert_eq!(&column.data_type.to_type_declaration(), column_desc.get_param_type());
+        assert_eq!(column.data_type.to_type_declaration(), column_desc.get_param_type());
         assert_eq!(column.max_physical_size, 19);
     }
 

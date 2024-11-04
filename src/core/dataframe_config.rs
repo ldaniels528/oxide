@@ -23,7 +23,7 @@ impl DataFrameConfig {
         DataFrameConfig {
             columns: parameters,
             indices: Vec::new(),
-            partitions: Vec::new() 
+            partitions: Vec::new(),
         }
     }
 
@@ -70,7 +70,6 @@ impl HashIndexConfig {
     pub fn new(indexed_column_names: Vec<String>, is_unique: bool) -> Self {
         HashIndexConfig { indexed_column_names, is_unique }
     }
-
 }
 
 // Unit tests

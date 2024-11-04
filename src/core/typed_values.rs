@@ -3,7 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::cmp::Ordering;
-use std::collections::{Bound, HashMap};
+use std::collections::Bound;
 use std::fmt::Display;
 use std::hash::{DefaultHasher, Hasher};
 use std::i32;
@@ -31,6 +31,7 @@ use crate::errors::Errors;
 use crate::errors::Errors::{Exact, TypeMismatch, Various};
 use crate::expression::Expression;
 use crate::file_row_collection::FileRowCollection;
+use crate::inferences::Inferences;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::*;
@@ -41,7 +42,6 @@ use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::structures::*;
-use crate::table_columns::Column;
 use crate::typed_values::TypedValue::*;
 
 const ISO_DATE_FORMAT: &str =
@@ -65,9 +65,9 @@ pub enum TypedValue {
     Null,
     Number(NumberValue),
     Outcome(Outcomes),
-    SoftStructureValue(SoftStructure),
+    StructureHard(HardStructure),
+    StructureSoft(SoftStructure),
     StringValue(String),
-    HardStructureValue(HardStructure),
     TableValue(ModelRowCollection),
     UUIDValue(u128),
     Undefined,
@@ -82,7 +82,7 @@ impl TypedValue {
     /// decodes the typed value based on the supplied data type and buffer
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
         match data_type {
-            ArrayType => Array(vec![]),
+            ArrayType(_kind) => Array(Vec::new()),
             BLOBType(_size) => BLOB(Vec::new()),
             BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             DateType => codec::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
@@ -101,9 +101,9 @@ impl TypedValue {
             //     OutcomeKind::RowsUpdated => Outcome(Outcomes::RowsAffected(codec::decode_row_id(&buffer, 1))),
             // },
             StringType(size) => StringValue(codec::decode_string(buffer, offset, size.to_size()).to_string()),
-            StructureType(columns) =>
-                match HardStructure::from_parameters(columns) {
-                    Ok(structure) => HardStructureValue(structure),
+            StructureType(params) =>
+                match HardStructure::from_parameters(params) {
+                    Ok(structure) => StructureHard(structure),
                     Err(err) => ErrorValue(Errors::Exact(err.to_string()))
                 }
             TableType(columns) => TableValue(ModelRowCollection::construct(columns)),
@@ -119,7 +119,7 @@ impl TypedValue {
         buffer: &mut ByteCodeCompiler,
     ) -> std::io::Result<TypedValue> {
         let tv = match data_type {
-            ArrayType => Array(buffer.next_array()?),
+            ArrayType(..) => Array(buffer.next_array()?),
             BLOBType(..) => BLOB(buffer.next_blob()),
             BooleanType => Boolean(buffer.next_bool()),
             DateType => DateValue(buffer.next_i64()),
@@ -155,7 +155,7 @@ impl TypedValue {
                 OutcomeKind::RowsUpdated => Outcome(Outcomes::RowsAffected(buffer.next_row_id())),
             },
             StringType(..) => StringValue(buffer.next_string()),
-            StructureType(params) => HardStructureValue(buffer.next_struct_with_parameters(params)?),
+            StructureType(params) => StructureHard(buffer.next_struct_with_parameters(params)?),
             TableType(columns) => TableValue(buffer.next_table_with_columns(columns)?),
             InferredType => Undefined,
             UUIDType => UUIDValue(buffer.next_u128()),
@@ -177,7 +177,7 @@ impl TypedValue {
                         let data_type = value.get_type().to_type_declaration();
                         Parameter::new(name, data_type, Some(value.to_code()))
                     }).collect::<Vec<_>>()) {
-                    Ok(structure) => HardStructureValue(structure),
+                    Ok(structure) => StructureHard(structure),
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 }
         }
@@ -247,17 +247,17 @@ impl TypedValue {
     pub fn contains(&self, value: &TypedValue) -> TypedValue {
         match &self {
             Array(items) => Boolean(items.contains(value)),
-            SoftStructureValue(soft) => match value {
-                StringValue(name) => Boolean(soft.contains(name)),
-                _ => Boolean(false)
-            },
-            HardStructureValue(hard) => match value {
+            StructureHard(hard) => match value {
                 StringValue(name) => Boolean(hard.contains(name)),
                 _ => Boolean(false)
             },
+            StructureSoft(soft) => match value {
+                StringValue(name) => Boolean(soft.contains(name)),
+                _ => Boolean(false)
+            },
             TableValue(mrc) => match value {
-                SoftStructureValue(soft) => mrc.contains(&soft.to_row()),
-                HardStructureValue(hard) => mrc.contains(&hard.to_row()),
+                StructureSoft(soft) => mrc.contains(&soft.to_row()),
+                StructureHard(hard) => mrc.contains(&hard.to_row()),
                 _ => Boolean(false)
             }
             _ => Boolean(false)
@@ -293,7 +293,7 @@ impl TypedValue {
             // Outcome(Outcomes::Ack) | Null | Undefined => [0u8; 0].to_vec(),
             // Outcome(oc) => oc.encode().unwrap(),
             StringValue(string) => codec::encode_string(string),
-            HardStructureValue(structure) => codec::encode_string(structure.to_string().as_str()),
+            //StructureHard(structure) => codec::encode_string(structure.to_string().as_str()),
             TableValue(rc) => rc.encode(),
             UUIDValue(guid) => guid.to_be_bytes().to_vec(),
             other => Codec::encode_value(other).unwrap_or_else(|err| {
@@ -305,14 +305,14 @@ impl TypedValue {
 
     pub fn get_type(&self) -> DataType {
         match self.to_owned() {
-            Array(..) => ArrayType,
+            Array(items) => ArrayType(Box::new(Inferences::infer_values(&items))),
             BackDoor(key) => key.get_type(),
             Function { params, .. } => FunctionType(params),
             BLOB(v) => BLOBType(Fixed(v.len())),
             Boolean(..) => BooleanType,
             DateValue(..) => DateType,
             ErrorValue(..) => ErrorType,
-            NamespaceValue(..) => TableType(vec![]),
+            NamespaceValue(..) => TableType(Vec::new()),
             Null => InferredType,
             Number(nv) => NumberType(nv.kind()),
             Outcome(oc) => match oc {
@@ -320,8 +320,8 @@ impl TypedValue {
                 Outcomes::RowId(..) => OutcomeType(OutcomeKind::RowInserted),
                 Outcomes::RowsAffected(..) => OutcomeType(OutcomeKind::RowsUpdated),
             },
-            HardStructureValue(hard) => StructureType(hard.get_parameters()),
-            SoftStructureValue(soft) => StructureType(soft.get_parameters()),
+            StructureHard(hard) => StructureType(hard.get_parameters()),
+            StructureSoft(soft) => StructureType(soft.get_parameters()),
             StringValue(s) => StringType(Fixed(s.len())),
             TableValue(mrc) => TableType(Parameter::from_columns(mrc.get_columns())),
             Undefined => InferredType,
@@ -350,10 +350,10 @@ impl TypedValue {
     pub fn matches(&self, other: &Self) -> TypedValue {
         match (self, other) {
             (a, b) if *a == *b => Boolean(true),
-            (SoftStructureValue(a), SoftStructureValue(b)) => {
+            (StructureSoft(a), StructureSoft(b)) => {
                 Boolean(a.to_hash_map() == b.to_hash_map())
             }
-            (HardStructureValue(a), HardStructureValue(b)) => Boolean(a == b),
+            (StructureHard(a), StructureHard(b)) => Boolean(a == b),
             _ => Boolean(false)
         }
     }
@@ -373,10 +373,20 @@ impl TypedValue {
                 format!("[{}]", items.iter()
                     .map(|v| v.to_code())
                     .collect::<Vec<_>>().join(", ")),
-            SoftStructureValue(ss) => ss.to_code(),
-            HardStructureValue(hs) => hs.to_code(),
+            StructureHard(hs) => hs.to_code(),
+            StructureSoft(ss) => ss.to_code(),
             StringValue(s) => format!("\"{s}\""),
             other => other.unwrap_value()
+        }
+    }
+
+    pub fn to_f32(&self) -> f32 {
+        match self {
+            Outcome(Outcomes::Ack) => 1.,
+            Boolean(true) => 1.,
+            Number(nv) => nv.to_f32(),
+            Outcome(oc) => oc.to_f32(),
+            _ => 0.
         }
     }
 
@@ -390,12 +400,52 @@ impl TypedValue {
         }
     }
 
+    pub fn to_i8(&self) -> i8 {
+        match self {
+            Outcome(Outcomes::Ack) => 1,
+            Boolean(true) => 1,
+            Number(nv) => nv.to_i8(),
+            Outcome(oc) => oc.to_i8(),
+            _ => 0
+        }
+    }
+
+    pub fn to_i16(&self) -> i16 {
+        match self {
+            Outcome(Outcomes::Ack) => 1,
+            Boolean(true) => 1,
+            Number(nv) => nv.to_i16(),
+            Outcome(oc) => oc.to_i16(),
+            _ => 0
+        }
+    }
+
+    pub fn to_i32(&self) -> i32 {
+        match self {
+            Outcome(Outcomes::Ack) => 1,
+            Boolean(true) => 1,
+            Number(nv) => nv.to_i32(),
+            Outcome(oc) => oc.to_i32(),
+            _ => 0
+        }
+    }
+
     pub fn to_i64(&self) -> i64 {
         match self {
             Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
             Number(nv) => nv.to_i64(),
             Outcome(oc) => oc.to_i64(),
+            _ => 0
+        }
+    }
+
+    pub fn to_i128(&self) -> i128 {
+        match self {
+            Outcome(Outcomes::Ack) => 1,
+            Boolean(true) => 1,
+            Number(nv) => nv.to_i128(),
+            Outcome(oc) => oc.to_i128(),
             _ => 0
         }
     }
@@ -415,13 +465,13 @@ impl TypedValue {
                     .map(|c| c.to_json()).collect());
                 serde_json::json!({ "params": my_params, "code": code.to_code() })
             }
-            HardStructureValue(s) => s.to_json(),
             NamespaceValue(d, s, n) => serde_json::json!(format!("{d}.{s}.{n}")),
             Null => serde_json::Value::Null,
             Number(value) => value.to_json(),
             Outcome(oc) => serde_json::json!(oc.to_u64()),
             StringValue(string) => serde_json::json!(string),
-            SoftStructureValue(s) => s.to_json(),
+            StructureHard(s) => s.to_json(),
+            StructureSoft(s) => s.to_json(),
             TableValue(mrc) => {
                 let rows = mrc.get_rows().iter()
                     .map(|r| r.to_row_js(mrc.get_columns()))
@@ -440,9 +490,41 @@ impl TypedValue {
                 let frc = FileRowCollection::open(&ns)?;
                 Ok(Box::new(frc))
             }
+            StructureHard(s) => Ok(Box::new(s.to_table())),
+            StructureSoft(s) => Ok(Box::new(s.to_table())),
             TableValue(mrc) => Ok(Box::new(mrc.to_owned())),
             ErrorValue(message) => fail(message.to_string()),
             z => fail_value("Table", z)
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            Outcome(Outcomes::Ack) => 1,
+            Boolean(true) => 1,
+            Number(n) => n.to_u8(),
+            Outcome(oc) => oc.to_u8(),
+            _ => 0
+        }
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        match self {
+            Outcome(Outcomes::Ack) => 1,
+            Boolean(true) => 1,
+            Number(n) => n.to_u16(),
+            Outcome(oc) => oc.to_u16(),
+            _ => 0
+        }
+    }
+
+    pub fn to_u32(&self) -> u32 {
+        match self {
+            Outcome(Outcomes::Ack) => 1,
+            Boolean(true) => 1,
+            Number(n) => n.to_u32(),
+            Outcome(oc) => oc.to_u32(),
+            _ => 0
         }
     }
 
@@ -492,14 +574,14 @@ impl TypedValue {
                 format!("(fn({}) => {})",
                         params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
                         code.to_code()),
-            HardStructureValue(structure) => structure.to_code(),
             TableValue(mrc) => serde_json::json!(mrc.get_rows()).to_string(),
             NamespaceValue(d, s, n) => format!("{d}.{s}.{n}"),
             Null => "null".into(),
             Number(number) => number.unwrap_value(),
             Outcome(outcome) => outcome.to_string(),
             StringValue(string) => string.into(),
-            SoftStructureValue(schemaless) => schemaless.to_code(),
+            StructureHard(structure) => structure.to_code(),
+            StructureSoft(structure) => structure.to_code(),
             Undefined => "undefined".into(),
             UUIDValue(guid) => Uuid::from_u128(*guid).to_string(),
         }
@@ -571,7 +653,7 @@ impl Add for TypedValue {
             (Outcome(Outcomes::Ack), Boolean(..)) => Boolean(true),
             (Outcome(a), Outcome(b)) => Outcome(Outcomes::RowsAffected(a.to_update_count() + b.to_update_count())),
             (StringValue(a), StringValue(b)) => StringValue(a + b.as_str()),
-            (TableValue(a), HardStructureValue(b)) => {
+            (TableValue(a), StructureHard(b)) => {
                 let mut mrc = match ModelRowCollection::from_table(Box::new(&a)) {
                     Ok(mrc) => mrc,
                     Err(err) => return ErrorValue(Exact(err.to_string()))
@@ -661,7 +743,7 @@ fn fetch(mrc: &ModelRowCollection, index: usize) -> TypedValue {
     let columns = mrc.get_columns();
     match mrc.read_row(index) {
         Ok((row, meta)) => {
-            HardStructureValue(match meta.is_allocated {
+            StructureHard(match meta.is_allocated {
                 true => row.to_struct(columns),
                 false => Row::empty(columns).to_struct(columns),
             })
@@ -712,10 +794,9 @@ impl Neg for TypedValue {
                 U128Value(z) => I128Value(-(z as i128)),
             }),
             Outcome(oc) => Number(I64Value(-oc.to_i64())),
-            // Surfaces (Hard -> StructureValue | Soft -> ShapelessValue)
-            SoftStructureValue(..) => error("Schemaless".into()),
             StringValue(..) => error("String".into()),
-            HardStructureValue(_) => error("Structure".into()),
+            StructureHard(..) => error("Structure".into()),
+            StructureSoft(..) => error("Structure".into()),
             TableValue(..) => error("Table".into()),
             Undefined => Undefined,
             UUIDValue(..) => error("UUID".into()),
@@ -816,7 +897,7 @@ impl Sub for TypedValue {
     }
 }
 
-// Unit tests
+/// Unit tests
 #[cfg(test)]
 mod tests {
     use crate::testdata::{make_quote, make_quote_columns};
@@ -890,7 +971,7 @@ mod tests {
 
     #[test]
     fn test_json_object_contains_string() {
-        let js_value = SoftStructureValue(SoftStructure::new(&vec![
+        let js_value = StructureSoft(SoftStructure::new(&vec![
             ("name", StringValue("symbol".to_string())),
             ("param_type", StringValue("String(8)".to_string())),
             ("default_value", Null),
@@ -909,7 +990,7 @@ mod tests {
             make_quote(4, "BOOM", "NASDAQ", 56.87),
             make_quote(5, "TRX", "NASDAQ", 7.9311),
         ]));
-        let js_obj = SoftStructureValue(SoftStructure::new(&vec![
+        let js_obj = StructureSoft(SoftStructure::new(&vec![
             ("symbol", StringValue("BIZ".into())),
             ("exchange", StringValue("NYSE".into())),
             ("last_sale", Number(F64Value(23.67))),
@@ -928,7 +1009,7 @@ mod tests {
             make_quote(4, "TRX", "NASDAQ", 7.9311),
             make_quote(5, "BIZ", "NYSE", 23.66),
         ]));
-        let obj = HardStructureValue(HardStructure::new(phys_columns, vec![
+        let obj = StructureHard(HardStructure::new(phys_columns, vec![
             StringValue("BIZ".into()),
             StringValue("NYSE".into()),
             Number(F64Value(23.66)),
@@ -945,7 +1026,7 @@ mod tests {
             make_quote(2, "BIZ", "NYSE", 23.66),
             make_quote(3, "GOTO", "OTC", 0.1428),
             make_quote(4, "BOOM", "NASDAQ", 56.87)]);
-        assert_eq!(TableValue(mrc)[0], HardStructureValue(HardStructure::new(
+        assert_eq!(TableValue(mrc)[0], StructureHard(HardStructure::new(
             phys_columns, vec![
                 StringValue("ABC".into()),
                 StringValue("AMEX".into()),
@@ -1042,6 +1123,7 @@ mod tests {
         verify_to_json(Number(U128Value(123_456_789)), serde_json::json!(123_456_789));
         verify_to_json(Null, serde_json::Value::Null);
         verify_to_json(StringValue("Hello World".into()), serde_json::Value::String("Hello World".into()));
+        //verify_to_json()
         verify_to_json(Undefined, serde_json::Value::Null);
         verify_to_json(UUIDValue(0x67452301_ABCD_EF89_1234_567890ABCDEFu128),
                        serde_json::Value::String("67452301-abcd-ef89-1234-567890abcdef".into()));
@@ -1081,7 +1163,6 @@ mod tests {
         let data_type = expected.get_type();
         let bytes = expected.encode();
         let actual = TypedValue::decode(&data_type, &bytes, 0);
-        println!("encode|decode: {:?} ({} bytes)", data_type, bytes.len());
         assert_eq!(actual, *expected)
     }
 

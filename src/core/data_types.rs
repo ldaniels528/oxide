@@ -52,7 +52,7 @@ impl Display for SizeTypes {
 /// Represents a Type
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DataType {
-    ArrayType,
+    ArrayType(Box<DataType>),
     BLOBType(SizeTypes),
     BooleanType,
     DateType,
@@ -77,10 +77,15 @@ impl DataType {
     /// parses a datatype expression (e.g. "String(20)")
     pub fn compile(param_type: &str) -> io::Result<DataType> {
         let ts = TokenSlice::from_string(param_type);
+        Self::compile_tokens(ts)
+    }
+
+    /// parses a datatype expression (e.g. "String(20)")
+    pub fn compile_tokens(ts: TokenSlice) -> io::Result<DataType> {
         if let (Some(Atom { text: name, .. }), ts) = ts.next() {
             match name.as_str() {
                 "Ack" => Ok(OutcomeType(OutcomeKind::Acked)),
-                "Array" => Ok(ArrayType),
+                "Array" => DataType::compile_type(ts, |kind| ArrayType(Box::new(kind))),
                 "BLOB" => DataType::compile_size(ts, |size| BLOBType(size)),
                 "Boolean" => Ok(BooleanType),
                 "Date" => Ok(DateType),
@@ -139,6 +144,28 @@ impl DataType {
         Ok(f(kind))
     }
 
+    fn compile_type(ts: TokenSlice, f: fn(DataType) -> DataType) -> io::Result<DataType> {
+        let mut args = Vec::new();
+        let mut ts = ts.expect("<")?;
+        while ts.has_next() && ts.isnt(">") {
+            match ts.next() {
+                (Some(tok), new_ts) => {
+                    args.push(tok);
+                    ts = new_ts;
+                }
+                (None, ts) =>
+                    return fail_near("Type declaration expected", &ts)
+            }
+        }
+        let ts = ts.expect(">")?;
+        if !ts.is_empty() {
+            return fail_near("Syntax error", &ts);
+        }
+
+        let kind = if args.is_empty() { InferredType } else { Self::compile_tokens(TokenSlice::new(args))? };
+        Ok(f(kind))
+    }
+
     ////////////////////////////////////////////////////////////////////
     //  INSTANCE METHODS
     ////////////////////////////////////////////////////////////////////
@@ -147,7 +174,7 @@ impl DataType {
     pub fn compute_max_physical_size(&self) -> usize {
         use crate::data_types::DataType::*;
         let width: usize = match self {
-            ArrayType => 1024,
+            ArrayType(kind) => 10 * kind.compute_max_physical_size(),
             BLOBType(size) => size.to_size(),
             BooleanType => 1,
             DateType => 8,
@@ -182,7 +209,8 @@ impl DataType {
 
     pub fn to_type_declaration(&self) -> Option<String> {
         let type_name = match self {
-            ArrayType => "Array".into(),
+            ArrayType(kind) =>
+                format!("Array<{}>", kind.to_type_declaration().unwrap_or("".to_string())),
             BLOBType(size) => format!("BLOB({})", size),
             BooleanType => "Boolean".into(),
             DateType => "Date".into(),

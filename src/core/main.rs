@@ -37,6 +37,7 @@ mod field_metadata;
 mod file_embedded_row_collection;
 mod file_row_collection;
 mod hash_table_row_collection;
+mod inferences;
 mod interpreter;
 mod machine;
 mod model_row_collection;

@@ -183,7 +183,6 @@ impl Token {
             _ => false,
         }
     }
-
 }
 
 impl Display for Token {

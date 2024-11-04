@@ -2,12 +2,10 @@
 // Parameter class
 ////////////////////////////////////////////////////////////////////
 
-use std::fmt::{Display, Formatter};
 use log::error;
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
-use crate::decompiler::Decompiler;
-use crate::structures::HardStructure;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Undefined;
@@ -48,7 +46,7 @@ impl Parameter {
         Self::new(
             name.into(),
             value.get_type().to_type_declaration(),
-            Some(value.to_code())
+            Some(value.to_code()),
         )
     }
 
@@ -77,7 +75,7 @@ impl Parameter {
 
     pub fn get_name(&self) -> &str { &self.name }
 
-    pub fn get_param_type(&self) -> &Option<String> { &self.param_type }
+    pub fn get_param_type(&self) -> Option<String> { self.param_type.clone() }
 
     pub fn get_default_value(&self) -> &Option<String> { &self.default_value }
 
@@ -108,7 +106,7 @@ impl Display for Parameter {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::testdata::{make_quote_parameters, make_quote_columns};
+    use crate::testdata::{make_quote_columns, make_quote_parameters};
 
     use super::*;
 

@@ -7,9 +7,9 @@ use std::ops::Index;
 
 use crate::backdoor::BackDoorKey;
 use crate::codec;
+use crate::codec::Codec;
 use crate::expression::*;
 use crate::model_row_collection::ModelRowCollection;
-use crate::codec::Codec;
 use crate::parameter::Parameter;
 use crate::rows::Row;
 use crate::structures::HardStructure;
@@ -307,7 +307,7 @@ impl ByteCodeCompiler {
 
     pub fn put_column(&mut self, column: &Parameter) -> &Self {
         self.put_string(column.get_name());
-        self.put_string(column.get_param_type().clone().unwrap_or("".to_string()).as_str());
+        self.put_string(column.get_param_type().unwrap_or("".to_string()).as_str());
         self.put_string_opt(column.get_default_value());
         self
     }

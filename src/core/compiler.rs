@@ -5,14 +5,13 @@
 use serde::{Deserialize, Serialize};
 use std::convert::From;
 
-use shared_lib::fail;
-
+use crate::errors::Errors;
 use crate::expression::Conditions::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::TableTarget;
 use crate::expression::Mutation::IntoNs;
-use crate::expression::{BitwiseOps, Conditions, Expression, ACK, FALSE, NULL, TRUE, UNDEFINED};
+use crate::expression::{BitwiseOps, Conditions, Expression, ImportOps, ACK, FALSE, NULL, TRUE, UNDEFINED};
 use crate::expression::{Directives, Excavation, Infrastructure, MutateTarget, Mutation, Queryable};
 use crate::numbers::NumberValue::*;
 use crate::parameter::Parameter;
@@ -21,7 +20,8 @@ use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Function, Number, StringValue, HardStructureValue};
+use crate::typed_values::TypedValue::{Function, Number, StringValue, StructureHard};
+use shared_lib::fail;
 
 /// Oxide language compiler - converts source code into [Expression]s.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -428,7 +428,7 @@ impl Compiler {
                 }, ts)),
             other => {
                 println!("parse_keyword_scenario: other {:?}", other);
-                return fail_expr("Code block expected", &other);
+                fail_expr("Code block expected", &other)
             }
         }
     }
@@ -534,17 +534,57 @@ impl Compiler {
     }
 
     /// Builds an import statement:
-    /// ex: import "os"
-    /// ex: import ["os", "oxide"]
-    /// future state:
+    ///   ex: import "os"
     ///   ex: import str::format
-    ///   ex: import [str::format, tables]
+    ///   ex: import vm::[eval, serve, version]
+    ///   ex: import lang, "os", str::format, vm::[eval, serve, version]
     fn parse_keyword_import(
         &mut self,
-        ts: TokenSlice,
+        mut ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (args, ts) = self.compile_next(ts)?;
-        Ok((Import(Box::from(args)), ts))
+        let mut ops = Vec::new();
+        let mut is_done = false;
+        while !is_done {
+            let ts0 = ts.clone();
+            let (expr, ts1) = self.compile_next(ts)?;
+            ts = ts1;
+            match expr {
+                // import 'cnv'
+                Literal(StringValue(pkg)) => ops.push(ImportOps::Everything(pkg)),
+                // import vm
+                Variable(pkg) => ops.push(ImportOps::Everything(pkg)),
+                // import vm::serve | vm::[eval, serve, version]
+                Extraction(a, b) => {
+                    match (*a, *b) {
+                        // import vm::serve
+                        (Variable(pkg), Variable(func)) =>
+                            ops.push(ImportOps::Selection(pkg, vec![func])),
+                        // import vm::[eval, serve, version]
+                        (Variable(pkg), ArrayExpression(items)) => {
+                            let mut func_list = Vec::new();
+                            for item in items {
+                                match item {
+                                    Literal(StringValue(name)) => func_list.push(name),
+                                    Variable(name) => func_list.push(name),
+                                    other => return fail_near(Errors::Syntax(other.to_code()).to_string(), &ts0)
+                                }
+                            }
+                            ops.push(ImportOps::Selection(pkg, func_list))
+                        }
+                        (a, ..) => return fail_near(Errors::Syntax(a.to_code()).to_string(), &ts0)
+                    }
+                }
+                // syntax error
+                other => return fail_near(Errors::Syntax(other.to_code()).to_string(), &ts0)
+            }
+
+            // if there's a comma, keep going
+            is_done = !ts.is(",");
+            if !is_done {
+                ts = ts.skip()
+            }
+        }
+        Ok((Import(ops), ts))
     }
 
     /// Translates a `mod` expression into an [Expression]
@@ -618,7 +658,7 @@ impl Compiler {
     /// ex: struct(symbol: String(8) = "TRX", exchange: String(8) = "AMEX", last_sale: f64 = 17.69)
     fn parse_keyword_struct(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Parameters(fields), ts) = self.expect_parameters(ts.to_owned())? {
-            Ok((Literal(HardStructureValue(HardStructure::from_parameters(&fields)?)), ts))
+            Ok((Literal(StructureHard(HardStructure::from_parameters(&fields)?)), ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }
@@ -1374,15 +1414,18 @@ mod tests {
         let code = Compiler::compile_script(r#"
             import "os"
         "#).unwrap();
-        assert_eq!(code, Import(Box::from(Literal(StringValue("os".into())))));
+        assert_eq!(code, Import(vec![
+            ImportOps::Everything("os".into())
+        ]));
 
         // multiple imports
         let code = Compiler::compile_script(r#"
-            import ["os", "util"]
+            import os, util
         "#).unwrap();
-        assert_eq!(code, Import(Box::from(ArrayExpression(vec![
-            Literal(StringValue("os".into())), Literal(StringValue("util".into()))
-        ]))));
+        assert_eq!(code, Import(vec![
+            ImportOps::Everything("os".into()),
+            ImportOps::Everything("util".into()),
+        ]));
     }
 
     #[test]

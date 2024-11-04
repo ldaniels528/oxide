@@ -303,7 +303,6 @@ pub struct RowJs {
 }
 
 impl RowJs {
-
     pub fn determine_column_value(&self, name: &str) -> TypedValue {
         for c in &self.fields {
             if *c.get_name() == *name { return TypedValue::from_json(c.get_value()); }
@@ -349,19 +348,18 @@ impl RowJs {
     }
 
     pub fn to_json_string(&self) -> String { serde_json::to_string(self).unwrap() }
-
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use shared_lib::tabulate_cells;
     use crate::data_types::DataType::{NumberType, StringType};
     use crate::data_types::SizeTypes;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::*;
     use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::*;
+    use shared_lib::tabulate_cells;
 
     use super::*;
 
@@ -544,5 +542,4 @@ mod tests {
         assert_eq!(row.to_row_js(&columns), row_js.to_owned());
         assert_eq!(Row::from_row_js(&columns, &row_js), row);
     }
-
 }

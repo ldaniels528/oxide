@@ -132,7 +132,7 @@ impl RowCollection for ModelRowCollection {
         let rows_affected = if meta.is_allocated {
             let old_values = row.get_values();
             let new_values = old_values.iter().enumerate()
-                .map(|( n, v)| {
+                .map(|(n, v)| {
                     if n == column_id { new_value.to_owned() } else { v.to_owned() }
                 }).collect();
             let new_row = Row::new(row.get_id(), new_values);
@@ -275,7 +275,7 @@ mod tests {
     fn create_data_set() -> (ModelRowCollection, Vec<Column>) {
         let columns = make_quote_parameters();
         let phys_columns = Column::from_parameters(&columns).unwrap();
-        let mrc = ModelRowCollection::from_rows(phys_columns.clone(),vec![
+        let mrc = ModelRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "BIZ", "NYSE", 9.775),

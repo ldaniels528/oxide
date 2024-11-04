@@ -4,8 +4,8 @@
 
 use std::fmt::{Display, Formatter};
 
-use serde::{Deserialize, Serialize};
 use crate::codec::Codec;
+use serde::{Deserialize, Serialize};
 
 /// Represents an Outcome type/kind
 #[repr(u8)]
@@ -40,11 +40,43 @@ impl Outcomes {
         }
     }
 
+    pub fn to_f32(&self) -> f32 {
+        match self {
+            Outcomes::Ack => 0.,
+            Outcomes::RowId(id) => *id as f32,
+            Outcomes::RowsAffected(n) => *n as f32,
+        }
+    }
+
     pub fn to_f64(&self) -> f64 {
         match self {
             Outcomes::Ack => 0.,
             Outcomes::RowId(id) => *id as f64,
             Outcomes::RowsAffected(n) => *n as f64,
+        }
+    }
+
+    pub fn to_i8(&self) -> i8 {
+        match self {
+            Outcomes::Ack => 0,
+            Outcomes::RowId(id) => *id as i8,
+            Outcomes::RowsAffected(n) => *n as i8,
+        }
+    }
+
+    pub fn to_i16(&self) -> i16 {
+        match self {
+            Outcomes::Ack => 0,
+            Outcomes::RowId(id) => *id as i16,
+            Outcomes::RowsAffected(n) => *n as i16,
+        }
+    }
+
+    pub fn to_i32(&self) -> i32 {
+        match self {
+            Outcomes::Ack => 0,
+            Outcomes::RowId(id) => *id as i32,
+            Outcomes::RowsAffected(n) => *n as i32,
         }
     }
 
@@ -56,11 +88,51 @@ impl Outcomes {
         }
     }
 
+    pub fn to_i128(&self) -> i128 {
+        match self {
+            Outcomes::Ack => 0,
+            Outcomes::RowId(id) => *id as i128,
+            Outcomes::RowsAffected(n) => *n as i128,
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match self {
+            Outcomes::Ack => 0,
+            Outcomes::RowId(id) => *id as u8,
+            Outcomes::RowsAffected(n) => *n as u8,
+        }
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        match self {
+            Outcomes::Ack => 0,
+            Outcomes::RowId(id) => *id as u16,
+            Outcomes::RowsAffected(n) => *n as u16,
+        }
+    }
+
+    pub fn to_u32(&self) -> u32 {
+        match self {
+            Outcomes::Ack => 0,
+            Outcomes::RowId(id) => *id as u32,
+            Outcomes::RowsAffected(n) => *n as u32,
+        }
+    }
+
     pub fn to_u64(&self) -> u64 {
         match self {
             Outcomes::Ack => 0,
             Outcomes::RowId(id) => *id as u64,
             Outcomes::RowsAffected(n) => *n as u64,
+        }
+    }
+
+    pub fn to_u128(&self) -> u128 {
+        match self {
+            Outcomes::Ack => 0,
+            Outcomes::RowId(id) => *id as u128,
+            Outcomes::RowsAffected(n) => *n as u128,
         }
     }
 

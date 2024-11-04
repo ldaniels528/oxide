@@ -2,12 +2,12 @@
 // table_view trait
 ////////////////////////////////////////////////////////////////////
 
-use std::io;
-use log::error;
-use serde::{Deserialize, Serialize};
 use crate::dataframes::DataFrame;
 use crate::rows::Row;
 use crate::table_view::Direction::{Backward, Forward};
+use log::error;
+use serde::{Deserialize, Serialize};
+use std::io;
 
 /// represents a table view or table query
 pub trait TableView {

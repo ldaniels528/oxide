@@ -4,9 +4,8 @@
 
 use std::fmt::{Display, Formatter};
 
-use serde::{Deserialize, Serialize};
-
 use crate::tokens::Token;
+use serde::{Deserialize, Serialize};
 
 /// Represents an Error Message
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -16,6 +15,7 @@ pub enum Errors {
     AsynchronousContextRequired,
     CollectionExpected(String),
     ColumnExpected(String),
+    ConversionError(String),
     DateExpected(String),
     Exact(String),
     ExactNear(String, String),
@@ -53,6 +53,8 @@ impl Display for Errors {
                 write!(f, "Iterable expected near {a}"),
             ColumnExpected(expr) =>
                 write!(f, "Expected a column, got \"{}\" instead", expr),
+            ConversionError(bdk) =>
+                write!(f, "Conversion error: {:?}", bdk),
             DateExpected(expr) =>
                 write!(f, "Expected a timestamp, got \"{}\" instead", expr),
             Exact(message) =>

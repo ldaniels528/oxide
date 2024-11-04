@@ -49,7 +49,10 @@ impl Decompiler {
                 format!("if {} {}{}", self.decompile(condition), self.decompile(a), b.to_owned()
                     .map(|x| format!(" else {}", self.decompile(&x)))
                     .unwrap_or("".into())),
-            Import(args) => format!("import {}", self.decompile(args)),
+            Import(args) =>
+                format!("import {}", args.iter().map(|a| a.to_code())
+                    .collect::<Vec<_>>()
+                    .join(", ")),
             Include(path) => format!("include {}", self.decompile(path)),
             JSONExpression(items) =>
                 format!("{{{}}}", items.iter()

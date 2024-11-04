@@ -11,7 +11,7 @@ use std::process::Output;
 use std::{fs, thread};
 
 use chrono::{Datelike, Local, TimeZone, Timelike};
-use log::{error, info, warn};
+use log::{error, info};
 use reqwest::multipart::{Form, Part};
 use reqwest::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
@@ -24,7 +24,6 @@ use crate::backdoor::BackDoorKey;
 use crate::compiler::Compiler;
 use crate::compiler::{fail_expr, fail_unexpected, fail_value};
 use crate::cursor::Cursor;
-use crate::data_types::DataType::OutcomeType;
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::dataframes::DataFrame;
 use crate::errors::Errors;
@@ -34,14 +33,14 @@ use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::Infrastructure::Declare;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
-use crate::expression::{BitwiseOps, Conditions, Expression, UNDEFINED};
+use crate::expression::{BitwiseOps, Conditions, Expression, ImportOps, ACK, UNDEFINED};
 use crate::expression::{Directives, Excavation, Infrastructure, Mutation, Queryable};
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::numbers::NumberValue::*;
+use crate::outcomes::Outcomes;
 use crate::outcomes::Outcomes::Ack;
-use crate::outcomes::{OutcomeKind, Outcomes};
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
@@ -91,54 +90,67 @@ impl Machine {
         use BackDoorKey::*;
         Self::empty()
             //////////////////////// packages ////////////////////////
+            .with_package("cnv", vec![
+                ("to_f32", BackDoor(CnvToF32)),
+                ("to_f64", BackDoor(CnvToF64)),
+                ("to_i8", BackDoor(CnvToI8)),
+                ("to_i16", BackDoor(CnvToI16)),
+                ("to_i32", BackDoor(CnvToI32)),
+                ("to_i64", BackDoor(CnvToI64)),
+                ("to_i128", BackDoor(CnvToI128)),
+                ("to_u8", BackDoor(CnvToU8)),
+                ("to_u16", BackDoor(CnvToU16)),
+                ("to_u32", BackDoor(CnvToU32)),
+                ("to_u64", BackDoor(CnvToU64)),
+                ("to_u128", BackDoor(CnvToU128)),
+            ])
             .with_package("io", vec![
-                ("stderr", BackDoor(BxStdErr)),
-                ("stdout", BackDoor(BxStdOut)),
+                ("stderr", BackDoor(IoStdErr)),
+                ("stdout", BackDoor(IoStdOut)),
             ])
             .with_package("lang", vec![
-                ("assert", BackDoor(BxAssert)),
-                ("matches", BackDoor(BxMatches)),
-                ("println", BackDoor(BxStdOut)),
-                ("type_of", BackDoor(BxTypeOf)),
+                ("assert", BackDoor(LangAssert)),
+                ("matches", BackDoor(LangMatches)),
+                ("println", BackDoor(IoStdOut)),
+                ("type_of", BackDoor(LangTypeOf)),
             ])
             .with_package("os", vec![
-                ("call", BackDoor(BxSysCall)),
-                ("env", BackDoor(BxEnvVars)),
+                ("call", BackDoor(OsSysCall)),
+                ("env", BackDoor(OsEnvVars)),
             ])
             .with_package("str", vec![
-                ("format", BackDoor(BxFormat)),
-                ("left", BackDoor(BxLeft)),
-                ("right", BackDoor(BxRight)),
-                ("substring", BackDoor(BxSubstring)),
+                ("format", BackDoor(StrFormat)),
+                ("left", BackDoor(StrLeft)),
+                ("right", BackDoor(StrRight)),
+                ("substring", BackDoor(StrSubstring)),
             ])
             .with_package("util", vec![
-                ("day_of", BackDoor(BxTimestampDay)),
-                ("hour_of", BackDoor(BxTimestampHour)),
-                ("hour12_of", BackDoor(BxTimestampHour12)),
-                ("minute_of", BackDoor(BxTimestampMinute)),
-                ("month_of", BackDoor(BxTimestampMonth)),
-                ("second_of", BackDoor(BxTimestampSecond)),
-                ("timestamp", BackDoor(BxTimestamp)),
-                ("to_csv", BackDoor(BxToCSV)),
-                ("to_json", BackDoor(BxToJSON)),
-                ("uuid", BackDoor(BxUUID)),
-                ("year_of", BackDoor(BxTimestampYear)),
+                ("day_of", BackDoor(UtilTimestampDay)),
+                ("hour_of", BackDoor(UtilTimestampHour)),
+                ("hour12_of", BackDoor(UtilTimestampHour12)),
+                ("minute_of", BackDoor(UtilTimestampMinute)),
+                ("month_of", BackDoor(UtilTimestampMonth)),
+                ("second_of", BackDoor(UtilTimestampSecond)),
+                ("timestamp", BackDoor(UtilTimestamp)),
+                ("to_csv", BackDoor(UtilToCSV)),
+                ("to_json", BackDoor(UtilToJSON)),
+                ("uuid", BackDoor(UtilUUID)),
+                ("year_of", BackDoor(UtilTimestampYear)),
             ])
             .with_package("vm", vec![
-                ("eval", BackDoor(BxEval)),
-                ("reset", BackDoor(BxReset)),
-                ("serve", BackDoor(BxServe)),
-                ("vars", BackDoor(BxVariables)),
-                ("version", BackDoor(BxVersion)),
+                ("eval", BackDoor(VmEval)),
+                ("reset", BackDoor(VmReset)),
+                ("serve", BackDoor(VmServe)),
+                ("vars", BackDoor(VmVariables)),
+                ("version", BackDoor(VmVersion)),
             ])
     }
 
     /// creates a new state machine prepopulated with platform packages
     /// and default imports
-    pub fn new_platform_with_default_imports() -> Self {
+    pub fn new_platform_full() -> Self {
         Self::new_platform()
             .import_module_by_name("lang")
-            .import_module_by_name("str")
     }
 
     ////////////////////////////////////////////////////////////////
@@ -184,7 +196,7 @@ impl Machine {
 
     fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
         match value {
-            SoftStructureValue(structure) => Ok(structure.get_tuples()),
+            StructureSoft(structure) => Ok(structure.get_tuples()),
             z => fail_value(Errors::TypeMismatch("Schemaless".into(), z.to_code()).to_string(), &z),
         }
     }
@@ -286,6 +298,47 @@ impl Machine {
         }
     }
 
+    /// converts a [Response] to a [TypedValue]
+    pub async fn convert_http_response(
+        &self,
+        response: Response,
+        is_header_only: bool,
+    ) -> TypedValue {
+        if response.status().is_success() {
+            if is_header_only {
+                let header_keys = response.headers().keys()
+                    .map(|k| k.to_string())
+                    .collect::<Vec<_>>();
+                let header_values = response.headers().values()
+                    .map(|hv| match hv.to_str() {
+                        Ok(s) => TypedValue::wrap_value(s).unwrap_or(Undefined),
+                        Err(e) => ErrorValue(Exact(e.to_string()))
+                    }).collect::<Vec<_>>();
+                StructureSoft(SoftStructure::from_tuples(header_keys.iter().zip(header_values.iter())
+                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
+                    .collect::<Vec<_>>()))
+            } else {
+                match response.text().await {
+                    Ok(body) => {
+                        match Compiler::compile_script(body.as_str()) {
+                            Ok(expr) => {
+                                match self.evaluate(&expr) {
+                                    Ok((_, Undefined)) => StructureSoft(SoftStructure::empty()),
+                                    Ok((_, value)) => value,
+                                    Err(_) => StringValue(body)
+                                }
+                            }
+                            _ => StringValue(body)
+                        }
+                    }
+                    Err(err) => ErrorValue(Exact(format!("Error reading response body: {}", err))),
+                }
+            }
+        } else {
+            ErrorValue(Exact(format!("Request failed with status: {}", response.status())))
+        }
+    }
+
     fn convert_to_csv_or_json(
         &self,
         value: &TypedValue,
@@ -305,58 +358,6 @@ impl Machine {
                 if is_csv { self.evaluate_to_csv(rc) } else { self.evaluate_to_json(rc) }
             }
             _ => (self.to_owned(), ErrorValue(Exact(format!("Cannot convert to {}", if is_csv { "CSV" } else { "JSON" }))))
-        }
-    }
-
-    /// converts a [Response] to a [TypedValue]
-    pub async fn convert_response(
-        &self,
-        response: Response,
-        is_header_only: bool,
-    ) -> TypedValue {
-        if response.status().is_success() {
-            if is_header_only {
-                let header_keys = response.headers().keys()
-                    .map(|k| k.to_string())
-                    .collect::<Vec<_>>();
-                let header_values = response.headers().values()
-                    .map(|hv| match hv.to_str() {
-                        Ok(s) => TypedValue::wrap_value(s).unwrap_or(Undefined),
-                        Err(e) => ErrorValue(Exact(e.to_string()))
-                    }).collect::<Vec<_>>();
-                SoftStructureValue(SoftStructure::from_tuples(header_keys.iter().zip(header_values.iter())
-                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect::<Vec<_>>()))
-            } else {
-                match response.text().await {
-                    Ok(body) => {
-                        match Compiler::compile_script(body.as_str()) {
-                            Ok(expr) => {
-                                match self.evaluate(&expr) {
-                                    Ok((_, Undefined)) => SoftStructureValue(SoftStructure::empty()),
-                                    Ok((_, value)) => value,
-                                    Err(_) => StringValue(body)
-                                }
-                            }
-                            _ => StringValue(body)
-                        }
-                    }
-                    Err(err) => ErrorValue(Exact(format!("Error reading response body: {}", err))),
-                }
-            }
-        } else {
-            ErrorValue(Exact(format!("Request failed with status: {}", response.status())))
-        }
-    }
-
-    /// converts a [std::io::Result<(Self, TypedValue)>] to a [(Self, TypedValue)]
-    pub fn convert_result(
-        &self,
-        result: std::io::Result<(Self, TypedValue)>,
-    ) -> (Self, TypedValue) {
-        match result {
-            Ok(value) => value,
-            Err(err) => (self.clone(), ErrorValue(Exact(err.to_string())))
         }
     }
 
@@ -390,7 +391,7 @@ impl Machine {
                 Ok((self.to_owned(), ErrorValue(AsynchronousContextRequired))),
             If { condition, a, b } =>
                 self.evaluate_if_then_else(condition, a, b),
-            Import(args) => self.evaluate_import(args),
+            Import(ops) => Ok(self.evaluate_imports(ops)),
             Include(path) => self.evaluate_include(path),
             JSONExpression(items) => self.evaluate_json(items),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
@@ -424,7 +425,7 @@ impl Machine {
                 Ok((machine.set(name, value), Outcome(Ack)))
             }
             StructureImpl(name, ops) => Ok(self.evaluate_structure_impl(name, ops)),
-            Variable(name) => Ok((self.to_owned(), self.get(&name).unwrap_or(Undefined))),
+            Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
             Via(src) => self.evaluate_table_row_query(src, &True, Undefined),
             While { condition, code } =>
                 self.evaluate_while(condition, code),
@@ -549,35 +550,46 @@ impl Machine {
         bdk: &BackDoorKey,
         args: Vec<TypedValue>,
     ) -> (Self, TypedValue) {
-        use BackDoorKey::*;
         match bdk {
-            BackDoorKey::BxAssert => self.evaluate_back_door_fn1(args, Machine::do_assert),
-            BackDoorKey::BxEnvVars => (self.clone(), Self::create_env_table()),
-            BackDoorKey::BxEval => self.evaluate_back_door_fn1(args, Machine::do_eval),
-            BackDoorKey::BxFormat => self.evaluate_format_string(args),
-            BackDoorKey::BxLeft => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_left(s, n)),
-            BackDoorKey::BxMatches => self.evaluate_back_door_fn2(args, |ms, a, b| (ms, a.matches(b))),
-            BackDoorKey::BxReset => self.evaluate_back_door_fn0(args, |_| (Machine::new(), Outcome(Ack))),
-            BackDoorKey::BxRight => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_right(s, n)),
-            BackDoorKey::BxServe => self.evaluate_back_door_fn1(args, Machine::do_serve),
-            BackDoorKey::BxStdErr => self.evaluate_back_door_fn1(args, Machine::do_stdout),
-            BackDoorKey::BxStdOut => self.evaluate_back_door_fn1(args, Machine::do_stdout),
-            BackDoorKey::BxSubstring => self.evaluate_back_door_fn3(args, |ms, s, a, b| ms.evaluate_substring(s, a, b)),
-            BackDoorKey::BxSysCall => self.convert_result(self.evaluate_syscall(args)),
-            BackDoorKey::BxTimestamp => self.convert_result(self.evaluate_timestamp(args)),
-            BackDoorKey::BxTimestampDay => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::BxTimestampHour => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::BxTimestampHour12 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::BxTimestampMinute => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::BxTimestampMonth => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::BxTimestampSecond => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::BxTimestampYear => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::BxToCSV => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, true)),
-            BackDoorKey::BxToJSON => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, false)),
-            BackDoorKey::BxTypeOf => self.evaluate_back_door_fn1(args, |ms, a| (ms, StringValue(a.get_type_name()))),
-            BackDoorKey::BxUUID => self.convert_result(self.evaluate_uuid(args)),
-            BackDoorKey::BxVariables => self.evaluate_back_door_fn0(args, |ms| (ms.clone(), TableValue(ms.get_variables()))),
-            BackDoorKey::BxVersion => self.evaluate_back_door_fn0(args, |ms| (ms, StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))),
+            BackDoorKey::LangAssert => self.evaluate_back_door_fn1(args, Machine::do_assert),
+            BackDoorKey::OsEnvVars => (self.clone(), Self::create_env_table()),
+            BackDoorKey::VmEval => self.evaluate_back_door_fn1(args, Machine::do_eval),
+            BackDoorKey::StrFormat => self.evaluate_format_string(args),
+            BackDoorKey::StrLeft => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_left(s, n)),
+            BackDoorKey::LangMatches => self.evaluate_back_door_fn2(args, |ms, a, b| (ms, a.matches(b))),
+            BackDoorKey::VmReset => self.evaluate_back_door_fn0(args, |_| (Machine::new(), Outcome(Ack))),
+            BackDoorKey::StrRight => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_right(s, n)),
+            BackDoorKey::VmServe => self.evaluate_back_door_fn1(args, Machine::do_serve),
+            BackDoorKey::IoStdErr => self.evaluate_back_door_fn1(args, Machine::do_stdout),
+            BackDoorKey::IoStdOut => self.evaluate_back_door_fn1(args, Machine::do_stdout),
+            BackDoorKey::StrSubstring => self.evaluate_back_door_fn3(args, |ms, s, a, b| ms.evaluate_substring(s, a, b)),
+            BackDoorKey::OsSysCall => self.ok_to_tv(self.evaluate_syscall(args)),
+            BackDoorKey::UtilTimestamp => self.ok_to_tv(self.evaluate_timestamp(args)),
+            BackDoorKey::UtilTimestampDay => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BackDoorKey::UtilTimestampHour => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BackDoorKey::UtilTimestampHour12 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BackDoorKey::UtilTimestampMinute => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BackDoorKey::UtilTimestampMonth => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BackDoorKey::UtilTimestampSecond => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BackDoorKey::UtilTimestampYear => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
+            BackDoorKey::UtilToCSV => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, true)),
+            BackDoorKey::UtilToJSON => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, false)),
+            BackDoorKey::LangTypeOf => self.evaluate_back_door_fn1(args, |ms, a| (ms, StringValue(a.get_type_name()))),
+            BackDoorKey::UtilUUID => self.ok_to_tv(self.evaluate_uuid(args)),
+            BackDoorKey::VmVariables => self.evaluate_back_door_fn0(args, |ms| (ms.clone(), TableValue(ms.get_variables()))),
+            BackDoorKey::VmVersion => self.evaluate_back_door_fn0(args, |ms| (ms, StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))),
+            BackDoorKey::CnvToF32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToF64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToI8 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToI16 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToI32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToI64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToI128 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToU8 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToU16 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToU32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToU64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::CnvToU128 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
         }
     }
 
@@ -587,6 +599,29 @@ impl Machine {
             Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
             z => (ms, z.to_owned())
         }
+    }
+
+    fn do_conversion(
+        ms: Machine,
+        value: &TypedValue,
+        bdk: &BackDoorKey,
+    ) -> (Machine, TypedValue) {
+        let result = match bdk {
+            BackDoorKey::CnvToF32 => Number(F32Value(value.to_f32())),
+            BackDoorKey::CnvToF64 => Number(F64Value(value.to_f64())),
+            BackDoorKey::CnvToI8 => Number(I8Value(value.to_i8())),
+            BackDoorKey::CnvToI16 => Number(I16Value(value.to_i16())),
+            BackDoorKey::CnvToI32 => Number(I32Value(value.to_i32())),
+            BackDoorKey::CnvToI64 => Number(I64Value(value.to_i64())),
+            BackDoorKey::CnvToI128 => Number(I128Value(value.to_i128())),
+            BackDoorKey::CnvToU8 => Number(U8Value(value.to_u8())),
+            BackDoorKey::CnvToU16 => Number(U16Value(value.to_u16())),
+            BackDoorKey::CnvToU32 => Number(U32Value(value.to_u32())),
+            BackDoorKey::CnvToU64 => Number(U64Value(value.to_u64())),
+            BackDoorKey::CnvToU128 => Number(U128Value(value.to_u128())),
+            bdk => ErrorValue(ConversionError(bdk.to_code()))
+        };
+        (ms, result)
     }
 
     fn do_date_part(
@@ -602,13 +637,13 @@ impl Machine {
                     Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
                 };
                 match bdk {
-                    BackDoorKey::BxTimestampDay => (ms, Number(U32Value(datetime.day()))),
-                    BackDoorKey::BxTimestampHour => (ms, Number(U32Value(datetime.hour()))),
-                    BackDoorKey::BxTimestampHour12 => (ms, Number(U32Value(datetime.hour12().1))),
-                    BackDoorKey::BxTimestampMinute => (ms, Number(U32Value(datetime.minute()))),
-                    BackDoorKey::BxTimestampMonth => (ms, Number(U32Value(datetime.second()))),
-                    BackDoorKey::BxTimestampSecond => (ms, Number(U32Value(datetime.second()))),
-                    BackDoorKey::BxTimestampYear => (ms, Number(I32Value(datetime.year()))),
+                    BackDoorKey::UtilTimestampDay => (ms, Number(U32Value(datetime.day()))),
+                    BackDoorKey::UtilTimestampHour => (ms, Number(U32Value(datetime.hour()))),
+                    BackDoorKey::UtilTimestampHour12 => (ms, Number(U32Value(datetime.hour12().1))),
+                    BackDoorKey::UtilTimestampMinute => (ms, Number(U32Value(datetime.minute()))),
+                    BackDoorKey::UtilTimestampMonth => (ms, Number(U32Value(datetime.second()))),
+                    BackDoorKey::UtilTimestampSecond => (ms, Number(U32Value(datetime.second()))),
+                    BackDoorKey::UtilTimestampYear => (ms, Number(I32Value(datetime.year()))),
                     other => (ms, ErrorValue(Syntax(other.to_code())))
                 }
             }
@@ -803,31 +838,33 @@ impl Machine {
         let (ms, obj) = self.evaluate(object)?;
         match obj {
             ErrorValue(err) => Ok((ms, ErrorValue(err))),
-            SoftStructureValue(s) => self.evaluate_extraction_schemaless(field, &s),
-            HardStructureValue(s) => self.evaluate_extraction_structure(field, &s),
+            Null => fail(format!("Cannot evaluate {}::{}", Null, field.to_code())),
+            StructureSoft(s) => self.evaluate_extraction_structure_soft(field, &s),
+            StructureHard(s) => self.evaluate_extraction_structure_hard(field, &s),
+            Undefined => fail(format!("Cannot evaluate {}::{}", Undefined, field.to_code())),
             z => fail(format!("Illegal object {}", z.to_code()))
         }
     }
 
-    fn evaluate_extraction_schemaless(
+    fn evaluate_extraction_structure_soft(
         &self,
         field: &Expression,
-        schemaless: &SoftStructure,
+        structure: &SoftStructure,
     ) -> std::io::Result<(Self, TypedValue)> {
         let ms = self.to_owned();
         match field {
             // method call: math::compute(5, 8)
             FunctionCall { fx, args } =>
-                schemaless.pollute(ms).evaluate_function_call(fx, args),
+                structure.pollute(ms).evaluate_function_call(fx, args),
             // { symbol:"AAA", price:123.45 }::symbol
-            Variable(name) => Ok((ms, schemaless.get(name))),
+            Variable(name) => Ok((ms, structure.get(name))),
             z =>
                 fail(format!("Illegal field {} for object {}",
-                             z.to_code(), schemaless.to_code()))
+                             z.to_code(), structure.to_code()))
         }
     }
 
-    fn evaluate_extraction_structure(
+    fn evaluate_extraction_structure_hard(
         &self,
         field: &Expression,
         structure: &HardStructure,
@@ -840,7 +877,7 @@ impl Machine {
             // stock::symbol
             Variable(name) => Ok((ms, structure.get(name))),
             z => fail(format!("Illegal field {} for structure {}",
-                              z.to_code(), HardStructureValue(structure.to_owned()).to_code()))
+                              z.to_code(), StructureHard(structure.to_owned()).to_code()))
         }
     }
 
@@ -994,6 +1031,13 @@ impl Machine {
         let (ms, body) = ms.evaluate_optional_map(body)?;
         let (ms, headers) = ms.evaluate_optional_map(headers)?;
         let (ms, multipart) = ms.evaluate_optional_map(multipart)?;
+
+        fn create_form(structure: Box<dyn Structure>) -> Form {
+            structure.get_tuples().iter().fold(Form::new(), |form, (name, value)| {
+                form.part(name.to_owned(), Part::text(value.unwrap_value()))
+            })
+        }
+
         ms.evaluate_http_method_call(
             method.unwrap_value(),
             url.unwrap_value(),
@@ -1003,14 +1047,8 @@ impl Machine {
                 None => Vec::new()
             },
             match multipart {
-                Some(SoftStructureValue(soft)) =>
-                    Some(soft.get_tuples().iter().fold(Form::new(), |form, (name, value)| {
-                        form.part(name.to_owned(), Part::text(value.unwrap_value()))
-                    })),
-                Some(HardStructureValue(hard)) =>
-                    Some(hard.get_tuples().iter().fold(Form::new(), |form, (name, value)| {
-                        form.part(name.to_owned(), Part::text(value.unwrap_value()))
-                    })),
+                Some(StructureSoft(soft)) => Some(create_form(Box::new(soft))),
+                Some(StructureHard(hard)) => Some(create_form(Box::new(hard))),
                 Some(z) => return Ok((ms, ErrorValue(TypeMismatch("Object".into(), z.to_code())))),
                 None => None
             },
@@ -1108,7 +1146,7 @@ impl Machine {
             request.header(k, v)
         });
         match request.send().await {
-            Ok(response) => self.convert_response(response, is_header_only).await,
+            Ok(response) => self.convert_http_response(response, is_header_only).await,
             Err(err) => ErrorValue(Exact(format!("Error making request: {}", err))),
         }
     }
@@ -1132,17 +1170,48 @@ impl Machine {
         }
     }
 
+    fn evaluate_imports(&self, ops: &Vec<ImportOps>) -> (Self, TypedValue) {
+        ops.iter()
+            .fold((self.to_owned(), Undefined),
+                  |(ms, tv), iop| match iop {
+                      ImportOps::Everything(pkg) =>
+                          ms.evaluate_import(pkg, &Vec::new()),
+                      ImportOps::Selection(pkg, selection) =>
+                          ms.evaluate_import(pkg, selection),
+                  })
+    }
+
+    /// Produces an aggregate [Machine] instance containing
+    /// the specified imports
     fn evaluate_import(
         &self,
-        args: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        match self.evaluate(args)? {
-            (ms, StringValue(pkg)) =>
-                ms.evaluate_import_fold(vec![StringValue(pkg)]),
-            (ms, Array(args)) =>
-                ms.evaluate_import_fold(args),
-            (ms, other) =>
-                Ok((ms, ErrorValue(StringExpected(other.to_code()))))
+        package_name: &str,
+        selection: &Vec<String>,
+    ) -> (Self, TypedValue) {
+        let ms = self.to_owned();
+        match ms.get(package_name) {
+            None => (ms, ErrorValue(PackageNotFound(package_name.into()))),
+            Some(component) => match component {
+                StructureHard(structure) =>
+                    if selection.is_empty() {
+                        (structure.pollute(ms), StructureHard(structure))
+                    } else {
+                        let ms = selection.iter().fold(ms, |ms, name| {
+                            println!("{package_name}::{name} => {}", structure.get(name));
+                            ms.with_variable(name, structure.get(name))
+                        });
+                        (ms, Outcome(Ack))
+                    }
+                StructureSoft(structure) => {
+                    let ms = structure.get_tuples().iter().fold(ms, |ms, (name, value)| {
+                        if selection.is_empty() || selection.contains(name) {
+                            ms.with_variable(name, value.to_owned())
+                        } else { ms }
+                    });
+                    (ms, Outcome(Ack))
+                }
+                other => (ms, ErrorValue(Syntax(other.to_code())))
+            }
         }
     }
 
@@ -1159,12 +1228,12 @@ impl Machine {
                     match ms.get(pkg.as_str()) {
                         None =>
                             return Ok((ms, ErrorValue(PackageNotFound(pkg)))),
-                        Some(SoftStructureValue(schemaless)) =>
-                            ms = schemaless.get_tuples().iter().fold(ms, |ms, (name, value)| {
+                        Some(StructureHard(structure)) =>
+                            ms = structure.pollute(ms),
+                        Some(StructureSoft(structure)) =>
+                            ms = structure.get_tuples().iter().fold(ms, |ms, (name, value)| {
                                 ms.with_variable(name, value.to_owned())
                             }),
-                        Some(HardStructureValue(structure)) =>
-                            ms = structure.pollute(ms),
                         Some(other) =>
                             return Ok((ms, ErrorValue(Syntax(other.to_code()))))
                     }
@@ -1252,15 +1321,15 @@ impl Machine {
                 let ns = Namespace::new(d, s, n);
                 let frc = FileRowCollection::open(&ns)?;
                 match frc.read_one(id)? {
-                    Some(row) => HardStructureValue(HardStructure::from_row(frc.get_columns().clone(), &row)),
-                    None => HardStructureValue(HardStructure::new(frc.get_columns().to_owned(), Vec::new()))
+                    Some(row) => StructureHard(HardStructure::from_row(frc.get_columns().clone(), &row)),
+                    None => StructureHard(HardStructure::new(frc.get_columns().to_owned(), Vec::new()))
                 }
             }
             StringValue(string) => {
                 let idx = index.to_usize();
                 if idx < string.len() { StringValue(string[idx..idx].to_string()) } else { ErrorValue(IndexOutOfRange("String".to_string(), idx, string.len())) }
             }
-            HardStructureValue(structure) => {
+            StructureHard(structure) => {
                 let idx = index.to_usize();
                 let values = structure.get_values();
                 if idx < values.len() { values[idx].to_owned() } else { ErrorValue(IndexOutOfRange("Structure element".to_string(), idx, values.len())) }
@@ -1268,8 +1337,8 @@ impl Machine {
             TableValue(mrc) => {
                 let id = index.to_usize();
                 match mrc.read_one(id)? {
-                    Some(row) => HardStructureValue(HardStructure::from_row(mrc.get_columns().clone(), &row)),
-                    None => HardStructureValue(HardStructure::new(mrc.get_columns().to_owned(), Vec::new()))
+                    Some(row) => StructureHard(HardStructure::from_row(mrc.get_columns().clone(), &row)),
+                    None => StructureHard(HardStructure::new(mrc.get_columns().to_owned(), Vec::new()))
                 }
             }
             other =>
@@ -1323,7 +1392,7 @@ impl Machine {
             let (_, value) = self.evaluate(expr)?;
             elems.push((name.to_string(), value))
         }
-        Ok((self.to_owned(), SoftStructureValue(SoftStructure::from_tuples(elems))))
+        Ok((self.to_owned(), StructureSoft(SoftStructure::from_tuples(elems))))
     }
 
     fn evaluate_module(
@@ -1333,13 +1402,22 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let structure = HardStructure::empty();
         let result =
-            ops.iter().fold(HardStructureValue(structure), |tv, op| match tv {
+            ops.iter().fold(StructureHard(structure), |tv, op| match tv {
                 ErrorValue(msg) => ErrorValue(msg),
-                HardStructureValue(structure) =>
+                StructureHard(structure) =>
                     match op {
                         SetVariable(name, expr) =>
                             match self.evaluate(expr) {
-                                Ok((_, value)) => HardStructureValue(structure.with_variable(name, value)),
+                                Ok((_, value)) => StructureHard(structure.with_variable(name, value)),
+                                Err(err) => ErrorValue(Exact(err.to_string()))
+                            },
+                        z => ErrorValue(IllegalExpression(z.to_code()))
+                    },
+                StructureSoft(structure) =>
+                    match op {
+                        SetVariable(name, expr) =>
+                            match self.evaluate(expr) {
+                                Ok((_, value)) => StructureSoft(structure.with_variable(name, value)),
                                 Err(err) => ErrorValue(Exact(err.to_string()))
                             },
                         z => ErrorValue(IllegalExpression(z.to_code()))
@@ -1505,9 +1583,9 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> (Self, TypedValue) {
         match self.get(name) {
-            Some(HardStructureValue(structure)) =>
+            Some(StructureHard(structure)) =>
                 self.evaluate_structure_hard_impl(name, structure, ops),
-            Some(SoftStructureValue(structure)) =>
+            Some(StructureSoft(structure)) =>
                 self.evaluate_structure_soft_impl(name, structure, ops),
             Some(v) => (self.clone(), ErrorValue(StructExpected(name.to_string(), v.to_code()))),
             None => (self.clone(), ErrorValue(StructExpected(name.to_string(), Undefined.to_code()))),
@@ -1521,13 +1599,13 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> (Self, TypedValue) {
         let result = ops.iter()
-            .fold(HardStructureValue(structure), |tv, op| match tv {
+            .fold(StructureHard(structure), |tv, op| match tv {
                 ErrorValue(msg) => ErrorValue(msg),
-                HardStructureValue(structure) =>
+                StructureHard(structure) =>
                     match op {
                         SetVariable(name, expr) =>
                             match self.evaluate(expr) {
-                                Ok((_, value)) => HardStructureValue(structure.with_variable(name, value)),
+                                Ok((_, value)) => StructureHard(structure.with_variable(name, value)),
                                 Err(err) => ErrorValue(Exact(err.to_string()))
                             },
                         z => ErrorValue(IllegalExpression(z.to_code()))
@@ -1544,13 +1622,13 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> (Self, TypedValue) {
         let result = ops.iter()
-            .fold(SoftStructureValue(structure), |tv, op| match tv {
+            .fold(StructureSoft(structure), |tv, op| match tv {
                 ErrorValue(msg) => ErrorValue(msg),
-                SoftStructureValue(structure) =>
+                StructureSoft(structure) =>
                     match op {
                         SetVariable(name, expr) =>
                             match self.evaluate(expr) {
-                                Ok((_, value)) => SoftStructureValue(structure.with_variable(name, value)),
+                                Ok((_, value)) => StructureSoft(structure.with_variable(name, value)),
                                 Err(err) => ErrorValue(Exact(err.to_string()))
                             },
                         z => ErrorValue(IllegalExpression(z.to_code()))
@@ -1748,7 +1826,6 @@ impl Machine {
         table: &Expression,
         source: &Expression,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        use Outcomes::*;
         let machine = self.to_owned();
         if let Expression::From(source) = source {
             // determine the writable target
@@ -1989,14 +2066,14 @@ impl Machine {
             Array(items) => {
                 let mut rows = Vec::new();
                 for tuples in items {
-                    if let SoftStructureValue(schemaless) = tuples {
-                        rows.push(Row::from_tuples(0, columns, &schemaless.get_tuples()))
+                    if let StructureSoft(structure) = tuples {
+                        rows.push(Row::from_tuples(0, columns, &structure.get_tuples()))
                     }
                 }
                 Ok(rows)
             }
-            HardStructureValue(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
-            SoftStructureValue(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
+            StructureHard(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
+            StructureSoft(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
             NamespaceValue(d, s, n) => {
                 let ns = Namespace::new(d, s, n);
                 let frc = FileRowCollection::open(&ns)?;
@@ -2015,9 +2092,9 @@ impl Machine {
         let writable = self.expect_row_collection(table)?;
         let (fields, values) = {
             if let Via(my_source) = source {
-                if let (_, SoftStructureValue(schemaless)) = self.evaluate(&my_source)? {
+                if let (_, StructureSoft(structure)) = self.evaluate(&my_source)? {
                     let columns = writable.get_columns();
-                    let row = Row::from_tuples(0, columns, &schemaless.get_tuples());
+                    let row = Row::from_tuples(0, columns, &structure.get_tuples());
                     Self::split(columns, &row)
                 } else {
                     return fail_expr("Expected a data object".to_string(), &my_source);
@@ -2069,6 +2146,11 @@ impl Machine {
         self.variables.get(name).map(|x| x.to_owned())
     }
 
+    /// returns a variable by name or the default value
+    pub fn get_or_else(&self, name: &str, default: fn() -> TypedValue) -> TypedValue {
+        self.get(name).unwrap_or(default())
+    }
+
     /// returns a table describing all variables
     /// ex. __variables()
     pub fn get_variables(&self) -> ModelRowCollection {
@@ -2076,17 +2158,13 @@ impl Machine {
             Parameter::new("name", Some("String(80)".into()), None),
             Parameter::new("kind", Some("String(80)".into()), None),
             Parameter::new("value", Some("String(256)".into()), None),
-        ]).unwrap_or(vec![]);
+        ]).unwrap_or(Vec::new());
         let mut mrc = ModelRowCollection::new(columns.to_owned());
-        let variables = self.variables.iter()
-            .filter(|&(_, v)| v.get_type_name() != "BackDoor")
-            .collect::<Vec<_>>();
-        for (name, value) in variables {
+        for (name, value) in self.variables.iter() {
             mrc.append_row(Row::new(0, vec![
                 StringValue(name.to_owned()),
                 StringValue(value.get_type_name()),
                 match value {
-                    BackDoor(key) => StringValue(format!("{}(???)", key.to_code())),
                     TableValue(rc) => StringValue(format!("{} row(s)", rc.len().unwrap_or(0))),
                     v => StringValue(v.to_code())
                 },
@@ -2096,13 +2174,26 @@ impl Machine {
     }
 
     pub fn import_module_by_name(&self, name: &str) -> Self {
-        let module = Literal(StringValue(name.into()));
-        match self.evaluate_import(&module) {
-            Ok((m, _)) => m,
-            Err(err) => {
+        let module = vec![
+            ImportOps::Everything(name.to_string())
+        ];
+        match self.evaluate_imports(&module) {
+            (m, ErrorValue(err)) => {
                 error!("{}", err);
-                self.with_variable("__error__", StringValue(err.to_string()))
+                m.with_variable("__error__", StringValue(err.to_string()))
             }
+            (m, _) => m,
+        }
+    }
+
+    /// converts a [std::io::Result<(Self, TypedValue)>] to a [(Self, TypedValue)]
+    pub fn ok_to_tv(
+        &self,
+        result: std::io::Result<(Self, TypedValue)>,
+    ) -> (Self, TypedValue) {
+        match result {
+            Ok(value) => value,
+            Err(err) => (self.clone(), ErrorValue(Exact(err.to_string())))
         }
     }
 
@@ -2128,7 +2219,7 @@ impl Machine {
             |structure, (name, value)| {
                 structure.with_variable(name, value.to_owned())
             });
-        self.with_variable(name, HardStructureValue(structure))
+        self.with_variable(name, StructureHard(structure))
     }
 
     pub fn with_row(&self, columns: &Vec<Column>, row: &Row) -> Self {
@@ -2169,13 +2260,6 @@ mod tests {
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_dataframe_ns, make_quote, make_quote_columns, make_quote_parameters};
     use Outcomes::*;
-
-    #[test]
-    fn test_new_platform() {
-        let m = Machine::new();
-        let value = m.get("lang");
-        println!("value {:?}", value)
-    }
 
     #[test]
     fn test_array_declaration() {
@@ -2378,7 +2462,7 @@ mod tests {
 
         // evaluate the instruction
         let (_, result) = Machine::new().evaluate(&model).unwrap();
-        assert_eq!(result, HardStructureValue(
+        assert_eq!(result, StructureHard(
             HardStructure::from_row(
                 phys_columns.clone(),
                 &make_quote(2, "BIZ", "NYSE", 23.66))
@@ -2407,7 +2491,7 @@ mod tests {
         let machine = Machine::new()
             .with_variable("stocks", TableValue(my_table));
         let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, HardStructureValue(
+        assert_eq!(result, StructureHard(
             HardStructure::from_row(phys_columns.clone(),
                                     &make_quote(4, "VAPOR", "NYSE", 0.0289))
         ))
@@ -2526,7 +2610,7 @@ mod tests {
             ],
         };
 
-        let machine = Machine::new_platform_with_default_imports();
+        let machine = Machine::new_platform_full();
         let (_, result) = machine.evaluate(&model).unwrap();
         let table = result.to_table().unwrap();
         let columns = table.get_columns();
@@ -2659,7 +2743,7 @@ mod tests {
     fn test_delete_rows_from_namespace() {
         // create a table with test data
         let ns_path = "machine.delete.stocks";
-        let (df, phys_columns) = create_dataframe(ns_path);
+        let (df, _) = create_dataframe(ns_path);
 
         // delete some rows
         let machine = Machine::new();
@@ -2682,7 +2766,7 @@ mod tests {
     fn test_undelete_rows_from_namespace() {
         // create a table with test data
         let ns_path = "machine.undelete.stocks";
-        let (df, phys_columns) = create_dataframe(ns_path);
+        let (df, _) = create_dataframe(ns_path);
 
         // delete some rows
         let machine = Machine::new();
@@ -2722,7 +2806,7 @@ mod tests {
     fn test_append_namespace() {
         // create a table with test data
         let ns_path = "machine.append.stocks";
-        let (df, phys_columns) = create_dataframe(ns_path);
+        let (df, _) = create_dataframe(ns_path);
 
         // insert some rows
         let machine = Machine::new();
@@ -2767,7 +2851,7 @@ mod tests {
         assert_eq!(model.to_code(), r#"overwrite ns("machine.overwrite.stocks") via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99} where symbol == "BOOM""#);
 
         // create a table with test data
-        let (df, phys_columns) = create_dataframe(ns_path);
+        let (df, _) = create_dataframe(ns_path);
 
         // overwrite some rows
         let machine = Machine::new();
@@ -2889,7 +2973,7 @@ mod tests {
                 Literal(StringValue("cat".to_string()))
             ],
         };
-        let (_, result) = Machine::new_platform_with_default_imports()
+        let (_, result) = Machine::new_platform_full()
             .evaluate(&model).unwrap();
         assert_eq!(result, StringValue("String(3)".to_string()));
     }
@@ -2933,7 +3017,7 @@ mod tests {
     fn test_update_rows_in_namespace() {
         // create a table with test data
         let ns_path = "machine.update.stocks";
-        let (df, phys_columns) = create_dataframe(ns_path);
+        let (df, _) = create_dataframe(ns_path);
 
         // create the instruction model
         let model = Quarry(Excavation::Mutate(Mutation::Update {
@@ -3023,7 +3107,7 @@ mod tests {
         let ns = Namespace::parse(namespace).unwrap();
         match fs::remove_file(ns.get_table_file_path()) {
             Ok(_) => {}
-            Err(_) => {}
+            Err(err) => error!("create_dataframe: {}", err)
         }
 
         let mut df = make_dataframe_ns(ns, columns.to_owned()).unwrap();

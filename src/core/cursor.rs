@@ -173,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_cursor_navigation_top_middle_and_bottom() {
-        let (brc, phys_columns) = create_sample_data_1();
+        let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
 
         cursor.middle();
@@ -188,7 +188,7 @@ mod tests {
 
     #[test]
     fn test_cursor_with_all_rows() {
-        let (brc, phys_columns) = create_sample_data_1();
+        let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
         assert_eq!(cursor.next().unwrap(), Some(make_quote(0, "ABC", "AMEX", 11.77)));
         assert_eq!(cursor.next().unwrap(), Some(make_quote(1, "UNO", "NASDAQ", 0.2456)));
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_cursor_with_filtered_rows() {
-        let (brc, phys_columns) = create_sample_data_2();
+        let (brc, _) = create_sample_data_2();
         let mut cursor = Cursor::filter(Box::new(brc), Equal(
             Box::new(Variable("exchange".to_string())),
             Box::new(Literal(StringValue("NYSE".to_string()))),
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn test_reverse() {
-        let (brc, phys_columns) = create_sample_data_1();
+        let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
         assert_eq!(cursor.next().unwrap(), Some(make_quote(0, "ABC", "AMEX", 11.77)));
         assert_eq!(cursor.next().unwrap(), Some(make_quote(1, "UNO", "NASDAQ", 0.2456)));
@@ -280,7 +280,7 @@ mod tests {
 
     #[test]
     fn test_take() {
-        let (brc, phys_columns) = create_sample_data_1();
+        let (brc, _) = create_sample_data_1();
         let mut cursor = Cursor::new(Box::new(brc));
         assert_eq!(cursor.take(3).unwrap(), vec![
             make_quote(0, "ABC", "AMEX", 11.77),

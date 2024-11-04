@@ -335,7 +335,7 @@ mod tests {
     use crate::data_types::SizeTypes;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::*;
-    use crate::testdata::{make_quote_parameters, make_quote_columns};
+    use crate::testdata::{make_quote_columns, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
 
     use super::*;
@@ -367,7 +367,7 @@ mod tests {
         ])).unwrap());
 
         // read the previously created row
-        let (columns, row_maybe) = read_row!(actor, ns, 0).unwrap();
+        let (_, row_maybe) = read_row!(actor, ns, 0).unwrap();
         assert_eq!(row_maybe.unwrap(), Row::new(0, vec![
             StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(11.88)),
         ]));
@@ -377,7 +377,6 @@ mod tests {
     async fn test_dataframe_lifecycle() {
         let actor = DataframeActor::new().start();
         let ns = Namespace::parse("dataframe.actor_crud.stocks").unwrap();
-        let table_columns = make_quote_columns();
 
         // create the new empty table
         assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());

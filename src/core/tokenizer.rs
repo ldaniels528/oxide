@@ -347,5 +347,4 @@ mod tests {
             Token::atom("one".into(), 46, 49, 3, 14)
         ])
     }
-    
 }

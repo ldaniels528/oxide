@@ -151,6 +151,24 @@ impl NumberValue {
         }
     }
 
+    pub fn to_f32(&self) -> f32 {
+        match *self {
+            F32Value(n) => n,
+            F64Value(n) => n as f32,
+            I8Value(n) => n as f32,
+            I16Value(n) => n as f32,
+            I32Value(n) => n as f32,
+            I64Value(n) => n as f32,
+            I128Value(n) => n as f32,
+            NaNValue => 0.0,
+            U8Value(n) => n as f32,
+            U16Value(n) => n as f32,
+            U32Value(n) => n as f32,
+            U64Value(n) => n as f32,
+            U128Value(n) => n as f32,
+        }
+    }
+
     pub fn to_f64(&self) -> f64 {
         match *self {
             F32Value(n) => n as f64,
@@ -187,6 +205,60 @@ impl NumberValue {
         }
     }
 
+    pub fn to_i8(&self) -> i8 {
+        match *self {
+            F32Value(n) => n as i8,
+            F64Value(n) => n as i8,
+            I8Value(n) => n,
+            I16Value(n) => n as i8,
+            I32Value(n) => n as i8,
+            I64Value(n) => n as i8,
+            I128Value(n) => n as i8,
+            NaNValue => 0,
+            U8Value(n) => n as i8,
+            U16Value(n) => n as i8,
+            U32Value(n) => n as i8,
+            U64Value(n) => n as i8,
+            U128Value(n) => n as i8,
+        }
+    }
+
+    pub fn to_i16(&self) -> i16 {
+        match *self {
+            F32Value(n) => n as i16,
+            F64Value(n) => n as i16,
+            I8Value(n) => n as i16,
+            I16Value(n) => n,
+            I32Value(n) => n as i16,
+            I64Value(n) => n as i16,
+            I128Value(n) => n as i16,
+            NaNValue => 0,
+            U8Value(n) => n as i16,
+            U16Value(n) => n as i16,
+            U32Value(n) => n as i16,
+            U64Value(n) => n as i16,
+            U128Value(n) => n as i16,
+        }
+    }
+
+    pub fn to_i32(&self) -> i32 {
+        match *self {
+            F32Value(n) => n as i32,
+            F64Value(n) => n as i32,
+            I8Value(n) => n as i32,
+            I16Value(n) => n as i32,
+            I32Value(n) => n,
+            I64Value(n) => n as i32,
+            I128Value(n) => n as i32,
+            NaNValue => 0,
+            U8Value(n) => n as i32,
+            U16Value(n) => n as i32,
+            U32Value(n) => n as i32,
+            U64Value(n) => n as i32,
+            U128Value(n) => n as i32,
+        }
+    }
+
     pub fn to_i64(&self) -> i64 {
         match *self {
             F32Value(n) => n as i64,
@@ -202,6 +274,78 @@ impl NumberValue {
             U32Value(n) => n as i64,
             U64Value(n) => n as i64,
             U128Value(n) => n as i64,
+        }
+    }
+
+    pub fn to_i128(&self) -> i128 {
+        match *self {
+            F32Value(n) => n as i128,
+            F64Value(n) => n as i128,
+            I8Value(n) => n as i128,
+            I16Value(n) => n as i128,
+            I32Value(n) => n as i128,
+            I64Value(n) => n as i128,
+            I128Value(n) => n,
+            NaNValue => 0,
+            U8Value(n) => n as i128,
+            U16Value(n) => n as i128,
+            U32Value(n) => n as i128,
+            U64Value(n) => n as i128,
+            U128Value(n) => n as i128,
+        }
+    }
+
+    pub fn to_u8(&self) -> u8 {
+        match *self {
+            F32Value(n) => n as u8,
+            F64Value(n) => n as u8,
+            I8Value(n) => n as u8,
+            I16Value(n) => n as u8,
+            I32Value(n) => n as u8,
+            I64Value(n) => n as u8,
+            I128Value(n) => n as u8,
+            NaNValue => 0,
+            U8Value(n) => n,
+            U16Value(n) => n as u8,
+            U32Value(n) => n as u8,
+            U64Value(n) => n as u8,
+            U128Value(n) => n as u8,
+        }
+    }
+
+    pub fn to_u16(&self) -> u16 {
+        match *self {
+            F32Value(n) => n as u16,
+            F64Value(n) => n as u16,
+            I8Value(n) => n as u16,
+            I16Value(n) => n as u16,
+            I32Value(n) => n as u16,
+            I64Value(n) => n as u16,
+            I128Value(n) => n as u16,
+            NaNValue => 0,
+            U8Value(n) => n as u16,
+            U16Value(n) => n,
+            U32Value(n) => n as u16,
+            U64Value(n) => n as u16,
+            U128Value(n) => n as u16,
+        }
+    }
+
+    pub fn to_u32(&self) -> u32 {
+        match *self {
+            F32Value(n) => n as u32,
+            F64Value(n) => n as u32,
+            I8Value(n) => n as u32,
+            I16Value(n) => n as u32,
+            I32Value(n) => n as u32,
+            I64Value(n) => n as u32,
+            I128Value(n) => n as u32,
+            NaNValue => 0,
+            U8Value(n) => n as u32,
+            U16Value(n) => n as u32,
+            U32Value(n) => n,
+            U64Value(n) => n as u32,
+            U128Value(n) => n as u32,
         }
     }
 

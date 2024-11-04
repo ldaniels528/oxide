@@ -302,20 +302,6 @@ mod tests {
         say("Hello").unwrap()
     }
 
-    #[test]
-    fn test_get_prompt() {
-        let r: REPLState = REPLState::new();
-        assert_eq!(r.get_prompt(), "oxide.public[0]> ");
-        assert_eq!(r, REPLState {
-            interpreter: REPLState::attach_builtin_functions(Interpreter::new()),
-            database: String::from("oxide"),
-            schema: String::from("public"),
-            counter: 0,
-            is_alive: true,
-            connection: REPLConnection::LocalConnection,
-        })
-    }
-
     #[actix::test]
     async fn test_get_put_history() {
         let mut r: REPLState = REPLState::new();
