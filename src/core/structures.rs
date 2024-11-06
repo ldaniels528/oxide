@@ -354,7 +354,7 @@ mod structure_tests {}
 #[cfg(test)]
 mod hard_structure_tests {
     use crate::data_types::DataType::*;
-    use crate::data_types::SizeTypes;
+    use crate::data_types::StorageTypes;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::F64Value;
     use crate::structures::{HardStructure, Structure};
@@ -439,8 +439,8 @@ mod hard_structure_tests {
     fn test_new() {
         let structure = HardStructure::new(make_quote_columns(), Vec::new());
         assert_eq!(structure.get_columns(), vec![
-            Column::new("symbol", StringType(SizeTypes::Fixed(8)), Null, 9),
-            Column::new("exchange", StringType(SizeTypes::Fixed(8)), Null, 26),
+            Column::new("symbol", StringType(StorageTypes::FixedSize(8)), Null, 9),
+            Column::new("exchange", StringType(StorageTypes::FixedSize(8)), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ]);
         assert_eq!(structure.get("symbol"), Null);

@@ -792,6 +792,7 @@ impl Compiler {
                         "÷" | "/" => self.parse_expression_2a(ts, op0, Divide),
                         "==" => self.parse_conditional_2a(ts, op0, Equal),
                         "::" => self.parse_expression_2a(ts, op0, Extraction),
+                        ":::" => self.parse_expression_2a(ts, op0, ExtractPostfix),
                         ">" => self.parse_conditional_2a(ts, op0, GreaterThan),
                         ">=" => self.parse_conditional_2a(ts, op0, GreaterOrEqual),
                         "<" => self.parse_conditional_2a(ts, op0, LessThan),

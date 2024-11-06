@@ -25,10 +25,10 @@ use crate::codec;
 use crate::codec::Codec;
 use crate::compiler::fail_value;
 use crate::data_types::DataType::*;
-use crate::data_types::SizeTypes::Fixed;
+use crate::data_types::StorageTypes::{FixedSize, BLOB};
 use crate::data_types::*;
 use crate::errors::Errors;
-use crate::errors::Errors::{Exact, TypeMismatch, Various};
+use crate::errors::Errors::{CannotSubtract, Exact, TypeMismatch, Various};
 use crate::expression::Expression;
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
@@ -56,8 +56,8 @@ const UUID_FORMAT: &str =
 pub enum TypedValue {
     Array(Vec<TypedValue>),
     BackDoor(BackDoorKey),
-    BLOB(Vec<u8>),
     Boolean(bool),
+    ByteArray(Vec<u8>),
     DateValue(i64),
     ErrorValue(Errors),
     Function { params: Vec<Parameter>, code: Box<Expression> },
@@ -69,7 +69,6 @@ pub enum TypedValue {
     StructureSoft(SoftStructure),
     StringValue(String),
     TableValue(ModelRowCollection),
-    UUIDValue(u128),
     Undefined,
 }
 
@@ -83,7 +82,7 @@ impl TypedValue {
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
         match data_type {
             ArrayType(_kind) => Array(Vec::new()),
-            BLOBType(_size) => BLOB(Vec::new()),
+            ByteArrayType(_size) => ByteArray(Vec::new()),
             BooleanType => codec::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             DateType => codec::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
             // EnumType(labels) => {
@@ -93,7 +92,7 @@ impl TypedValue {
             ErrorType => ErrorValue(Exact(codec::decode_string(buffer, offset, 255).to_string())),
             //FunctionType(_columns) => Codec::decode_value(&buffer[offset..].to_vec()),
             //JSONType => Codec::decode_value(&buffer[offset..].to_vec()),
-            InferredType => Null,
+            LazyEvalType => Null,
             NumberType(kind) => Number(NumberValue::decode(buffer, offset, *kind)),
             // OutcomeType(kind) => match kind {
             //     OutcomeKind::Acked => Outcome(Outcomes::Ack),
@@ -106,9 +105,8 @@ impl TypedValue {
                     Ok(structure) => StructureHard(structure),
                     Err(err) => ErrorValue(Errors::Exact(err.to_string()))
                 }
-            TableType(columns) => TableValue(ModelRowCollection::construct(columns)),
-            InferredType => Undefined,
-            UUIDType => codec::decode_u8x16(buffer, offset, |b| UUIDValue(u128::from_be_bytes(b))),
+            TableType(columns, ..) => TableValue(ModelRowCollection::construct(columns)),
+            LazyEvalType => Undefined,
             _ => Codec::decode_value(&buffer[offset..].to_vec())
         }
     }
@@ -120,7 +118,7 @@ impl TypedValue {
     ) -> std::io::Result<TypedValue> {
         let tv = match data_type {
             ArrayType(..) => Array(buffer.next_array()?),
-            BLOBType(..) => BLOB(buffer.next_blob()),
+            ByteArrayType(..) => ByteArray(buffer.next_blob()),
             BooleanType => Boolean(buffer.next_bool()),
             DateType => DateValue(buffer.next_i64()),
             EnumType(labels) => {
@@ -132,7 +130,7 @@ impl TypedValue {
                 params: columns.to_owned(),
                 code: Box::new(ByteCodeCompiler::disassemble(buffer)?),
             },
-            InferredType => Null,
+            LazyEvalType => Null,
             NumberType(kind) =>
                 Number(match *kind {
                     F32Kind => F32Value(buffer.next_f32()),
@@ -156,9 +154,8 @@ impl TypedValue {
             },
             StringType(..) => StringValue(buffer.next_string()),
             StructureType(params) => StructureHard(buffer.next_struct_with_parameters(params)?),
-            TableType(columns) => TableValue(buffer.next_table_with_columns(columns)?),
-            InferredType => Undefined,
-            UUIDType => UUIDValue(buffer.next_u128()),
+            TableType(columns, ..) => TableValue(buffer.next_table_with_columns(columns)?),
+            LazyEvalType => Undefined,
         };
         Ok(tv)
     }
@@ -224,7 +221,7 @@ impl TypedValue {
             s if iso_date_regex.is_match(s) =>
                 DateValue(DateTime::parse_from_rfc3339(s)
                     .map_err(|e| cnv_error!(e))?.timestamp_millis()),
-            s if uuid_regex.is_match(s) => UUIDValue(codec::decode_uuid(s)?),
+            s if uuid_regex.is_match(s) => Number(U128Value(codec::decode_uuid(s)?)),
             s => StringValue(s.to_string()),
         };
         Ok(result)
@@ -273,7 +270,7 @@ impl TypedValue {
                 bytes
             }
             BackDoor(nf) => vec![nf.to_u8()],
-            BLOB(bytes) => codec::encode_u8x_n(bytes.to_vec()),
+            ByteArray(bytes) => codec::encode_u8x_n(bytes.to_vec()),
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
             DateValue(number) => number.to_be_bytes().to_vec(),
             ErrorValue(err) => codec::encode_string(err.to_string().as_str()),
@@ -295,7 +292,6 @@ impl TypedValue {
             StringValue(string) => codec::encode_string(string),
             //StructureHard(structure) => codec::encode_string(structure.to_string().as_str()),
             TableValue(rc) => rc.encode(),
-            UUIDValue(guid) => guid.to_be_bytes().to_vec(),
             other => Codec::encode_value(other).unwrap_or_else(|err| {
                 error!("decode error: {err}");
                 Vec::new()
@@ -307,13 +303,13 @@ impl TypedValue {
         match self.to_owned() {
             Array(items) => ArrayType(Box::new(Inferences::infer_values(&items))),
             BackDoor(key) => key.get_type(),
-            Function { params, .. } => FunctionType(params),
-            BLOB(v) => BLOBType(Fixed(v.len())),
+            ByteArray(v) => ByteArrayType(FixedSize(v.len())),
             Boolean(..) => BooleanType,
             DateValue(..) => DateType,
             ErrorValue(..) => ErrorType,
-            NamespaceValue(..) => TableType(Vec::new()),
-            Null => InferredType,
+            Function { params, .. } => FunctionType(params),
+            NamespaceValue(..) => TableType(Vec::new(), BLOB),
+            Null | Undefined => LazyEvalType,
             Number(nv) => NumberType(nv.kind()),
             Outcome(oc) => match oc {
                 Outcomes::Ack => OutcomeType(OutcomeKind::Acked),
@@ -322,10 +318,8 @@ impl TypedValue {
             },
             StructureHard(hard) => StructureType(hard.get_parameters()),
             StructureSoft(soft) => StructureType(soft.get_parameters()),
-            StringValue(s) => StringType(Fixed(s.len())),
-            TableValue(mrc) => TableType(Parameter::from_columns(mrc.get_columns())),
-            Undefined => InferredType,
-            UUIDValue(..) => UUIDType,
+            StringValue(s) => StringType(FixedSize(s.len())),
+            TableValue(mrc) => TableType(Parameter::from_columns(mrc.get_columns()), BLOB),
         }
     }
 
@@ -456,7 +450,7 @@ impl TypedValue {
             Array(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
             BackDoor(nf) => serde_json::json!(nf),
-            BLOB(bytes) => serde_json::json!(bytes),
+            ByteArray(bytes) => serde_json::json!(bytes),
             Boolean(b) => serde_json::json!(b),
             DateValue(millis) => serde_json::json!(Self::millis_to_iso_date(*millis)),
             ErrorValue(message) => serde_json::json!(message),
@@ -479,12 +473,12 @@ impl TypedValue {
                 serde_json::json!(rows)
             }
             Undefined => serde_json::Value::Null,
-            UUIDValue(guid) => serde_json::json!(Uuid::from_u128(*guid).to_string()),
         }
     }
 
     pub fn to_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
         match self {
+            ErrorValue(message) => fail(message.to_string()),
             NamespaceValue(d, s, n) => {
                 let ns = Namespace::new(d, s, n);
                 let frc = FileRowCollection::open(&ns)?;
@@ -493,8 +487,67 @@ impl TypedValue {
             StructureHard(s) => Ok(Box::new(s.to_table())),
             StructureSoft(s) => Ok(Box::new(s.to_table())),
             TableValue(mrc) => Ok(Box::new(mrc.to_owned())),
-            ErrorValue(message) => fail(message.to_string()),
             z => fail_value("Table", z)
+        }
+    }
+
+    pub fn to_table_value(&self) -> TypedValue {
+        match self {
+            Array(items) => self.convert_array_to_table(items),
+            ErrorValue(message) => ErrorValue(message.to_owned()),
+            NamespaceValue(d, s, n) =>
+                match FileRowCollection::open(&Namespace::new(d, s, n)) {
+                    Ok(frc) => match frc.read_active_rows() {
+                        Ok(rows) => TableValue(ModelRowCollection::from_rows(frc.get_columns().clone(), rows)),
+                        Err(err) => ErrorValue(Exact(err.to_string()))
+                    }
+                    Err(err) => ErrorValue(Exact(err.to_string()))
+                }
+            StructureHard(s) => TableValue(s.to_table()),
+            StructureSoft(s) => TableValue(s.to_table()),
+            TableValue(mrc) => TableValue(mrc.to_owned()),
+            z => ErrorValue(TypeMismatch("Table".into(), z.to_code()))
+        }
+    }
+
+    fn convert_array_to_table(&self, items: &Vec<TypedValue>) -> TypedValue {
+        // gather each struct in the array as a table
+        let tables = items.iter()
+            .fold(Vec::new(), |mut tables, tv| match tv {
+                StructureHard(hs) => {
+                    tables.push(hs.to_table());
+                    tables
+                }
+                StructureSoft(ss) => {
+                    tables.push(ss.to_table());
+                    tables
+                }
+                TableValue(mrc) => {
+                    tables.push(mrc.to_owned());
+                    tables
+                }
+                z => {
+                    println!("{} is not a struct nor table", z.to_code());
+                    tables
+                }
+            });
+
+        // process the tables
+        match tables.as_slice() {
+            [] => ErrorValue(Exact("At least one struct is required.".into())),
+            [mrc] => TableValue(mrc.to_owned()),
+            rcs => {
+                let columns = rcs[0].get_columns().to_owned();
+                TableValue(rcs.iter().fold(
+                    ModelRowCollection::new(columns),
+                    |mut mrc, rc| {
+                        match mrc.append_rows(rc.get_rows()) {
+                            ErrorValue(err) => error!("{}", err),
+                            _ => {}
+                        }
+                        mrc
+                    }))
+            }
         }
     }
 
@@ -566,7 +619,7 @@ impl TypedValue {
                 format!("[{}]", values.join(", "))
             }
             BackDoor(nf) => format!("{:?}", nf),
-            BLOB(bytes) => hex::encode(bytes),
+            ByteArray(bytes) => hex::encode(bytes),
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
             DateValue(millis) => Self::millis_to_iso_date(*millis).unwrap_or("".into()),
             ErrorValue(message) => message.to_string(),
@@ -583,7 +636,6 @@ impl TypedValue {
             StructureHard(structure) => structure.to_code(),
             StructureSoft(structure) => structure.to_code(),
             Undefined => "undefined".into(),
-            UUIDValue(guid) => Uuid::from_u128(*guid).to_string(),
         }
     }
 
@@ -771,7 +823,7 @@ impl Neg for TypedValue {
         match self {
             Array(v) => Array(v.iter().map(|tv| tv.to_owned().neg()).collect::<Vec<_>>()),
             BackDoor(..) => error("BackDoor".into()),
-            BLOB(..) => error("BLOB".into()),
+            ByteArray(..) => error("BLOB".into()),
             Boolean(n) => Boolean(!n),
             DateValue(v) => Number(I64Value(-v)),
             ErrorValue(msg) => ErrorValue(msg),
@@ -799,7 +851,6 @@ impl Neg for TypedValue {
             StructureSoft(..) => error("Structure".into()),
             TableValue(..) => error("Table".into()),
             Undefined => Undefined,
-            UUIDValue(..) => error("UUID".into()),
         }
     }
 }
@@ -841,13 +892,12 @@ impl PartialOrd for TypedValue {
     fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
         match (&self, &rhs) {
             (Array(a), Array(b)) => a.partial_cmp(b),
-            (BLOB(a), BLOB(b)) => a.partial_cmp(b),
+            (ByteArray(a), ByteArray(b)) => a.partial_cmp(b),
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
             (DateValue(a), DateValue(b)) => a.partial_cmp(b),
             (Number(a), Number(b)) => a.partial_cmp(b),
             (Outcome(a), Outcome(b)) => a.partial_cmp(b),
             (StringValue(a), StringValue(b)) => a.partial_cmp(b),
-            (UUIDValue(a), UUIDValue(b)) => a.partial_cmp(b),
             (Null, Null) => Some(Ordering::Equal),
             (Null, Undefined) => Some(Ordering::Greater),
             (Undefined, Null) => Some(Ordering::Less),
@@ -892,7 +942,7 @@ impl Sub for TypedValue {
                     let b = b.to_update_count() as i64;
                     abs(a - b)
                 } as usize)),
-            (a, b) => ErrorValue(Exact(format!("cannot {} - {}", a, b)))
+            (a, b) => ErrorValue(CannotSubtract(a.to_code(), b.to_code()))
         }
     }
 }
@@ -908,7 +958,7 @@ mod tests {
     #[test]
     fn test_decode() {
         let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
-        assert_eq!(TypedValue::decode(&StringType(SizeTypes::Fixed(5)), &buf, 0), StringValue("Hello".into()))
+        assert_eq!(TypedValue::decode(&StringType(StorageTypes::FixedSize(5)), &buf, 0), StringValue("Hello".into()))
     }
 
     #[test]
@@ -1125,13 +1175,10 @@ mod tests {
         verify_to_json(StringValue("Hello World".into()), serde_json::Value::String("Hello World".into()));
         //verify_to_json()
         verify_to_json(Undefined, serde_json::Value::Null);
-        verify_to_json(UUIDValue(0x67452301_ABCD_EF89_1234_567890ABCDEFu128),
-                       serde_json::Value::String("67452301-abcd-ef89-1234-567890abcdef".into()));
     }
 
     #[test]
     fn test_to_string() {
-        assert_eq!(format!("{}", UUIDValue(0xDEADFACEBABE)), "00000000-0000-0000-0000-deadfacebabe");
         assert_eq!(format!("{}", StringValue("Hello".into())), "Hello");
     }
 
@@ -1146,9 +1193,6 @@ mod tests {
         verify_wrap_unwrap("null", Null);
         verify_wrap_unwrap("Hello World", StringValue("Hello World".into()));
         verify_wrap_unwrap("undefined", Undefined);
-        verify_wrap_unwrap("67452301-abcd-ef89-1234-567890abcdef", UUIDValue(
-            0x67452301_ABCD_EF89_1234_567890ABCDEFu128
-        ))
     }
 
     #[test]

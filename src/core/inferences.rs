@@ -2,9 +2,9 @@
 // Inferences class
 ////////////////////////////////////////////////////////////////////
 
-use crate::data_types::DataType::{ArrayType, BLOBType, BooleanType, InferredType, OutcomeType, StringType, StructureType};
-use crate::data_types::{DataType, SizeTypes};
-use crate::expression::Expression::{ArrayExpression, AsValue, BitwiseOp, CodeBlock, Condition, Directive, Divide, ElementAt, Extraction, Factorial, Feature, From, FunctionCall, If, Import, Include, JSONExpression, Literal, Minus, Module, Modulo, Multiply, Neg, Ns, Parameters, Plus, Pow, Quarry, Range, Return, Scenario, SetVariable, StructureImpl, Variable, Via, While, HTTP};
+use crate::data_types::DataType::{ArrayType, ByteArrayType, BooleanType, LazyEvalType, OutcomeType, StringType, StructureType};
+use crate::data_types::{DataType, StorageTypes};
+use crate::expression::Expression::{ArrayExpression, AsValue, BitwiseOp, CodeBlock, Condition, Directive, Divide, ElementAt, ExtractPostfix, Extraction, Factorial, Feature, From, FunctionCall, If, Import, Include, JSONExpression, Literal, Minus, Module, Modulo, Multiply, Neg, Ns, Parameters, Plus, Pow, Quarry, Range, Return, Scenario, SetVariable, StructureImpl, Variable, Via, While, HTTP};
 use crate::expression::{BitwiseOps, Excavation, Expression, Mutation};
 use crate::outcomes::OutcomeKind;
 use crate::typed_values::TypedValue;
@@ -25,18 +25,19 @@ impl Inferences {
                 BitwiseOps::ShiftRight(a, b) => Inferences::infer_a_or_b(a, b),
                 BitwiseOps::Xor(a, b) => Inferences::infer_a_or_b(a, b),
             },
-            CodeBlock(..) => InferredType,
+            CodeBlock(..) => LazyEvalType,
             Parameters(params) => ArrayType(Box::new(StructureType(params.to_owned()))),
             Condition(..) => BooleanType,
             Directive(..) => OutcomeType(OutcomeKind::Acked),
             Divide(a, b) => Inferences::infer_a_or_b(a, b),
-            ElementAt(..) => InferredType,
-            Extraction(..) => InferredType,
+            ElementAt(..) => LazyEvalType,
+            Extraction(..) => LazyEvalType,
+            ExtractPostfix(..) => LazyEvalType,
             Factorial(a) => Inferences::infer_expr(a),
             Feature { .. } => OutcomeType(OutcomeKind::Acked),
-            From(..) => InferredType,
-            FunctionCall { .. } => InferredType,
-            HTTP { .. } => InferredType,
+            From(..) => LazyEvalType,
+            FunctionCall { .. } => LazyEvalType,
+            HTTP { .. } => LazyEvalType,
             If { a, .. } => Inferences::infer_expr(a),
             Import(..) => OutcomeType(OutcomeKind::Acked),
             Include(..) => OutcomeType(OutcomeKind::Acked),
@@ -59,13 +60,13 @@ impl Inferences {
                 }
             },
             Range(a, b) => Inferences::infer_a_or_b(a, b),
-            Return(..) => InferredType,
+            Return(..) => LazyEvalType,
             Scenario { .. } => OutcomeType(OutcomeKind::Acked),
             SetVariable(..) => OutcomeType(OutcomeKind::Acked),
             StructureImpl(..) => OutcomeType(OutcomeKind::Acked),
-            Variable(..) => InferredType,
-            Via(..) => InferredType,
-            While { .. } => InferredType,
+            Variable(..) => LazyEvalType,
+            Via(..) => LazyEvalType,
+            While { .. } => LazyEvalType,
         }
     }
 
@@ -76,18 +77,18 @@ impl Inferences {
 
     /// provides type resolution for the given [Vec<DataType>]
     pub fn infer_type(types: Vec<DataType>) -> DataType {
-        fn larger(a: &SizeTypes, b: &SizeTypes) -> SizeTypes {
+        fn larger(a: &StorageTypes, b: &StorageTypes) -> StorageTypes {
             if a > b { a.to_owned() } else { b.to_owned() }
         }
 
         match types.len() {
-            0 => InferredType,
+            0 => LazyEvalType,
             1 => types[0].to_owned(),
             _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
                 match (agg, t) {
-                    (InferredType, b) => b.to_owned(),
-                    (a, InferredType) => a.to_owned(),
-                    (BLOBType(a), BLOBType(b)) => StringType(larger(&a, b)),
+                    (LazyEvalType, b) => b.to_owned(),
+                    (a, LazyEvalType) => a.to_owned(),
+                    (ByteArrayType(a), ByteArrayType(b)) => StringType(larger(&a, b)),
                     (StringType(a), StringType(b)) => StringType(larger(&a, b)),
                     (_, t) => t.to_owned()
                 })
@@ -113,7 +114,7 @@ impl Inferences {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_types::SizeTypes::Fixed;
+    use crate::data_types::StorageTypes::FixedSize;
     use crate::typed_values::TypedValue::StringValue;
 
     #[test]
@@ -121,7 +122,7 @@ mod tests {
         let kind = Inferences::infer_expr(
             &Literal(StringValue("hello world".into()))
         );
-        assert_eq!(kind, StringType(Fixed(11)))
+        assert_eq!(kind, StringType(FixedSize(11)))
     }
 
     #[test]
@@ -130,17 +131,17 @@ mod tests {
             &Literal(StringValue("yes".into())),
             &Literal(StringValue("hello".into())),
         );
-        assert_eq!(kind, StringType(Fixed(5)))
+        assert_eq!(kind, StringType(FixedSize(5)))
     }
 
     #[test]
     fn test_infer_type() {
         let kind = Inferences::infer_type(vec![
-            StringType(Fixed(11)),
-            StringType(Fixed(110)),
-            StringType(Fixed(55))
+            StringType(FixedSize(11)),
+            StringType(FixedSize(110)),
+            StringType(FixedSize(55))
         ]);
-        assert_eq!(kind, StringType(Fixed(110)))
+        assert_eq!(kind, StringType(FixedSize(110)))
     }
 
     #[test]
@@ -150,7 +151,7 @@ mod tests {
             StringValue("banana".into()),
             StringValue("cherry".into()),
         ]);
-        assert_eq!(kind, StringType(Fixed(6)))
+        assert_eq!(kind, StringType(FixedSize(6)))
     }
 
     #[test]
@@ -160,6 +161,6 @@ mod tests {
             Literal(StringValue("banana".into())),
             Literal(StringValue("cherry".into())),
         ]);
-        assert_eq!(kind, StringType(Fixed(6)))
+        assert_eq!(kind, StringType(FixedSize(6)))
     }
 }

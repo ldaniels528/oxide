@@ -102,28 +102,6 @@ mod tests {
     }
 
     #[test]
-    fn test_platform_functions_cnv() {
-        use crate::numbers::NumberValue::*;
-        // floating-point kinds
-        verify_exact("cnv::to_f32(1015)", Number(F32Value(1015.)));
-        verify_exact("cnv::to_f64(7779311)", Number(F64Value(7779311.)));
-
-        // signed-integer kinds
-        verify_exact("cnv::to_i128(12345678987.43)", Number(I128Value(12345678987)));
-        verify_exact("cnv::to_i64(123456789.42)", Number(I64Value(123456789)));
-        verify_exact("cnv::to_i32(-765.65)", Number(I32Value(-765)));
-        verify_exact("cnv::to_i16(567.311)", Number(I16Value(567)));
-        verify_exact("cnv::to_i8(-125.089)", Number(I8Value(-125)));
-
-        // unsigned-integer kinds
-        verify_exact("cnv::to_u128(12789.43)", Number(U128Value(12789)));
-        verify_exact("cnv::to_u64(12.3)", Number(U64Value(12)));
-        verify_exact("cnv::to_u32(765.65)", Number(U32Value(765)));
-        verify_exact("cnv::to_u16(567.311)", Number(U16Value(567)));
-        verify_exact("cnv::to_u8(125.089)", Number(U8Value(125)));
-    }
-
-    #[test]
     fn test_platform_functions_io() {
         verify_exact(r#"io::stderr("Goodbye Cruel World")"#, Outcome(Ack));
         verify_exact(r#"io::stdout("Hello World")"#, Outcome(Ack));
@@ -142,10 +120,14 @@ mod tests {
     }
 
     #[test]
-    fn test_platform_functions_str_format() {
+    fn test_platform_functions_str() {
         verify_exact(r#"
             str::format("This {} the {}", "is", "way")
         "#, StringValue("This is the way".into()));
+
+        verify_exact(r#"
+            str::to_string(125.75)
+        "#, StringValue("125.75".into()));
     }
 
     #[test]
@@ -205,7 +187,7 @@ mod tests {
     #[test]
     fn test_platform_functions_util() {
         verify_when("util::timestamp()", |r| matches!(r, DateValue(..)));
-        verify_when("util::uuid()", |r| matches!(r, UUIDValue(..)));
+        verify_when("util::uuid()", |r| matches!(r, Number(U128Value(..))));
 
         let mut interpreter = Interpreter::new();
         interpreter.evaluate(r#"
@@ -262,6 +244,28 @@ mod tests {
             StringValue(r#"{"symbol":"GOTO","exchange":"OTC","last_sale":0.1428}"#.into()),
             StringValue(r#"{"symbol":"BOOM","exchange":"NASDAQ","last_sale":0.0872}"#.into()),
         ]));
+    }
+
+    #[test]
+    fn test_platform_functions_util_numeric() {
+        use crate::numbers::NumberValue::*;
+        // floating-point kinds
+        verify_exact("util::to_f32(1015)", Number(F32Value(1015.)));
+        verify_exact("util::to_f64(7779311)", Number(F64Value(7779311.)));
+
+        // signed-integer kinds
+        verify_exact("util::to_i128(12345678987.43)", Number(I128Value(12345678987)));
+        verify_exact("util::to_i64(123456789.42)", Number(I64Value(123456789)));
+        verify_exact("util::to_i32(-765.65)", Number(I32Value(-765)));
+        verify_exact("util::to_i16(567.311)", Number(I16Value(567)));
+        verify_exact("util::to_i8(-125.089)", Number(I8Value(-125)));
+
+        // unsigned-integer kinds
+        verify_exact("util::to_u128(12789.43)", Number(U128Value(12789)));
+        verify_exact("util::to_u64(12.3)", Number(U64Value(12)));
+        verify_exact("util::to_u32(765.65)", Number(U32Value(765)));
+        verify_exact("util::to_u16(567.311)", Number(U16Value(567)));
+        verify_exact("util::to_u8(125.089)", Number(U8Value(125)));
     }
 
     #[test]
@@ -623,11 +627,12 @@ mod tests {
     #[test]
     fn test_hard_structure_field() {
         verify_exact(r#"
-            struct(
+            stock := struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
-            )::symbol
+            )
+            stock::symbol
         "#, StringValue("ABC".into()));
     }
 
@@ -684,6 +689,23 @@ mod tests {
     }
 
     #[test]
+    fn test_hard_structure_to_table() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            util::to_table(struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 45.67
+            ))
+        "#).unwrap();
+        let rows = result.to_table().unwrap()
+            .read_active_rows().unwrap();
+        assert_eq!(rows, vec![
+            make_quote(0, "ABC", "NYSE", 45.67),
+        ])
+    }
+
+    #[test]
     fn test_soft_structure() {
         let code = r#"
             {
@@ -720,7 +742,8 @@ mod tests {
     #[test]
     fn test_soft_structure_field() {
         verify_exact(r#"
-            { symbol:"AAA", price:123.45 }::symbol
+            stock := { symbol:"AAA", price:123.45 }
+            stock::symbol
         "#, StringValue("AAA".into()));
     }
 
@@ -733,7 +756,6 @@ mod tests {
                 last_sale: 23.67,
                 is_this_you: fn(symbol) => symbol == self::symbol
             }
-
             stock::is_this_you('ABC')
         "#, Boolean(true));
     }
@@ -849,6 +871,75 @@ mod tests {
     }
 
     #[test]
+    fn test_soft_structure_to_table() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            util::to_table({
+                symbol: "ABC",
+                exchange: "NYSE",
+                last_sale: 23.67
+            })
+        "#).unwrap();
+        let rows = result.to_table().unwrap()
+            .read_active_rows().unwrap();
+        assert_eq!(rows, vec![
+            make_quote(0, "ABC", "NYSE", 23.67),
+        ])
+    }
+
+    #[test]
+    fn test_soft_structure_array_to_table() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            util::to_table([{
+                symbol: "TRX",
+                exchange: "AMEX",
+                last_sale: 29.88
+            }, {
+                symbol: "BMX",
+                exchange: "NYSE",
+                last_sale: 46.11
+            }])
+        "#).unwrap();
+        let rows = result.to_table().unwrap()
+            .read_active_rows().unwrap();
+        assert_eq!(rows, vec![
+            make_quote(0, "TRX", "AMEX", 29.88),
+            make_quote(1, "BMX", "NYSE", 46.11),
+        ])
+    }
+
+    #[test]
+    fn test_structure_mixed_array_to_table() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+             stocks := util::to_table([
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
+             ])
+
+            util::to_table([
+                stocks,
+                struct(
+                    symbol: String(8) = "ABC",
+                    exchange: String(8) = "OTHER_OTC",
+                    last_sale: f64 = 0.67),
+                { symbol: "TRX", exchange: "AMEX", last_sale: 29.88 },
+                { symbol: "BMX", exchange: "NASDAQ", last_sale: 46.11 }
+            ])
+        "#).unwrap();
+        let rows = result.to_table().unwrap()
+            .read_active_rows().unwrap();
+        assert_eq!(rows, vec![
+            make_quote(0, "BIZ", "NYSE", 23.66),
+            make_quote(1, "DMX", "OTC_BB", 1.17),
+            make_quote(2, "ABC", "OTHER_OTC", 0.67),
+            make_quote(3, "TRX", "AMEX", 29.88),
+            make_quote(4, "BMX", "NASDAQ", 46.11),
+        ])
+    }
+
+    #[test]
     fn test_module() {
         verify_exact(r#"
             mod abc {
@@ -959,13 +1050,26 @@ mod tests {
         assert_eq!(interpreter.machine.get("to_u64"), None);
 
         // import all conversion members
-        interpreter.evaluate("import cnv").unwrap();
+        interpreter.evaluate("import util").unwrap();
 
         // after the import, 'to_u8' should be in scope
-        assert_eq!(interpreter.machine.get("to_u8"), Some(BackDoor(BackDoorKey::CnvToU8)));
-        assert_eq!(interpreter.machine.get("to_u16"), Some(BackDoor(BackDoorKey::CnvToU16)));
-        assert_eq!(interpreter.machine.get("to_u32"), Some(BackDoor(BackDoorKey::CnvToU32)));
-        assert_eq!(interpreter.machine.get("to_u64"), Some(BackDoor(BackDoorKey::CnvToU64)));
+        assert_eq!(interpreter.machine.get("to_u8"), Some(BackDoor(BackDoorKey::UtilToU8)));
+        assert_eq!(interpreter.machine.get("to_u16"), Some(BackDoor(BackDoorKey::UtilToU16)));
+        assert_eq!(interpreter.machine.get("to_u32"), Some(BackDoor(BackDoorKey::UtilToU32)));
+        assert_eq!(interpreter.machine.get("to_u64"), Some(BackDoor(BackDoorKey::UtilToU64)));
+    }
+
+    #[test]
+    fn test_postfix_methods() {
+        verify_exact(r#"
+            import str::substring
+            "Hello":::substring(1, 4)
+        "#, StringValue("ell".into()));
+
+        verify_exact(r#"
+            import str::to_string
+            123:::to_string()
+        "#, StringValue("123".into()));
     }
 
     #[test]
@@ -1289,7 +1393,7 @@ mod tests {
             exchange: String(8),
             last_sale: f64
         ))"#, StringValue("Table(symbol: String(8), exchange: String(8), last_sale: f64)".into()));
-        verify_exact("type_of(util::uuid())", StringValue("UUID".into()));
+        verify_exact("type_of(util::uuid())", StringValue("u128".into()));
         verify_exact("type_of(my_var)", StringValue("".into()));
         verify_exact("type_of(null)", StringValue("".into()));
         verify_exact("type_of(undefined)", StringValue("".into()));

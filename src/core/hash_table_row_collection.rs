@@ -8,7 +8,7 @@ use log::warn;
 
 use crate::data_types::DataType::NumberType;
 use crate::errors::Errors;
-use crate::errors::Errors::{Exact, HashTableOverflow, OutcomeExpected};
+use crate::errors::Errors::{Exact, HashTableOverflow, OutcomeExpected, RowsAffectedExpected};
 use crate::field_metadata::FieldMetadata;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::NumberValue::U64Value;
@@ -384,8 +384,8 @@ impl RowCollection for HashTableRowCollection {
             _ =>
                 match self.move_key_value(id, &old_value, new_value) {
                     Outcome(..) => self.data_table.update_row(id, row),
-                    ErrorValue(msg) => ErrorValue(msg),
-                    other => ErrorValue(Exact(format!("expected RowsAffected(..) near {}", other)))
+                    ErrorValue(err) => ErrorValue(err),
+                    other => ErrorValue(RowsAffectedExpected(other.to_code()))
                 }
         }
     }

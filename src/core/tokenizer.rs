@@ -4,6 +4,10 @@
 
 use crate::tokens::Token;
 
+const COMPOUND_3_OPERATORS: [&str; 1] = [
+    ":::"
+];
+
 const COMPOUND_OPERATORS: [&str; 23] = [
     "&&", "**", "||", "::", "..", "==", ">>", "<<",
     "->", "<-", ">=", "<=", "=>",
@@ -90,6 +94,7 @@ fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
 fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
         skip_comments,
+        next_compound3_operator_token,
         next_compound_symbol_token,
         next_compound_operator_token,
         next_operator_token,
@@ -205,6 +210,17 @@ fn is_same(a: &[char], b: &str) -> bool {
     let aa: String = a.iter().collect();
     let bb: String = b.into();
     aa == bb
+}
+
+fn next_compound3_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    let symbol_len = 3;
+    let start = *pos;
+    if has_at_least(inputs, pos, symbol_len) &&
+        COMPOUND_3_OPERATORS.iter().any(|gl| is_same(&inputs[start..(start + symbol_len)], gl)) {
+        *pos += symbol_len;
+        let end = *pos;
+        generate_token(&inputs, start, end, Token::operator)
+    } else { None }
 }
 
 fn next_compound_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {

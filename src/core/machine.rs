@@ -9,7 +9,7 @@ use std::io::Read;
 use std::ops::{Deref, Neg};
 use std::process::Output;
 use std::{fs, thread};
-
+use actix_web::web::scope;
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use log::{error, info};
 use reqwest::multipart::{Form, Part};
@@ -90,20 +90,6 @@ impl Machine {
         use BackDoorKey::*;
         Self::empty()
             //////////////////////// packages ////////////////////////
-            .with_package("cnv", vec![
-                ("to_f32", BackDoor(CnvToF32)),
-                ("to_f64", BackDoor(CnvToF64)),
-                ("to_i8", BackDoor(CnvToI8)),
-                ("to_i16", BackDoor(CnvToI16)),
-                ("to_i32", BackDoor(CnvToI32)),
-                ("to_i64", BackDoor(CnvToI64)),
-                ("to_i128", BackDoor(CnvToI128)),
-                ("to_u8", BackDoor(CnvToU8)),
-                ("to_u16", BackDoor(CnvToU16)),
-                ("to_u32", BackDoor(CnvToU32)),
-                ("to_u64", BackDoor(CnvToU64)),
-                ("to_u128", BackDoor(CnvToU128)),
-            ])
             .with_package("io", vec![
                 ("stderr", BackDoor(IoStdErr)),
                 ("stdout", BackDoor(IoStdOut)),
@@ -123,6 +109,7 @@ impl Machine {
                 ("left", BackDoor(StrLeft)),
                 ("right", BackDoor(StrRight)),
                 ("substring", BackDoor(StrSubstring)),
+                ("to_string", BackDoor(StrToString)),
             ])
             .with_package("util", vec![
                 ("day_of", BackDoor(UtilTimestampDay)),
@@ -130,10 +117,24 @@ impl Machine {
                 ("hour12_of", BackDoor(UtilTimestampHour12)),
                 ("minute_of", BackDoor(UtilTimestampMinute)),
                 ("month_of", BackDoor(UtilTimestampMonth)),
+                ("now", BackDoor(UtilTimestamp)),
                 ("second_of", BackDoor(UtilTimestampSecond)),
                 ("timestamp", BackDoor(UtilTimestamp)),
                 ("to_csv", BackDoor(UtilToCSV)),
+                ("to_f32", BackDoor(UtilToF32)),
+                ("to_f64", BackDoor(UtilToF64)),
+                ("to_i8", BackDoor(UtilToI8)),
+                ("to_i16", BackDoor(UtilToI16)),
+                ("to_i32", BackDoor(UtilToI32)),
+                ("to_i64", BackDoor(UtilToI64)),
+                ("to_i128", BackDoor(UtilToI128)),
                 ("to_json", BackDoor(UtilToJSON)),
+                ("to_table", BackDoor(UtilToTable)),
+                ("to_u8", BackDoor(UtilToU8)),
+                ("to_u16", BackDoor(UtilToU16)),
+                ("to_u32", BackDoor(UtilToU32)),
+                ("to_u64", BackDoor(UtilToU64)),
+                ("to_u128", BackDoor(UtilToU128)),
                 ("uuid", BackDoor(UtilUUID)),
                 ("year_of", BackDoor(UtilTimestampYear)),
             ])
@@ -339,6 +340,10 @@ impl Machine {
         }
     }
 
+    fn convert_to_csv(&self, value: &TypedValue) -> (Self, TypedValue) {
+        self.convert_to_csv_or_json(value, true)
+    }
+
     fn convert_to_csv_or_json(
         &self,
         value: &TypedValue,
@@ -361,6 +366,10 @@ impl Machine {
         }
     }
 
+    fn convert_to_json(&self, value: &TypedValue) -> (Self, TypedValue) {
+        self.convert_to_csv_or_json(value, false)
+    }
+
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
     pub fn evaluate(
         &self,
@@ -375,13 +384,13 @@ impl Machine {
             }
             BitwiseOp(bitwise) => self.evaluate_bitwise(bitwise),
             CodeBlock(ops) => self.evaluate_scope(ops),
-            Parameters(columns) => Ok(self.evaluate_column_set(columns)),
             Condition(condition) => self.evaluate_cond(condition),
             Directive(d) => self.evaluate_directive(d),
             Divide(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.evaluate_index_of_collection(a, b),
             Extraction(a, b) => self.evaluate_extraction(a, b),
+            ExtractPostfix(a, b) => self.evaluate_postfix_method(a, b),
             Factorial(a) => self.evaluate_inline_1(a, |aa| aa.factorial()),
             Feature { title, scenarios } => self.evaluate_feature(title, scenarios),
             From(src) => self.evaluate_table_row_query(src, &True, Undefined),
@@ -404,6 +413,7 @@ impl Machine {
                 self.evaluate_inline_2(a, b, |aa, bb| aa * bb),
             Neg(a) => Ok(self.evaluate_neg(a)),
             Ns(a) => self.evaluate_table_ns(a),
+            Parameters(params) => Ok(self.evaluate_parameters(params)),
             Plus(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa + bb),
             Pow(a, b) =>
@@ -551,19 +561,18 @@ impl Machine {
         args: Vec<TypedValue>,
     ) -> (Self, TypedValue) {
         match bdk {
-            BackDoorKey::LangAssert => self.evaluate_back_door_fn1(args, Machine::do_assert),
-            BackDoorKey::OsEnvVars => (self.clone(), Self::create_env_table()),
-            BackDoorKey::VmEval => self.evaluate_back_door_fn1(args, Machine::do_eval),
-            BackDoorKey::StrFormat => self.evaluate_format_string(args),
-            BackDoorKey::StrLeft => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_left(s, n)),
-            BackDoorKey::LangMatches => self.evaluate_back_door_fn2(args, |ms, a, b| (ms, a.matches(b))),
-            BackDoorKey::VmReset => self.evaluate_back_door_fn0(args, |_| (Machine::new(), Outcome(Ack))),
-            BackDoorKey::StrRight => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_right(s, n)),
-            BackDoorKey::VmServe => self.evaluate_back_door_fn1(args, Machine::do_serve),
             BackDoorKey::IoStdErr => self.evaluate_back_door_fn1(args, Machine::do_stdout),
             BackDoorKey::IoStdOut => self.evaluate_back_door_fn1(args, Machine::do_stdout),
-            BackDoorKey::StrSubstring => self.evaluate_back_door_fn3(args, |ms, s, a, b| ms.evaluate_substring(s, a, b)),
+            BackDoorKey::LangAssert => self.evaluate_back_door_fn1(args, Machine::do_assert),
+            BackDoorKey::LangMatches => self.evaluate_back_door_fn2(args, |ms, a, b| (ms, a.matches(b))),
+            BackDoorKey::LangTypeOf => self.evaluate_back_door_fn1(args, |ms, a| (ms, StringValue(a.get_type_name()))),
+            BackDoorKey::OsEnvVars => (self.clone(), Self::create_env_table()),
             BackDoorKey::OsSysCall => self.ok_to_tv(self.evaluate_syscall(args)),
+            BackDoorKey::StrFormat => self.evaluate_format_string(args),
+            BackDoorKey::StrLeft => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_left(s, n)),
+            BackDoorKey::StrRight => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_right(s, n)),
+            BackDoorKey::StrSubstring => self.evaluate_back_door_fn3(args, |ms, s, a, b| ms.evaluate_substring(s, a, b)),
+            BackDoorKey::StrToString => self.evaluate_back_door_fn1(args, |ms, a| (ms, StringValue(a.to_string()))),
             BackDoorKey::UtilTimestamp => self.ok_to_tv(self.evaluate_timestamp(args)),
             BackDoorKey::UtilTimestampDay => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
             BackDoorKey::UtilTimestampHour => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
@@ -572,24 +581,27 @@ impl Machine {
             BackDoorKey::UtilTimestampMonth => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
             BackDoorKey::UtilTimestampSecond => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
             BackDoorKey::UtilTimestampYear => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::UtilToCSV => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, true)),
-            BackDoorKey::UtilToJSON => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv_or_json(a, false)),
-            BackDoorKey::LangTypeOf => self.evaluate_back_door_fn1(args, |ms, a| (ms, StringValue(a.get_type_name()))),
+            BackDoorKey::UtilToCSV => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv(a)),
+            BackDoorKey::UtilToF32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToF64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToI8 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToI16 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToI32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToI64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToI128 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToJSON => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_json(a)),
+            BackDoorKey::UtilToTable => self.evaluate_back_door_fn1(args, |ms, a| (ms, a.to_table_value())),
+            BackDoorKey::UtilToU8 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToU16 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToU32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToU64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
+            BackDoorKey::UtilToU128 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
             BackDoorKey::UtilUUID => self.ok_to_tv(self.evaluate_uuid(args)),
+            BackDoorKey::VmEval => self.evaluate_back_door_fn1(args, Machine::do_eval),
+            BackDoorKey::VmReset => self.evaluate_back_door_fn0(args, |_| (Machine::new(), Outcome(Ack))),
+            BackDoorKey::VmServe => self.evaluate_back_door_fn1(args, Machine::do_serve),
             BackDoorKey::VmVariables => self.evaluate_back_door_fn0(args, |ms| (ms.clone(), TableValue(ms.get_variables()))),
             BackDoorKey::VmVersion => self.evaluate_back_door_fn0(args, |ms| (ms, StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))),
-            BackDoorKey::CnvToF32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToF64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToI8 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToI16 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToI32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToI64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToI128 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToU8 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToU16 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToU32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToU64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::CnvToU128 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
         }
     }
 
@@ -607,18 +619,18 @@ impl Machine {
         bdk: &BackDoorKey,
     ) -> (Machine, TypedValue) {
         let result = match bdk {
-            BackDoorKey::CnvToF32 => Number(F32Value(value.to_f32())),
-            BackDoorKey::CnvToF64 => Number(F64Value(value.to_f64())),
-            BackDoorKey::CnvToI8 => Number(I8Value(value.to_i8())),
-            BackDoorKey::CnvToI16 => Number(I16Value(value.to_i16())),
-            BackDoorKey::CnvToI32 => Number(I32Value(value.to_i32())),
-            BackDoorKey::CnvToI64 => Number(I64Value(value.to_i64())),
-            BackDoorKey::CnvToI128 => Number(I128Value(value.to_i128())),
-            BackDoorKey::CnvToU8 => Number(U8Value(value.to_u8())),
-            BackDoorKey::CnvToU16 => Number(U16Value(value.to_u16())),
-            BackDoorKey::CnvToU32 => Number(U32Value(value.to_u32())),
-            BackDoorKey::CnvToU64 => Number(U64Value(value.to_u64())),
-            BackDoorKey::CnvToU128 => Number(U128Value(value.to_u128())),
+            BackDoorKey::UtilToF32 => Number(F32Value(value.to_f32())),
+            BackDoorKey::UtilToF64 => Number(F64Value(value.to_f64())),
+            BackDoorKey::UtilToI8 => Number(I8Value(value.to_i8())),
+            BackDoorKey::UtilToI16 => Number(I16Value(value.to_i16())),
+            BackDoorKey::UtilToI32 => Number(I32Value(value.to_i32())),
+            BackDoorKey::UtilToI64 => Number(I64Value(value.to_i64())),
+            BackDoorKey::UtilToI128 => Number(I128Value(value.to_i128())),
+            BackDoorKey::UtilToU8 => Number(U8Value(value.to_u8())),
+            BackDoorKey::UtilToU16 => Number(U16Value(value.to_u16())),
+            BackDoorKey::UtilToU32 => Number(U32Value(value.to_u32())),
+            BackDoorKey::UtilToU64 => Number(U64Value(value.to_u64())),
+            BackDoorKey::UtilToU128 => Number(U128Value(value.to_u128())),
             bdk => ErrorValue(ConversionError(bdk.to_code()))
         };
         (ms, result)
@@ -763,7 +775,7 @@ impl Machine {
         }
     }
 
-    fn evaluate_column_set(
+    fn evaluate_parameters(
         &self,
         columns: &Vec<Parameter>,
     ) -> (Machine, TypedValue) {
@@ -832,52 +844,55 @@ impl Machine {
 
     fn evaluate_extraction(
         &self,
-        object: &Box<Expression>,
-        field: &Box<Expression>,
+        object: &Expression,
+        field: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         let (ms, obj) = self.evaluate(object)?;
         match obj {
             ErrorValue(err) => Ok((ms, ErrorValue(err))),
             Null => fail(format!("Cannot evaluate {}::{}", Null, field.to_code())),
-            StructureSoft(s) => self.evaluate_extraction_structure_soft(field, &s),
-            StructureHard(s) => self.evaluate_extraction_structure_hard(field, &s),
+            StructureHard(structure) =>
+                match field {
+                    // method call: math::compute(5, 8)
+                    FunctionCall { fx, args } =>
+                        structure.pollute(ms).evaluate_function_call(fx, args),
+                    // stock::symbol
+                    Variable(name) => Ok((ms, structure.get(name))),
+                    z => fail(format!("Illegal field {} for structure {}",
+                                      z.to_code(), StructureHard(structure.to_owned()).to_code()))
+                }
+            StructureSoft(structure) =>
+                match field {
+                    // method call: math::compute(5, 8)
+                    FunctionCall { fx, args } =>
+                        structure.pollute(ms).evaluate_function_call(fx, args),
+                    // { symbol:"AAA", price:123.45 }::symbol
+                    Variable(name) => Ok((ms, structure.get(name))),
+                    z =>
+                        fail(format!("Illegal field {} for structure {}",
+                                     z.to_code(), structure.to_code()))
+                }
             Undefined => fail(format!("Cannot evaluate {}::{}", Undefined, field.to_code())),
-            z => fail(format!("Illegal object {}", z.to_code()))
+            z => fail(format!("Illegal structure {}", z.to_code()))
         }
     }
 
-    fn evaluate_extraction_structure_soft(
+    /// Executes a postfix method call
+    /// e.g. "hello":::left(5)
+    fn evaluate_postfix_method(
         &self,
+        object: &Expression,
         field: &Expression,
-        structure: &SoftStructure,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let ms = self.to_owned();
         match field {
-            // method call: math::compute(5, 8)
-            FunctionCall { fx, args } =>
-                structure.pollute(ms).evaluate_function_call(fx, args),
-            // { symbol:"AAA", price:123.45 }::symbol
-            Variable(name) => Ok((ms, structure.get(name))),
-            z =>
-                fail(format!("Illegal field {} for object {}",
-                             z.to_code(), structure.to_code()))
-        }
-    }
-
-    fn evaluate_extraction_structure_hard(
-        &self,
-        field: &Expression,
-        structure: &HardStructure,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let ms = self.to_owned();
-        match field {
-            // method call: math::compute(5, 8)
-            FunctionCall { fx, args } =>
-                structure.pollute(ms).evaluate_function_call(fx, args),
-            // stock::symbol
-            Variable(name) => Ok((ms, structure.get(name))),
-            z => fail(format!("Illegal field {} for structure {}",
-                              z.to_code(), StructureHard(structure.to_owned()).to_code()))
+            FunctionCall { fx, args } => {
+                // "hello":::left(5) => left("hello", 5)
+                let mut enriched_args = Vec::new();
+                enriched_args.push(object.to_owned());
+                enriched_args.extend(args.to_owned());
+                self.evaluate_function_call(fx, &enriched_args)
+            }
+            z => fail(format!("{} is not a function call", z.to_code()))
         }
     }
 
@@ -2037,7 +2052,7 @@ impl Machine {
         if !args.is_empty() {
             return fail(format!("No arguments expected, but found {}", args.len()));
         }
-        Ok((self.to_owned(), UUIDValue(Uuid::new_v4().as_u128())))
+        Ok((self.to_owned(), Number(U128Value(Uuid::new_v4().as_u128()))))
     }
 
     fn expect_namespace(&self, table: &Expression) -> std::io::Result<Namespace> {
@@ -2269,7 +2284,9 @@ mod tests {
         ]);
 
         let (_, array) = Machine::new().evaluate_array(&models).unwrap();
-        assert_eq!(array, Array(vec![Number(F64Value(3.25)), Boolean(true), Boolean(false), Null, Undefined]));
+        assert_eq!(array, Array(vec![
+            Number(F64Value(3.25)), Boolean(true), Boolean(false), Null, Undefined
+        ]));
     }
 
     #[test]

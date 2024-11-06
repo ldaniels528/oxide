@@ -11,7 +11,7 @@ use shared_lib::fail;
 
 use crate::compiler::{fail_near, Compiler};
 use crate::data_types::DataType::*;
-use crate::data_types::SizeTypes::{Fixed, Unlimited};
+use crate::data_types::StorageTypes::{FixedSize, BLOB};
 use crate::errors::Errors::Syntax;
 use crate::expression::Expression::{Literal, Parameters};
 use crate::number_kind::NumberKind;
@@ -26,46 +26,45 @@ const PTR_LEN: usize = 8;
 
 /// Represents a Size Type
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub enum SizeTypes {
-    Fixed(usize),
-    Unlimited,
+pub enum StorageTypes {
+    FixedSize(usize),
+    BLOB,
 }
 
-impl SizeTypes {
+impl StorageTypes {
     pub fn to_size(&self) -> usize {
         match self {
-            Fixed(size) => *size,
-            Unlimited => PTR_LEN
+            FixedSize(size) => *size,
+            BLOB => PTR_LEN
         }
     }
 }
 
-impl Display for SizeTypes {
+impl Display for StorageTypes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", match self {
-            Fixed(size) => size.to_string(),
-            Unlimited => "".to_string()
+            FixedSize(size) => size.to_string(),
+            BLOB => "".to_string()
         })
     }
 }
 
-/// Represents a Type
+/// Represents an Oxide-native datatype
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DataType {
-    ArrayType(Box<DataType>),
-    BLOBType(SizeTypes),
+    ArrayType(Box<DataType>), // Array(Structure(..)) is Table(..)
     BooleanType,
+    ByteArrayType(StorageTypes),
     DateType,
     EnumType(Vec<Parameter>),
     ErrorType,
     FunctionType(Vec<Parameter>),
-    InferredType,
+    LazyEvalType, // TODO ^ absorb via FunctionType
     NumberType(NumberKind),
     OutcomeType(OutcomeKind),
-    StringType(SizeTypes),
+    StringType(StorageTypes),
     StructureType(Vec<Parameter>),
-    TableType(Vec<Parameter>),
-    UUIDType,
+    TableType(Vec<Parameter>, StorageTypes),
 }
 
 impl DataType {
@@ -85,8 +84,11 @@ impl DataType {
         if let (Some(Atom { text: name, .. }), ts) = ts.next() {
             match name.as_str() {
                 "Ack" => Ok(OutcomeType(OutcomeKind::Acked)),
-                "Array" => DataType::compile_type(ts, |kind| ArrayType(Box::new(kind))),
-                "BLOB" => DataType::compile_size(ts, |size| BLOBType(size)),
+                "Array" => DataType::compile_type(ts, |kind| match kind {
+                    StructureType(p) => TableType(p, BLOB),
+                    kind => ArrayType(Box::new(kind))
+                }),
+                "ByteArray" => DataType::compile_size(ts, |size| ByteArrayType(size)),
                 "Boolean" => Ok(BooleanType),
                 "Date" => Ok(DateType),
                 "enum" => DataType::compile_parameters(ts, |params| EnumType(params)),
@@ -103,13 +105,12 @@ impl DataType {
                 "RowsAffected" => Ok(OutcomeType(OutcomeKind::RowsUpdated)),
                 "String" => DataType::compile_size(ts, |size| StringType(size)),
                 "struct" => DataType::compile_parameters(ts, |params| StructureType(params)),
-                "Table" => DataType::compile_parameters(ts, |params| TableType(params)),
+                "Table" => DataType::compile_parameters(ts, |params| TableType(params, BLOB)),
                 "u8" => Ok(NumberType(U8Kind)),
                 "u16" => Ok(NumberType(U16Kind)),
                 "u32" => Ok(NumberType(U32Kind)),
                 "u64" => Ok(NumberType(U64Kind)),
                 "u128" => Ok(NumberType(U128Kind)),
-                "UUID" => Ok(UUIDType),
                 type_name => fail(format!("unrecognized type {}", type_name))
             }
         } else {
@@ -125,14 +126,14 @@ impl DataType {
         } else { fail("parameters are expected for this type") }
     }
 
-    fn compile_size(ts: TokenSlice, f: fn(SizeTypes) -> DataType) -> io::Result<DataType> {
+    fn compile_size(ts: TokenSlice, f: fn(StorageTypes) -> DataType) -> io::Result<DataType> {
         let mut compiler = Compiler::new();
-        let (args, ts) = compiler.expect_arguments(ts)?;
+        let (args, _ts) = compiler.expect_arguments(ts)?;
         let kind = match args.as_slice() {
             // String()
-            [] => Unlimited,
+            [] => BLOB,
             // String(40)
-            [Literal(Number(size))] => Fixed(size.to_usize()),
+            [Literal(Number(size))] => FixedSize(size.to_usize()),
             // enum(a, b, c)?
             other => return fail(ErrorValue(
                 Syntax(other.iter()
@@ -162,7 +163,7 @@ impl DataType {
             return fail_near("Syntax error", &ts);
         }
 
-        let kind = if args.is_empty() { InferredType } else { Self::compile_tokens(TokenSlice::new(args))? };
+        let kind = if args.is_empty() { LazyEvalType } else { Self::compile_tokens(TokenSlice::new(args))? };
         Ok(f(kind))
     }
 
@@ -175,13 +176,13 @@ impl DataType {
         use crate::data_types::DataType::*;
         let width: usize = match self {
             ArrayType(kind) => 10 * kind.compute_max_physical_size(),
-            BLOBType(size) => size.to_size(),
+            ByteArrayType(size) => size.to_size(),
             BooleanType => 1,
             DateType => 8,
             EnumType(..) => 2,
             ErrorType => 256,
             FunctionType(columns) => columns.len() * 8,
-            InferredType => 0,
+            LazyEvalType => 0,
             NumberType(kind) => match kind {
                 I8Kind | U8Kind => 1,
                 I16Kind | U16Kind => 2,
@@ -196,13 +197,12 @@ impl DataType {
                 OutcomeKind::RowsUpdated => 16,
             },
             StringType(size) => match size {
-                Fixed(size) => *size + size.to_be_bytes().len(),
-                Unlimited => PTR_LEN
+                FixedSize(size) => *size + size.to_be_bytes().len(),
+                BLOB => PTR_LEN
             },
             StructureType(columns) => columns.len() * 8,
-            TableType(columns) => columns.len() * 8,
-            InferredType => 0,
-            UUIDType => 16
+            TableType(columns, ..) => columns.len() * 8,
+            LazyEvalType => 0,
         };
         width + 1 // +1 for field metadata
     }
@@ -210,14 +210,15 @@ impl DataType {
     pub fn to_type_declaration(&self) -> Option<String> {
         let type_name = match self {
             ArrayType(kind) =>
-                format!("Array<{}>", kind.to_type_declaration().unwrap_or("".to_string())),
-            BLOBType(size) => format!("BLOB({})", size),
+                format!("Array<{}>", kind.to_type_declaration()
+                    .unwrap_or("".to_string())),
+            ByteArrayType(size) => format!("ByteArray({})", size),
             BooleanType => "Boolean".into(),
             DateType => "Date".into(),
             EnumType(labels) => format!("enum({})", Parameter::render(labels)),
             ErrorType => "Error".into(),
             FunctionType(columns) => format!("fn({})", Parameter::render(columns)),
-            InferredType => "".into(),
+            LazyEvalType => "".into(),
             NumberType(index) => match *index {
                 F32Kind => "f32".into(),
                 F64Kind => "f64".into(),
@@ -240,8 +241,7 @@ impl DataType {
             },
             StringType(size) => format!("String({})", size),
             StructureType(params) => format!("struct({})", Parameter::render(params)),
-            TableType(columns) => format!("Table({})", Parameter::render(columns)),
-            UUIDType => "UUID".into(),
+            TableType(columns, ..) => format!("Table({})", Parameter::render(columns)),
         };
         if type_name.is_empty() { None } else { Some(type_name) }
     }
@@ -258,15 +258,15 @@ impl Display for DataType {
 mod tests {
     use crate::data_types::DataType;
     use crate::data_types::DataType::*;
-    use crate::data_types::SizeTypes::Fixed;
+    use crate::data_types::StorageTypes::{FixedSize, BLOB};
     use crate::number_kind::NumberKind::*;
     use crate::outcomes::OutcomeKind;
     use crate::parameter::Parameter;
     use crate::testdata::make_quote_parameters;
 
     #[test]
-    fn test_blob() {
-        verify_type_construction("BLOB(5566)", BLOBType(Fixed(5566)));
+    fn test_byte_array() {
+        verify_type_construction("ByteArray(5566)", ByteArrayType(FixedSize(5566)));
     }
 
     #[test]
@@ -350,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_string() {
-        verify_type_construction("String(10)", StringType(Fixed(10)));
+        verify_type_construction("String(10)", StringType(FixedSize(10)));
     }
 
     #[test]
@@ -364,7 +364,7 @@ mod tests {
     fn test_table() {
         verify_type_construction(
             "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
-            TableType(make_quote_parameters()));
+            TableType(make_quote_parameters(), BLOB));
     }
 
     #[test]
@@ -390,11 +390,6 @@ mod tests {
     #[test]
     fn test_u128() {
         verify_type_construction("u128", NumberType(U128Kind));
-    }
-
-    #[test]
-    fn test_uuid() {
-        verify_type_construction("UUID", UUIDType);
     }
 
     fn verify_type_construction(type_decl: &str, data_type: DataType) {

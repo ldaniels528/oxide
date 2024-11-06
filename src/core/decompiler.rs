@@ -36,6 +36,8 @@ impl Decompiler {
                 format!("{}[{}]", self.decompile(a), self.decompile(b)),
             Extraction(a, b) =>
                 format!("{}::{}", self.decompile(a), self.decompile(b)),
+            ExtractPostfix(a, b) =>
+                format!("{}:::{}", self.decompile(a), self.decompile(b)),
             Factorial(a) => format!("¡{}", self.decompile(a)),
             Feature { title, scenarios } =>
                 format!("feature {} {{\n{}\n}}", title.to_code(), scenarios.iter()

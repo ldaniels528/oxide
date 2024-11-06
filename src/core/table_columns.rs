@@ -99,7 +99,7 @@ impl Column {
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::*;
-    use crate::data_types::SizeTypes;
+    use crate::data_types::StorageTypes;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::NumberValue::F64Value;
     use crate::testdata::make_quote_parameters;
@@ -122,7 +122,7 @@ mod tests {
         let column = Column::from_parameter(&column_desc, 0)
             .expect("Deserialization error");
         assert_eq!(column.name, "exchange");
-        assert_eq!(column.data_type, StringType(SizeTypes::Fixed(10)));
+        assert_eq!(column.data_type, StringType(StorageTypes::FixedSize(10)));
         assert_eq!(column.default_value, StringValue("N/A".into()));
         assert_eq!(column.data_type.to_type_declaration(), column_desc.get_param_type());
         assert_eq!(column.max_physical_size, 19);
@@ -132,8 +132,8 @@ mod tests {
     fn test_differences() {
         let generated: Vec<Column> = Column::from_parameters(&make_quote_parameters()).unwrap();
         let natural: Vec<Column> = vec![
-            Column::new("symbol", StringType(SizeTypes::Fixed(8)), Null, 9),
-            Column::new("exchange", StringType(SizeTypes::Fixed(8)), Null, 26),
+            Column::new("symbol", StringType(StorageTypes::FixedSize(8)), Null, 9),
+            Column::new("exchange", StringType(StorageTypes::FixedSize(8)), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ];
         assert_eq!(generated, natural);

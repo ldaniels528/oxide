@@ -213,6 +213,7 @@ pub enum Expression {
     Divide(Box<Expression>, Box<Expression>),
     ElementAt(Box<Expression>, Box<Expression>),
     Extraction(Box<Expression>, Box<Expression>),
+    ExtractPostfix(Box<Expression>, Box<Expression>),
     Factorial(Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
     From(Box<Expression>),
