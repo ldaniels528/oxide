@@ -27,7 +27,6 @@ impl Decompiler {
                 format!("{}: {}", name, self.decompile(expr)),
             BitwiseOp(bitwise) => self.decompile_bitwise(bitwise),
             CodeBlock(items) => self.decompile_code_blocks(items),
-            Parameters(parameters) => self.decompile_parameters(parameters),
             Condition(cond) => self.decompile_cond(cond),
             Directive(d) => self.decompile_directives(d),
             Divide(a, b) =>
@@ -72,6 +71,7 @@ impl Decompiler {
                 format!("{} * {}", self.decompile(a), self.decompile(b)),
             Neg(a) => format!("-({})", self.decompile(a)),
             Ns(a) => format!("ns({})", self.decompile(a)),
+            Parameters(parameters) => self.decompile_parameters(parameters),
             Plus(a, b) =>
                 format!("{} + {}", self.decompile(a), self.decompile(b)),
             Pow(a, b) =>
@@ -97,8 +97,6 @@ impl Decompiler {
             }
             SetVariable(name, value) =>
                 format!("{} := {}", name, self.decompile(value)),
-            StructureImpl(name, ops) =>
-                format!("{} {}", name, self.decompile_code_blocks(ops)),
             Variable(name) => name.to_string(),
             Via(expr) => format!("via {}", self.decompile(expr)),
             While { condition, code } =>
@@ -255,8 +253,6 @@ impl Decompiler {
                         condition.to_owned().map(|e| format!(" where {}", self.decompile_cond(&e))).unwrap_or("".into()),
                         limit.to_owned().map(|e| format!(" limit {}", self.decompile(&e))).unwrap_or("".into()),
                 ),
-            Mutation::Scan { path } =>
-                format!("scan {}", self.decompile(path)),
             Mutation::Truncate { path, limit } =>
                 format!("truncate {}{}", self.decompile(path), self.decompile_limit(limit)),
             Mutation::Undelete { path, condition, limit } =>
@@ -269,13 +265,10 @@ impl Decompiler {
 
     pub fn decompile_queryables(&self, expr: &Queryable) -> String {
         match expr {
-            Queryable::Describe(a) =>
-                format!("describe {}", self.decompile(a)),
             Queryable::Limit { from: a, limit: b } =>
                 format!("{} limit {}", self.decompile(a), self.decompile(b)),
             Queryable::Where { from, condition } =>
                 format!("{} where {}", self.decompile(from), self.decompile_cond(condition)),
-            Queryable::Reverse(a) => format!("reverse {}", self.decompile(a)),
             Queryable::Select { fields, from, condition, group_by, having, order_by, limit } =>
                 format!("select {}{}{}{}{}{}{}", self.decompile_list(fields),
                         from.to_owned().map(|e| format!(" from {}", self.decompile(&e))).unwrap_or("".into()),

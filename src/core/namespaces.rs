@@ -2,11 +2,11 @@
 // namespaces module
 ////////////////////////////////////////////////////////////////////
 
-use std::env;
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
+use crate::machine::Machine;
 use shared_lib::fail;
 
 // Namespace is a logical representation of a Lollypop object namespace or path
@@ -33,10 +33,6 @@ impl Namespace {
             [d, s, n] => Ok(Namespace::new(d, s, n)),
             _ => fail(format!("Failed to parse namespace '{}'", text))
         }
-    }
-
-    pub(crate) fn oxide_home() -> String {
-        env::var("OXIDE_HOME").unwrap_or("./oxide_db".to_string())
     }
 
     pub fn id(&self) -> String {
@@ -75,7 +71,7 @@ impl Namespace {
     pub fn get_root_path(&self) -> String {
         // ex:  "$OXIDE_HOME/ns/database/schema/name/"
         let mut builder = String::new();
-        builder.push_str(&*Self::oxide_home());
+        builder.push_str(&*Machine::oxide_home());
         builder.push_str("/ns/");
         builder.push_str(&self.database);
         builder.push('/');
@@ -107,6 +103,7 @@ impl Into<String> for Namespace {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::machine::Machine;
 
     #[test]
     fn test_into_string() {
@@ -128,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_get_blob_file_path() {
-        let oxide_home = Namespace::oxide_home();
+        let oxide_home = Machine::oxide_home();
         let ns = Namespace::parse("securities.amex.stocks").unwrap();
         let filename = ns.get_blob_file_path();
         assert_eq!(filename, format!("{}/ns/securities/amex/stocks/stocks.blob", oxide_home))
@@ -136,7 +133,7 @@ mod tests {
 
     #[test]
     fn test_get_config_file_path() {
-        let oxide_home = Namespace::oxide_home();
+        let oxide_home = Machine::oxide_home();
         let ns = Namespace::parse("securities.otc.stocks").unwrap();
         let filename = ns.get_config_file_path();
         assert_eq!(filename, format!("{}/ns/securities/otc/stocks/stocks.json", oxide_home))
@@ -150,14 +147,14 @@ mod tests {
 
     #[test]
     fn test_get_root_path() {
-        let oxide_home = Namespace::oxide_home();
+        let oxide_home = Machine::oxide_home();
         let ns = Namespace::parse("securities.nasdaq.stocks").unwrap();
         assert_eq!(ns.get_root_path(), format!("{}/ns/securities/nasdaq/stocks/", oxide_home))
     }
 
     #[test]
     fn test_get_table_file_path() {
-        let oxide_home = Namespace::oxide_home();
+        let oxide_home = Machine::oxide_home();
         let ns = Namespace::parse("securities.nyse.stocks").unwrap();
         let filename = ns.get_table_file_path();
         assert_eq!(filename, format!("{}/ns/securities/nyse/stocks/stocks.table", oxide_home))

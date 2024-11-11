@@ -5,7 +5,6 @@
 
 use std::ops::Index;
 
-use crate::backdoor::BackDoorKey;
 use crate::codec;
 use crate::codec::Codec;
 use crate::expression::*;
@@ -78,10 +77,6 @@ impl ByteCodeCompiler {
             array.push(self.next_value()?);
         }
         Ok(array)
-    }
-
-    pub fn next_backdoor_fn(&mut self) -> BackDoorKey {
-        BackDoorKey::from_u8(self.next_u8())
     }
 
     /// returns a 64-bit byte array

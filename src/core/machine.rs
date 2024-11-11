@@ -2,25 +2,26 @@
 //  Machine - state machine module
 ////////////////////////////////////////////////////////////////////
 
+use actix_web::web::scope;
+use chrono::{Datelike, Local, TimeZone, Timelike};
+use crossterm::style::Stylize;
+use log::{error, info};
+use reqwest::multipart::{Form, Part};
+use reqwest::{Client, RequestBuilder, Response};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::{From, Into};
 use std::fs::File;
 use std::io::Read;
 use std::ops::{Deref, Neg};
+use std::path::Path;
 use std::process::Output;
-use std::{fs, thread};
-use actix_web::web::scope;
-use chrono::{Datelike, Local, TimeZone, Timelike};
-use log::{error, info};
-use reqwest::multipart::{Form, Part};
-use reqwest::{Client, RequestBuilder, Response};
-use serde::{Deserialize, Serialize};
+use std::{env, fs, thread};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use shared_lib::fail;
 
-use crate::backdoor::BackDoorKey;
 use crate::compiler::Compiler;
 use crate::compiler::{fail_expr, fail_unexpected, fail_value};
 use crate::cursor::Cursor;
@@ -42,6 +43,7 @@ use crate::numbers::NumberValue::*;
 use crate::outcomes::Outcomes;
 use crate::outcomes::Outcomes::Ack;
 use crate::parameter::Parameter;
+use crate::platform::PlatformFunctions;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::structures::*;
@@ -49,7 +51,6 @@ use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use crate::web_routes;
 
 pub const MAJOR_VERSION: u8 = 0;
 pub const MINOR_VERSION: u8 = 1;
@@ -68,7 +69,7 @@ impl Machine {
     ////////////////////////////////////////////////////////////////
 
     /// (lowest-level constructor) creates a new state machine
-    fn construct(
+    fn build(
         stack: Vec<TypedValue>,
         variables: HashMap<String, TypedValue>,
     ) -> Self {
@@ -77,103 +78,28 @@ impl Machine {
 
     /// creates a new completely empty state machine
     pub fn empty() -> Self {
-        Self::construct(Vec::new(), HashMap::new())
-    }
-
-    /// creates a new state machine
-    pub fn new() -> Self {
-        Self::empty()
+        Self::build(Vec::new(), HashMap::new())
     }
 
     /// creates a new state machine prepopulated with platform packages
-    pub fn new_platform() -> Self {
-        use BackDoorKey::*;
-        Self::empty()
-            //////////////////////// packages ////////////////////////
-            .with_package("io", vec![
-                ("stderr", BackDoor(IoStdErr)),
-                ("stdout", BackDoor(IoStdOut)),
-            ])
-            .with_package("lang", vec![
-                ("assert", BackDoor(LangAssert)),
-                ("matches", BackDoor(LangMatches)),
-                ("println", BackDoor(IoStdOut)),
-                ("type_of", BackDoor(LangTypeOf)),
-            ])
-            .with_package("os", vec![
-                ("call", BackDoor(OsSysCall)),
-                ("env", BackDoor(OsEnvVars)),
-            ])
-            .with_package("str", vec![
-                ("format", BackDoor(StrFormat)),
-                ("left", BackDoor(StrLeft)),
-                ("right", BackDoor(StrRight)),
-                ("substring", BackDoor(StrSubstring)),
-                ("to_string", BackDoor(StrToString)),
-            ])
-            .with_package("util", vec![
-                ("day_of", BackDoor(UtilTimestampDay)),
-                ("hour_of", BackDoor(UtilTimestampHour)),
-                ("hour12_of", BackDoor(UtilTimestampHour12)),
-                ("minute_of", BackDoor(UtilTimestampMinute)),
-                ("month_of", BackDoor(UtilTimestampMonth)),
-                ("now", BackDoor(UtilTimestamp)),
-                ("second_of", BackDoor(UtilTimestampSecond)),
-                ("timestamp", BackDoor(UtilTimestamp)),
-                ("to_csv", BackDoor(UtilToCSV)),
-                ("to_f32", BackDoor(UtilToF32)),
-                ("to_f64", BackDoor(UtilToF64)),
-                ("to_i8", BackDoor(UtilToI8)),
-                ("to_i16", BackDoor(UtilToI16)),
-                ("to_i32", BackDoor(UtilToI32)),
-                ("to_i64", BackDoor(UtilToI64)),
-                ("to_i128", BackDoor(UtilToI128)),
-                ("to_json", BackDoor(UtilToJSON)),
-                ("to_table", BackDoor(UtilToTable)),
-                ("to_u8", BackDoor(UtilToU8)),
-                ("to_u16", BackDoor(UtilToU16)),
-                ("to_u32", BackDoor(UtilToU32)),
-                ("to_u64", BackDoor(UtilToU64)),
-                ("to_u128", BackDoor(UtilToU128)),
-                ("uuid", BackDoor(UtilUUID)),
-                ("year_of", BackDoor(UtilTimestampYear)),
-            ])
-            .with_package("vm", vec![
-                ("eval", BackDoor(VmEval)),
-                ("reset", BackDoor(VmReset)),
-                ("serve", BackDoor(VmServe)),
-                ("vars", BackDoor(VmVariables)),
-                ("version", BackDoor(VmVersion)),
-            ])
+    pub fn new() -> Self {
+        PlatformFunctions::create_packages().iter()
+            .fold(Self::empty(), |ms, (name, list)| {
+                //println!("platform::{} <~ {:?}", name, list);
+                ms.with_package(name, list.to_owned())
+            })
     }
 
     /// creates a new state machine prepopulated with platform packages
     /// and default imports
-    pub fn new_platform_full() -> Self {
-        Self::new_platform()
-            .import_module_by_name("lang")
+    pub fn new_platform() -> Self {
+        Self::new()
+            .import_package_by_name("lang")
     }
 
     ////////////////////////////////////////////////////////////////
     //  static methods
     ////////////////////////////////////////////////////////////////
-
-    fn create_env_table() -> TypedValue {
-        use std::env;
-        let mut mrc = ModelRowCollection::construct(&vec![
-            Parameter::new("key", Some("String(256)".into()), None),
-            Parameter::new("value", Some("String(8192)".into()), None)
-        ]);
-        for (key, value) in env::vars() {
-            if let ErrorValue(err) = mrc.append_row(Row::new(0, vec![
-                StringValue(key), StringValue(value)
-            ])) {
-                return ErrorValue(err);
-            }
-        }
-
-        TableValue(mrc)
-    }
 
     fn enrich_request(
         builder: RequestBuilder,
@@ -202,22 +128,23 @@ impl Machine {
         }
     }
 
-    fn orchestrate_rc(
+    pub fn orchestrate_rc(
         machine: Self,
         table: TypedValue,
-        f: fn(Self, Box<dyn RowCollection>) -> std::io::Result<(Self, TypedValue)>,
-    ) -> std::io::Result<(Self, TypedValue)> {
+        f: fn(Self, Box<dyn RowCollection>) -> (Self, TypedValue),
+    ) -> (Self, TypedValue) {
         use TypedValue::*;
         match table {
-            ErrorValue(msg) => Ok((machine, ErrorValue(msg))),
+            ErrorValue(msg) => (machine, ErrorValue(msg)),
             NamespaceValue(d, s, n) => {
                 let ns = Namespace::new(d, s, n);
-                let frc = FileRowCollection::open(&ns)?;
-                f(machine, Box::new(frc))
+                match FileRowCollection::open(&ns) {
+                    Ok(frc) => f(machine, Box::new(frc)),
+                    Err(err) => (machine, ErrorValue(Exact(err.to_string())))
+                }
             }
             TableValue(mrc) => f(machine, Box::new(mrc)),
-            z =>
-                Ok((machine, ErrorValue(CollectionExpected(z.to_code()))))
+            z => (machine, ErrorValue(CollectionExpected(z.to_code())))
         }
     }
 
@@ -246,6 +173,10 @@ impl Machine {
         }
     }
 
+    pub fn oxide_home() -> String {
+        env::var("OXIDE_HOME").unwrap_or("./oxide_db".to_string())
+    }
+
     fn split(columns: &Vec<Column>, row: &Row) -> (Vec<Expression>, Vec<Expression>) {
         let my_fields = columns.iter()
             .map(|tc| Variable(tc.get_name().to_string()))
@@ -254,11 +185,6 @@ impl Machine {
             .map(|v| Literal(v.to_owned()))
             .collect::<Vec<Expression>>();
         (my_fields, my_values)
-    }
-
-    fn split_first<T>(vec: Vec<T>) -> Option<(T, Vec<T>)> {
-        let mut iter = vec.into_iter();
-        iter.next().map(|first| (first, iter.collect()))
     }
 
     ////////////////////////////////////////////////////////////////
@@ -340,36 +266,6 @@ impl Machine {
         }
     }
 
-    fn convert_to_csv(&self, value: &TypedValue) -> (Self, TypedValue) {
-        self.convert_to_csv_or_json(value, true)
-    }
-
-    fn convert_to_csv_or_json(
-        &self,
-        value: &TypedValue,
-        is_csv: bool,
-    ) -> (Self, TypedValue) {
-        match value {
-            NamespaceValue(d, s, n) =>
-                match FileRowCollection::open(&Namespace::new(d, s, n)) {
-                    Ok(frc) => {
-                        let rc = Box::new(frc);
-                        if is_csv { self.evaluate_to_csv(rc) } else { self.evaluate_to_json(rc) }
-                    }
-                    Err(err) => (self.to_owned(), ErrorValue(Exact(err.to_string())))
-                }
-            TableValue(mrc) => {
-                let rc = Box::new(mrc.to_owned());
-                if is_csv { self.evaluate_to_csv(rc) } else { self.evaluate_to_json(rc) }
-            }
-            _ => (self.to_owned(), ErrorValue(Exact(format!("Cannot convert to {}", if is_csv { "CSV" } else { "JSON" }))))
-        }
-    }
-
-    fn convert_to_json(&self, value: &TypedValue) -> (Self, TypedValue) {
-        self.convert_to_csv_or_json(value, false)
-    }
-
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
     pub fn evaluate(
         &self,
@@ -406,7 +302,7 @@ impl Machine {
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
             Minus(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa - bb),
-            Module(name, ops) => self.evaluate_module(name, ops),
+            Module(name, ops) => Ok(self.evaluate_structure_module(name, ops)),
             Modulo(a, b) =>
                 self.evaluate_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) =>
@@ -434,7 +330,6 @@ impl Machine {
                 let (machine, value) = self.evaluate(expr)?;
                 Ok((machine.set(name, value), Outcome(Ack)))
             }
-            StructureImpl(name, ops) => Ok(self.evaluate_structure_impl(name, ops)),
             Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
             Via(src) => self.evaluate_table_row_query(src, &True, Undefined),
             While { condition, code } =>
@@ -552,207 +447,6 @@ impl Machine {
                 Ok((machine.set(name, value), Outcome(Ack)))
             }
             other => self.evaluate(other)
-        }
-    }
-
-    fn evaluate_back_door(
-        &self,
-        bdk: &BackDoorKey,
-        args: Vec<TypedValue>,
-    ) -> (Self, TypedValue) {
-        match bdk {
-            BackDoorKey::IoStdErr => self.evaluate_back_door_fn1(args, Machine::do_stdout),
-            BackDoorKey::IoStdOut => self.evaluate_back_door_fn1(args, Machine::do_stdout),
-            BackDoorKey::LangAssert => self.evaluate_back_door_fn1(args, Machine::do_assert),
-            BackDoorKey::LangMatches => self.evaluate_back_door_fn2(args, |ms, a, b| (ms, a.matches(b))),
-            BackDoorKey::LangTypeOf => self.evaluate_back_door_fn1(args, |ms, a| (ms, StringValue(a.get_type_name()))),
-            BackDoorKey::OsEnvVars => (self.clone(), Self::create_env_table()),
-            BackDoorKey::OsSysCall => self.ok_to_tv(self.evaluate_syscall(args)),
-            BackDoorKey::StrFormat => self.evaluate_format_string(args),
-            BackDoorKey::StrLeft => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_left(s, n)),
-            BackDoorKey::StrRight => self.evaluate_back_door_fn2(args, |ms, s, n| ms.evaluate_string_right(s, n)),
-            BackDoorKey::StrSubstring => self.evaluate_back_door_fn3(args, |ms, s, a, b| ms.evaluate_substring(s, a, b)),
-            BackDoorKey::StrToString => self.evaluate_back_door_fn1(args, |ms, a| (ms, StringValue(a.to_string()))),
-            BackDoorKey::UtilTimestamp => self.ok_to_tv(self.evaluate_timestamp(args)),
-            BackDoorKey::UtilTimestampDay => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::UtilTimestampHour => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::UtilTimestampHour12 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::UtilTimestampMinute => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::UtilTimestampMonth => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::UtilTimestampSecond => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::UtilTimestampYear => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_date_part),
-            BackDoorKey::UtilToCSV => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_csv(a)),
-            BackDoorKey::UtilToF32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToF64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToI8 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToI16 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToI32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToI64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToI128 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToJSON => self.evaluate_back_door_fn1(args, |ms, a| ms.convert_to_json(a)),
-            BackDoorKey::UtilToTable => self.evaluate_back_door_fn1(args, |ms, a| (ms, a.to_table_value())),
-            BackDoorKey::UtilToU8 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToU16 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToU32 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToU64 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilToU128 => self.evaluate_back_door_fn1bdk(args, bdk, Machine::do_conversion),
-            BackDoorKey::UtilUUID => self.ok_to_tv(self.evaluate_uuid(args)),
-            BackDoorKey::VmEval => self.evaluate_back_door_fn1(args, Machine::do_eval),
-            BackDoorKey::VmReset => self.evaluate_back_door_fn0(args, |_| (Machine::new(), Outcome(Ack))),
-            BackDoorKey::VmServe => self.evaluate_back_door_fn1(args, Machine::do_serve),
-            BackDoorKey::VmVariables => self.evaluate_back_door_fn0(args, |ms| (ms.clone(), TableValue(ms.get_variables()))),
-            BackDoorKey::VmVersion => self.evaluate_back_door_fn0(args, |ms| (ms, StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))),
-        }
-    }
-
-    fn do_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        match value {
-            ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
-            Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
-            z => (ms, z.to_owned())
-        }
-    }
-
-    fn do_conversion(
-        ms: Machine,
-        value: &TypedValue,
-        bdk: &BackDoorKey,
-    ) -> (Machine, TypedValue) {
-        let result = match bdk {
-            BackDoorKey::UtilToF32 => Number(F32Value(value.to_f32())),
-            BackDoorKey::UtilToF64 => Number(F64Value(value.to_f64())),
-            BackDoorKey::UtilToI8 => Number(I8Value(value.to_i8())),
-            BackDoorKey::UtilToI16 => Number(I16Value(value.to_i16())),
-            BackDoorKey::UtilToI32 => Number(I32Value(value.to_i32())),
-            BackDoorKey::UtilToI64 => Number(I64Value(value.to_i64())),
-            BackDoorKey::UtilToI128 => Number(I128Value(value.to_i128())),
-            BackDoorKey::UtilToU8 => Number(U8Value(value.to_u8())),
-            BackDoorKey::UtilToU16 => Number(U16Value(value.to_u16())),
-            BackDoorKey::UtilToU32 => Number(U32Value(value.to_u32())),
-            BackDoorKey::UtilToU64 => Number(U64Value(value.to_u64())),
-            BackDoorKey::UtilToU128 => Number(U128Value(value.to_u128())),
-            bdk => ErrorValue(ConversionError(bdk.to_code()))
-        };
-        (ms, result)
-    }
-
-    fn do_date_part(
-        ms: Machine,
-        value: &TypedValue,
-        bdk: &BackDoorKey,
-    ) -> (Machine, TypedValue) {
-        match value {
-            DateValue(epoch_millis) => {
-                let datetime = {
-                    let seconds = epoch_millis / 1000;
-                    let millis_part = epoch_millis % 1000;
-                    Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
-                };
-                match bdk {
-                    BackDoorKey::UtilTimestampDay => (ms, Number(U32Value(datetime.day()))),
-                    BackDoorKey::UtilTimestampHour => (ms, Number(U32Value(datetime.hour()))),
-                    BackDoorKey::UtilTimestampHour12 => (ms, Number(U32Value(datetime.hour12().1))),
-                    BackDoorKey::UtilTimestampMinute => (ms, Number(U32Value(datetime.minute()))),
-                    BackDoorKey::UtilTimestampMonth => (ms, Number(U32Value(datetime.second()))),
-                    BackDoorKey::UtilTimestampSecond => (ms, Number(U32Value(datetime.second()))),
-                    BackDoorKey::UtilTimestampYear => (ms, Number(I32Value(datetime.year()))),
-                    other => (ms, ErrorValue(Syntax(other.to_code())))
-                }
-            }
-            other => (ms, ErrorValue(DateExpected(other.to_code())))
-        }
-    }
-
-    fn do_eval(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        match value {
-            StringValue(ql) =>
-                match Compiler::compile_script(ql.as_str()) {
-                    Ok(opcode) =>
-                        match ms.evaluate(&opcode) {
-                            Ok((machine, tv)) => (machine, tv),
-                            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                        }
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                }
-            x => (ms, ErrorValue(StringExpected(x.get_type_name())))
-        }
-    }
-
-    fn do_serve(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        match ms.evaluate_serve(value) {
-            Ok(mtv) => mtv,
-            Err(err) => (ms.to_owned(), ErrorValue(Exact(err.to_string())))
-        }
-    }
-
-    fn do_stdout(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        println!("{}", value.unwrap_value());
-        (ms, Outcome(Ack))
-    }
-
-    fn do_stderr(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        println!("{}", value.unwrap_value());
-        (ms, Outcome(Ack))
-    }
-
-    fn evaluate_back_door_fn0(
-        &self,
-        args: Vec<TypedValue>,
-        f: fn(Self) -> (Self, TypedValue),
-    ) -> (Self, TypedValue) {
-        let ms = self.to_owned();
-        match args.len() {
-            0 => f(ms),
-            n => (ms, ErrorValue(ArgumentsMismatched(0, n)))
-        }
-    }
-
-    fn evaluate_back_door_fn1(
-        &self,
-        args: Vec<TypedValue>,
-        f: fn(Self, &TypedValue) -> (Machine, TypedValue),
-    ) -> (Self, TypedValue) {
-        let ms = self.to_owned();
-        match args.as_slice() {
-            [value] => f(ms, value),
-            _ => (ms, ErrorValue(ArgumentsMismatched(1, args.len())))
-        }
-    }
-
-    fn evaluate_back_door_fn1bdk(
-        &self,
-        args: Vec<TypedValue>,
-        bdk: &BackDoorKey,
-        f: fn(Self, &TypedValue, &BackDoorKey) -> (Self, TypedValue),
-    ) -> (Self, TypedValue) {
-        let ms = self.to_owned();
-        match args.as_slice() {
-            [a] => f(ms, a, bdk),
-            _ => (ms, ErrorValue(ArgumentsMismatched(1, args.len())))
-        }
-    }
-
-    fn evaluate_back_door_fn2(
-        &self,
-        args: Vec<TypedValue>,
-        f: fn(Self, &TypedValue, &TypedValue) -> (Self, TypedValue),
-    ) -> (Self, TypedValue) {
-        let ms = self.to_owned();
-        match args.as_slice() {
-            [a, b] => f(ms, a, b),
-            _ => (ms, ErrorValue(ArgumentsMismatched(2, args.len())))
-        }
-    }
-
-    fn evaluate_back_door_fn3(
-        &self,
-        args: Vec<TypedValue>,
-        f: fn(Self, &TypedValue, &TypedValue, &TypedValue) -> (Self, TypedValue),
-    ) -> (Self, TypedValue) {
-        let ms = self.to_owned();
-        match args.as_slice() {
-            [a, b, c] => f(ms, a, b, c),
-            _ => (ms, ErrorValue(ArgumentsMismatched(3, args.len())))
         }
     }
 
@@ -965,43 +659,6 @@ impl Machine {
         Ok((ms, TableValue(report)))
     }
 
-    /// Formats a string based on a template
-    /// Ex: format("This {} the {}", "is", "way") => "This is the way"
-    fn evaluate_format_string(&self, args: Vec<TypedValue>) -> (Self, TypedValue) {
-        // internal parsing function
-        fn format_text(
-            ms: Machine,
-            template: String,
-            replacements: Vec<TypedValue>,
-        ) -> (Machine, TypedValue) {
-            let mut result = String::from(template);
-            let mut replacement_iter = replacements.iter();
-
-            // replace each placeholder "{}" with the next element from the vector
-            while let Some(pos) = result.find("{}") {
-                // get the next replacement, if available
-                if let Some(replacement) = replacement_iter.next() {
-                    result.replace_range(pos..pos + 2, replacement.unwrap_value().as_str()); // Replace the "{}" with the replacement
-                } else {
-                    break; // no more replacements available, break out of the loop
-                }
-            }
-
-            (ms, StringValue(result))
-        }
-
-        // parse the arguments
-        let ms = Machine::new();
-        if args.is_empty() { (ms, StringValue("".to_string())) } else {
-            match (args[0].to_owned(), args[1..].to_owned()) {
-                (StringValue(format_str), format_args) =>
-                    format_text(ms, format_str, format_args),
-                (other, ..) =>
-                    (ms, ErrorValue(StringExpected(other.to_code())))
-            }
-        }
-    }
-
     fn evaluate_function_call(
         &self,
         fx: &Expression,
@@ -1011,10 +668,9 @@ impl Machine {
         if let (ms, Array(args)) = self.evaluate_array(args)? {
             // evaluate the anonymous- or named-function
             match ms.evaluate(fx)? {
-                (ms, BackDoor(bdf)) =>
-                    Ok(ms.evaluate_back_door(&bdf, args)),
                 (ms, Function { params, code }) =>
                     ms.evaluate_function_arguments(params, args).evaluate(&code),
+                (ms, PlatformFunction(pf)) => Ok(pf.evaluate(ms, args)),
                 (_, z) => fail(format!("'{}' is not a function ({})", fx.to_code(), z))
             }
         } else {
@@ -1076,7 +732,8 @@ impl Machine {
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), self.evaluate_http_rest_call(Client::new().delete(url), headers, body_opt, false).await))
+        let req = Client::new().delete(url);
+        Ok((self.to_owned(), self.evaluate_http_rest_call(req, headers, body_opt, false).await))
     }
 
     async fn evaluate_http_get(
@@ -1085,7 +742,8 @@ impl Machine {
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), self.evaluate_http_rest_call(Client::new().get(url), headers, body_opt, false).await))
+        let req = Client::new().get(url);
+        Ok((self.to_owned(), self.evaluate_http_rest_call(req, headers, body_opt, false).await))
     }
 
     async fn evaluate_http_head(
@@ -1094,7 +752,8 @@ impl Machine {
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let value = self.evaluate_http_rest_call(Client::new().head(url), headers, body_opt, true).await;
+        let req = Client::new().head(url);
+        let value = self.evaluate_http_rest_call(req, headers, body_opt, true).await;
         Ok((self.to_owned(), value))
     }
 
@@ -1212,7 +871,6 @@ impl Machine {
                         (structure.pollute(ms), StructureHard(structure))
                     } else {
                         let ms = selection.iter().fold(ms, |ms, name| {
-                            println!("{package_name}::{name} => {}", structure.get(name));
                             ms.with_variable(name, structure.get(name))
                         });
                         (ms, Outcome(Ack))
@@ -1284,12 +942,10 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         use crate::expression::Queryable::*;
         match expression {
-            Describe(table) => self.evaluate_table_describe(table),
             Limit { from, limit } => {
                 let (machine, limit) = self.evaluate(limit)?;
                 machine.evaluate_table_row_query(from, &True, limit)
             }
-            Reverse(a) => self.evaluate_table_row_reverse(a),
             Select { fields, from, condition, group_by, having, order_by, limit } =>
                 self.evaluate_table_row_selection(fields, from, condition, group_by, having, order_by, limit),
             Where { from, condition } =>
@@ -1410,7 +1066,7 @@ impl Machine {
         Ok((self.to_owned(), StructureSoft(SoftStructure::from_tuples(elems))))
     }
 
-    fn evaluate_module(
+    fn evaluate_module_alone(
         &self,
         name: &str,
         ops: &Vec<Expression>,
@@ -1458,8 +1114,6 @@ impl Machine {
                 self.evaluate_table_into(target, source),
             Overwrite { path, source, condition, limit } =>
                 self.evaluate_table_row_overwrite(path, source, condition, limit),
-            Scan { path } =>
-                self.evaluate_table_scan(path),
             Truncate { path, limit } =>
                 match limit {
                     None => self.evaluate_table_row_resize(path, Boolean(false)),
@@ -1515,84 +1169,7 @@ impl Machine {
                            }))
     }
 
-    fn evaluate_serve(
-        &self,
-        port: &TypedValue,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        use actix_web::web;
-        use crate::rest_server::*;
-        let port = port.to_usize();
-        thread::spawn(move || {
-            let server = actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
-                .bind(format!("{}:{}", "0.0.0.0", port))
-                .expect(format!("Can not bind to port {port}").as_str())
-                .run();
-            Runtime::new()
-                .expect("Failed to create a Runtime instance")
-                .block_on(server)
-                .expect(format!("Failed while blocking on port {port}").as_str());
-        });
-        Ok((self.to_owned(), Outcome(Ack)))
-    }
-
-    fn evaluate_substring(
-        &self,
-        string: &TypedValue,
-        a: &TypedValue,
-        b: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        (self.to_owned(), match string {
-            StringValue(s) =>
-                match (a, b) {
-                    (Number(na), Number(nb)) =>
-                        StringValue(s[na.to_usize()..nb.to_usize()].to_string()),
-                    (..) => Undefined
-                },
-            _ => Undefined
-        })
-    }
-
-    fn evaluate_string_left(
-        &self,
-        string: &TypedValue,
-        n_chars: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        let result = match string {
-            StringValue(s) =>
-                match n_chars {
-                    Number(nv) if nv.to_i64() < 0 =>
-                        self.evaluate_string_right(string, &Number(I64Value(-nv.to_i64()))).1,
-                    Number(nv) =>
-                        StringValue(s[0..nv.to_usize()].to_string()),
-                    _ => Undefined
-                },
-            _ => Undefined
-        };
-        (self.to_owned(), result)
-    }
-
-    fn evaluate_string_right(
-        &self,
-        string: &TypedValue,
-        n_chars: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        let result = match string {
-            StringValue(s) =>
-                match n_chars {
-                    Number(nv) if nv.to_i64() < 0 =>
-                        self.evaluate_string_left(string, &Number(I64Value(-nv.to_i64()))).1,
-                    Number(nv) => {
-                        let strlen = s.len();
-                        StringValue(s[(strlen - nv.to_usize())..strlen].to_string())
-                    }
-                    _ => Undefined
-                },
-            _ => Undefined
-        };
-        (self.to_owned(), result)
-    }
-
-    fn evaluate_structure_impl(
+    fn evaluate_structure_module(
         &self,
         name: &str,
         ops: &Vec<Expression>,
@@ -1602,8 +1179,11 @@ impl Machine {
                 self.evaluate_structure_hard_impl(name, structure, ops),
             Some(StructureSoft(structure)) =>
                 self.evaluate_structure_soft_impl(name, structure, ops),
-            Some(v) => (self.clone(), ErrorValue(StructExpected(name.to_string(), v.to_code()))),
-            None => (self.clone(), ErrorValue(StructExpected(name.to_string(), Undefined.to_code()))),
+            Some(v) => (self.clone(), ErrorValue(StructExpected(name.into(), v.to_code()))),
+            None => match self.evaluate_module_alone(name, ops) {
+                Ok(result) => result,
+                Err(err) => (self.to_owned(), ErrorValue(Exact(err.to_string())))
+            }
         }
     }
 
@@ -1627,7 +1207,10 @@ impl Machine {
                     },
                 z => ErrorValue(StructExpected(name.to_string(), z.to_code()))
             });
-        (self.with_variable(name, result), Outcome(Ack))
+        match result {
+            ErrorValue(err) => (self.to_owned(), ErrorValue(err)),
+            result => (self.with_variable(name, result), Outcome(Ack))
+        }
     }
 
     fn evaluate_structure_soft_impl(
@@ -1650,31 +1233,9 @@ impl Machine {
                     },
                 z => ErrorValue(StructExpected(name.to_string(), z.to_code()))
             });
-        (self.with_variable(name, result), Outcome(Ack))
-    }
-
-    fn evaluate_syscall(
-        &self,
-        args: Vec<TypedValue>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        let ms = self.to_owned();
-        let items: Vec<_> = args.iter().map(|i| i.unwrap_value()).collect();
-        if let Some((command, cmd_args)) = Self::split_first(items) {
-            let output: Output = std::process::Command::new(command).args(cmd_args).output()?;
-            let result: TypedValue =
-                if output.status.success() {
-                    let raw_text = String::from_utf8_lossy(&output.stdout);
-                    StringValue(raw_text.to_string())
-                } else {
-                    let message = String::from_utf8_lossy(&output.stderr);
-                    ErrorValue(Exact(message.to_string()))
-                };
-            Ok((ms, result))
-        } else {
-            Ok((ms, ErrorValue(CollectionExpected(args.iter()
-                .map(|e| e.to_code())
-                .collect::<Vec<_>>()
-                .join(", ")))))
+        match result {
+            ErrorValue(err) => (self.to_owned(), ErrorValue(err)),
+            result => (self.with_variable(name, result), Outcome(Ack))
         }
     }
 
@@ -1747,15 +1308,6 @@ impl Machine {
         Ok((self.to_owned(), TableValue(ModelRowCollection::with_rows(columns, Vec::new()))))
     }
 
-    fn evaluate_table_describe(
-        &self,
-        expression: &Box<Expression>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, result) = self.evaluate(expression)?;
-        let rc = result.to_table()?;
-        Ok((machine, rc.describe()))
-    }
-
     fn evaluate_table_drop(&self, table: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (machine, table) = self.evaluate(table)?;
         match table {
@@ -1804,9 +1356,9 @@ impl Machine {
 
     fn evaluate_table_compact(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (machine, tv_table) = self.evaluate(expr)?;
-        Self::orchestrate_rc(machine, tv_table, |machine, mut rc| {
-            Ok((machine, rc.compact()))
-        })
+        Ok(Self::orchestrate_rc(machine, tv_table, |machine, mut rc| {
+            (machine, rc.compact())
+        }))
     }
 
     fn evaluate_table_ns(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
@@ -1916,19 +1468,6 @@ impl Machine {
         }
     }
 
-    /// Reverse orders a collection
-    fn evaluate_table_row_reverse(
-        &self,
-        table: &Box<Expression>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, table) = self.evaluate(table)?;
-        let result = self.assume_dataframe(&table, |df| {
-            let rows = df.reverse()?;
-            Ok(TableValue(ModelRowCollection::from_rows(df.get_columns().clone(), rows)))
-        })?;
-        Ok((machine, result))
-    }
-
     fn evaluate_table_row_selection(
         &self,
         fields: &Vec<Expression>,
@@ -1987,44 +1526,6 @@ impl Machine {
         })
     }
 
-    fn evaluate_table_scan(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, tv_table) = self.evaluate(expr)?;
-        Self::orchestrate_rc(machine, tv_table, |machine, rc| {
-            let rows = rc.examine_rows()?;
-            let columns = rows.first()
-                .map(|row| rc.get_columns().to_owned())
-                .unwrap_or(Vec::new());
-            let mrc = ModelRowCollection::from_rows(columns, rows);
-            Ok((machine, TableValue(mrc)))
-        })
-    }
-
-    fn evaluate_timestamp(
-        &self,
-        args: Vec<TypedValue>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        if !args.is_empty() {
-            return fail(format!("No arguments expected, but found {}", args.len()));
-        }
-        Ok((self.to_owned(), DateValue(Local::now().timestamp_millis())))
-    }
-
-    fn evaluate_to_csv(
-        &self,
-        rc: Box<dyn RowCollection>,
-    ) -> (Self, TypedValue) {
-        (self.to_owned(), Array(rc.iter().map(|row| row.to_csv())
-            .map(StringValue).collect()))
-    }
-
-    fn evaluate_to_json(
-        &self,
-        rc: Box<dyn RowCollection>,
-    ) -> (Self, TypedValue) {
-        (self.to_owned(), Array(rc.iter().map(|row| row.to_json(rc.get_columns()))
-            .map(StringValue).collect()))
-    }
-
     fn evaluate_while(
         &self,
         condition: &Expression,
@@ -2043,16 +1544,6 @@ impl Machine {
             }
         }
         Ok((machine, outcome))
-    }
-
-    fn evaluate_uuid(
-        &self,
-        args: Vec<TypedValue>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        if !args.is_empty() {
-            return fail(format!("No arguments expected, but found {}", args.len()));
-        }
-        Ok((self.to_owned(), Number(U128Value(Uuid::new_v4().as_u128()))))
     }
 
     fn expect_namespace(&self, table: &Expression) -> std::io::Result<Namespace> {
@@ -2188,7 +1679,7 @@ impl Machine {
         mrc
     }
 
-    pub fn import_module_by_name(&self, name: &str) -> Self {
+    pub fn import_package_by_name(&self, name: &str) -> Self {
         let module = vec![
             ImportOps::Everything(name.to_string())
         ];
@@ -2215,7 +1706,7 @@ impl Machine {
     pub fn set(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.to_owned();
         variables.insert(name.to_string(), value);
-        Self::construct(self.stack.to_owned(), variables)
+        Self::build(self.stack.to_owned(), variables)
     }
 
     pub fn show(columns: Vec<Column>, rows: Vec<Row>) {
@@ -2227,13 +1718,12 @@ impl Machine {
     pub fn with_package(
         &self,
         name: &str,
-        variables: Vec<(&str, TypedValue)>,
+        variables: Vec<PlatformFunctions>,
     ) -> Self {
         let structure = variables.iter().fold(
             HardStructure::empty(),
-            |structure, (name, value)| {
-                structure.with_variable(name, value.to_owned())
-            });
+            |structure, key|
+                structure.with_variable(key.get_name().as_str(), PlatformFunction(key.clone())));
         self.with_variable(name, StructureHard(structure))
     }
 
@@ -2253,7 +1743,7 @@ impl Machine {
     pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.to_owned();
         variables.insert(name.to_string(), value);
-        Self::construct(self.stack.to_owned(), variables)
+        Self::build(self.stack.to_owned(), variables)
     }
 }
 
@@ -2279,11 +1769,11 @@ mod tests {
     #[test]
     fn test_array_declaration() {
         let models = vec![Literal(Number(F64Value(3.25))), TRUE, FALSE, NULL, UNDEFINED];
-        assert_eq!(models.iter().map(|e| e.to_code()).collect::<Vec<String>>(), vec![
+        assert_eq!(models.iter().map(|e| e.to_code()).collect::<Vec<_>>(), vec![
             "3.25", "true", "false", "null", "undefined",
         ]);
 
-        let (_, array) = Machine::new().evaluate_array(&models).unwrap();
+        let (_, array) = Machine::empty().evaluate_array(&models).unwrap();
         assert_eq!(array, Array(vec![
             Number(F64Value(3.25)), Boolean(true), Boolean(false), Null, Undefined
         ]));
@@ -2297,7 +1787,7 @@ mod tests {
         );
         assert_eq!(model.to_code(), "symbol: \"ABC\"");
 
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (machine, tv) = machine.evaluate(&model).unwrap();
         assert_eq!(tv, StringValue("ABC".into()));
         assert_eq!(machine.get("symbol"), Some(StringValue("ABC".into())));
@@ -2308,7 +1798,7 @@ mod tests {
         let model = Parameters(make_quote_parameters());
         assert_eq!(model.to_code(), "symbol: String(8), exchange: String(8), last_sale: f64");
 
-        let machine = Machine::new()
+        let machine = Machine::empty()
             .with_variable("symbol", StringValue("ABC".into()))
             .with_variable("exchange", StringValue("NYSE".into()))
             .with_variable("last_sale", Number(F64Value(12.66)));
@@ -2322,7 +1812,7 @@ mod tests {
 
     #[test]
     fn test_divide() {
-        let machine = Machine::new().with_variable("x", Number(I64Value(50)));
+        let machine = Machine::empty().with_variable("x", Number(I64Value(50)));
         let model = Divide(Box::new(Variable("x".into())), Box::new(Literal(Number(I64Value(7)))));
         assert_eq!(model.to_code(), "x / 7");
 
@@ -2337,7 +1827,7 @@ mod tests {
         let model = Factorial(Box::new(Literal(Number(U64Value(6)))));
         assert_eq!(model.to_code(), "¡6");
 
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Number(U128Value(720)))
     }
@@ -2376,7 +1866,7 @@ mod tests {
         println!("f := {}", model.to_code());
 
         // f(5.0)
-        let machine = Machine::new().with_variable("f", model);
+        let machine = Machine::empty().with_variable("f", model);
         let (machine, result) = machine.evaluate(&FunctionCall {
             fx: Box::new(Variable("f".into())),
             args: vec![
@@ -2400,11 +1890,11 @@ mod tests {
         };
         assert_eq!(model.to_code(), r#"if num > 25 "Yes" else "No""#);
 
-        let machine = Machine::new().with_variable("num", Number(I64Value(5)));
+        let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("No".into()));
 
-        let machine = Machine::new().with_variable("num", Number(I64Value(37)));
+        let machine = Machine::empty().with_variable("num", Number(I64Value(37)));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("Yes".into()));
     }
@@ -2421,11 +1911,11 @@ mod tests {
         };
         assert_eq!(model.to_code(), r#"if num < 10 "Yes" else "No""#);
 
-        let machine = Machine::new().with_variable("num", Number(I64Value(5)));
+        let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("Yes".into()));
 
-        let machine = Machine::new().with_variable("num", Number(I64Value(99)));
+        let machine = Machine::empty().with_variable("num", Number(I64Value(99)));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StringValue("No".into()));
     }
@@ -2443,7 +1933,7 @@ mod tests {
         );
         assert_eq!(model.to_code(), "[1, 4, 2, 8, 5, 7][5]");
 
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Number(I64Value(7)))
     }
@@ -2478,7 +1968,7 @@ mod tests {
         assert_eq!(model.to_code(), r#"ns("machine.element_at.stocks")[2]"#);
 
         // evaluate the instruction
-        let (_, result) = Machine::new().evaluate(&model).unwrap();
+        let (_, result) = Machine::empty().evaluate(&model).unwrap();
         assert_eq!(result, StructureHard(
             HardStructure::from_row(
                 phys_columns.clone(),
@@ -2505,7 +1995,7 @@ mod tests {
         assert_eq!(model.to_code(), "stocks[4]");
 
         // evaluate the instruction
-        let machine = Machine::new()
+        let machine = Machine::empty()
             .with_variable("stocks", TableValue(my_table));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, StructureHard(
@@ -2525,7 +2015,7 @@ mod tests {
         }));
 
         // create the table
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Outcome(Ack));
 
@@ -2539,7 +2029,7 @@ mod tests {
     #[test]
     fn test_create_table_with_index() {
         let path = "machine.index.stocks";
-        let machine = Machine::new();
+        let machine = Machine::empty();
 
         // drop table if exists ns("machine.index.stocks")
         let (machine, _) = machine.evaluate(&Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget {
@@ -2587,7 +2077,7 @@ mod tests {
             from: None,
         })));
 
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, TypedValue::TableValue(ModelRowCollection::with_rows(
             make_quote_columns(), Vec::new(),
@@ -2604,7 +2094,7 @@ mod tests {
         let model = Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget { path: Box::new(ns) })));
         assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
 
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Outcome(Ack))
     }
@@ -2627,14 +2117,12 @@ mod tests {
             ],
         };
 
-        let machine = Machine::new_platform_full();
+        let machine = Machine::new_platform();
         let (_, result) = machine.evaluate(&model).unwrap();
         let table = result.to_table().unwrap();
         let columns = table.get_columns();
         let rows = table.read_active_rows().unwrap();
-        for s in TableRenderer::from_rows(columns.clone(), rows.to_owned()) {
-            println!("{}", s)
-        }
+        for s in TableRenderer::from_table(&table) { println!("{}", s) }
         let dump = rows.iter().map(|row| row.get_values()).collect::<Vec<_>>();
         assert_eq!(dump, vec![
             vec![
@@ -2677,7 +2165,7 @@ mod tests {
         };
 
         // evaluate the function
-        let (machine, result) = Machine::new()
+        let (machine, result) = Machine::empty()
             .with_variable("n", Number(I64Value(3)))
             .evaluate(&model)
             .unwrap();
@@ -2701,7 +2189,7 @@ mod tests {
         };
 
         // publish the function in scope: fn add(a, b) => a + b
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (machine, result) = machine.evaluate_scope(&vec![
             SetVariable("add".to_string(), Box::new(Literal(fx.to_owned())))
         ]).unwrap();
@@ -2728,7 +2216,7 @@ mod tests {
         // create a table with test data
         let columns = make_quote_parameters();
         let phys_columns = Column::from_parameters(&columns).unwrap();
-        let machine = Machine::new()
+        let machine = Machine::empty()
             .with_variable("stocks", TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
                 make_quote(0, "ABC", "AMEX", 12.33),
                 make_quote(1, "UNO", "OTC", 0.2456),
@@ -2763,7 +2251,7 @@ mod tests {
         let (df, _) = create_dataframe(ns_path);
 
         // delete some rows
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let code = Compiler::compile_script(r#"
             delete from ns("machine.delete.stocks")
             where last_sale > 1.0
@@ -2786,7 +2274,7 @@ mod tests {
         let (df, _) = create_dataframe(ns_path);
 
         // delete some rows
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let code = Compiler::compile_script(r#"
             stocks := ns("machine.undelete.stocks")
             delete from stocks where last_sale > 1.0
@@ -2826,7 +2314,7 @@ mod tests {
         let (df, _) = create_dataframe(ns_path);
 
         // insert some rows
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (_, result) = machine.evaluate(&Quarry(Excavation::Mutate(Mutation::Append {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
             source: Box::new(From(Box::new(JSONExpression(vec![
@@ -2871,7 +2359,7 @@ mod tests {
         let (df, _) = create_dataframe(ns_path);
 
         // overwrite some rows
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Outcome(RowsAffected(1)));
 
@@ -2896,30 +2384,8 @@ mod tests {
                                    Box::new(Literal(Number(I64Value(3)))))))
         ];
 
-        let (_ms, result) = Machine::new().evaluate_scope(&opcodes).unwrap();
+        let (_ms, result) = Machine::empty().evaluate_scope(&opcodes).unwrap();
         assert_eq!(result, Number(F64Value(14.)))
-    }
-
-    #[test]
-    fn test_reverse_from_variable() {
-        let model = Quarry(Excavation::Query(Queryable::Reverse(Box::new(From(Box::new(Variable("stocks".to_string())))))));
-        let phys_columns = make_quote_columns();
-        let machine = Machine::new()
-            .with_variable("stocks", TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
-                make_quote(0, "ABC", "AMEX", 12.33),
-                make_quote(1, "GAS.Q", "OTC", 0.2456),
-                make_quote(2, "BASH", "NYSE", 13.11),
-                make_quote(3, "GOTO", "OTC", 0.1442),
-                make_quote(4, "VAPOR", "NYSE", 0.0289),
-            ])));
-        let (_, value) = machine.evaluate(&model).unwrap();
-        assert_eq!(value, TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
-            make_quote(4, "VAPOR", "NYSE", 0.0289),
-            make_quote(3, "GOTO", "OTC", 0.1442),
-            make_quote(2, "BASH", "NYSE", 13.11),
-            make_quote(1, "GAS.Q", "OTC", 0.2456),
-            make_quote(0, "ABC", "AMEX", 12.33),
-        ])))
     }
 
     #[test]
@@ -2929,7 +2395,7 @@ mod tests {
             create_dataframe("machine.select.stocks");
 
         // execute the query
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let (_, result) = machine.evaluate(&Quarry(Excavation::Query(Queryable::Select {
             fields: vec![
                 Variable("symbol".into()),
@@ -2956,7 +2422,7 @@ mod tests {
     #[test]
     fn test_select_from_variable() {
         let (mrc, phys_columns) = create_memory_table();
-        let machine = Machine::new()
+        let machine = Machine::empty()
             .with_variable("stocks", TableValue(mrc));
 
         // execute the code
@@ -2990,7 +2456,7 @@ mod tests {
                 Literal(StringValue("cat".to_string()))
             ],
         };
-        let (_, result) = Machine::new_platform_full()
+        let (_, result) = Machine::new_platform()
             .evaluate(&model).unwrap();
         assert_eq!(result, StringValue("String(3)".to_string()));
     }
@@ -3014,7 +2480,7 @@ mod tests {
 
         // perform the update and verify
         let (mrc, phys_columns) = create_memory_table();
-        let machine = Machine::new().with_variable("stocks", TableValue(mrc));
+        let machine = Machine::empty().with_variable("stocks", TableValue(mrc));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Outcome(RowsAffected(2)));
 
@@ -3050,7 +2516,7 @@ mod tests {
         }));
 
         // update some rows
-        let (_, delta) = Machine::new().evaluate(&model).unwrap();
+        let (_, delta) = Machine::empty().evaluate(&model).unwrap();
         assert_eq!(delta, Outcome(RowsAffected(2)));
 
         // verify the rows
@@ -3072,14 +2538,14 @@ mod tests {
         }));
 
         let (mrc, _) = create_memory_table();
-        let machine = Machine::new().with_variable("stocks", TableValue(mrc));
+        let machine = Machine::empty().with_variable("stocks", TableValue(mrc));
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Outcome(RowsAffected(1)))
     }
 
     #[test]
     fn test_variables() {
-        let machine = Machine::new()
+        let machine = Machine::empty()
             .with_variable("abc", Number(I32Value(5)))
             .with_variable("xyz", Number(I32Value(58)));
         assert_eq!(machine.get("abc"), Some(Number(I32Value(5))));
@@ -3102,7 +2568,7 @@ mod tests {
         };
         assert_eq!(model.to_code(), "while num < 5 num := num + 1");
 
-        let machine = Machine::new().with_variable("num", Number(I64Value(0)));
+        let machine = Machine::empty().with_variable("num", Number(I64Value(0)));
         let (machine, _) = machine.evaluate(&model).unwrap();
         assert_eq!(machine.get("num"), Some(Number(I64Value(5))))
     }

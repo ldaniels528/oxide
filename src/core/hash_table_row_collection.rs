@@ -650,9 +650,7 @@ mod tests {
         // | 6          | X      |
         // | 7          | ABC    |
         // |---------------------|
-        for s in TableRenderer::from_rows(
-            hkrc.keys_table.get_columns().clone(),
-            hkrc.keys_table.read_active_rows().unwrap()) { println!("{}", s) }
+        for s in TableRenderer::from_table(&hkrc.keys_table) { println!("{}", s) }
         hkrc
     }
 }

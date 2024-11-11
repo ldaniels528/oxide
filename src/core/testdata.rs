@@ -13,11 +13,13 @@ use serde::{Deserialize, Serialize};
 use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::file_row_collection::FileRowCollection;
+use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::numbers::NumberValue::{F64Value, U64Value};
 use crate::parameter::Parameter;
 use crate::rows::Row;
 use crate::table_columns::Column;
+use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
 pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<DataFrame> {
@@ -82,6 +84,35 @@ pub fn make_table_file(
     let ns = Namespace::new(database, schema, name);
     let file = FileRowCollection::table_file_create(&ns).unwrap();
     (ns.get_table_file_path(), file, table_columns, record_size)
+}
+
+pub fn verify_whence(mut interpreter: Interpreter, code: &str, expected: TypedValue) -> Interpreter {
+    let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual, expected);
+    interpreter
+}
+
+pub fn verify_exact(code: &str, expected: TypedValue) {
+    let mut interpreter = Interpreter::new();
+    let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual, expected);
+}
+
+pub fn verify_when(code: &str, f: fn(TypedValue) -> bool) {
+    let mut interpreter = Interpreter::new();
+    let actual = interpreter.evaluate(code).unwrap();
+    assert!(f(actual));
+}
+
+pub fn verify_where(
+    interpreter: Interpreter,
+    code: &str,
+    f: fn(TypedValue) -> bool,
+) -> Interpreter {
+    let mut my_interpreter = interpreter;
+    let actual = my_interpreter.evaluate(code).unwrap();
+    assert!(f(actual));
+    my_interpreter
 }
 
 /////////////////////////////////////////////////////////////

@@ -3,7 +3,6 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
-use std::convert::From;
 
 use crate::errors::Errors;
 use crate::expression::Conditions::*;
@@ -236,7 +235,6 @@ impl Compiler {
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
                 "DELETE" => self.parse_keyword_http(ts),
-                "describe" => self.parse_keyword_describe(nts),
                 "drop" => self.parse_mutate_target(nts, |m| Quarry(Excavation::Construct(Infrastructure::Drop(m)))),
                 "false" => Ok((FALSE, nts)),
                 "feature" => self.parse_keyword_feature(nts),
@@ -249,7 +247,6 @@ impl Compiler {
                 "HEAD" => self.parse_keyword_http(ts),
                 "HTTP" => self.parse_keyword_http(nts),
                 "if" => self.parse_keyword_if(nts),
-                "impl" => self.parse_keyword_impl(nts),
                 "import" => self.parse_keyword_import(nts),
                 "include" => self.parse_expression_1a(nts, Include),
                 "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &nts),
@@ -260,8 +257,6 @@ impl Compiler {
                 "PATCH" => self.parse_keyword_http(ts),
                 "POST" => self.parse_keyword_http(ts),
                 "PUT" => self.parse_keyword_http(ts),
-                "reverse" => self.parse_expression_1a(nts, |q| Quarry(Excavation::Query(Queryable::Reverse(q)))),
-                "scan" => self.parse_keyword_scan(nts),
                 "scenario" => self.parse_keyword_scenario(nts),
                 "select" => self.parse_keyword_select(nts),
                 "struct" => self.parse_keyword_struct(nts),
@@ -297,14 +292,6 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.compile_next(ts)?;
         Ok((Quarry(Excavation::Mutate(Mutation::Compact { path: Box::new(table) })), ts))
-    }
-
-    fn parse_keyword_scan(
-        &mut self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (table, ts) = self.compile_next(ts)?;
-        Ok((Quarry(Excavation::Mutate(Mutation::Scan { path: Box::new(table) })), ts))
     }
 
     /// Creates a database object (e.g., table or index)
@@ -372,14 +359,6 @@ impl Compiler {
         let (condition, ts) = self.next_keyword_cond("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
         Ok((Quarry(Excavation::Mutate(Mutation::Delete { path: Box::new(from), condition, limit: limit.map(Box::new) })), ts))
-    }
-
-    fn parse_keyword_describe(
-        &mut self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (table, ts) = self.compile_next(ts)?;
-        Ok((Quarry(Excavation::Query(Queryable::Describe(Box::new(table)))), ts))
     }
 
     fn parse_keyword_feature(
@@ -517,27 +496,11 @@ impl Compiler {
         }, ts))
     }
 
-    /// Translates an `impl` block
-    /// ex: impl Processor { ... }
-    fn parse_keyword_impl(
-        &mut self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (name, ts) = match self.compile_next(ts)? {
-            (Variable(name), ts) => (name, ts),
-            (_, ts) => return fail_near("Variable expected", &ts)
-        };
-        match self.compile_next(ts)? {
-            (CodeBlock(ops), ts) => Ok((StructureImpl(name, ops), ts)),
-            (_, ts) => fail_near("Code block expected", &ts)
-        }
-    }
-
     /// Builds an import statement:
     ///   ex: import "os"
     ///   ex: import str::format
-    ///   ex: import vm::[eval, serve, version]
-    ///   ex: import lang, "os", str::format, vm::[eval, serve, version]
+    ///   ex: import oxide::[eval, serve, version]
+    ///   ex: import lang, "os", str::format, oxide::[eval, serve, version]
     fn parse_keyword_import(
         &mut self,
         mut ts: TokenSlice,
@@ -553,13 +516,13 @@ impl Compiler {
                 Literal(StringValue(pkg)) => ops.push(ImportOps::Everything(pkg)),
                 // import vm
                 Variable(pkg) => ops.push(ImportOps::Everything(pkg)),
-                // import vm::serve | vm::[eval, serve, version]
+                // import oxide::serve | oxide::[eval, serve, version]
                 Extraction(a, b) => {
                     match (*a, *b) {
-                        // import vm::serve
+                        // import oxide::serve
                         (Variable(pkg), Variable(func)) =>
                             ops.push(ImportOps::Selection(pkg, vec![func])),
-                        // import vm::[eval, serve, version]
+                        // import oxide::[eval, serve, version]
                         (Variable(pkg), ArrayExpression(items)) => {
                             let mut func_list = Vec::new();
                             for item in items {
@@ -1941,16 +1904,6 @@ mod tests {
             )),
             limit: Some(Box::new(Literal(Number(I64Value(5))))),
         })))
-    }
-
-    #[test]
-    fn test_reverse_from_variable() {
-        let code = Compiler::compile_script(r#"
-        reverse from stocks
-        "#).unwrap();
-        assert_eq!(code, Quarry(Excavation::Query(
-            Queryable::Reverse(Box::new(From(Box::new(Variable("stocks".to_string()))))))
-        ))
     }
 
     #[test]

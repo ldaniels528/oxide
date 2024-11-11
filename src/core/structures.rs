@@ -205,6 +205,7 @@ impl Structure for HardStructure {
         self.values.to_owned()
     }
 
+    /// Returns the structure as source code
     /// ex: struct(symbol: String(8), exchange: String(8), last_sale: f64)
     fn to_code(&self) -> String {
         let inside = self.columns.iter().zip(self.values.iter())
@@ -228,6 +229,7 @@ impl Structure for HardStructure {
         format!("struct({inside})")
     }
 
+    /// Returns the structure as a JSON object
     fn to_json(&self) -> Value {
         let mapping = self.columns.iter().zip(self.values.iter())
             .map(|(f, v)|
@@ -327,6 +329,7 @@ impl Structure for SoftStructure {
             .collect()
     }
 
+    /// Returns the structure as source code
     fn to_code(&self) -> String {
         format!("{{{}}}", self.tuples.iter()
             .map(|(name, value)| (name.to_string(), value.to_code()))
@@ -335,6 +338,7 @@ impl Structure for SoftStructure {
             .join(", "))
     }
 
+    /// Returns the structure as a JSON object
     fn to_json(&self) -> Value {
         let mapping = self.tuples.iter()
             .map(|(name, value)| (name.to_string(), value.to_json()))

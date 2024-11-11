@@ -76,7 +76,7 @@ impl RowCollection for ViewRowCollection {
     fn read_one(&self, id: usize) -> std::io::Result<Option<Row>> {
         let (row, rmd) = self.host.read_row(id)?;
         if rmd.is_allocated {
-            let machine = Machine::new().with_row(self.get_columns(), &row);
+            let machine = Machine::empty().with_row(self.get_columns(), &row);
             if row.matches(&machine, &Some(self.condition.to_owned()), self.get_columns()) {
                 return Ok(Some(row));
             }
@@ -87,7 +87,7 @@ impl RowCollection for ViewRowCollection {
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
         let (row, rmd) = self.host.read_row(id)?;
         if rmd.is_allocated {
-            let machine = Machine::new().with_row(self.get_columns(), &row);
+            let machine = Machine::empty().with_row(self.get_columns(), &row);
             if row.matches(&machine, &Some(self.condition.to_owned()), self.get_columns()) {
                 return Ok((row, rmd));
             }
@@ -98,7 +98,7 @@ impl RowCollection for ViewRowCollection {
     fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
         let (row, rmd) = self.host.read_row(id)?;
         if rmd.is_allocated {
-            let machine = Machine::new().with_row(self.get_columns(), &row);
+            let machine = Machine::empty().with_row(self.get_columns(), &row);
             if row.matches(&machine, &Some(self.condition.to_owned()), self.get_columns()) {
                 return Ok(rmd);
             }

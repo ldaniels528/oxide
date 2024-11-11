@@ -12,6 +12,7 @@ use std::sync::Arc;
 use crate::dataframe_config::DataFrameConfig;
 use crate::errors::Errors;
 use crate::field_metadata::FieldMetadata;
+use crate::machine::Machine;
 use crate::namespaces::Namespace;
 use crate::outcomes::Outcomes;
 use crate::row_collection::RowCollection;
@@ -39,7 +40,7 @@ impl FileRowCollection {
     }
 
     pub fn get_related_filename(path: &str, extension: &str) -> (String, String) {
-        let (oxide_home, untitled) = (Namespace::oxide_home(), "untitled");
+        let (oxide_home, untitled) = (Machine::oxide_home() , "untitled");
         let raw_file_path = Path::new(path);
 
         // determine the index_name and full_path

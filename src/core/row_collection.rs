@@ -2,12 +2,11 @@
 // RowCollection module
 ////////////////////////////////////////////////////////////////////
 
+use shared_lib::fail;
 use std::fmt::Debug;
 use std::fs::File;
 use std::ops::Range;
 use std::sync::Arc;
-
-use shared_lib::fail;
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::compiler::fail_value;
@@ -232,7 +231,7 @@ pub trait RowCollection: Debug {
     }
 
     fn filter_rows(&self, condition: &Conditions) -> std::io::Result<Vec<Row>> {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let result = self.iter().filter(|row| {
             let machine = machine.with_row(self.get_columns(), &row);
             match machine.evaluate_cond(condition) {
@@ -419,7 +418,7 @@ pub trait RowCollection: Debug {
         callback: fn(&TypedValue, Row) -> TypedValue,
     ) -> TypedValue {
         let mut result = initial_value;
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let columns = self.get_columns();
         for row in self.iter() {
             let ms = machine.with_row(columns, &row);
@@ -590,24 +589,28 @@ pub trait RowCollection: Debug {
 
     /// returns a reverse-order copy of the table
     fn reverse(&self) -> std::io::Result<Box<dyn RowCollection>> {
-        use TypedValue::{ErrorValue, TableValue};
-        let mrc = ModelRowCollection::with_rows(self.get_columns().to_owned(), Vec::new());
-        let result = self.fold_right(TableValue(mrc), |tv, row| {
-            match tv {
-                ErrorValue(message) => ErrorValue(message),
-                TableValue(mut rc) =>
-                    match rc.append_row(row) {
-                        ErrorValue(message) => ErrorValue(message),
-                        _ => TableValue(rc),
-                    }
-                z => ErrorValue(InvalidNamespace(z.unwrap_value()))
-            }
-        });
-        match result {
+        match self.reverse_table_value() {
             TableValue(rc) => Ok(Box::new(rc)),
             ErrorValue(err) => fail(err.to_string()),
             z => fail(format!("Expected table value near {}", z.unwrap_value()))
         }
+    }
+
+    /// returns a reverse-order copy of the table
+    fn reverse_table_value(&self) -> TypedValue {
+        use TypedValue::{ErrorValue, TableValue};
+        let mrc = ModelRowCollection::with_rows(self.get_columns().to_owned(), Vec::new());
+        self.fold_right(TableValue(mrc), |tv, row| {
+            match tv {
+                ErrorValue(message) => return ErrorValue(message),
+                TableValue(mut rc) =>
+                    match rc.append_row(row) {
+                        ErrorValue(message) => return ErrorValue(message),
+                        _ => TableValue(rc),
+                    }
+                z => return ErrorValue(InvalidNamespace(z.unwrap_value()))
+            }
+        })
     }
 
     /// Returns an option of the first row that matches the given search_column_value
@@ -1274,11 +1277,7 @@ mod tests {
                 rc.read_field_metadata(0, 1).unwrap());
 
             // verify the row
-            for s in TableRenderer::from_rows(
-                rc.get_columns().clone(),
-                rc.read_active_rows().unwrap()) {
-                println!("{}", s)
-            }
+            for s in TableRenderer::from_table(&rc) { println!("{}", s) }
             assert_eq!(
                 rc.read_one(0).unwrap(),
                 Some(

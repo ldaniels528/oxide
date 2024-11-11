@@ -2,9 +2,9 @@
 // Inferences class
 ////////////////////////////////////////////////////////////////////
 
-use crate::data_types::DataType::{ArrayType, ByteArrayType, BooleanType, LazyEvalType, OutcomeType, StringType, StructureType};
+use crate::data_types::DataType::*;
 use crate::data_types::{DataType, StorageTypes};
-use crate::expression::Expression::{ArrayExpression, AsValue, BitwiseOp, CodeBlock, Condition, Directive, Divide, ElementAt, ExtractPostfix, Extraction, Factorial, Feature, From, FunctionCall, If, Import, Include, JSONExpression, Literal, Minus, Module, Modulo, Multiply, Neg, Ns, Parameters, Plus, Pow, Quarry, Range, Return, Scenario, SetVariable, StructureImpl, Variable, Via, While, HTTP};
+use crate::expression::Expression::*;
 use crate::expression::{BitwiseOps, Excavation, Expression, Mutation};
 use crate::outcomes::OutcomeKind;
 use crate::typed_values::TypedValue;
@@ -63,7 +63,6 @@ impl Inferences {
             Return(..) => LazyEvalType,
             Scenario { .. } => OutcomeType(OutcomeKind::Acked),
             SetVariable(..) => OutcomeType(OutcomeKind::Acked),
-            StructureImpl(..) => OutcomeType(OutcomeKind::Acked),
             Variable(..) => LazyEvalType,
             Via(..) => LazyEvalType,
             While { .. } => LazyEvalType,

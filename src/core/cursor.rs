@@ -75,7 +75,7 @@ impl Cursor {
     pub fn get(&mut self, pos: usize) -> std::io::Result<Option<Row>> {
         let (row, rmd) = self.rc.read_row(pos)?;
         if rmd.is_allocated {
-            let machine = Machine::new().with_row(self.rc.get_columns(), &row);
+            let machine = Machine::empty().with_row(self.rc.get_columns(), &row);
             if row.matches(&machine, &self.condition, self.rc.get_columns()) {
                 return Ok(Some(row));
             }

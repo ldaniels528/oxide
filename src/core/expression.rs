@@ -8,7 +8,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::codec::Codec;
 use crate::data_types::DataType;
-use crate::data_types::DataType::*;
 use crate::decompiler::Decompiler;
 use crate::errors::Errors::IllegalOperator;
 use crate::expression::Expression::*;
@@ -103,7 +102,7 @@ pub enum CreationEntity {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum ImportOps {
     Everything(String),
-    Selection(String, Vec<String>)
+    Selection(String, Vec<String>),
 }
 
 impl ImportOps {
@@ -152,9 +151,6 @@ pub enum Mutation {
         condition: Option<Conditions>,
         limit: Option<Box<Expression>>,
     },
-    Scan {
-        path: Box<Expression>,
-    },
     Truncate {
         path: Box<Expression>,
         limit: Option<Box<Expression>>,
@@ -186,9 +182,7 @@ pub enum MutateTarget {
 /// Represents a queryable
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Queryable {
-    Describe(Box<Expression>),
     Limit { from: Box<Expression>, limit: Box<Expression> },
-    Reverse(Box<Expression>),
     Select {
         fields: Vec<Expression>,
         from: Option<Box<Expression>>,
@@ -252,7 +246,6 @@ pub enum Expression {
         inherits: Option<Box<Expression>>,
     },
     SetVariable(String, Box<Expression>),
-    StructureImpl(String, Vec<Expression>),
     Variable(String),
     Via(Box<Expression>),
     While {
@@ -313,14 +306,13 @@ impl Display for Expression {
     }
 }
 
-fn fx(name: &str, path: Expression) -> Expression {
-    FunctionCall {
-        fx: Box::new(Variable(name.into())),
-        args: vec![path],
-    }
-}
-
 fn to_ns(path: Expression) -> Expression {
+    fn fx(name: &str, path: Expression) -> Expression {
+        FunctionCall {
+            fx: Box::new(Variable(name.into())),
+            args: vec![path],
+        }
+    }
     fx("ns", path)
 }
 
@@ -382,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_conditional_and() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = And(Box::new(TRUE), Box::new(FALSE));
         let (_, result) = machine.evaluate_cond(&model).unwrap();
         assert_eq!(result, Boolean(false));
@@ -391,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_between_expression() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = Between(
             Box::new(Literal(Number(I32Value(10)))),
             Box::new(Literal(Number(I32Value(1)))),
@@ -404,7 +396,7 @@ mod tests {
 
     #[test]
     fn test_betwixt_expression() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = Betwixt(
             Box::new(Literal(Number(I32Value(10)))),
             Box::new(Literal(Number(I32Value(1)))),
@@ -417,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_equality_integers() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = Equal(
             Box::new(Literal(Number(I32Value(5)))),
             Box::new(Literal(Number(I32Value(5)))),
@@ -429,7 +421,7 @@ mod tests {
 
     #[test]
     fn test_equality_floats() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = Equal(
             Box::new(Literal(Number(F64Value(5.1)))),
             Box::new(Literal(Number(F64Value(5.1)))),
@@ -441,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_equality_strings() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = Equal(
             Box::new(Literal(StringValue("Hello".to_string()))),
             Box::new(Literal(StringValue("Hello".to_string()))),
@@ -453,7 +445,7 @@ mod tests {
 
     #[test]
     fn test_inequality_strings() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = NotEqual(
             Box::new(Literal(StringValue("Hello".to_string()))),
             Box::new(Literal(StringValue("Goodbye".to_string()))),
@@ -465,7 +457,7 @@ mod tests {
 
     #[test]
     fn test_greater_than() {
-        let machine = Machine::new()
+        let machine = Machine::empty()
             .with_variable("x", Number(I64Value(5)));
         let model = GreaterThan(
             Box::new(Variable("x".into())),
@@ -478,7 +470,7 @@ mod tests {
 
     #[test]
     fn test_greater_than_or_equal() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = GreaterOrEqual(
             Box::new(Literal(Number(I32Value(5)))),
             Box::new(Literal(Number(I32Value(1)))),
@@ -490,7 +482,7 @@ mod tests {
 
     #[test]
     fn test_less_than() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = LessThan(
             Box::new(Literal(Number(I32Value(4)))),
             Box::new(Literal(Number(I32Value(5)))),
@@ -502,7 +494,7 @@ mod tests {
 
     #[test]
     fn test_less_than_or_equal() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = LessOrEqual(
             Box::new(Literal(Number(I32Value(1)))),
             Box::new(Literal(Number(I32Value(5)))),
@@ -514,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_not_equal() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = NotEqual(
             Box::new(Literal(Number(I32Value(-5)))),
             Box::new(Literal(Number(I32Value(5)))),
@@ -526,7 +518,7 @@ mod tests {
 
     #[test]
     fn test_conditional_or() {
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let model = Or(Box::new(TRUE), Box::new(FALSE));
         let (_, result) = machine.evaluate_cond(&model).unwrap();
         assert_eq!(result, Boolean(true));

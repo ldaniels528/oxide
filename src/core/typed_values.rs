@@ -18,7 +18,6 @@ use uuid::Uuid;
 
 use shared_lib::fail;
 
-use crate::backdoor::BackDoorKey;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::cnv_error;
 use crate::codec;
@@ -39,6 +38,7 @@ use crate::numbers::NumberValue;
 use crate::numbers::NumberValue::*;
 use crate::outcomes::{OutcomeKind, Outcomes};
 use crate::parameter::Parameter;
+use crate::platform::PlatformFunctions;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::structures::*;
@@ -55,7 +55,6 @@ const UUID_FORMAT: &str =
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     Array(Vec<TypedValue>),
-    BackDoor(BackDoorKey),
     Boolean(bool),
     ByteArray(Vec<u8>),
     DateValue(i64),
@@ -65,6 +64,7 @@ pub enum TypedValue {
     Null,
     Number(NumberValue),
     Outcome(Outcomes),
+    PlatformFunction(PlatformFunctions),
     StructureHard(HardStructure),
     StructureSoft(SoftStructure),
     StringValue(String),
@@ -99,6 +99,7 @@ impl TypedValue {
             //     OutcomeKind::RowInserted => Outcome(Outcomes::RowId(codec::decode_row_id(&buffer, 1))),
             //     OutcomeKind::RowsUpdated => Outcome(Outcomes::RowsAffected(codec::decode_row_id(&buffer, 1))),
             // },
+            PlatformFunctionType(pf) => PlatformFunction(pf.to_owned()),
             StringType(size) => StringValue(codec::decode_string(buffer, offset, size.to_size()).to_string()),
             StructureType(params) =>
                 match HardStructure::from_parameters(params) {
@@ -152,6 +153,7 @@ impl TypedValue {
                 OutcomeKind::RowInserted => Outcome(Outcomes::RowId(buffer.next_row_id())),
                 OutcomeKind::RowsUpdated => Outcome(Outcomes::RowsAffected(buffer.next_row_id())),
             },
+            PlatformFunctionType(pf) => PlatformFunction(pf.to_owned()),
             StringType(..) => StringValue(buffer.next_string()),
             StructureType(params) => StructureHard(buffer.next_struct_with_parameters(params)?),
             TableType(columns, ..) => TableValue(buffer.next_table_with_columns(columns)?),
@@ -269,7 +271,7 @@ impl TypedValue {
                 for item in items { bytes.extend(item.encode()); }
                 bytes
             }
-            BackDoor(nf) => vec![nf.to_u8()],
+            PlatformFunction(pf) => pf.encode().unwrap_or(vec![]),
             ByteArray(bytes) => codec::encode_u8x_n(bytes.to_vec()),
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
             DateValue(number) => number.to_be_bytes().to_vec(),
@@ -302,7 +304,6 @@ impl TypedValue {
     pub fn get_type(&self) -> DataType {
         match self.to_owned() {
             Array(items) => ArrayType(Box::new(Inferences::infer_values(&items))),
-            BackDoor(key) => key.get_type(),
             ByteArray(v) => ByteArrayType(FixedSize(v.len())),
             Boolean(..) => BooleanType,
             DateValue(..) => DateType,
@@ -316,6 +317,7 @@ impl TypedValue {
                 Outcomes::RowId(..) => OutcomeType(OutcomeKind::RowInserted),
                 Outcomes::RowsAffected(..) => OutcomeType(OutcomeKind::RowsUpdated),
             },
+            PlatformFunction(pf) => pf.get_type(),
             StructureHard(hard) => StructureType(hard.get_parameters()),
             StructureSoft(soft) => StructureType(soft.get_parameters()),
             StringValue(s) => StringType(FixedSize(s.len())),
@@ -449,7 +451,7 @@ impl TypedValue {
             Outcome(Outcomes::Ack) => serde_json::Value::Bool(true),
             Array(items) =>
                 serde_json::json!(items.iter().map(|v|v.to_json()).collect::<Vec<serde_json::Value>>()),
-            BackDoor(nf) => serde_json::json!(nf),
+            PlatformFunction(nf) => serde_json::json!(nf),
             ByteArray(bytes) => serde_json::json!(bytes),
             Boolean(b) => serde_json::json!(b),
             DateValue(millis) => serde_json::json!(Self::millis_to_iso_date(*millis)),
@@ -618,7 +620,7 @@ impl TypedValue {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("[{}]", values.join(", "))
             }
-            BackDoor(nf) => format!("{:?}", nf),
+            PlatformFunction(nf) => format!("{:?}", nf),
             ByteArray(bytes) => hex::encode(bytes),
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
             DateValue(millis) => Self::millis_to_iso_date(*millis).unwrap_or("".into()),
@@ -822,7 +824,7 @@ impl Neg for TypedValue {
         let error: fn(String) -> TypedValue = |s| ErrorValue(Exact(format!("{} cannot be negated", s)));
         match self {
             Array(v) => Array(v.iter().map(|tv| tv.to_owned().neg()).collect::<Vec<_>>()),
-            BackDoor(..) => error("BackDoor".into()),
+            PlatformFunction(..) => error("BackDoor".into()),
             ByteArray(..) => error("BLOB".into()),
             Boolean(n) => Boolean(!n),
             DateValue(v) => Number(I64Value(-v)),

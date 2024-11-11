@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(df.append(make_quote(0, "AWAY", "AMEX", 123.45)).unwrap(), 4);
 
         // updates rows where ...
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let fields = vec![
             Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into()),
         ];
@@ -803,7 +803,7 @@ mod tests {
         assert_eq!(df.append(make_quote(4, "AWAY", "AMEX", 123.45)).unwrap(), 4);
 
         // updates rows where ...
-        let machine = Machine::new();
+        let machine = Machine::empty();
         let fields = vec![Variable("last_sale".into())];
         let values = vec![Literal(Number(F64Value(11.1111)))];
         let condition = Some(Equal(

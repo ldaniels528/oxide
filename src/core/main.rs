@@ -16,11 +16,11 @@ use shared_lib::{cnv_error, get_host_and_port};
 use crate::interpreter::Interpreter;
 use crate::repl::REPLState;
 use crate::rest_server::SharedState;
+use crate::row_collection::RowCollection;
 use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::TableValue;
 
-mod backdoor;
 mod byte_code_compiler;
 mod byte_row_collection;
 mod codec;
@@ -46,6 +46,7 @@ mod number_kind;
 mod numbers;
 mod outcomes;
 mod parameter;
+mod platform;
 mod readme;
 mod repl;
 mod rest_server;
@@ -112,9 +113,8 @@ fn run_command(command: &str) -> std::io::Result<()> {
     let result = interpreter.evaluate(command)?;
     match result {
         TableValue(mrc) => {
-            let lines =
-                TableRenderer::from_collection(Box::new(mrc.to_owned()));
-            for line in lines { println!("{}", line); }
+            let rc: Box<dyn RowCollection> = Box::from(mrc);
+            for line in TableRenderer::from_table(&rc) { println!("{}", line); }
         }
         z =>
             println!("{}", z.unwrap_value())

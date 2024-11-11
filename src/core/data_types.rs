@@ -18,6 +18,7 @@ use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::outcomes::OutcomeKind;
 use crate::parameter::Parameter;
+use crate::platform::PlatformFunctions;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token::Atom;
 use crate::typed_values::TypedValue::{ErrorValue, Number};
@@ -62,6 +63,7 @@ pub enum DataType {
     LazyEvalType, // TODO ^ absorb via FunctionType
     NumberType(NumberKind),
     OutcomeType(OutcomeKind),
+    PlatformFunctionType(PlatformFunctions),
     StringType(StorageTypes),
     StructureType(Vec<Parameter>),
     TableType(Vec<Parameter>, StorageTypes),
@@ -196,6 +198,7 @@ impl DataType {
                 OutcomeKind::RowInserted => 16,
                 OutcomeKind::RowsUpdated => 16,
             },
+            PlatformFunctionType(..) => 4,
             StringType(size) => match size {
                 FixedSize(size) => *size + size.to_be_bytes().len(),
                 BLOB => PTR_LEN
@@ -239,6 +242,7 @@ impl DataType {
                 OutcomeKind::RowInserted => "RowId".into(),
                 OutcomeKind::RowsUpdated => "RowsAffected".into(),
             },
+            PlatformFunctionType(pf) => pf.to_code(),
             StringType(size) => format!("String({})", size),
             StructureType(params) => format!("struct({})", Parameter::render(params)),
             TableType(columns, ..) => format!("Table({})", Parameter::render(columns)),
