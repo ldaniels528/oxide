@@ -21,7 +21,7 @@ use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::U64Kind;
 use crate::numbers::NumberValue::U64Value;
 use crate::outcomes::Outcomes;
-use crate::parameter::Parameter;
+use crate::platform::PlatformFunctions;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::Column;
@@ -159,13 +159,8 @@ pub trait RowCollection: Debug {
 
     /// Returns a table that describes the structure of the host table
     fn describe(&self) -> TypedValue {
-        let columns = vec![
-            Parameter::new("name", Some("String(128)".into()), None),
-            Parameter::new("type", Some("String(128)".into()), None),
-            Parameter::new("default_value", Some("String(128)".into()), None),
-            Parameter::new("is_nullable", Some("Boolean".into()), None),
-        ];
-        let mut mrc = ModelRowCollection::construct(&columns);
+        let params = PlatformFunctions::get_util_describe_parameters();
+        let mut mrc = ModelRowCollection::construct(&params);
         for column in self.get_columns() {
             mrc.append_row(Row::new(0, vec![
                 StringValue(column.get_name().to_string()),

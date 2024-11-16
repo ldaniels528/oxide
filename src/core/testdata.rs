@@ -19,6 +19,7 @@ use crate::numbers::NumberValue::{F64Value, U64Value};
 use crate::parameter::Parameter;
 use crate::rows::Row;
 use crate::table_columns::Column;
+use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
@@ -95,6 +96,22 @@ pub fn verify_whence(mut interpreter: Interpreter, code: &str, expected: TypedVa
 pub fn verify_exact(code: &str, expected: TypedValue) {
     let mut interpreter = Interpreter::new();
     let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual, expected);
+}
+
+pub fn verify_table_exact(code: &str, expected: Vec<&str>) {
+    let mut interpreter = Interpreter::new();
+    let actual = interpreter.evaluate(code)
+        .unwrap().to_table().unwrap();
+    assert_eq!(TableRenderer::from_table(&actual), expected);
+}
+
+pub fn verify_table_exact_with_ids(code: &str, expected: Vec<&str>) {
+    let mut interpreter = Interpreter::new();
+    let result = interpreter.evaluate(code)
+        .unwrap().to_table().unwrap();
+    let actual = TableRenderer::from_table_with_ids(&result).unwrap();
+    for s in &actual { println!("{}", s) }
     assert_eq!(actual, expected);
 }
 

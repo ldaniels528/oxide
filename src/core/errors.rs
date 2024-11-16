@@ -20,6 +20,7 @@ pub enum Errors {
     DateExpected(String),
     Exact(String),
     ExactNear(String, String),
+    FunctionArgsExpected(String),
     HashTableOverflow(usize, String),
     IllegalExpression(String),
     IllegalOperator(Token),
@@ -65,6 +66,8 @@ impl Display for Errors {
                 write!(f, "{message}"),
             ExactNear(message, here) =>
                 write!(f, "{message} near {here}"),
+            FunctionArgsExpected(other) =>
+                write!(f, "Function arguments expected, but got {}", other),
             HashTableOverflow(rid, value) =>
                 write!(f, "Hash table overflow detected (rid: {rid}, key: {value})"),
             IllegalExpression(expr) =>

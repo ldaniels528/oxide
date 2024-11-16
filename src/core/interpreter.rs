@@ -60,7 +60,6 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::NumberValue::{F64Value, I64Value, NaNValue, U128Value};
     use crate::outcomes::Outcomes::{Ack, RowsAffected};
-    use crate::row_collection::RowCollection;
     use crate::structures::*;
     use crate::table_columns::Column;
     use crate::table_renderer::TableRenderer;
@@ -95,45 +94,6 @@ mod tests {
         assert_eq!(interpreter.evaluate("x % 5").unwrap(), Number(F64Value(0.)));
         assert_eq!(interpreter.evaluate("x < 35").unwrap(), Boolean(false));
         assert_eq!(interpreter.evaluate("x >= 35").unwrap(), Boolean(true));
-    }
-
-    #[test]
-    fn test_compact_from_namespace() {
-        let phys_columns = make_quote_columns();
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate(r#"
-            [+] stocks := ns("interpreter.compact.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-            [+] delete from stocks where last_sale > 1.0
-            [+] from stocks
-        "#).unwrap();
-
-        let rc = result.to_table().unwrap();
-        assert_eq!(rc.read_active_rows().unwrap(), vec![
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(3, "GOTO", "OTC", 0.1428),
-            make_quote(5, "BOOM", "NASDAQ", 0.0872),
-        ]);
-
-        let result = interpreter.evaluate(r#"
-            [+] compact stocks
-            [+] from stocks
-        "#).unwrap();
-        let rc = result.to_table().unwrap();
-        let rows = rc.read_active_rows().unwrap();
-        for s in TableRenderer::from_table(&rc) { println!("{}", s); }
-        assert_eq!(rows, vec![
-            make_quote(0, "BOOM", "NASDAQ", 0.0872),
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(2, "GOTO", "OTC", 0.1428),
-        ]);
     }
 
     #[test]
@@ -209,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_directives_pipeline() {
-        verify_exact(r#"
+        verify_table_exact(r#"
             [+] stocks := ns("interpreter.pipeline.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -217,10 +177,14 @@ mod tests {
                  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
             [+] delete from stocks where last_sale < 30.0
             [+] from stocks
-        "#, TableValue(ModelRowCollection::from_rows(make_quote_columns(), vec![
-            make_quote(1, "BOOM", "NYSE", 56.88),
-            make_quote(2, "JET", "NASDAQ", 32.12),
-        ])));
+        "#, vec![
+            "|-------------------------------|",
+            "| symbol | exchange | last_sale |",
+            "|-------------------------------|",
+            "| BOOM   | NYSE     | 56.88     |",
+            "| JET    | NASDAQ   | 32.12     |",
+            "|-------------------------------|"
+        ]);
     }
 
     #[test]
@@ -750,8 +714,7 @@ mod tests {
         let phys_columns = Column::from_parameters(&columns).unwrap();
 
         // set up the interpreter
-        let mut interpreter = Interpreter::new();
-        assert_eq!(interpreter.evaluate(r#"
+        verify_table_exact_with_ids(r#"
             [+] stocks := ns("interpreter.select.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
@@ -764,10 +727,14 @@ mod tests {
                 where last_sale > 1.0
                 order by symbol
                 limit 5
-        "#).unwrap(), TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
-            make_quote(0, "ABC", "AMEX", 11.77),
-            make_quote(2, "BIZ", "NYSE", 23.66),
-        ])));
+        "#, vec![
+            "|------------------------------------|",
+            "| id | symbol | exchange | last_sale |",
+            "|------------------------------------|",
+            "| 0  | ABC    | AMEX     | 11.77     |",
+            "| 2  | BIZ    | NYSE     | 23.66     |",
+            "|------------------------------------|"
+        ]);
     }
 
     #[test]

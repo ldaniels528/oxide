@@ -6,9 +6,12 @@ use shared_lib::tabulate_cells;
 
 use crate::cursor::Cursor;
 use crate::model_row_collection::ModelRowCollection;
+use crate::numbers::NumberValue::U64Value;
+use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::table_columns::Column;
+use crate::typed_values::TypedValue::Number;
 
 /// Table renderer
 pub struct TableRenderer;
@@ -39,6 +42,26 @@ impl TableRenderer {
         let columns = rc.get_columns().to_owned();
         let rows = rc.read_active_rows().unwrap_or(vec![]);
         Self::from_rows(columns, rows)
+    }
+
+    /// Transforms the [RowCollection] into a textual table
+    pub fn from_table_with_ids(rc: &Box<dyn RowCollection>) -> std::io::Result<Vec<String>> {
+        // define columns by combining "id" column with those from the RowCollection
+        let columns: Vec<Column> = {
+            let mut params = vec![Parameter::new("id", Some("u64".into()), None)];
+            params.extend(rc.get_columns().iter().map(|c| c.to_parameter()));
+            Column::from_parameters(&params)?
+        };
+
+        // define rows by prepending ID values to each row's data
+        let rows: Vec<Row> = rc.read_active_rows()?.into_iter().map(|row| {
+                let mut values = vec![Number(U64Value(row.get_id() as u64))];
+                values.extend(row.get_values());
+                Row::new(row.get_id(), values)
+            })
+            .collect();
+
+        Ok(Self::from_rows(columns, rows))
     }
 
     fn tabulate_body_cells_from_collection(rc: Box<dyn RowCollection>) -> Vec<Vec<String>> {

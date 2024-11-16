@@ -8,7 +8,7 @@ use log::warn;
 
 use crate::data_types::DataType::NumberType;
 use crate::errors::Errors;
-use crate::errors::Errors::{Exact, HashTableOverflow, OutcomeExpected, RowsAffectedExpected};
+use crate::errors::Errors::*;
 use crate::field_metadata::FieldMetadata;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::NumberValue::U64Value;
@@ -70,23 +70,6 @@ impl HashTableRowCollection {
         let keys_columns = Self::create_hash_keys_columns(src_column)?;
         let keys_table = data_table.create_related_structure(keys_columns, key_column_index.to_string().as_str())?;
         Ok(Self::create_with_tables_and_options(key_column_index, bucket_count, bucket_depth, data_table, keys_table))
-    }
-
-    /// Returns a hash-table ready to be queried
-    pub fn create_with_tables(
-        key_column_index: usize,
-        data_table: Box<dyn RowCollection>,
-        keys_table: Box<dyn RowCollection>,
-    ) -> HashTableRowCollection {
-        let bucket_count = 100_000;
-        let bucket_depth = 1_000;
-        Self::create_with_tables_and_options(
-            key_column_index,
-            bucket_count,
-            bucket_depth,
-            data_table,
-            keys_table,
-        )
     }
 
     /// Returns a hash-table ready to be queried

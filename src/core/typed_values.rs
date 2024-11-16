@@ -369,6 +369,7 @@ impl TypedValue {
                 format!("[{}]", items.iter()
                     .map(|v| v.to_code())
                     .collect::<Vec<_>>().join(", ")),
+            PlatformFunction(pf) => pf.to_code(),
             StructureHard(hs) => hs.to_code(),
             StructureSoft(ss) => ss.to_code(),
             StringValue(s) => format!("\"{s}\""),

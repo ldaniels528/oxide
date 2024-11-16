@@ -8,18 +8,21 @@ use std::io::Read;
 use std::string::ToString;
 
 use actix_web::web;
+use crossterm::terminal;
 use log::{info, LevelFilter};
 
 use rest_server::*;
 use shared_lib::{cnv_error, get_host_and_port};
 
 use crate::interpreter::Interpreter;
+use crate::number_kind::NumberKind::U16Kind;
+use crate::numbers::NumberValue::U16Value;
 use crate::repl::REPLState;
 use crate::rest_server::SharedState;
 use crate::row_collection::RowCollection;
 use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::TableValue;
+use crate::typed_values::TypedValue::{Number, TableValue};
 
 mod byte_code_compiler;
 mod byte_row_collection;
@@ -81,7 +84,17 @@ async fn main() -> std::io::Result<()> {
     match args.as_slice() {
         // no arguments: start the REPL
         // ex: ./target/debug/oxide
-        [_] => repl::run(REPLState::new()).await,
+        [_] => {
+            // get the terminal width
+            let mut repl_state = REPLState::new();
+            if let Ok((width, height)) = terminal::size() {
+                repl_state.interpreter
+                    .with_variable("__COLUMNS__", Number(U16Value(width)));
+                repl_state.interpreter
+                    .with_variable("__HEIGHT__", Number(U16Value(height)));
+            }
+            repl::run(repl_state).await
+        },
         // listen: start a dedicated server?
         // ex: ./target/debug/oxide -listen 0.0.0.0 8080
         [_, cmd, ..] if cmd == "-l" || cmd == "-listen" =>

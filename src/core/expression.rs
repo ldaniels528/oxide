@@ -136,9 +136,6 @@ pub enum Mutation {
         path: Box<Expression>,
         source: Box<Expression>,
     },
-    Compact {
-        path: Box<Expression>,
-    },
     Delete {
         path: Box<Expression>,
         condition: Option<Conditions>,

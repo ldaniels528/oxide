@@ -231,7 +231,6 @@ impl Compiler {
                 "[~]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustIgnoreAck(e))),
                 "ack" => Ok((ACK, nts)),
                 "append" => self.parse_keyword_append(nts),
-                "compact" => self.parse_keyword_compact(nts),
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
                 "DELETE" => self.parse_keyword_http(ts),
@@ -282,16 +281,6 @@ impl Compiler {
         let (table, ts) = self.compile_next(ts)?;
         let (source, ts) = self.compile_next(ts)?;
         Ok((Quarry(Excavation::Mutate(Mutation::Append { path: Box::new(table), source: Box::new(source) })), ts))
-    }
-
-    /// Removes deleted rows from a table
-    /// ex: compact stocks
-    fn parse_keyword_compact(
-        &mut self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (table, ts) = self.compile_next(ts)?;
-        Ok((Quarry(Excavation::Mutate(Mutation::Compact { path: Box::new(table) })), ts))
     }
 
     /// Creates a database object (e.g., table or index)

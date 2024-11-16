@@ -5,9 +5,9 @@
 use std::io::{stdout, Write};
 
 use chrono::Local;
-use crossterm::execute;
 use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{Clear, ClearType};
+use crossterm::execute;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
@@ -44,7 +44,7 @@ pub enum REPLConnection {
 pub struct REPLState {
     database: String,
     schema: String,
-    interpreter: Interpreter,
+    pub interpreter: Interpreter,
     counter: usize,
     is_alive: bool,
     connection: REPLConnection,
@@ -186,8 +186,16 @@ pub async fn run(mut state: REPLState) -> std::io::Result<()> {
                     // show the output
                     match result {
                         TableValue(mrc) => {
-                            let lines =
-                                TableRenderer::from_collection(Box::new(mrc.to_owned()));
+                            let rc: Box<dyn RowCollection> = Box::from(mrc);
+                            let raw_lines = TableRenderer::from_table_with_ids(&rc)?;
+                            let lines = state.interpreter.machine
+                                .get("__COLUMNS__").map(|limit_v| {
+                                let limit = limit_v.to_usize();
+                                raw_lines.iter()
+                                    .map(|s| s[0..limit].to_string())
+                                    .collect::<Vec<_>>()
+                            })
+                                .unwrap_or(raw_lines);
                             for line in lines { stdout.write((line + "\n").as_bytes())?; }
                         }
                         z => {

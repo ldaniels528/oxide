@@ -7,7 +7,10 @@ use crate::data_types::{DataType, StorageTypes};
 use crate::expression::Expression::*;
 use crate::expression::{BitwiseOps, Excavation, Expression, Mutation};
 use crate::outcomes::OutcomeKind;
+use crate::platform::PlatformFunctions;
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::{Function, PlatformFunction};
+use std::ops::Deref;
 
 /// Type-Inference Detection
 pub struct Inferences;
@@ -25,23 +28,33 @@ impl Inferences {
                 BitwiseOps::ShiftRight(a, b) => Inferences::infer_a_or_b(a, b),
                 BitwiseOps::Xor(a, b) => Inferences::infer_a_or_b(a, b),
             },
-            CodeBlock(..) => LazyEvalType,
-            Parameters(params) => ArrayType(Box::new(StructureType(params.to_owned()))),
+            CodeBlock(ops) => ops.last().map(Inferences::infer_expr).unwrap_or(LazyEvalType),
             Condition(..) => BooleanType,
             Directive(..) => OutcomeType(OutcomeKind::Acked),
             Divide(a, b) => Inferences::infer_a_or_b(a, b),
             ElementAt(..) => LazyEvalType,
-            Extraction(..) => LazyEvalType,
+            Extraction(a, b) => match (a.deref(), b.deref()) {
+                (Variable(pkg), FunctionCall { fx, .. }) => match fx.deref() {
+                    Variable(name) =>
+                        PlatformFunctions::find_function(pkg, name)
+                            .map(|f| f.return_type.clone())
+                            .unwrap_or(LazyEvalType),
+                    _ => LazyEvalType,
+                }
+                _ => LazyEvalType
+            },
             ExtractPostfix(..) => LazyEvalType,
             Factorial(a) => Inferences::infer_expr(a),
             Feature { .. } => OutcomeType(OutcomeKind::Acked),
             From(..) => LazyEvalType,
-            FunctionCall { .. } => LazyEvalType,
+            FunctionCall { fx, .. } => Inferences::infer_expr(fx),
             HTTP { .. } => LazyEvalType,
             If { a, .. } => Inferences::infer_expr(a),
             Import(..) => OutcomeType(OutcomeKind::Acked),
             Include(..) => OutcomeType(OutcomeKind::Acked),
-            JSONExpression(..) => StructureType(Vec::new()), // todo can we infer?
+            JSONExpression(..) => StructureType(Vec::new()), // TODO can we infer?
+            Literal(Function { code, .. }) => Inferences::infer_expr(code),
+            Literal(PlatformFunction(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
             Minus(a, b) => Inferences::infer_a_or_b(a, b),
             Module(..) => OutcomeType(OutcomeKind::Acked),
@@ -49,6 +62,7 @@ impl Inferences {
             Multiply(a, b) => Inferences::infer_a_or_b(a, b),
             Neg(a) => Inferences::infer_expr(a),
             Ns(..) => OutcomeType(OutcomeKind::Acked),
+            Parameters(params) => ArrayType(Box::new(StructureType(params.to_owned()))),
             Plus(a, b) => Inferences::infer_a_or_b(a, b),
             Pow(a, b) => Inferences::infer_a_or_b(a, b),
             Quarry(a) => match a {
@@ -113,7 +127,9 @@ impl Inferences {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compiler::Compiler;
     use crate::data_types::StorageTypes::FixedSize;
+    use crate::outcomes::OutcomeKind::Acked;
     use crate::typed_values::TypedValue::StringValue;
 
     #[test]
@@ -161,5 +177,15 @@ mod tests {
             Literal(StringValue("cherry".into())),
         ]);
         assert_eq!(kind, StringType(FixedSize(6)))
+    }
+
+    #[test]
+    fn test_inference_lang_assert() {
+        let model = Compiler::compile_script(
+            r#"
+            lang::assert(100 > 5)
+        "#
+        ).unwrap();
+        assert_eq!(Inferences::infer_expr(&model), OutcomeType(Acked));
     }
 }

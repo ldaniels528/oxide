@@ -242,8 +242,6 @@ impl Decompiler {
         match expr {
             Mutation::Append { path, source } =>
                 format!("append {} {}", self.decompile(path), self.decompile(source)),
-            Mutation::Compact { path } =>
-                format!("compact {}", self.decompile(path)),
             Mutation::Delete { path, condition, limit } =>
                 format!("delete from {} where {}{}", self.decompile(path), self.decompile_cond_opt(condition), self.decompile_opt(limit)),
             Mutation::IntoNs(a, b) =>
