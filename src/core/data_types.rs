@@ -60,7 +60,7 @@ pub enum DataType {
     EnumType(Vec<Parameter>),
     ErrorType,
     FunctionType(Vec<Parameter>),
-    LazyEvalType, // TODO ^ absorb via FunctionType
+    LazyType, // TODO ^ absorb via FunctionType
     NumberType(NumberKind),
     OutcomeType(OutcomeKind),
     PlatformFunctionType(PlatformFunctions),
@@ -165,7 +165,7 @@ impl DataType {
             return fail_near("Syntax error", &ts);
         }
 
-        let kind = if args.is_empty() { LazyEvalType } else { Self::compile_tokens(TokenSlice::new(args))? };
+        let kind = if args.is_empty() { LazyType } else { Self::compile_tokens(TokenSlice::new(args))? };
         Ok(f(kind))
     }
 
@@ -184,7 +184,7 @@ impl DataType {
             EnumType(..) => 2,
             ErrorType => 256,
             FunctionType(columns) => columns.len() * 8,
-            LazyEvalType => 0,
+            LazyType => 0,
             NumberType(kind) => match kind {
                 I8Kind | U8Kind => 1,
                 I16Kind | U16Kind => 2,
@@ -205,7 +205,7 @@ impl DataType {
             },
             StructureType(columns) => columns.len() * 8,
             TableType(columns, ..) => columns.len() * 8,
-            LazyEvalType => 0,
+            LazyType => 0,
         };
         width + 1 // +1 for field metadata
     }
@@ -221,7 +221,7 @@ impl DataType {
             EnumType(labels) => format!("enum({})", Parameter::render(labels)),
             ErrorType => "Error".into(),
             FunctionType(columns) => format!("fn({})", Parameter::render(columns)),
-            LazyEvalType => "".into(),
+            LazyType => "".into(),
             NumberType(index) => match *index {
                 F32Kind => "f32".into(),
                 F64Kind => "f64".into(),
@@ -354,6 +354,7 @@ mod tests {
 
     #[test]
     fn test_string() {
+        verify_type_construction("String()", StringType(BLOB));
         verify_type_construction("String(10)", StringType(FixedSize(10)));
     }
 

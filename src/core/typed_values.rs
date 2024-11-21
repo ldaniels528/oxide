@@ -92,7 +92,7 @@ impl TypedValue {
             ErrorType => ErrorValue(Exact(codec::decode_string(buffer, offset, 255).to_string())),
             //FunctionType(_columns) => Codec::decode_value(&buffer[offset..].to_vec()),
             //JSONType => Codec::decode_value(&buffer[offset..].to_vec()),
-            LazyEvalType => Null,
+            LazyType => Null,
             NumberType(kind) => Number(NumberValue::decode(buffer, offset, *kind)),
             // OutcomeType(kind) => match kind {
             //     OutcomeKind::Acked => Outcome(Outcomes::Ack),
@@ -107,7 +107,7 @@ impl TypedValue {
                     Err(err) => ErrorValue(Errors::Exact(err.to_string()))
                 }
             TableType(columns, ..) => TableValue(ModelRowCollection::construct(columns)),
-            LazyEvalType => Undefined,
+            LazyType => Undefined,
             _ => Codec::decode_value(&buffer[offset..].to_vec())
         }
     }
@@ -131,7 +131,7 @@ impl TypedValue {
                 params: columns.to_owned(),
                 code: Box::new(ByteCodeCompiler::disassemble(buffer)?),
             },
-            LazyEvalType => Null,
+            LazyType => Null,
             NumberType(kind) =>
                 Number(match *kind {
                     F32Kind => F32Value(buffer.next_f32()),
@@ -157,7 +157,7 @@ impl TypedValue {
             StringType(..) => StringValue(buffer.next_string()),
             StructureType(params) => StructureHard(buffer.next_struct_with_parameters(params)?),
             TableType(columns, ..) => TableValue(buffer.next_table_with_columns(columns)?),
-            LazyEvalType => Undefined,
+            LazyType => Undefined,
         };
         Ok(tv)
     }
@@ -310,7 +310,7 @@ impl TypedValue {
             ErrorValue(..) => ErrorType,
             Function { params, .. } => FunctionType(params),
             NamespaceValue(..) => TableType(Vec::new(), BLOB),
-            Null | Undefined => LazyEvalType,
+            Null | Undefined => LazyType,
             Number(nv) => NumberType(nv.kind()),
             Outcome(oc) => match oc {
                 Outcomes::Ack => OutcomeType(OutcomeKind::Acked),
@@ -355,11 +355,19 @@ impl TypedValue {
     }
 
     pub fn to_bool(&self) -> bool {
-        match &self {
+        match self {
             Outcome(Outcomes::Ack) => true,
             Boolean(b) => *b,
             Outcome(oc) => oc.to_bool(),
             _ => false
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        match self {
+            ByteArray(bytes) => bytes.to_vec(),
+            StringValue(s) => s.bytes().collect(),
+            z => z.encode()
         }
     }
 
@@ -381,6 +389,7 @@ impl TypedValue {
         match self {
             Outcome(Outcomes::Ack) => 1.,
             Boolean(true) => 1.,
+            DateValue(dt) => *dt as f32,
             Number(nv) => nv.to_f32(),
             Outcome(oc) => oc.to_f32(),
             _ => 0.
@@ -391,6 +400,7 @@ impl TypedValue {
         match self {
             Outcome(Outcomes::Ack) => 1.,
             Boolean(true) => 1.,
+            DateValue(dt) => *dt as f64,
             Number(nv) => nv.to_f64(),
             Outcome(oc) => oc.to_f64(),
             _ => 0.
@@ -401,6 +411,7 @@ impl TypedValue {
         match self {
             Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
+            DateValue(dt) => *dt as i8,
             Number(nv) => nv.to_i8(),
             Outcome(oc) => oc.to_i8(),
             _ => 0
@@ -411,6 +422,7 @@ impl TypedValue {
         match self {
             Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
+            DateValue(dt) => *dt as i16,
             Number(nv) => nv.to_i16(),
             Outcome(oc) => oc.to_i16(),
             _ => 0
@@ -421,6 +433,7 @@ impl TypedValue {
         match self {
             Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
+            DateValue(dt) => *dt as i32,
             Number(nv) => nv.to_i32(),
             Outcome(oc) => oc.to_i32(),
             _ => 0
@@ -431,6 +444,7 @@ impl TypedValue {
         match self {
             Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
+            DateValue(dt) => *dt,
             Number(nv) => nv.to_i64(),
             Outcome(oc) => oc.to_i64(),
             _ => 0
@@ -441,6 +455,7 @@ impl TypedValue {
         match self {
             Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
+            DateValue(dt) => *dt as i128,
             Number(nv) => nv.to_i128(),
             Outcome(oc) => oc.to_i128(),
             _ => 0
@@ -515,6 +530,9 @@ impl TypedValue {
 
     fn convert_array_to_table(&self, items: &Vec<TypedValue>) -> TypedValue {
         // gather each struct in the array as a table
+        fn value_parameters(value: &TypedValue) -> Vec<Parameter> {
+            vec![Parameter::new("value".to_string(), value.get_type().to_type_declaration(), None)]
+        }
         let tables = items.iter()
             .fold(Vec::new(), |mut tables, tv| match tv {
                 StructureHard(hs) => {
@@ -530,7 +548,9 @@ impl TypedValue {
                     tables
                 }
                 z => {
-                    println!("{} is not a struct nor table", z.to_code());
+                    let mut mrc = ModelRowCollection::construct(&value_parameters(z));
+                    mrc.append_row(Row::new(0, vec![z.clone()]));
+                    tables.push(mrc);
                     tables
                 }
             });
@@ -687,6 +707,11 @@ impl Add for TypedValue {
 
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            (Array(a), Array(b)) => {
+                let mut c = a.clone();
+                c.extend(b);
+                Array(c)
+            }
             (Boolean(..), Outcome(Outcomes::Ack)) => Boolean(true),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
             (ErrorValue(Various(mut errors0)), ErrorValue(Various(errors1))) => {
@@ -812,6 +837,13 @@ impl Mul for TypedValue {
 
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            (Array(a), Number(n)) => {
+                let mut b = a.clone();
+                for _ in 1..n.to_usize() {
+                    b.extend(a.clone());
+                }
+                Array(b)
+            }
             (Number(a), Number(b)) => Number(a * b),
             _ => Undefined
         }

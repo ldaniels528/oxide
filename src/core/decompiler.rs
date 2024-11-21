@@ -149,6 +149,8 @@ impl Decompiler {
                 format!("{} < {}", self.decompile(a), self.decompile(b)),
             LessOrEqual(a, b) =>
                 format!("{} <= {}", self.decompile(a), self.decompile(b)),
+            Like(a, b) =>
+                format!("{} like {}", self.decompile(a), self.decompile(b)),
             Not(a) => format!("!{}", self.decompile(a)),
             NotEqual(a, b) =>
                 format!("{} != {}", self.decompile(a), self.decompile(b)),

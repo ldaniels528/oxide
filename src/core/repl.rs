@@ -5,9 +5,9 @@
 use std::io::{stdout, Write};
 
 use chrono::Local;
+use crossterm::execute;
 use crossterm::style::{Print, ResetColor};
 use crossterm::terminal::{Clear, ClearType};
-use crossterm::execute;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,6 @@ use shared_lib::{cnv_error, RemoteCallRequest, RemoteCallResponse};
 use crate::expression::ACK;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
-use crate::outcomes::Outcomes;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::rows::{Row, RowJs};
@@ -94,7 +93,6 @@ impl REPLState {
     fn create_history_table() -> std::io::Result<ModelRowCollection> {
         Ok(ModelRowCollection::with_rows(
             Column::from_parameters(&vec![
-                Parameter::new("pid", Some("i64".into()), None),
                 Parameter::new("input", Some("String(65536)".into()), None),
             ])?, Vec::new(),
         ))
@@ -108,7 +106,7 @@ impl REPLState {
         if let Ok(TypedValue::TableValue(mrc)) = outcome {
             for row in mrc.get_rows() {
                 listing.push(format!("[{}] {}",
-                                     &row.get_id(), row.get(1).unwrap_value()));
+                                     &row.get_id(), row.get(0).unwrap_value()));
             }
         }
         listing
@@ -127,7 +125,6 @@ impl REPLState {
         // create a new row
         let id = mrc.len()?;
         let row = Row::new(id, vec![
-            TypedValue::Outcome(Outcomes::RowId(id)),
             TypedValue::StringValue(clean_input),
         ]);
         // write the row
@@ -188,13 +185,13 @@ pub async fn run(mut state: REPLState) -> std::io::Result<()> {
                         TableValue(mrc) => {
                             let rc: Box<dyn RowCollection> = Box::from(mrc);
                             let raw_lines = TableRenderer::from_table_with_ids(&rc)?;
-                            let lines = state.interpreter.machine
-                                .get("__COLUMNS__").map(|limit_v| {
-                                let limit = limit_v.to_usize();
-                                raw_lines.iter()
-                                    .map(|s| s[0..limit].to_string())
-                                    .collect::<Vec<_>>()
-                            })
+                            let lines = state.interpreter.get("__COLUMNS__")
+                                .map(|limit_v| {
+                                    let limit = limit_v.to_usize();
+                                    raw_lines.iter()
+                                        .map(|s| if s.len() > limit { s[0..limit].to_string() } else { s.to_string() })
+                                        .collect::<Vec<_>>()
+                                })
                                 .unwrap_or(raw_lines);
                             for line in lines { stdout.write((line + "\n").as_bytes())?; }
                         }

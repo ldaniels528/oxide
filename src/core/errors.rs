@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 pub enum Errors {
     ArgumentsMismatched(usize, usize),
     AssertionError(String, String),
-    AsynchronousContextRequired,
     CannotSubtract(String, String),
     CollectionExpected(String),
     ColumnExpected(String),
@@ -50,8 +49,6 @@ impl Display for Errors {
                 write!(f, "Mismatched number of arguments: {a} vs. {b}"),
             AssertionError(a, b) =>
                 write!(f, "Assertion Error: {a} was not {b}"),
-            AsynchronousContextRequired =>
-                write!(f, "Asynchronous context required"),
             CannotSubtract(a, b) =>
                 write!(f, "Cannot subtract {b} from {a}"),
             CollectionExpected(a) =>
@@ -123,7 +120,6 @@ mod tests {
     fn test_errors() {
         verify(ArgumentsMismatched(2, 1), "Mismatched number of arguments: 2 vs. 1");
         verify(AssertionError("true".into(), "false".into()), "Assertion Error: true was not false");
-        verify(AsynchronousContextRequired, "Asynchronous context required");
         verify(CannotSubtract("a".into(), "b".into()), "Cannot subtract b from a");
         verify(CollectionExpected("1".into()), "Iterable expected near 1");
         verify(ColumnExpected("^".into()), "Expected a column, got \"^\" instead");
@@ -131,6 +127,7 @@ mod tests {
         verify(DateExpected("Tom".into()), "Expected a timestamp, got \"Tom\" instead");
         verify(Exact("Something bad happened".into()), "Something bad happened");
         verify(ExactNear("Something bad happened".into(), "here".into()), "Something bad happened near here");
+        verify(FunctionArgsExpected("Tom".into()), "Function arguments expected, but got Tom");
         verify(HashTableOverflow(100, "AAA".into()), "Hash table overflow detected (rid: 100, key: AAA)");
         verify(IllegalExpression("2 ~ 3".into()), "Illegal expression: 2 ~ 3");
         verify(IllegalOperator(Token::Atom {

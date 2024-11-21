@@ -11,7 +11,7 @@ use crate::typed_values::TypedValue;
 /// Represents the Oxide language interpreter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Interpreter {
-    pub(crate) machine: Machine,
+    machine: Machine,
 }
 
 impl Interpreter {
@@ -45,6 +45,11 @@ impl Interpreter {
         Ok(result)
     }
 
+    /// returns a variable by name
+    pub fn get(&self, name: &str) -> Option<TypedValue> {
+        self.machine.get(name)
+    }
+
     /// Sets the value of a variable
     pub fn with_variable(&mut self, name: &str, value: TypedValue) {
         self.machine = self.machine.with_variable(name, value);
@@ -62,18 +67,54 @@ mod tests {
     use crate::outcomes::Outcomes::{Ack, RowsAffected};
     use crate::structures::*;
     use crate::table_columns::Column;
-    use crate::table_renderer::TableRenderer;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
 
     #[test]
-    fn test_arrays() {
+    fn test_array_definition() {
         use crate::numbers::NumberValue::*;
         verify_exact("[0, 1, 3, 5]", Array(vec![
             Number(I64Value(0)), Number(I64Value(1)),
             Number(I64Value(3)), Number(I64Value(5)),
         ]));
-        verify_exact("[0, 1, 3, 5][2]", Number(I64Value(3)));
+    }
+
+    #[test]
+    fn test_array_access_element_at_index() {
+        verify_exact("[-0.01, 8.25, 3.8, -4.5][2]", Number(F64Value(3.8)));
+    }
+
+    #[test]
+    fn test_array_addition() {
+        verify_exact(r#"
+            a := ['cat', 'dog']
+            b := ['mouse', 'rat']
+            a + b
+        "#, Array(vec![
+            StringValue("cat".into()), StringValue("dog".into()),
+            StringValue("mouse".into()), StringValue("rat".into())
+        ]));
+    }
+
+    #[test]
+    fn test_array_multiplication() {
+        verify_exact(r#"
+            a := ['cat', 'dog']
+            a * 3
+        "#, Array(vec![
+            StringValue("cat".into()), StringValue("dog".into()),
+            StringValue("cat".into()), StringValue("dog".into()),
+            StringValue("cat".into()), StringValue("dog".into()),
+        ]));
+    }
+
+    #[test]
+    fn test_array_ranges() {
+        use crate::numbers::NumberValue::*;
+        verify_exact("0..4", Array(vec![
+            Number(I64Value(0)), Number(I64Value(1)),
+            Number(I64Value(2)), Number(I64Value(3)),
+        ]));
     }
 
     #[test]
@@ -97,9 +138,64 @@ mod tests {
     }
 
     #[test]
+    fn test_between() {
+        verify_exact("20 between 1 and 20", Boolean(true));
+        verify_exact("21 between 1 and 20", Boolean(false));
+    }
+
+    #[test]
+    fn test_betwixt() {
+        verify_exact("20 betwixt 1 and 20", Boolean(false));
+        verify_exact("19 betwixt 1 and 20", Boolean(true));
+    }
+
+    #[test]
+    fn test_directive_die() {
+        verify_exact(r#"[!] "Kaboom!!!""#, ErrorValue(Exact("Kaboom!!!".into())));
+    }
+
+    #[test]
+    fn test_directive_ignore_failure() {
+        verify_exact(r#"[~] 7 / 0"#, Outcome(Ack));
+    }
+
+    #[test]
+    fn test_directive_must_be_false() {
+        verify_exact(r#"
+            [+] x := 67
+            [-] x < 67
+        "#, Boolean(false));
+    }
+
+    #[test]
+    fn test_directive_must_be_true() {
+        verify_exact("[+] x := 67", Outcome(Ack));
+    }
+
+    #[test]
+    fn test_directives_pipeline() {
+        verify_exact_table(r#"
+            [+] stocks := ns("interpreter.pipeline.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+            [+] delete from stocks where last_sale < 30.0
+            [+] from stocks
+        "#, vec![
+            "|-------------------------------|",
+            "| symbol | exchange | last_sale |",
+            "|-------------------------------|",
+            "| BOOM   | NYSE     | 56.88     |",
+            "| JET    | NASDAQ   | 32.12     |",
+            "|-------------------------------|"
+        ]);
+    }
+
+    #[test]
     fn test_feature_with_scenarios() {
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate(r#"
+        verify_exact_table_with_ids(r#"
+            import oxide
             feature "Matches function" {
                 scenario "Compare Array contents: Equal" {
                     assert(matches(
@@ -123,68 +219,61 @@ mod tests {
                             { scores: [82 78 99], id: "A1537" },
                             { id: "A1537", scores: [82 78 99] }))
                 }
-            } "#).unwrap();
-        let table = result.to_table().unwrap();
-        let output = TableRenderer::from_table(&table).join("\n");
-        println!("{}", output);
-        assert_eq!(output, r#"|---------------------------------------------------------------------------------------------------------------------|
-| level | item                                                                                      | passed | result |
-|---------------------------------------------------------------------------------------------------------------------|
-| 0     | Matches function                                                                          | true   | ack    |
-| 1     | Compare Array contents: Equal                                                             | true   | ack    |
-| 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |
-| 1     | Compare Array contents: Not Equal                                                         | true   | ack    |
-| 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |
-| 1     | Compare JSON contents (in sequence)                                                       | true   | ack    |
-| 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |
-| 1     | Compare JSON contents (out of sequence)                                                   | true   | ack    |
-| 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |
-|---------------------------------------------------------------------------------------------------------------------|"#);
-    }
-
-    #[test]
-    fn test_directive_die() {
-        verify_exact(r#"
-            [!] "Kaboom!!!"
-        "#, ErrorValue(Exact("Kaboom!!!".into())));
-    }
-
-    #[test]
-    fn test_directive_ignore_failure() {
-        verify_exact(r#"[~] oxide::eval("7 / 0")"#, Outcome(Ack));
-    }
-
-    #[test]
-    fn test_directive_must_be_true() {
-        verify_exact("[+] x := 67", Outcome(Ack));
-    }
-
-    #[test]
-    fn test_directive_must_be_false() {
-        verify_exact(r#"
-            [+] x := 67
-            [-] x < 67
-        "#, Boolean(false));
-    }
-
-    #[test]
-    fn test_directives_pipeline() {
-        verify_table_exact(r#"
-            [+] stocks := ns("interpreter.pipeline.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-            [+] delete from stocks where last_sale < 30.0
-            [+] from stocks
-        "#, vec![
-            "|-------------------------------|",
-            "| symbol | exchange | last_sale |",
-            "|-------------------------------|",
-            "| BOOM   | NYSE     | 56.88     |",
-            "| JET    | NASDAQ   | 32.12     |",
-            "|-------------------------------|"
+            }"#, vec![
+            "|--------------------------------------------------------------------------------------------------------------------------|",
+            "| id | level | item                                                                                      | passed | result |",
+            "|--------------------------------------------------------------------------------------------------------------------------|",
+            "| 0  | 0     | Matches function                                                                          | true   | ack    |",
+            "| 1  | 1     | Compare Array contents: Equal                                                             | true   | ack    |",
+            r#"| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |"#,
+            "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | ack    |",
+            r#"| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |"#,
+            "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | ack    |",
+            r#"| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |"#,
+            "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | ack    |",
+            r#"| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |"#,
+            "|--------------------------------------------------------------------------------------------------------------------------|"
         ]);
+    }
+
+    #[test]
+    fn test_function_lambda() {
+        let mut interpreter = Interpreter::new();
+        assert_eq!(Outcome(Ack), interpreter.evaluate(r#"
+            product := fn (a, b) => a * b
+        "#).unwrap());
+
+        assert_eq!(Number(I64Value(10)), interpreter.evaluate(r#"
+            product(2, 5)
+        "#).unwrap())
+    }
+
+    #[test]
+    fn test_function_named() {
+        let mut interpreter = Interpreter::new();
+        assert_eq!(Outcome(Ack), interpreter.evaluate(r#"
+            fn product(a, b) => a * b
+        "#).unwrap());
+
+        assert_eq!(Number(I64Value(10)), interpreter.evaluate(r#"
+            product(2, 5)
+        "#).unwrap())
+    }
+
+    #[test]
+    fn test_function_recursion_1() {
+        verify_exact(r#"
+            f := fn(n: i64) => if(n <= 1) 1 else n * f(n - 1)
+            f(5)
+        "#, Number(I64Value(120)))
+    }
+
+    #[test]
+    fn test_function_recursion_2() {
+        verify_exact(r#"
+            f := fn(n) => iff(n <= 1, 1, n * f(n - 1))
+            f(6)
+        "#, Number(I64Value(720)))
     }
 
     #[test]
@@ -231,6 +320,19 @@ mod tests {
     }
 
     #[test]
+    fn test_hard_structure_field_assignment() {
+        verify_exact(r#"
+            stock := struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+            stock::last_sale := 24.11
+            stock::last_sale
+        "#, Number(F64Value(24.11)));
+    }
+
+    #[test]
     fn test_hard_structure_module_method() {
         verify_exact(r#"
             stock := struct(
@@ -258,9 +360,9 @@ mod tests {
             )
             import stock
         "#).unwrap();
-        assert_eq!(interpreter.machine.get("symbol"), Some(StringValue("ABC".into())));
-        assert_eq!(interpreter.machine.get("exchange"), Some(StringValue("NYSE".into())));
-        assert_eq!(interpreter.machine.get("last_sale"), Some(Number(F64Value(23.67))));
+        assert_eq!(interpreter.get("symbol"), Some(StringValue("ABC".into())));
+        assert_eq!(interpreter.get("exchange"), Some(StringValue("NYSE".into())));
+        assert_eq!(interpreter.get("last_sale"), Some(Number(F64Value(23.67))));
     }
 
     #[test]
@@ -281,6 +383,39 @@ mod tests {
                 Number(F64Value(11.11)),
             ],
         ).unwrap()));
+    }
+
+    #[test]
+    fn test_if_when_result_is_defined() {
+        verify_exact(r#"
+            x := 7
+            if(x > 5) "Yes"
+        "#, StringValue("Yes".into()));
+    }
+
+    #[test]
+    fn test_if_when_result_is_undefined() {
+        verify_exact(r#"
+            x := 4
+            if(x > 5) "Yes"
+        "#, Undefined);
+    }
+
+    #[test]
+    fn test_if_else_expression() {
+        verify_exact(r#"
+            x := 4
+            if(x > 5) "Yes"
+            else if(x < 5) "Maybe"
+            else "No"
+        "#, StringValue("Maybe".into()));
+    }
+
+    #[test]
+    fn test_like() {
+        verify_exact("'Hello' like 'H*o'", Boolean(true));
+        verify_exact("'Hello' like 'H.ll.'", Boolean(true));
+        verify_exact("'Hello' like 'H%ll%'", Boolean(false));
     }
 
     #[test]
@@ -326,6 +461,15 @@ mod tests {
     }
 
     #[test]
+    fn test_soft_structure_field_assignment() {
+        verify_exact(r#"
+            stock := { symbol:"AAA", price:123.45 }
+            stock::price := 124.11
+            stock::price
+        "#, Number(F64Value(124.11)));
+    }
+
+    #[test]
     fn test_soft_structure_method() {
         verify_exact(r#"
             stock := {
@@ -362,7 +506,7 @@ mod tests {
             quote := { symbol: "ABC", exchange: "AMEX" }
             import quote
         "#).unwrap();
-        let machine = interpreter.machine;
+        let machine = interpreter;
         assert_eq!(machine.get("symbol"), Some(StringValue("ABC".into())));
         assert_eq!(machine.get("exchange"), Some(StringValue("AMEX".into())));
     }
@@ -460,117 +604,11 @@ mod tests {
     }
 
     #[test]
-    fn test_function_lambda() {
-        let mut interpreter = Interpreter::new();
-        assert_eq!(Outcome(Ack), interpreter.evaluate(r#"
-            product := fn (a, b) => a * b
-        "#).unwrap());
-
-        assert_eq!(Number(I64Value(10)), interpreter.evaluate(r#"
-            product(2, 5)
-        "#).unwrap())
-    }
-
-    #[test]
-    fn test_function_named() {
-        let mut interpreter = Interpreter::new();
-        assert_eq!(Outcome(Ack), interpreter.evaluate(r#"
-            fn product(a, b) => a * b
-        "#).unwrap());
-
-        assert_eq!(Number(I64Value(10)), interpreter.evaluate(r#"
-            product(2, 5)
-        "#).unwrap())
-    }
-
-    #[test]
-    fn test_function_recursion_1() {
-        verify_exact(r#"
-            f := fn(n: i64) => if(n <= 1) 1 else n * f(n - 1)
-            f(5)
-        "#, Number(I64Value(120)))
-    }
-
-    #[test]
-    fn test_function_recursion_2() {
-        verify_exact(r#"
-            f := fn(n) => iff(n <= 1, 1, n * f(n - 1))
-            f(6)
-        "#, Number(I64Value(720)))
-    }
-
-    #[test]
-    fn test_if_when_result_is_defined() {
-        verify_exact(r#"
-            x := 7
-            if(x > 5) "Yes"
-        "#, StringValue("Yes".into()));
-    }
-
-    #[test]
-    fn test_if_when_result_is_undefined() {
-        verify_exact(r#"
-            x := 4
-            if(x > 5) "Yes"
-        "#, Undefined);
-    }
-
-    #[test]
-    fn test_if_else_expression() {
-        verify_exact(r#"
-            x := 4
-            if(x > 5) "Yes"
-            else if(x < 5) "Maybe"
-            else "No"
-        "#, StringValue("Maybe".into()));
-    }
-
-    #[test]
     fn test_if_function() {
         verify_exact(r#"
             x := 4
             iff(x > 5, "Yes", iff(x < 5, "Maybe", "No"))
         "#, StringValue("Maybe".into()));
-    }
-
-    #[test]
-    fn test_matches_1() {
-        // test a perfect match
-        verify_exact(r#"
-            a := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
-            b := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
-            matches(a, b)
-        "#, Boolean(true));
-    }
-
-    #[test]
-    fn test_matches_2() {
-        // test an unordered match
-        verify_exact(r#"
-            a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-            b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
-            matches(a, b)
-        "#, Boolean(true));
-    }
-
-    #[test]
-    fn test_match_not_1() {
-        // test when things do not match 1
-        verify_exact(r#"
-            a := { first: "Tom", last: "Lane" }
-            b := { first: "Jerry", last: "Lane" }
-            matches(a, b)
-        "#, Boolean(false));
-    }
-
-    #[test]
-    fn test_match_not_2() {
-        // test when things do not match 2
-        verify_exact(r#"
-            a := { key: "123", values: [1, 74, 88] }
-            b := { key: "123", values: [1, 74, 88, 0] }
-            matches(a, b)
-        "#, Boolean(false));
     }
 
     #[test]
@@ -714,7 +752,7 @@ mod tests {
         let phys_columns = Column::from_parameters(&columns).unwrap();
 
         // set up the interpreter
-        verify_table_exact_with_ids(r#"
+        verify_exact_table_with_ids(r#"
             [+] stocks := ns("interpreter.select.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
@@ -735,33 +773,6 @@ mod tests {
             "| 2  | BIZ    | NYSE     | 23.66     |",
             "|------------------------------------|"
         ]);
-    }
-
-    #[test]
-    fn test_type_of() {
-        verify_exact("type_of([true, false])", StringValue("Array<Boolean>".into()));
-        verify_exact("type_of([12, 76, 444])", StringValue("Array<i64>".into()));
-        verify_exact("type_of(['ciao', 'hello', 'world'])", StringValue("Array<String(5)>".into()));
-        verify_exact("type_of(false)", StringValue("Boolean".into()));
-        verify_exact("type_of(true)", StringValue("Boolean".into()));
-        verify_exact("type_of(util::now())", StringValue("Date".into()));
-        verify_exact("type_of(fn(a, b) => a + b)", StringValue("fn(a, b)".into()));
-        verify_exact("type_of(1234)", StringValue("i64".into()));
-        verify_exact("type_of(12.394)", StringValue("f64".into()));
-        verify_exact("type_of('1234')", StringValue("String(4)".into()));
-        verify_exact(r#"type_of("abcde")"#, StringValue("String(5)".into()));
-        verify_exact(r#"type_of({symbol:"ABC"})"#,
-                     StringValue(r#"struct(symbol: String(3) = "ABC")"#.into()));
-        verify_exact(r#"type_of(ns("a.b.c"))"#, StringValue("Table()".into()));
-        verify_exact(r#"type_of(table(
-            symbol: String(8),
-            exchange: String(8),
-            last_sale: f64
-        ))"#, StringValue("Table(symbol: String(8), exchange: String(8), last_sale: f64)".into()));
-        verify_exact("type_of(util::uuid())", StringValue("u128".into()));
-        verify_exact("type_of(my_var)", StringValue("".into()));
-        verify_exact("type_of(null)", StringValue("".into()));
-        verify_exact("type_of(undefined)", StringValue("".into()));
     }
 
     #[test]

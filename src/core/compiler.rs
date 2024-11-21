@@ -3,6 +3,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
+use std::convert::From;
 
 use crate::errors::Errors;
 use crate::expression::Conditions::*;
@@ -89,6 +90,20 @@ impl Compiler {
 
         // handle postfix operator?
         match ts.next() {
+            // keyword operator "between"
+            (Some(Atom { text: kw, .. }), ts) if kw == "between" => {
+                let (expr1, ts) = self.compile_next(ts)?;
+                let ts = ts.expect("and")?;
+                let (expr2, ts) = self.compile_next(ts)?;
+                Ok((Condition(Between(Box::new(expr), Box::new(expr1), Box::new(expr2))), ts))
+            }
+            // keyword operator "betwixt"
+            (Some(Atom { text: kw, .. }), ts) if kw == "betwixt" => {
+                let (expr1, ts) = self.compile_next(ts)?;
+                let ts = ts.expect("and")?;
+                let (expr2, ts) = self.compile_next(ts)?;
+                Ok((Condition(Betwixt(Box::new(expr), Box::new(expr1), Box::new(expr2))), ts))
+            }
             // keyword operator "is"
             (Some(Atom { text: kw, .. }), ts) if kw == "is" => {
                 let (expr1, ts) = self.compile_next(ts)?;
@@ -98,6 +113,11 @@ impl Compiler {
             (Some(Atom { text: kw, .. }), ts) if kw == "isnt" => {
                 let (expr1, ts) = self.compile_next(ts)?;
                 Ok((Condition(NotEqual(Box::new(expr), Box::new(expr1))), ts))
+            }
+            // keyword operator "like"
+            (Some(Atom { text: kw, .. }), ts) if kw == "like" => {
+                let (expr1, ts) = self.compile_next(ts)?;
+                Ok((Condition(Like(Box::new(expr), Box::new(expr1))), ts))
             }
             // non-barrier operator: "," | ";"
             (Some(Operator { is_barrier, .. }), _) if !is_barrier => {
@@ -489,7 +509,7 @@ impl Compiler {
     ///   ex: import "os"
     ///   ex: import str::format
     ///   ex: import oxide::[eval, serve, version]
-    ///   ex: import lang, "os", str::format, oxide::[eval, serve, version]
+    ///   ex: import "os", str::format, oxide::[eval, serve, version]
     fn parse_keyword_import(
         &mut self,
         mut ts: TokenSlice,
@@ -505,10 +525,10 @@ impl Compiler {
                 Literal(StringValue(pkg)) => ops.push(ImportOps::Everything(pkg)),
                 // import vm
                 Variable(pkg) => ops.push(ImportOps::Everything(pkg)),
-                // import oxide::serve | oxide::[eval, serve, version]
+                // import www::serve | oxide::[eval, serve, version]
                 Extraction(a, b) => {
                     match (*a, *b) {
-                        // import oxide::serve
+                        // import www::serve
                         (Variable(pkg), Variable(func)) =>
                             ops.push(ImportOps::Selection(pkg, vec![func])),
                         // import oxide::[eval, serve, version]
@@ -1126,39 +1146,65 @@ mod tests {
     }
 
     #[test]
+    fn test_between() {
+        assert_eq!(
+            Compiler::compile_script("20 between 1 and 20").unwrap(),
+            Condition(Between(
+                Box::new(Literal(Number(I64Value(20)))),
+                Box::new(Literal(Number(I64Value(1)))),
+                Box::new(Literal(Number(I64Value(20)))),
+            )));
+    }
+
+    #[test]
+    fn test_betwixt() {
+        assert_eq!(
+            Compiler::compile_script("20 betwixt 1 and 21").unwrap(),
+            Condition(Betwixt(
+                Box::new(Literal(Number(I64Value(20)))),
+                Box::new(Literal(Number(I64Value(1)))),
+                Box::new(Literal(Number(I64Value(21)))),
+            )));
+    }
+
+    #[test]
     fn test_bitwise_and() {
-        assert_eq!(Compiler::compile_script("20 & 3").unwrap(),
-                   BitwiseOp(BitwiseOps::And(
-                       Box::new(Literal(Number(I64Value(20)))),
-                       Box::new(Literal(Number(I64Value(3)))),
-                   )));
+        assert_eq!(
+            Compiler::compile_script("20 & 3").unwrap(),
+            BitwiseOp(BitwiseOps::And(
+                Box::new(Literal(Number(I64Value(20)))),
+                Box::new(Literal(Number(I64Value(3)))),
+            )));
     }
 
     #[test]
     fn test_bitwise_or() {
-        assert_eq!(Compiler::compile_script("20 | 3").unwrap(),
-                   BitwiseOp(BitwiseOps::Or(
-                       Box::new(Literal(Number(I64Value(20)))),
-                       Box::new(Literal(Number(I64Value(3)))),
-                   )));
+        assert_eq!(
+            Compiler::compile_script("20 | 3").unwrap(),
+            BitwiseOp(BitwiseOps::Or(
+                Box::new(Literal(Number(I64Value(20)))),
+                Box::new(Literal(Number(I64Value(3)))),
+            )));
     }
 
     #[test]
     fn test_bitwise_shl() {
-        assert_eq!(Compiler::compile_script("20 << 3").unwrap(),
-                   BitwiseOp(BitwiseOps::ShiftLeft(
-                       Box::new(Literal(Number(I64Value(20)))),
-                       Box::new(Literal(Number(I64Value(3)))),
-                   )));
+        assert_eq!(
+            Compiler::compile_script("20 << 3").unwrap(),
+            BitwiseOp(BitwiseOps::ShiftLeft(
+                Box::new(Literal(Number(I64Value(20)))),
+                Box::new(Literal(Number(I64Value(3)))),
+            )));
     }
 
     #[test]
     fn test_bitwise_shr() {
-        assert_eq!(Compiler::compile_script("20 >> 3").unwrap(),
-                   BitwiseOp(BitwiseOps::ShiftRight(
-                       Box::new(Literal(Number(I64Value(20)))),
-                       Box::new(Literal(Number(I64Value(3)))),
-                   )));
+        assert_eq!(
+            Compiler::compile_script("20 >> 3").unwrap(),
+            BitwiseOp(BitwiseOps::ShiftRight(
+                Box::new(Literal(Number(I64Value(20)))),
+                Box::new(Literal(Number(I64Value(3)))),
+            )));
     }
 
     #[test]
@@ -1169,20 +1215,19 @@ mod tests {
         let code = Compiler::compile_script(r#"
             fn add(a, b) => a + b
         "#).unwrap();
-        assert_eq!(code,
-                   SetVariable("add".to_string(), Box::new(
-                       Literal(Function {
-                           params: vec![
-                               Parameter::new("a", None, None),
-                               Parameter::new("b", None, None),
-                           ],
-                           code: Box::new(Plus(Box::new(
-                               Variable("a".into())
-                           ), Box::new(
-                               Variable("b".into())
-                           ))),
-                       })
-                   ))
+        assert_eq!(code, SetVariable("add".to_string(), Box::new(
+            Literal(Function {
+                params: vec![
+                    Parameter::new("a", None, None),
+                    Parameter::new("b", None, None),
+                ],
+                code: Box::new(Plus(Box::new(
+                    Variable("a".into())
+                ), Box::new(
+                    Variable("b".into())
+                ))),
+            })
+        ))
         )
     }
 
@@ -1194,18 +1239,17 @@ mod tests {
         let code = Compiler::compile_script(r#"
             fn (a, b) => a * b
         "#).unwrap();
-        assert_eq!(code,
-                   Literal(Function {
-                       params: vec![
-                           Parameter::new("a", None, None),
-                           Parameter::new("b", None, None),
-                       ],
-                       code: Box::new(Multiply(Box::new(
-                           Variable("a".into())
-                       ), Box::new(
-                           Variable("b".into())
-                       ))),
-                   })
+        assert_eq!(code, Literal(Function {
+            params: vec![
+                Parameter::new("a", None, None),
+                Parameter::new("b", None, None),
+            ],
+            code: Box::new(Multiply(Box::new(
+                Variable("a".into())
+            ), Box::new(
+                Variable("b".into())
+            ))),
+        })
         )
     }
 
@@ -1393,6 +1437,16 @@ mod tests {
                        ("last_sale".to_string(), Literal(Number(F64Value(16.79)))),
                    ])
         );
+    }
+
+    #[test]
+    fn test_like() {
+        assert_eq!(
+            Compiler::compile_script("'Hello' like 'H.ll.'").unwrap(),
+            Condition(Like(
+                Box::new(Literal(StringValue("Hello".into()))),
+                Box::new(Literal(StringValue("H.ll.".into()))),
+            )));
     }
 
     #[test]

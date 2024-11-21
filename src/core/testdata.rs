@@ -87,26 +87,20 @@ pub fn make_table_file(
     (ns.get_table_file_path(), file, table_columns, record_size)
 }
 
-pub fn verify_whence(mut interpreter: Interpreter, code: &str, expected: TypedValue) -> Interpreter {
-    let actual = interpreter.evaluate(code).unwrap();
-    assert_eq!(actual, expected);
-    interpreter
-}
-
 pub fn verify_exact(code: &str, expected: TypedValue) {
     let mut interpreter = Interpreter::new();
     let actual = interpreter.evaluate(code).unwrap();
     assert_eq!(actual, expected);
 }
 
-pub fn verify_table_exact(code: &str, expected: Vec<&str>) {
+pub fn verify_exact_table(code: &str, expected: Vec<&str>) {
     let mut interpreter = Interpreter::new();
     let actual = interpreter.evaluate(code)
         .unwrap().to_table().unwrap();
     assert_eq!(TableRenderer::from_table(&actual), expected);
 }
 
-pub fn verify_table_exact_with_ids(code: &str, expected: Vec<&str>) {
+pub fn verify_exact_table_with_ids(code: &str, expected: Vec<&str>) {
     let mut interpreter = Interpreter::new();
     let result = interpreter.evaluate(code)
         .unwrap().to_table().unwrap();
@@ -115,13 +109,26 @@ pub fn verify_table_exact_with_ids(code: &str, expected: Vec<&str>) {
     assert_eq!(actual, expected);
 }
 
+pub fn verify_exact_table_where(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: Vec<&str>
+) -> Interpreter {
+    let result = interpreter.evaluate(code)
+        .unwrap().to_table().unwrap();
+    let actual = TableRenderer::from_table_with_ids(&result).unwrap();
+    for s in &actual { println!("{}", s) }
+    assert_eq!(actual, expected);
+    interpreter
+}
+
 pub fn verify_when(code: &str, f: fn(TypedValue) -> bool) {
     let mut interpreter = Interpreter::new();
     let actual = interpreter.evaluate(code).unwrap();
     assert!(f(actual));
 }
 
-pub fn verify_where(
+pub fn verify_whence(
     interpreter: Interpreter,
     code: &str,
     f: fn(TypedValue) -> bool,
@@ -130,6 +137,12 @@ pub fn verify_where(
     let actual = my_interpreter.evaluate(code).unwrap();
     assert!(f(actual));
     my_interpreter
+}
+
+pub fn verify_where(mut interpreter: Interpreter, code: &str, expected: TypedValue) -> Interpreter {
+    let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual, expected);
+    interpreter
 }
 
 /////////////////////////////////////////////////////////////

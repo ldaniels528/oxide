@@ -28,6 +28,7 @@ pub trait Structure {
     /// Encodes the [Structure] into a byte vector
     fn encode(&self) -> std::io::Result<Vec<u8>>;
 
+    /// Retrieves a field by name
     fn get(&self, name: &str) -> TypedValue {
         self.get_tuples().iter()
             .find(|(my_name, _)| *my_name == *name)
@@ -35,12 +36,16 @@ pub trait Structure {
             .unwrap_or(Undefined)
     }
 
+    /// Retrieves the structure parameters
     fn get_parameters(&self) -> Vec<Parameter>;
 
+    /// Retrieves the state of the structure as key-value pairs
     fn get_tuples(&self) -> Vec<(String, TypedValue)>;
 
+    /// Retrieves the structure values
     fn get_values(&self) -> Vec<TypedValue>;
 
+    /// Writes the internal state to the [Machine]
     fn pollute(&self, ms0: Machine) -> Machine {
         // add all scope variables (includes functions)
         let tuples = self.get_tuples();
@@ -52,6 +57,7 @@ pub trait Structure {
         ms1.with_variable("self", StructureSoft(SoftStructure::from_tuples(tuples)))
     }
 
+    /// Decompiles the structure back to source code
     fn to_code(&self) -> String;
 
     fn to_hash_map(&self) -> HashMap<String, Value> {
@@ -75,6 +81,8 @@ pub trait Structure {
             .unwrap_or(Vec::new());
         ModelRowCollection::from_rows(columns, vec![row])
     }
+
+    fn update(&self, name: &str, value: TypedValue) -> TypedValue;
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -247,6 +255,10 @@ impl Structure for HardStructure {
     fn to_table(&self) -> ModelRowCollection {
         ModelRowCollection::from_rows(self.columns.clone(), vec![self.to_row()])
     }
+
+    fn update(&self, name: &str, value: TypedValue) -> TypedValue {
+        StructureHard(self.with_variable(name, value))
+    }
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -347,6 +359,10 @@ impl Structure for SoftStructure {
                 m
             });
         Value::Object(mapping)
+    }
+
+    fn update(&self, name: &str, value: TypedValue) -> TypedValue {
+        StructureSoft(self.with_variable(name, value))
     }
 }
 

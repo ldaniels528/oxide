@@ -56,6 +56,7 @@ pub enum Conditions {
     GreaterThan(Box<Expression>, Box<Expression>),
     LessOrEqual(Box<Expression>, Box<Expression>),
     LessThan(Box<Expression>, Box<Expression>),
+    Like(Box<Expression>, Box<Expression>),
     Not(Box<Expression>),
     NotEqual(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
@@ -273,7 +274,7 @@ impl Expression {
     }
 
     pub fn infer_type(&self) -> DataType {
-        Inferences::infer_expr(self)
+        Inferences::infer(self)
     }
 
     /// Indicates whether the expression is a conditional expression

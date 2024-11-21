@@ -7,3 +7,5 @@ oxide_db/
 target/
 oxide_db
 out/
+quote.json
+temp_secret.txt

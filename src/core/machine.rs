@@ -6,6 +6,7 @@ use actix_web::web::scope;
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
 use log::{error, info};
+use regex::Error;
 use reqwest::multipart::{Form, Part};
 use reqwest::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
@@ -91,7 +92,6 @@ impl Machine {
     /// and default imports
     pub fn new_platform() -> Self {
         Self::new()
-            .import_module_by_name("lang")
     }
 
     ////////////////////////////////////////////////////////////////
@@ -178,14 +178,16 @@ impl Machine {
                 self.do_inline_2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.do_index_of_collection(a, b),
             Extraction(a, b) => self.do_extraction(a, b),
-            ExtractPostfix(a, b) => self.do_postfix_method_call(a, b),
+            ExtractPostfix(a, b) => self.do_function_call_postfix(a, b),
             Factorial(a) => self.do_inline_1(a, |aa| aa.factorial()),
             Feature { title, scenarios } => self.do_feature(title, scenarios),
             From(src) => self.do_table_row_query(src, &True, Undefined),
             FunctionCall { fx, args } =>
                 Ok(self.do_function_call(fx, args)),
-            HTTP { .. } =>
-                Ok((self.to_owned(), ErrorValue(AsynchronousContextRequired))),
+            HTTP { method, url, body, headers, multipart } => {
+                let rt = Runtime::new()?;
+                rt.block_on(self.do_http(method, url, body, headers, multipart))
+            }
             If { condition, a, b } =>
                 self.do_if_then_else(condition, a, b),
             Import(ops) => Ok(self.do_imports(ops)),
@@ -254,6 +256,8 @@ impl Machine {
                 self.do_inline_2(a, b, |aa, bb| Boolean(aa < bb)),
             LessOrEqual(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| Boolean(aa <= bb)),
+            Like(text, pattern) =>
+                self.do_like(text, pattern),
             Not(a) => self.do_inline_1(a, |aa| !aa),
             NotEqual(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| Boolean(aa != bb)),
@@ -465,52 +469,47 @@ impl Machine {
         object: &Expression,
         field: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, obj) = self.evaluate(object)?;
-        match obj {
-            ErrorValue(err) => Ok((ms, ErrorValue(err))),
-            Null => fail(format!("Cannot evaluate {}::{}", Null, field.to_code())),
-            StructureHard(structure) =>
-                match field {
-                    // method call: math::compute(5, 8)
-                    FunctionCall { fx, args } =>
-                        Ok(structure.pollute(ms).do_function_call(fx, args)),
-                    // stock::symbol
-                    Variable(name) => Ok((ms, structure.get(name))),
-                    z => fail(format!("Illegal field {} for structure {}",
-                                      z.to_code(), StructureHard(structure.to_owned()).to_code()))
+        let ms = self.clone();
+        match object {
+            Variable(var_name) =>
+                match ms.get(var_name) {
+                    None => fail(format!("Variable '{}' was not found", var_name)),
+                    Some(object_v) =>
+                        match object_v {
+                            ErrorValue(err) => Ok((ms, ErrorValue(err))),
+                            Null => fail(format!("Cannot evaluate {}::{}", Null, field.to_code())),
+                            StructureHard(structure) =>
+                                self.do_extraction_structure(var_name, Box::from(structure), field),
+                            StructureSoft(structure) =>
+                                self.do_extraction_structure(var_name, Box::from(structure), field),
+                            Undefined => fail(format!("Cannot evaluate {}::{}", Undefined, field.to_code())),
+                            z => fail(format!("Illegal structure {}", z.to_code()))
+                        }
                 }
-            StructureSoft(structure) =>
-                match field {
-                    // method call: math::compute(5, 8)
-                    FunctionCall { fx, args } =>
-                        Ok(structure.pollute(ms).do_function_call(fx, args)),
-                    // { symbol:"AAA", price:123.45 }::symbol
-                    Variable(name) => Ok((ms, structure.get(name))),
-                    z =>
-                        fail(format!("Illegal field {} for structure {}",
-                                     z.to_code(), structure.to_code()))
-                }
-            Undefined => fail(format!("Cannot evaluate {}::{}", Undefined, field.to_code())),
-            z => fail(format!("Illegal structure {}", z.to_code()))
+            z => fail_expr(Syntax(z.to_code()).to_string(), &z)
         }
     }
 
-    /// Executes a postfix method call
-    /// e.g. "hello":::left(5)
-    fn do_postfix_method_call(
+    fn do_extraction_structure(
         &self,
-        object: &Expression,
+        var_name: &str,
+        structure: Box<dyn Structure>,
         field: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
+        let ms = self.clone();
         match field {
-            FunctionCall { fx, args } => {
-                // "hello":::left(5) => left("hello", 5)
-                let mut enriched_args = Vec::new();
-                enriched_args.push(object.to_owned());
-                enriched_args.extend(args.to_owned());
-                Ok(self.do_function_call(fx, &enriched_args))
+            // math::compute(5, 8)
+            FunctionCall { fx, args } =>
+                Ok(structure.pollute(ms).do_function_call(fx, args)),
+            // stock::last_sale := 24.11
+            SetVariable(name, expr) => {
+                let (ms, value) = ms.evaluate(expr)?;
+                Ok((ms.with_variable(var_name, structure.update(name, value)), Outcome(Ack)))
             }
-            z => fail(format!("{} is not a function call", z.to_code()))
+            // stock::symbol
+            Variable(name) => Ok((ms, structure.get(name))),
+            z => fail(format!("Illegal field '{}' for structure {}",
+                              z.to_code(), var_name))
         }
     }
 
@@ -583,6 +582,19 @@ impl Machine {
         Ok((ms, TableValue(report)))
     }
 
+    fn do_function_arguments(
+        &self,
+        params: Vec<Parameter>,
+        args: Vec<TypedValue>,
+    ) -> Self {
+        assert_eq!(params.len(), args.len());
+        params.iter().zip(args.iter())
+            .fold(self.to_owned(), |machine, (c, v)|
+                machine.with_variable(c.get_name(), v.to_owned()))
+    }
+
+    /// Executes a function call
+    /// e.g. factorial(5)
     fn do_function_call(
         &self,
         fx: &Expression,
@@ -606,15 +618,23 @@ impl Machine {
         }
     }
 
-    fn do_function_arguments(
+    /// Executes a postfix function call
+    /// e.g. "hello":::left(5)
+    fn do_function_call_postfix(
         &self,
-        params: Vec<Parameter>,
-        args: Vec<TypedValue>,
-    ) -> Self {
-        assert_eq!(params.len(), args.len());
-        params.iter().zip(args.iter())
-            .fold(self.to_owned(), |machine, (c, v)|
-                machine.with_variable(c.get_name(), v.to_owned()))
+        object: &Expression,
+        field: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match field {
+            FunctionCall { fx, args } => {
+                // "hello":::left(5) => left("hello", 5)
+                let mut enriched_args = Vec::new();
+                enriched_args.push(object.to_owned());
+                enriched_args.extend(args.to_owned());
+                Ok(self.do_function_call(fx, &enriched_args))
+            }
+            z => fail(format!("{} is not a function call", z.to_code()))
+        }
     }
 
     async fn do_http(
@@ -980,6 +1000,25 @@ impl Machine {
         let (machine, bb) = machine.evaluate(b)?;
         let (machine, cc) = machine.evaluate(c)?;
         Ok((machine, f(aa, bb, cc)))
+    }
+
+    fn do_like(
+        &self,
+        text: &Expression,
+        pattern: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        use regex::Regex;
+        let (ms, text_v) = self.evaluate(text)?;
+        let (ms, pattern_v) = ms.evaluate(pattern)?;
+        match (text_v, pattern_v) {
+            (StringValue(text), StringValue(pattern)) =>
+                match Regex::new(pattern.as_str()) {
+                    Ok(pattern) => Ok((ms, Boolean(pattern.is_match(text.as_str())))),
+                    Err(err) => Ok((ms, ErrorValue(Exact(err.to_string()))))
+                }
+            (a, b) =>
+                Ok((ms, ErrorValue(Syntax(format!("{} like {}", a.to_code(), b.to_code())))))
+        }
     }
 
     fn do_structure_soft(
@@ -2062,7 +2101,8 @@ mod tests {
             ],
         };
 
-        let machine = Machine::new_platform();
+        let machine = Machine::new_platform()
+            .import_module_by_name("oxide");
         let (_, result) = machine.evaluate(&model).unwrap();
         let table = result.to_table().unwrap();
         let columns = table.get_columns();
