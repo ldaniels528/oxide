@@ -49,15 +49,6 @@ impl ByteRowCollection {
         Self::new(columns, encoded_rows)
     }
 
-    pub fn get_rows(&self) -> Vec<Row> {
-        let mut rows = Vec::new();
-        for buf in &self.row_data {
-            let (row, rmd) = Row::decode(buf, &self.columns);
-            if rmd.is_allocated { rows.push(row) }
-        }
-        rows
-    }
-
     /// Creates a new [ByteRowCollection] from the specified row data
     pub fn new(columns: Vec<Column>, rows: Vec<Vec<u8>>) -> Self {
         ByteRowCollection {
@@ -73,6 +64,15 @@ impl RowCollection for ByteRowCollection {
     fn get_columns(&self) -> &Vec<Column> { &self.columns }
 
     fn get_record_size(&self) -> usize { self.record_size }
+
+    fn get_rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        for buf in &self.row_data {
+            let (row, rmd) = Row::decode(buf, &self.columns);
+            if rmd.is_allocated { rows.push(row) }
+        }
+        rows
+    }
 
     fn len(&self) -> std::io::Result<usize> { Ok(self.watermark) }
 
@@ -170,7 +170,7 @@ impl RowCollection for ByteRowCollection {
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
-    use crate::numbers::NumberValue::U64Value;
+    use crate::numbers::Numbers::U64Value;
     use crate::row_collection::RowCollection;
     use crate::table_columns::Column;
     use crate::testdata::{make_quote, make_quote_columns};

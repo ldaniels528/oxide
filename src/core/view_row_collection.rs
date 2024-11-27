@@ -33,6 +33,15 @@ impl RowCollection for ViewRowCollection {
 
     fn get_record_size(&self) -> usize { self.host.get_record_size() }
 
+    fn get_rows(&self) -> Vec<Row> {
+        self.iter().filter(|r| {
+            let ms = Machine::empty();
+            if let Ok((_, TypedValue::Boolean(true))) = ms.evaluate_cond(&self.condition) {
+                true
+            } else { false }
+        }).collect()
+    }
+
     fn len(&self) -> std::io::Result<usize> { self.host.len() }
 
     fn overwrite_field(
@@ -118,7 +127,7 @@ mod tests {
     use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::NumberValue::F64Value;
+    use crate::numbers::Numbers::F64Value;
     use crate::row_collection::RowCollection;
     use crate::table_columns::Column;
     use crate::testdata::{make_quote, make_quote_parameters};
@@ -134,7 +143,7 @@ mod tests {
         );
 
         let rows = vrc.read_active_rows().unwrap();
-        Machine::show(vrc.get_columns().clone(), rows.to_owned());
+        Machine::show(vrc.get_columns(), &rows);
 
         let results = rows.iter()
             .map(|row| row.get_values())
@@ -158,7 +167,7 @@ mod tests {
             Box::new(Variable("last_sale".into())),
             Box::new(Literal(Number(F64Value(20.)))),
         )).unwrap();
-        Machine::show(vrc.get_columns().to_owned(), rows.to_owned());
+        Machine::show(vrc.get_columns(), &rows);
 
         let results = rows.iter()
             .map(|row| row.get_values())
@@ -190,7 +199,7 @@ mod tests {
     fn create_data_set() -> ModelRowCollection {
         let parameters = make_quote_parameters();
         let phys_columns = Column::from_parameters(&parameters).unwrap();
-        ModelRowCollection::from_rows(phys_columns.clone(), vec![
+        ModelRowCollection::from_rows(&phys_columns, &vec![
             make_quote(0, "IBM", "NYSE", 21.22),
             make_quote(1, "ATT", "NYSE", 98.44),
             make_quote(2, "HOCK", "AMEX", 0.0076),

@@ -9,13 +9,13 @@ use rand::distributions::Uniform;
 use rand::prelude::ThreadRng;
 use rand::{thread_rng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
-
+use serde_json::Value;
 use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
-use crate::numbers::NumberValue::{F64Value, U64Value};
+use crate::numbers::Numbers::{F64Value, U64Value};
 use crate::parameter::Parameter;
 use crate::rows::Row;
 use crate::table_columns::Column;
@@ -91,6 +91,18 @@ pub fn verify_exact(code: &str, expected: TypedValue) {
     let mut interpreter = Interpreter::new();
     let actual = interpreter.evaluate(code).unwrap();
     assert_eq!(actual, expected);
+}
+
+pub fn verify_exact_text(code: &str, expected: &str) {
+    let mut interpreter = Interpreter::new();
+    let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual.to_code(), expected);
+}
+
+pub fn verify_exact_json(code: &str, expected: Value) {
+    let mut interpreter = Interpreter::new();
+    let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual.to_json(), expected);
 }
 
 pub fn verify_exact_table(code: &str, expected: Vec<&str>) {

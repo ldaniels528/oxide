@@ -6,7 +6,7 @@ use shared_lib::tabulate_cells;
 
 use crate::cursor::Cursor;
 use crate::model_row_collection::ModelRowCollection;
-use crate::numbers::NumberValue::U64Value;
+use crate::numbers::Numbers::U64Value;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
@@ -33,15 +33,15 @@ impl TableRenderer {
     }
 
     /// Transforms the [Vec<Row>] into a textual table
-    pub fn from_rows(columns: Vec<Column>, rows: Vec<Row>) -> Vec<String> {
+    pub fn from_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> Vec<String> {
         Self::from_collection(Box::new(ModelRowCollection::from_rows(columns, rows)))
     }
 
     /// Transforms the [RowCollection] into a textual table
     pub fn from_table(rc: &Box<dyn RowCollection>) -> Vec<String> {
-        let columns = rc.get_columns().to_owned();
+        let columns = rc.get_columns();
         let rows = rc.read_active_rows().unwrap_or(vec![]);
-        Self::from_rows(columns, rows)
+        Self::from_rows(columns, &rows)
     }
 
     /// Transforms the [RowCollection] into a textual table
@@ -61,7 +61,7 @@ impl TableRenderer {
             })
             .collect();
 
-        Ok(Self::from_rows(columns, rows))
+        Ok(Self::from_rows(&columns, &rows))
     }
 
     fn tabulate_body_cells_from_collection(rc: Box<dyn RowCollection>) -> Vec<Vec<String>> {

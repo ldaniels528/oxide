@@ -19,12 +19,13 @@ use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::U64Kind;
-use crate::numbers::NumberValue::U64Value;
+use crate::numbers::Numbers::U64Value;
 use crate::outcomes::Outcomes;
-use crate::platform::PlatformFunctions;
+use crate::platform::PlatformOps;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::Column;
+use crate::table_values::TableValues::Model;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 
@@ -121,6 +122,10 @@ pub trait RowCollection: Debug {
         (id * self.get_record_size()) as u64
     }
 
+    fn count(&self, f: fn(Row) -> bool) -> u64 {
+        self.iter().fold(0, |n, row| if f(row) { n + 1 } else { n })
+    }
+
     fn create_related_structure(
         &self,
         columns: Vec<Column>,
@@ -159,7 +164,7 @@ pub trait RowCollection: Debug {
 
     /// Returns a table that describes the structure of the host table
     fn describe(&self) -> TypedValue {
-        let params = PlatformFunctions::get_util_describe_parameters();
+        let params = PlatformOps::get_tools_describe_parameters();
         let mut mrc = ModelRowCollection::construct(&params);
         for column in self.get_columns() {
             mrc.append_row(Row::new(0, vec![
@@ -169,7 +174,7 @@ pub trait RowCollection: Debug {
                 Boolean(true),
             ]));
         }
-        TableValue(mrc)
+        TableValue(Model(mrc))
     }
 
     fn examine_range(&self, range: std::ops::Range<usize>) -> TypedValue {
@@ -196,14 +201,14 @@ pub trait RowCollection: Debug {
             let meta = meta.with_allocated(true);
             row_data.push((row, meta));
         }
-        TableValue(ModelRowCollection::with_rows(columns, row_data))
+        TableValue(Model(ModelRowCollection::with_rows(columns, row_data)))
     }
 
     /// Reads active and inactive (deleted) rows
     fn examine_rows(&self) -> std::io::Result<Vec<Row>> {
         match self.examine_range(self.get_indices()?) {
             ErrorValue(err) => return fail(err.to_string()),
-            TableValue(mrc) => Ok(mrc.get_rows()),
+            TableValue(rcv) => Ok(rcv.get_rows()),
             z => fail_value("Table", &z)
         }
     }
@@ -449,6 +454,9 @@ pub trait RowCollection: Debug {
     /// returns the record size of the device
     fn get_record_size(&self) -> usize;
 
+    /// Returns all active rows
+    fn get_rows(&self) -> Vec<Row>;
+
     /// Returns true, if the given item matches a [Row] found within it
     fn index_of(&self, item: &Row) -> TypedValue {
         let mut it = self.iter();
@@ -585,7 +593,7 @@ pub trait RowCollection: Debug {
     /// returns a reverse-order copy of the table
     fn reverse(&self) -> std::io::Result<Box<dyn RowCollection>> {
         match self.reverse_table_value() {
-            TableValue(rc) => Ok(Box::new(rc)),
+            TableValue(rcv) => Ok(Box::new(rcv)),
             ErrorValue(err) => fail(err.to_string()),
             z => fail(format!("Expected table value near {}", z.unwrap_value()))
         }
@@ -595,13 +603,13 @@ pub trait RowCollection: Debug {
     fn reverse_table_value(&self) -> TypedValue {
         use TypedValue::{ErrorValue, TableValue};
         let mrc = ModelRowCollection::with_rows(self.get_columns().to_owned(), Vec::new());
-        self.fold_right(TableValue(mrc), |tv, row| {
+        self.fold_right(TableValue(Model(mrc)), |tv, row| {
             match tv {
                 ErrorValue(message) => return ErrorValue(message),
-                TableValue(mut rc) =>
-                    match rc.append_row(row) {
+                TableValue(mut rcv) =>
+                    match rcv.append_row(row) {
                         ErrorValue(message) => return ErrorValue(message),
-                        _ => TableValue(rc),
+                        _ => TableValue(rcv),
                     }
                 z => return ErrorValue(InvalidNamespace(z.unwrap_value()))
             }
@@ -789,26 +797,27 @@ impl dyn RowCollection {
     }
 }
 
-// Unit tests
+/// Unit tests
 #[cfg(test)]
 mod tests {
+    use chrono::Local;
+    use num_traits::ToPrimitive;
+    use rand::{thread_rng, Rng, RngCore};
+    use shared_lib::cnv_error;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use rand::{thread_rng, Rng, RngCore};
-
-    use shared_lib::cnv_error;
-
+    use super::*;
     use crate::expression::Conditions::Equal;
     use crate::expression::Expression::{Literal, Variable};
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
-    use crate::numbers::NumberValue::F64Value;
+    use crate::numbers::Numbers::F64Value;
     use crate::outcomes::Outcomes::RowsAffected;
+    use crate::parameter::Parameter;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::*;
-
-    use super::*;
+    use crate::table_values::TableValues;
 
     #[test]
     fn test_from_bytes() {
@@ -845,7 +854,7 @@ mod tests {
 
     #[test]
     fn test_condition_exists_in_table() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // append some rows to the host table (rc)
             assert_eq!(Outcome(Outcomes::RowsAffected(4)), rc.append_rows(vec![
                 make_quote(0, "HOCK", "AMEX", 0.0076),
@@ -865,6 +874,8 @@ mod tests {
                 row.get(1),
                 StringValue(s) if s.starts_with("OTC")
             )), Boolean(false));
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -873,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_write_then_read_row() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write a new row
             let row = make_quote(2, "AMD", "NYSE", 88.78);
             assert_eq!(rc.overwrite_row(row.get_id(), row.to_owned()), Outcome(RowsAffected(1)));
@@ -882,6 +893,8 @@ mod tests {
             let (new_row, meta) = rc.read_row(row.get_id()).unwrap();
             assert!(meta.is_allocated);
             assert_eq!(new_row, row);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -890,7 +903,7 @@ mod tests {
 
     #[test]
     fn test_write_then_read_row_metadata() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write a new row
             let row = make_quote(2, "BOX", "AMEX", 777.9311);
             assert_eq!(rc.overwrite_row(row.get_id(), row.to_owned()), Outcome(RowsAffected(1)));
@@ -898,6 +911,8 @@ mod tests {
             // read and verify the row metadata
             let meta = rc.read_row_metadata(row.get_id()).unwrap();
             assert!(meta.is_allocated);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -906,7 +921,7 @@ mod tests {
 
     #[test]
     fn test_write_then_read_field() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write two rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "INTC", "NYSE", 66.77)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(1, "AMD", "NASDAQ", 77.66)));
@@ -916,6 +931,8 @@ mod tests {
 
             // read the second column of the second row
             assert_eq!(rc.read_field(1, 1), StringValue("NASDAQ".into()));
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -927,7 +944,7 @@ mod tests {
         let columns = make_quote_columns();
 
         // create a second table for which to append
-        let mrc_a = ModelRowCollection::from_rows(columns.clone(), vec![
+        let mrc_a = ModelRowCollection::from_rows(&columns, &vec![
             make_quote(0, "AAB", "NYSE", 22.44),
             make_quote(1, "WXYZ", "NASDAQ", 66.67),
             make_quote(2, "SSO", "NYSE", 123.44),
@@ -935,7 +952,7 @@ mod tests {
         ]);
 
         // create a second table for which to append
-        let mrc_b = ModelRowCollection::from_rows(columns.clone(), vec![
+        let mrc_b = ModelRowCollection::from_rows(&columns, &vec![
             make_quote(0, "IBM", "NYSE", 21.22),
             make_quote(1, "ATT", "NYSE", 98.44),
             make_quote(2, "HOCK", "AMEX", 0.0076),
@@ -943,9 +960,9 @@ mod tests {
         ]);
 
         // perform: table0 + table1
-        let mrc_ab = TableValue(mrc_a) + TableValue(mrc_b);
+        let mrc_ab = TableValue(Model(mrc_a)) + TableValue(Model(mrc_b));
         let rows = match mrc_ab {
-            TableValue(mrc) => mrc.get_rows(),
+            TableValue(rcv) => rcv.get_rows(),
             _ => Vec::new()
         };
 
@@ -964,7 +981,7 @@ mod tests {
 
     #[test]
     fn test_append_table() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // append some rows to the host table (rc)
             assert_eq!(Outcome(RowsAffected(4)), rc.append_rows(vec![
                 make_quote(0, "IBM", "NYSE", 21.22),
@@ -974,7 +991,7 @@ mod tests {
             ]));
 
             // create a second table for which to append
-            let mrc = ModelRowCollection::from_rows(columns.clone(), vec![
+            let mrc = ModelRowCollection::from_rows(&columns, &vec![
                 make_quote(0, "AAA", "NYSE", 22.44),
                 make_quote(1, "XYZ", "NASDAQ", 66.67),
                 make_quote(2, "SSO", "NYSE", 123.44),
@@ -995,6 +1012,8 @@ mod tests {
                 make_quote(6, "SSO", "NYSE", 123.44),
                 make_quote(7, "RAND", "AMEX", 11.33),
             ]);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1003,7 +1022,7 @@ mod tests {
 
     #[test]
     fn test_delete_row() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(1, "ATT", "NYSE", 98.44)));
@@ -1022,6 +1041,8 @@ mod tests {
                 make_quote(1, "ATT", "NYSE", 98.44),
                 make_quote(3, "X", "NASDAQ", 33.33),
             ]);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1030,7 +1051,7 @@ mod tests {
 
     #[test]
     fn test_delete_rows() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(1, "ATT", "NYSE", 98.44)));
@@ -1047,6 +1068,8 @@ mod tests {
                 make_quote(1, "ATT", "NYSE", 98.44),
                 make_quote(3, "X", "NASDAQ", 33.33),
             ]);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1055,7 +1078,7 @@ mod tests {
 
     #[test]
     fn test_describe_table() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write a row
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
 
@@ -1063,6 +1086,7 @@ mod tests {
             let mrc = rc.describe().to_table().unwrap();
             let mrc_columns = mrc.get_columns().to_owned();
             let mrc_rows = mrc.read_active_rows().unwrap();
+            let count = rc.count(|_| true);
 
             for s in TableRenderer::from_collection(rc) {
                 println!("{}", s)
@@ -1091,6 +1115,8 @@ mod tests {
                     Boolean(true),
                 ]),
             ]);
+
+            count
         }
 
         // test the variants
@@ -1099,7 +1125,7 @@ mod tests {
 
     #[test]
     fn test_find() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
@@ -1117,6 +1143,8 @@ mod tests {
                 .map(|row| row.get_values())
                 .unwrap();
             assert_eq!(actual, expected);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1125,7 +1153,7 @@ mod tests {
 
     #[test]
     fn test_find_next() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
@@ -1138,6 +1166,8 @@ mod tests {
                 Some(make_quote(2, "H", "OTC_BB", 0.0076)),
                 rc.find_next(0, |row| row[0] == StringValue("H".to_string())).unwrap()
             );
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1146,7 +1176,7 @@ mod tests {
 
     #[test]
     fn test_fold_left() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
@@ -1157,6 +1187,8 @@ mod tests {
             // resize and verify
             assert_eq!(Number(F64Value(152.99759999999998)),
                        rc.fold_left(Number(F64Value(0.)), |agg, row| agg + row.get(2)));
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1165,7 +1197,7 @@ mod tests {
 
     #[test]
     fn test_fold_left_where() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "ABC", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(0, "XCI", "NYSE", 98.44)));
@@ -1184,6 +1216,8 @@ mod tests {
                     |accum, row| accum.to_owned() + row.get(2)),
                 Number(F64Value(119.66)),
             );
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1192,7 +1226,7 @@ mod tests {
 
     #[test]
     fn test_fold_right() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
@@ -1205,6 +1239,8 @@ mod tests {
                 Number(F64Value(347.00239999999997)),
                 rc.fold_right(Number(F64Value(500.)), |agg, row| agg - row.get(2))
             );
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1213,7 +1249,7 @@ mod tests {
 
     #[test]
     fn test_iterator() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "A", "NYSE", 100.74)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(0, "B", "NYSE", 50.19)));
@@ -1229,6 +1265,8 @@ mod tests {
 
             // fold and verify
             assert_eq!(total, Number(F64Value(202.75)));
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1237,7 +1275,7 @@ mod tests {
 
     #[test]
     fn test_overwrite_field() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
@@ -1251,6 +1289,8 @@ mod tests {
             assert_eq!(rc.read_one(0).unwrap(), Some(
                 make_quote(0, "GE", "AMEX", 21.22)
             ));
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1259,7 +1299,7 @@ mod tests {
 
     #[test]
     fn test_overwrite_field_metadata() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write a row at 0
             assert_eq!(Outcome(RowsAffected(1)), rc.overwrite_row(0, make_quote(0, "GE", "NYSE", 21.22)));
 
@@ -1282,6 +1322,8 @@ mod tests {
                         Number(F64Value(21.22)),
                     ]),
                 ));
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1290,7 +1332,7 @@ mod tests {
 
     #[test]
     fn test_update_row() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
@@ -1322,6 +1364,8 @@ mod tests {
                 make_quote(3, "X", "NASDAQ", 33.33),
                 make_quote(4, "OXIDE", "OSS", 0.00),
             ]);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1330,7 +1374,7 @@ mod tests {
 
     #[test]
     fn test_write_delete_then_read_rows() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(4)), rc.append_rows(vec![
                 make_quote(0, "GE", "NYSE", 21.22),
@@ -1358,6 +1402,8 @@ mod tests {
                 make_quote(1, "ATT", "NYSE", 98.44),
                 make_quote(3, "GG", "NASDAQ", 33.33),
             ]);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1366,7 +1412,7 @@ mod tests {
 
     #[test]
     fn test_push_pop() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             let phys_columns = make_quote_columns();
             assert_eq!(Outcome(RowsAffected(0)), rc.push_row(make_quote(0, "BILL", "AMEX", 12.33)));
             assert_eq!(Outcome(RowsAffected(1)), rc.push_row(make_quote(1, "TED", "NYSE", 56.2456)));
@@ -1377,6 +1423,8 @@ mod tests {
                 rc.pop_row(),
                 StructureHard(make_quote(0, "BILL", "AMEX", 12.33).to_struct(&phys_columns)));
             assert_eq!(rc.pop_row(), Undefined);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1385,7 +1433,7 @@ mod tests {
 
     #[test]
     fn test_read_range() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             let columns = make_quote_parameters();
             let phys_columns = Column::from_parameters(&columns).unwrap();
             rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
@@ -1401,6 +1449,8 @@ mod tests {
                 make_quote(2, "BIZ", "NYSE", 9.775),
                 make_quote(3, "GOTO", "OTC", 0.1442),
             ]);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1409,7 +1459,7 @@ mod tests {
 
     #[test]
     fn test_resize_shrink() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // insert some rows and verify the size
             assert_eq!(Outcome(RowsAffected(1)), rc.overwrite_row(5, make_quote(0, "DUMMY", "OTC_BB", 0.0001)));
             assert_eq!(6, rc.len().unwrap());
@@ -1417,6 +1467,8 @@ mod tests {
             // resize and verify
             assert_eq!(Outcome(Outcomes::Ack), rc.resize(0));
             assert_eq!(rc.len().unwrap(), 0);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1425,7 +1477,7 @@ mod tests {
 
     #[test]
     fn test_resize_grow() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             assert_eq!(Outcome(Outcomes::Ack), rc.resize(0));
 
             // insert some rows and verify the size
@@ -1435,6 +1487,8 @@ mod tests {
             // resize and verify
             let _ = rc.resize(50);
             assert!(rc.len().unwrap() >= 50);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1443,7 +1497,7 @@ mod tests {
 
     #[test]
     fn test_resize_compact() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(4)), rc.append_rows(vec![
                 make_quote(0, "GE", "NYSE", 21.22),
@@ -1480,6 +1534,8 @@ mod tests {
                 make_quote(0, "GE", "NYSE", 21.22),
                 make_quote(1, "H", "OTC_BB", 0.0076),
             ]);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1488,7 +1544,7 @@ mod tests {
 
     #[test]
     fn test_reverse() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             let columns = make_quote_parameters();
             let phys_columns = Column::from_parameters(&columns).unwrap();
             rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
@@ -1506,7 +1562,9 @@ mod tests {
                 make_quote(2, "BIZ", "NYSE", 9.775),
                 make_quote(3, "UNO", "OTC", 0.2456),
                 make_quote(4, "ABC", "AMEX", 12.33),
-            ])
+            ]);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1515,7 +1573,7 @@ mod tests {
 
     #[test]
     fn test_scan_all_rows() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             let columns = make_quote_parameters();
             let phys_columns = Column::from_parameters(&columns).unwrap();
             assert_eq!(Outcome(RowsAffected(5)), rc.append_rows(vec![
@@ -1534,7 +1592,7 @@ mod tests {
             // produce the scan
             let rows = rc.examine_rows().unwrap();
             let scan_columns = rc.get_columns();
-            for s in TableRenderer::from_rows(scan_columns.clone(), rows.to_owned()) { println!("{}", s); }
+            for s in TableRenderer::from_rows(scan_columns, &rows) { println!("{}", s); }
 
             // verify row states: active or inactive
             assert_eq!(rows, vec![
@@ -1543,7 +1601,9 @@ mod tests {
                 make_scan_quote(2, "BIZ", "NYSE", 9.775, false),
                 make_scan_quote(3, "GOTO", "OTC", 0.1442, true),
                 make_scan_quote(4, "XYZ", "NASDAQ", 0.0289, false),
-            ])
+            ]);
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1552,7 +1612,7 @@ mod tests {
 
     #[test]
     fn test_scan_forward() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             let columns = make_quote_parameters();
             let phys_columns = Column::from_parameters(&columns).unwrap();
             assert_eq!(Outcome(RowsAffected(5)), rc.append_rows(vec![
@@ -1581,6 +1641,8 @@ mod tests {
                 scan_row,
                 make_quote(3, "GOTO", "OTC", 0.1442)
             );
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1589,7 +1651,7 @@ mod tests {
 
     #[test]
     fn test_scan_next() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
             assert_eq!(Outcome(RowsAffected(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
             assert_eq!(Outcome(RowsAffected(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
@@ -1602,6 +1664,8 @@ mod tests {
                 Some(make_quote(3, "X", "NASDAQ", 33.33)),
                 rc.scan_next(0, &StringValue("X".into()), 0).unwrap()
             );
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1610,7 +1674,7 @@ mod tests {
 
     #[test]
     fn test_scan_reverse() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             assert_eq!(Outcome(RowsAffected(5)), rc.append_rows(vec![
                 make_quote(0, "TED", "OTC", 0.2456),
                 make_quote(1, "GOTO", "OTC", 0.1442),
@@ -1637,6 +1701,8 @@ mod tests {
                 scan_row,
                 make_quote(1, "GOTO", "OTC", 0.1442)
             );
+
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1645,9 +1711,10 @@ mod tests {
 
     #[test]
     fn test_performance() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             test_write_performance(label, &mut rc, &columns, 10_000).unwrap();
             test_read_performance(label, &rc).unwrap();
+            rc.len().unwrap() as u64
         }
 
         // test the variants
@@ -1675,7 +1742,7 @@ mod tests {
         let elapsed_time = end_time - start_time;
         let elapsed_time_sec = elapsed_time as f64 / 1000.;
         let rpm = total as f64 / elapsed_time as f64;
-        println!("{} wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+        println!("* {} wrote {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
                  label, total, elapsed_time, elapsed_time_sec, rpm);
         Ok(())
     }
@@ -1694,42 +1761,104 @@ mod tests {
         let elapsed_time = end_time - start_time;
         let elapsed_time_sec = elapsed_time as f64 / 1000.;
         let rpm = total as f64 / elapsed_time as f64;
-        println!("{} read {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
+        println!("* {} read {} row(s) in {} msec ({:.2} seconds, {:.2} records/msec)",
                  label, total, elapsed_time, elapsed_time_sec, rpm);
         Ok(())
     }
 
-    fn verify_variants(name: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> ()) {
-        println!("file_variant:");
-        verify_file_variant(name, columns.to_owned(), test_variant);
-        println!("byte_array_variant:");
-        verify_byte_array_variant(columns.to_owned(), test_variant);
-        println!("model_variant:");
-        verify_model_variant(columns.to_owned(), test_variant);
-        println!("hash_table_variant:");
-        verify_hash_table_variant(name, columns, test_variant);
+    fn verify_variants(name: &str, columns: Vec<Column>, test: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) {
+        // rounds a number to 2-significant figures
+        fn round_2sf(value: f64) -> f64 { (value * 100.0).round() / 100.0 }
+
+        // report function
+        fn work(
+            mut mrc: ModelRowCollection,
+            name: &str,
+            kind: &str,
+            columns: &Vec<Column>,
+            tester: fn(&str, &str, Vec<Column>, fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64,
+            test: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64,
+        ) -> ModelRowCollection {
+            println!("Testing: {name} -> {kind}");
+            let t0 = Local::now();
+            let processed = tester(name, kind, columns.clone(), test);
+            let t1 = Local::now();
+            let t = t1 - t0;
+            let execution_time = match t.num_nanoseconds() {
+                Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
+                None => t.num_milliseconds().to_f64().unwrap_or(0.)
+            };
+
+            // record this test
+            let rate = processed.to_f64().unwrap_or(0.) / execution_time;
+            mrc.append_row(Row::new(0, vec![
+                StringValue(name.to_owned()),
+                StringValue(kind.to_owned()),
+                Number(U64Value(processed)),
+                Number(F64Value(execution_time)),
+                Number(F64Value(round_2sf(rate))),
+            ]));
+            mrc
+        }
+
+        let mut mrc = ModelRowCollection::construct(&vec![
+            Parameter::new("name", Some("String(64)".into()), None),
+            Parameter::new("kind", Some("String(20)".into()), None),
+            Parameter::new("processed", Some("u64".into()), None),
+            Parameter::new("process_time_millis", Some("f64".into()), None),
+            Parameter::new("rows_per_millis", Some("f64".into()), None),
+        ]);
+        mrc = work(mrc, name, "Binary", &columns, verify_byte_array_variant, test);
+        mrc = work(mrc, name, "File", &columns, verify_file_variant, test);
+        mrc = work(mrc, name, "HashTable", &columns, verify_hash_table_variant, test);
+        mrc = work(mrc, name, "Model", &columns, verify_model_variant, test);
+
+        mrc = work(mrc, name, "Proxy|Binary", &columns, verify_proxy_binary_variant, test);
+        mrc = work(mrc, name, "Proxy|Disk", &columns, verify_proxy_file_variant, test);
+        mrc = work(mrc, name, "Proxy|Model", &columns, verify_proxy_model_variant, test);
+
+        let rc: Box<dyn RowCollection> = Box::new(mrc);
+        for s in TableRenderer::from_table_with_ids(&rc).unwrap() {
+            println!("{}", s)
+        }
     }
 
-    fn verify_byte_array_variant(columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> ()) {
+    fn verify_byte_array_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
         let brc = ByteRowCollection::new(columns.to_owned(), Vec::new());
-        test_variant("Bytes", Box::new(brc), columns);
+        test_variant(kind, Box::new(brc), columns)
     }
 
-    fn verify_file_variant(name: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> ()) {
+    fn verify_proxy_binary_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
+        let brc = TableValues::Binary(ByteRowCollection::new(columns.to_owned(), Vec::new()));
+        test_variant(kind, Box::new(brc), columns)
+    }
+
+    fn verify_proxy_file_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
+        let ns = Namespace::new("file_row_collection", name, "stocks");
+        let frc = TableValues::Disk(FileRowCollection::create_table(&ns, columns.to_owned()).unwrap());
+        test_variant(kind, Box::new(frc), columns.to_owned())
+    }
+
+    fn verify_proxy_model_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
+        let mrc = TableValues::Model(ModelRowCollection::with_rows(columns.to_owned(), Vec::new()));
+        test_variant(kind, Box::new(mrc), columns)
+    }
+
+    fn verify_file_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
         let ns = Namespace::new("file_row_collection", name, "stocks");
         let frc = FileRowCollection::create_table(&ns, columns.to_owned()).unwrap();
-        test_variant("Disk", Box::new(frc), columns.to_owned());
+        test_variant(kind, Box::new(frc), columns.to_owned())
     }
 
-    fn verify_hash_table_variant(name: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> ()) {
+    fn verify_hash_table_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
         let ns = Namespace::new("hashing_row_collection", name, "stocks");
         let frc = FileRowCollection::create_table(&ns, columns.to_owned()).unwrap();
         let hrc = HashTableRowCollection::new(0, Box::new(frc)).unwrap();
-        test_variant("HashTable", Box::new(hrc), columns.to_owned());
+        test_variant(kind, Box::new(hrc), columns.to_owned())
     }
 
-    fn verify_model_variant(columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> ()) {
+    fn verify_model_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
         let mrc = ModelRowCollection::with_rows(columns.to_owned(), Vec::new());
-        test_variant("Model", Box::new(mrc), columns);
+        test_variant(kind, Box::new(mrc), columns)
     }
 }

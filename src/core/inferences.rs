@@ -7,9 +7,9 @@ use crate::data_types::{DataType, StorageTypes};
 use crate::expression::Expression::*;
 use crate::expression::{BitwiseOps, Excavation, Expression, Mutation};
 use crate::outcomes::OutcomeKind;
-use crate::platform::PlatformFunctions;
+use crate::platform::PlatformOps;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Function, PlatformFunction};
+use crate::typed_values::TypedValue::{Function, PlatformOp};
 use std::ops::Deref;
 
 /// Type-Inference Detection
@@ -36,7 +36,7 @@ impl Inferences {
             Extraction(a, b) => match (a.deref(), b.deref()) {
                 (Variable(pkg), FunctionCall { fx, .. }) => match fx.deref() {
                     Variable(name) =>
-                        PlatformFunctions::find_function(pkg, name)
+                        PlatformOps::find_function(pkg, name)
                             .map(|pf| pf.return_type.clone())
                             .unwrap_or(LazyType),
                     _ => LazyType,
@@ -56,7 +56,7 @@ impl Inferences {
             Include(..) => OutcomeType(OutcomeKind::Acked),
             JSONExpression(..) => StructureType(Vec::new()), // TODO can we infer?
             Literal(Function { code, .. }) => Inferences::infer(code),
-            Literal(PlatformFunction(pf)) => pf.get_return_type(),
+            Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
             Minus(a, b) => Inferences::infer_a_or_b(a, b),
             Module(..) => OutcomeType(OutcomeKind::Acked),
@@ -140,7 +140,7 @@ mod tests {
     use crate::compiler::Compiler;
     use crate::data_types::StorageTypes::FixedSize;
     use crate::number_kind::NumberKind::{F64Kind, I64Kind};
-    use crate::numbers::NumberValue::{F64Value, I64Value};
+    use crate::numbers::Numbers::{F64Value, I64Value};
     use crate::typed_values::TypedValue::{Number, StringValue};
 
     #[test]
@@ -191,62 +191,62 @@ mod tests {
 
     #[test]
     fn test_infer_conditionals_and() {
-        verify_code("true && false", BooleanType);
+        verify_data_type("true && false", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_between() {
-        verify_code("20 between 1 and 20", BooleanType);
+        verify_data_type("20 between 1 and 20", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_betwixt() {
-        verify_code("20 betwixt 1 and 21", BooleanType);
+        verify_data_type("20 betwixt 1 and 21", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_eq() {
-        verify_code("x == y", BooleanType);
+        verify_data_type("x == y", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_gt() {
-        verify_code("x > y", BooleanType);
+        verify_data_type("x > y", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_gte() {
-        verify_code("x >= y", BooleanType);
+        verify_data_type("x >= y", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_is() {
-        verify_code("a is b", BooleanType);
+        verify_data_type("a is b", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_isnt() {
-        verify_code("a isnt b", BooleanType);
+        verify_data_type("a isnt b", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_lt() {
-        verify_code("x < y", BooleanType);
+        verify_data_type("x < y", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_lte() {
-        verify_code("x <= y", BooleanType);
+        verify_data_type("x <= y", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_neq() {
-        verify_code("x != y", BooleanType);
+        verify_data_type("x != y", BooleanType);
     }
 
     #[test]
     fn test_infer_conditionals_or() {
-        verify_code("true || false", BooleanType);
+        verify_data_type("true || false", BooleanType);
     }
 
     #[test]
@@ -286,7 +286,7 @@ mod tests {
 
     #[test]
     fn test_infer_return() {
-        verify_code("return 5", NumberType(I64Kind));
+        verify_data_type("return 5", NumberType(I64Kind));
     }
 
     #[test]
@@ -299,19 +299,19 @@ mod tests {
         assert_eq!(kind, StringType(FixedSize(6)))
     }
 
-    fn verify_code(code: &str, expected: DataType) {
-        let model = Compiler::compile_script(code).unwrap();
+    fn verify_data_type(code: &str, expected: DataType) {
+        let model = Compiler::build(code).unwrap();
         assert_eq!(Inferences::infer(&model), expected);
     }
 
     fn verify_bit_operator(op: &str) {
-        verify_code(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
-        verify_code(format!("a {} b", op).as_str(), LazyType);
+        verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
+        verify_data_type(format!("a {} b", op).as_str(), LazyType);
     }
 
     fn verify_math_operator(op: &str) {
-        verify_code(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
-        verify_code(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
-        verify_code(format!("a {} b", op).as_str(), LazyType);
+        verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
+        verify_data_type(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
+        verify_data_type(format!("a {} b", op).as_str(), LazyType);
     }
 }

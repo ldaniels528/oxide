@@ -4,20 +4,19 @@
 
 use std::fmt::{Display, Formatter};
 
-use serde::{Deserialize, Serialize};
-
-use crate::codec::Codec;
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
-use crate::decompiler::Decompiler;
 use crate::errors::Errors::IllegalOperator;
+use crate::expression::Conditions::{False, True};
 use crate::expression::Expression::*;
 use crate::inferences::Inferences;
-use crate::numbers::NumberValue;
+use crate::numbers::Numbers;
 use crate::outcomes::Outcomes;
 use crate::parameter::Parameter;
 use crate::tokens::Token;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{ErrorValue, Number, Outcome, StringValue};
+use serde::{Deserialize, Serialize};
 
 // constants
 pub const ACK: Expression = Literal(Outcome(Outcomes::Ack));
@@ -39,7 +38,7 @@ pub enum BitwiseOps {
 impl BitwiseOps {
     /// Returns a string representation of this object
     pub fn to_code(&self) -> String {
-        Decompiler::new().decompile_bitwise(self)
+        Expression::decompile_bitwise(self)
     }
 }
 
@@ -66,7 +65,7 @@ pub enum Conditions {
 impl Conditions {
     /// Returns a string representation of this object
     pub fn to_code(&self) -> String {
-        Decompiler::new().decompile_cond(self)
+        Expression::decompile_cond(self)
     }
 }
 
@@ -258,8 +257,271 @@ impl Expression {
     // instance methods
     ////////////////////////////////////////////////////////////////
 
+    pub fn decompile(expr: &Expression) -> String {
+        use crate::expression::Expression::*;
+        match expr {
+            ArrayExpression(items) =>
+                format!("[{}]", items.iter().map(|i| Self::decompile(i)).collect::<Vec<String>>().join(", ")),
+            AsValue(name, expr) =>
+                format!("{}: {}", name, Self::decompile(expr)),
+            BitwiseOp(bitwise) => Self::decompile_bitwise(bitwise),
+            CodeBlock(items) => Self::decompile_code_blocks(items),
+            Condition(cond) => Self::decompile_cond(cond),
+            Directive(d) => Self::decompile_directives(d),
+            Divide(a, b) =>
+                format!("{} / {}", Self::decompile(a), Self::decompile(b)),
+            ElementAt(a, b) =>
+                format!("{}[{}]", Self::decompile(a), Self::decompile(b)),
+            Extraction(a, b) =>
+                format!("{}::{}", Self::decompile(a), Self::decompile(b)),
+            ExtractPostfix(a, b) =>
+                format!("{}:::{}", Self::decompile(a), Self::decompile(b)),
+            Factorial(a) => format!("¡{}", Self::decompile(a)),
+            Feature { title, scenarios } =>
+                format!("feature {} {{\n{}\n}}", title.to_code(), scenarios.iter()
+                    .map(|s| s.to_code())
+                    .collect::<Vec<_>>()
+                    .join("\n")),
+            From(a) => format!("from {}", Self::decompile(a)),
+            FunctionCall { fx, args } =>
+                format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
+            If { condition, a, b } =>
+                format!("if {} {}{}", Self::decompile(condition), Self::decompile(a), b.to_owned()
+                    .map(|x| format!(" else {}", Self::decompile(&x)))
+                    .unwrap_or("".into())),
+            Import(args) =>
+                format!("import {}", args.iter().map(|a| a.to_code())
+                    .collect::<Vec<_>>()
+                    .join(", ")),
+            Include(path) => format!("include {}", Self::decompile(path)),
+            JSONExpression(items) =>
+                format!("{{{}}}", items.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<String>>()
+                    .join(", ")),
+            Literal(value) => value.to_code(),
+            Minus(a, b) =>
+                format!("{} - {}", Self::decompile(a), Self::decompile(b)),
+            Module(name, ops) =>
+                format!("{} {}", name, Self::decompile_code_blocks(ops)),
+            Modulo(a, b) =>
+                format!("{} % {}", Self::decompile(a), Self::decompile(b)),
+            Multiply(a, b) =>
+                format!("{} * {}", Self::decompile(a), Self::decompile(b)),
+            Neg(a) => format!("-({})", Self::decompile(a)),
+            Ns(a) => format!("ns({})", Self::decompile(a)),
+            Parameters(parameters) => Self::decompile_parameters(parameters),
+            Plus(a, b) =>
+                format!("{} + {}", Self::decompile(a), Self::decompile(b)),
+            Pow(a, b) =>
+                format!("{} ** {}", Self::decompile(a), Self::decompile(b)),
+            Quarry(job) =>
+                match job {
+                    Excavation::Construct(i) => Self::decompile_infrastructures(i),
+                    Excavation::Query(q) => Self::decompile_queryables(q),
+                    Excavation::Mutate(m) => Self::decompile_modifications(m),
+                },
+            Range(a, b) =>
+                format!("{}..{}", Self::decompile(a), Self::decompile(b)),
+            Return(items) =>
+                format!("return {}", Self::decompile_list(items)),
+            Scenario { title, verifications, inherits } => {
+                let title = title.to_code();
+                let inherits = inherits.to_owned().map(|e| e.to_code()).unwrap_or(String::new());
+                let verifications = verifications.iter()
+                    .map(|s| s.to_code())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("scenario {title} {{\n{verifications}\n}}")
+            }
+            SetVariable(name, value) =>
+                format!("{} := {}", name, Self::decompile(value)),
+            Variable(name) => name.to_string(),
+            Via(expr) => format!("via {}", Self::decompile(expr)),
+            While { condition, code } =>
+                format!("while {} {}", Self::decompile(condition), Self::decompile(code)),
+            HTTP { method, url, body, headers, multipart } =>
+                format!("{} {}{}{}{}", method, Self::decompile(url), Self::decompile_opt(body), Self::decompile_opt(headers), Self::decompile_opt(multipart)),
+        }
+    }
+
+    pub fn decompile_code_blocks(ops: &Vec<Expression>) -> String {
+        format!("{{\n{}\n}}", ops.iter().map(|i| Self::decompile(i))
+            .collect::<Vec<String>>()
+            .join("\n"))
+    }
+
+    pub fn decompile_bitwise(bitwise: &BitwiseOps) -> String {
+        match bitwise {
+            BitwiseOps::And(a, b) =>
+                format!("{} & {}", Self::decompile(a), Self::decompile(b)),
+            BitwiseOps::Or(a, b) =>
+                format!("{} | {}", Self::decompile(a), Self::decompile(b)),
+            BitwiseOps::Xor(a, b) =>
+                format!("{} ^ {}", Self::decompile(a), Self::decompile(b)),
+            BitwiseOps::ShiftLeft(a, b) =>
+                format!("{} << {}", Self::decompile(a), Self::decompile(b)),
+            BitwiseOps::ShiftRight(a, b) =>
+                format!("{} >> {}", Self::decompile(a), Self::decompile(b)),
+        }
+    }
+
+    pub fn decompile_cond(cond: &Conditions) -> String {
+        use crate::expression::Conditions::*;
+        match cond {
+            And(a, b) =>
+                format!("{} && {}", Self::decompile(a), Self::decompile(b)),
+            Between(a, b, c) =>
+                format!("{} between {} and {}", Self::decompile(a), Self::decompile(b), Self::decompile(c)),
+            Betwixt(a, b, c) =>
+                format!("{} betwixt {} and {}", Self::decompile(a), Self::decompile(b), Self::decompile(c)),
+            Contains(a, b) =>
+                format!("{} contains {}", Self::decompile(a), Self::decompile(b)),
+            Equal(a, b) =>
+                format!("{} == {}", Self::decompile(a), Self::decompile(b)),
+            False => "false".to_string(),
+            GreaterThan(a, b) =>
+                format!("{} > {}", Self::decompile(a), Self::decompile(b)),
+            GreaterOrEqual(a, b) =>
+                format!("{} >= {}", Self::decompile(a), Self::decompile(b)),
+            LessThan(a, b) =>
+                format!("{} < {}", Self::decompile(a), Self::decompile(b)),
+            LessOrEqual(a, b) =>
+                format!("{} <= {}", Self::decompile(a), Self::decompile(b)),
+            Like(a, b) =>
+                format!("{} like {}", Self::decompile(a), Self::decompile(b)),
+            Not(a) => format!("!{}", Self::decompile(a)),
+            NotEqual(a, b) =>
+                format!("{} != {}", Self::decompile(a), Self::decompile(b)),
+            Or(a, b) =>
+                format!("{} || {}", Self::decompile(a), Self::decompile(b)),
+            True => "true".to_string(),
+        }
+    }
+
+    pub fn decompile_parameters(params: &Vec<Parameter>) -> String {
+        params.iter().map(|p| p.to_code())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    pub fn decompile_directives(directive: &Directives) -> String {
+        match directive {
+            Directives::MustAck(a) => format!("[+] {}", Self::decompile(a)),
+            Directives::MustDie(a) => format!("[!] {}", Self::decompile(a)),
+            Directives::MustIgnoreAck(a) => format!("[~] {}", Self::decompile(a)),
+            Directives::MustNotAck(a) => format!("[-] {}", Self::decompile(a)),
+        }
+    }
+
+    pub fn decompile_if_exists(if_exists: bool) -> String {
+        (if if_exists { "if exists " } else { "" }).to_string()
+    }
+
+    pub fn decompile_insert_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> String {
+        let field_list = fields.iter().map(|f| Self::decompile(f)).collect::<Vec<String>>().join(", ");
+        let value_list = values.iter().map(|v| Self::decompile(v)).collect::<Vec<String>>().join(", ");
+        format!("({}) values ({})", field_list, value_list)
+    }
+
+    pub fn decompile_limit(opt: &Option<Box<Expression>>) -> String {
+        opt.to_owned().map(|x| format!(" limit {}", Self::decompile(&x))).unwrap_or("".into())
+    }
+
+    pub fn decompile_list(fields: &Vec<Expression>) -> String {
+        fields.iter().map(|x| Self::decompile(x)).collect::<Vec<String>>().join(", ".into())
+    }
+
+    pub fn decompile_cond_opt(opt: &Option<Conditions>) -> String {
+        opt.to_owned().map(|i| Self::decompile_cond(&i)).unwrap_or("".into())
+    }
+
+    pub fn decompile_opt(opt: &Option<Box<Expression>>) -> String {
+        opt.to_owned().map(|i| Self::decompile(&i)).unwrap_or("".into())
+    }
+
+    pub fn decompile_update_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> String {
+        fields.iter().zip(values.iter()).map(|(f, v)|
+            format!("{} = {}", Self::decompile(f), Self::decompile(v))).collect::<Vec<String>>().join(", ")
+    }
+
+    pub fn decompile_excavations(excavation: &Excavation) -> String {
+        match excavation {
+            Excavation::Construct(i) => Self::decompile_infrastructures(i),
+            Excavation::Query(q) => Self::decompile_queryables(q),
+            Excavation::Mutate(m) => Self::decompile_modifications(m),
+        }
+    }
+
+    pub fn decompile_infrastructures(infra: &Infrastructure) -> String {
+        match infra {
+            Infrastructure::Create { path, entity } =>
+                match entity {
+                    CreationEntity::IndexEntity { columns } =>
+                        format!("create index {} [{}]", Self::decompile(path), Self::decompile_list(columns)),
+                    CreationEntity::TableEntity { columns, from } =>
+                        format!("create table {} ({})", Self::decompile(path), Self::decompile_parameters(columns)),
+                }
+            Infrastructure::Declare(entity) =>
+                match entity {
+                    CreationEntity::IndexEntity { columns } =>
+                        format!("index [{}]", Self::decompile_list(columns)),
+                    CreationEntity::TableEntity { columns, from } =>
+                        format!("table({})", Self::decompile_parameters(columns)),
+                }
+            Infrastructure::Drop(target) => {
+                let (kind, path) = match target {
+                    MutateTarget::IndexTarget { path } => ("index", path),
+                    MutateTarget::TableTarget { path } => ("table", path),
+                };
+                format!("drop {} {}", kind, Self::decompile(path))
+            }
+        }
+    }
+
+    pub fn decompile_modifications(expr: &Mutation) -> String {
+        match expr {
+            Mutation::Append { path, source } =>
+                format!("append {} {}", Self::decompile(path), Self::decompile(source)),
+            Mutation::Delete { path, condition, limit } =>
+                format!("delete from {} where {}{}", Self::decompile(path), Self::decompile_cond_opt(condition), Self::decompile_opt(limit)),
+            Mutation::IntoNs(a, b) =>
+                format!("{} ~> {}", Self::decompile(a), Self::decompile(b)),
+            Mutation::Overwrite { path, source, condition, limit } =>
+                format!("overwrite {} {}{}{}", Self::decompile(path), Self::decompile(source),
+                        condition.to_owned().map(|e| format!(" where {}", Self::decompile_cond(&e))).unwrap_or("".into()),
+                        limit.to_owned().map(|e| format!(" limit {}", Self::decompile(&e))).unwrap_or("".into()),
+                ),
+            Mutation::Truncate { path, limit } =>
+                format!("truncate {}{}", Self::decompile(path), Self::decompile_limit(limit)),
+            Mutation::Undelete { path, condition, limit } =>
+                format!("undelete from {} where {}{}", Self::decompile(path), Self::decompile_cond_opt(condition), Self::decompile_opt(limit)),
+            Mutation::Update { path, source, condition, limit } =>
+                format!("update {} {} where {}{}", Self::decompile(path), Self::decompile(source), Self::decompile_cond_opt(condition),
+                        limit.to_owned().map(|e| format!(" limit {}", Self::decompile(&e))).unwrap_or("".into()), ),
+        }
+    }
+
+    pub fn decompile_queryables(expr: &Queryable) -> String {
+        match expr {
+            Queryable::Limit { from: a, limit: b } =>
+                format!("{} limit {}", Self::decompile(a), Self::decompile(b)),
+            Queryable::Where { from, condition } =>
+                format!("{} where {}", Self::decompile(from), Self::decompile_cond(condition)),
+            Queryable::Select { fields, from, condition, group_by, having, order_by, limit } =>
+                format!("select {}{}{}{}{}{}{}", Self::decompile_list(fields),
+                        from.to_owned().map(|e| format!(" from {}", Self::decompile(&e))).unwrap_or("".into()),
+                        condition.to_owned().map(|c| format!(" where {}", Self::decompile_cond(&c))).unwrap_or("".into()),
+                        limit.to_owned().map(|e| format!(" limit {}", Self::decompile(&e))).unwrap_or("".into()),
+                        group_by.to_owned().map(|items| format!(" group by {}", items.iter().map(|e| Self::decompile(e)).collect::<Vec<String>>().join(", "))).unwrap_or("".into()),
+                        having.to_owned().map(|e| format!(" having {}", Self::decompile(&e))).unwrap_or("".into()),
+                        order_by.to_owned().map(|e| format!(" order by {}", Self::decompile_list(&e))).unwrap_or("".into()),
+                ),
+        }
+    }
+
     pub fn encode(&self) -> Vec<u8> {
-        Codec::encode(&self).unwrap_or_else(|e| panic!("{}", e))
+        ByteCodeCompiler::encode(&self).unwrap_or_else(|e| panic!("{}", e))
     }
 
     pub fn from_token(token: Token) -> Self {
@@ -267,7 +529,7 @@ impl Expression {
             Token::Atom { text, .. } => Variable(text),
             Token::Backticks { text, .. } => Variable(text),
             Token::DoubleQuoted { text, .. } => Literal(StringValue(text)),
-            Token::Numeric { text, .. } => Literal(Number(NumberValue::from_string(text))),
+            Token::Numeric { text, .. } => Literal(Number(Numbers::from_string(text))),
             Token::Operator { .. } => Literal(ErrorValue(IllegalOperator(token))),
             Token::SingleQuoted { text, .. } => Literal(StringValue(text)),
         }
@@ -294,7 +556,7 @@ impl Expression {
 
     /// Returns a string representation of this object
     pub fn to_code(&self) -> String {
-        Decompiler::new().decompile(self)
+        Self::decompile(self)
     }
 }
 
@@ -321,9 +583,15 @@ mod tests {
     use crate::expression::Excavation::{Mutate, Query};
     use crate::expression::*;
     use crate::machine::Machine;
-    use crate::numbers::NumberValue::*;
+    use crate::numbers::Numbers::*;
     use crate::tokenizer;
     use crate::typed_values::TypedValue::*;
+    use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+    use crate::expression::Expression::{AsValue, Literal};
+    use crate::numbers::Numbers::I64Value;
+    use crate::typed_values::TypedValue::{Function, Number, StringValue};
+
+    use super::*;
 
     #[test]
     fn test_from_token_to_i64() {
@@ -614,5 +882,172 @@ mod tests {
     #[test]
     fn test_is_referential() {
         assert!(Variable("symbol".into()).is_referential());
+    }
+
+    #[test]
+    fn test_alias() {
+        let model = AsValue("symbol".into(), Box::new(Literal(StringValue("ABC".into()))));
+        assert_eq!(Expression::decompile(&model), r#"symbol: "ABC""#);
+    }
+
+    #[test]
+    fn test_array_declaration() {
+        let model = ArrayExpression(vec![
+            Literal(Number(I64Value(2))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
+            Literal(Number(I64Value(7))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
+        ]);
+        assert_eq!(Expression::decompile(&model), "[2, 5, 8, 7, 4, 1]")
+    }
+
+    #[test]
+    fn test_array_indexing() {
+        let model = ElementAt(
+            Box::new(ArrayExpression(vec![
+                Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
+                Literal(Number(I64Value(2))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
+            ])),
+            Box::new(Literal(Number(I64Value(3)))));
+        assert_eq!(Expression::decompile(&model), "[7, 5, 8, 2, 4, 1][3]")
+    }
+
+    #[test]
+    fn test_bitwise_and() {
+        let model = BitwiseOp(BitwiseOps::And(
+            Box::new(Literal(Number(I64Value(20)))),
+            Box::new(Literal(Number(I64Value(3)))),
+        ));
+        assert_eq!(Expression::decompile(&model), "20 & 3")
+    }
+
+    #[test]
+    fn test_bitwise_or() {
+        let model = BitwiseOp(BitwiseOps::Or(
+            Box::new(Literal(Number(I64Value(20)))),
+            Box::new(Literal(Number(I64Value(3)))),
+        ));
+        assert_eq!(Expression::decompile(&model), "20 | 3")
+    }
+
+    #[test]
+    fn test_bitwise_shl() {
+        let model = BitwiseOp(BitwiseOps::ShiftLeft(
+            Box::new(Literal(Number(I64Value(20)))),
+            Box::new(Literal(Number(I64Value(3)))),
+        ));
+        assert_eq!(Expression::decompile(&model), "20 << 3")
+    }
+
+    #[test]
+    fn test_bitwise_shr() {
+        let model = BitwiseOp(BitwiseOps::ShiftRight(
+            Box::new(Literal(Number(I64Value(20)))),
+            Box::new(Literal(Number(I64Value(3)))),
+        ));
+        assert_eq!(Expression::decompile(&model), "20 >> 3")
+    }
+
+    #[test]
+    fn test_bitwise_xor() {
+        let model = BitwiseOp(BitwiseOps::Xor(
+            Box::new(Literal(Number(I64Value(20)))),
+            Box::new(Literal(Number(I64Value(3)))),
+        ));
+        assert_eq!(Expression::decompile(&model), "20 ^ 3")
+    }
+
+    #[test]
+    fn test_define_anonymous_function() {
+        let model = Literal(Function {
+            params: vec![
+                Parameter::new("a", None, None),
+                Parameter::new("b", None, None),
+            ],
+            code: Box::new(Multiply(Box::new(
+                Variable("a".into())
+            ), Box::new(
+                Variable("b".into())
+            ))),
+        });
+        assert_eq!(Expression::decompile(&model), "(fn(a, b) => a * b)")
+    }
+
+    #[test]
+    fn test_define_named_function() {
+        let model = SetVariable("add".into(), Box::new(
+            Literal(Function {
+                params: vec![
+                    Parameter::new("a", None, None),
+                    Parameter::new("b", None, None),
+                ],
+                code: Box::new(Plus(Box::new(
+                    Variable("a".into())
+                ), Box::new(
+                    Variable("b".into())
+                ))),
+            })
+        ));
+        assert_eq!(Expression::decompile(&model), "add := (fn(a, b) => a + b)")
+    }
+
+    #[test]
+    fn test_function_call() {
+        let model = FunctionCall {
+            fx: Box::new(Variable("f".into())),
+            args: vec![
+                Literal(Number(I64Value(2))),
+                Literal(Number(I64Value(3))),
+            ],
+        };
+        assert_eq!(Expression::decompile(&model), "f(2, 3)")
+    }
+
+    #[test]
+    fn test_create_index_in_namespace() {
+        let model = Quarry(Excavation::Construct(Infrastructure::Create {
+            path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
+            entity: IndexEntity {
+                columns: vec![
+                    Variable("symbol".into()),
+                    Variable("exchange".into()),
+                ],
+            },
+        }));
+        assert_eq!(
+            Expression::decompile(&model),
+            r#"create index ns("compiler.create.stocks") [symbol, exchange]"#)
+    }
+
+    #[test]
+    fn test_create_table_in_namespace() {
+        let ns_path = "compiler.create.stocks";
+        let model = Quarry(Excavation::Construct(Infrastructure::Create {
+            path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
+            entity: TableEntity {
+                columns: vec![
+                    Parameter::new("symbol", Some("String(8)".into()), Some("\"ABC\"".into())),
+                    Parameter::new("exchange", Some("String(8)".into()), Some("\"NYSE\"".into())),
+                    Parameter::new("last_sale", Some("f64".into()), Some("0.00".into())),
+                ],
+                from: None,
+            },
+        }));
+        assert_eq!(
+            Expression::decompile(&model),
+            r#"create table ns("compiler.create.stocks") (symbol: String(8) = "ABC", exchange: String(8) = "NYSE", last_sale: f64 = 0.00)"#)
+    }
+
+    #[test]
+    fn test_declare_table() {
+        let model = Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
+            columns: vec![
+                Parameter::new("symbol", Some("String(8)".into()), None),
+                Parameter::new("exchange", Some("String(8)".into()), None),
+                Parameter::new("last_sale", Some("f64".into()), None),
+            ],
+            from: None,
+        })));
+        assert_eq!(
+            Expression::decompile(&model),
+            r#"table(symbol: String(8), exchange: String(8), last_sale: f64)"#)
     }
 }

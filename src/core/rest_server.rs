@@ -2,6 +2,7 @@
 // REST server module
 ////////////////////////////////////////////////////////////////////
 
+use std::collections::HashMap;
 use std::error::Error;
 
 use actix::{Actor, Addr};
@@ -9,7 +10,7 @@ use actix_session::Session;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws;
 use log::{error, info};
-
+use serde_json::{json, Value};
 use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse};
 
 use crate::dataframe_actor::DataframeActor;
@@ -17,11 +18,11 @@ use crate::dataframe_config::DataFrameConfig;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::row_metadata::RowMetadata;
-use crate::rows::{Row, RowJs};
+use crate::rows::Row;
 use crate::server::SystemInfoJs;
 use crate::table_columns::Column;
 use crate::websockets::OxideWebSocket;
-use crate::{append_row, create_table_from_config, delete_row, get_columns, overwrite_row, read_range, read_row, read_row_metadata, update_row};
+use crate::*;
 
 pub const SECS_IN_WEEK: i64 = 60 * 60 * 24 * 7;
 
@@ -177,7 +178,7 @@ pub async fn handle_row_get(
     path: web::Path<(String, String, String, usize)>,
 ) -> impl Responder {
     match get_row_by_id(req, path).await {
-        Ok((columns, Some(row))) => HttpResponse::Ok().json(row.to_row_js(&columns)),
+        Ok((columns, Some(row))) => HttpResponse::Ok().json(row.to_json(&columns)),
         Ok((_, None)) => HttpResponse::Ok().json(serde_json::json!({})),
         Err(err) => {
             error!("error {}", err.to_string());
@@ -205,7 +206,7 @@ pub async fn handle_row_head(
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_post(
     req: HttpRequest,
-    data: web::Json<RowJs>,
+    data: web::Json<Value>,
     path: web::Path<(String, String, String, usize)>,
 ) -> impl Responder {
     match append_row(req, data, path).await {
@@ -221,7 +222,7 @@ pub async fn handle_row_post(
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_put(
     req: HttpRequest,
-    data: web::Json<RowJs>,
+    data: web::Json<Value>,
     path: web::Path<(String, String, String, usize)>,
 ) -> impl Responder {
     match overwrite_row_by_id(req, data, path).await {
@@ -237,7 +238,7 @@ pub async fn handle_row_put(
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_row_patch(
     req: HttpRequest,
-    data: web::Json<RowJs>,
+    data: web::Json<Value>,
     path: web::Path<(String, String, String, usize)>,
 ) -> impl Responder {
     match update_row_by_id(req, data, path).await {
@@ -256,10 +257,8 @@ pub async fn handle_row_range_get(
     path: web::Path<(String, String, String, usize, usize)>,
 ) -> impl Responder {
     match get_range_by_id(req, path).await {
-        Ok((columns, rows)) => {
-            HttpResponse::Ok().json(rows.iter()
-                .map(|row| row.to_row_js(&columns)).collect::<Vec<RowJs>>())
-        }
+        Ok((columns, rows)) =>
+            HttpResponse::Ok().json(Row::rows_to_json(&columns, &rows)),
         Err(err) => {
             error!("error {}", err.to_string());
             HttpResponse::InternalServerError().finish()
@@ -277,7 +276,7 @@ pub async fn handle_rpc_post(
         Err(err) =>
             return HttpResponse::Ok().json(RemoteCallResponse::fail(err.to_string())),
     };
-    match interpreter.evaluate_async(data.0.get_code()).await {
+    match interpreter.evaluate(data.0.get_code()) {
         Ok(result) =>
             HttpResponse::Ok().json(RemoteCallResponse::success(result.to_json())),
         Err(err) =>
@@ -300,13 +299,13 @@ pub async fn handle_websockets(
 
 async fn append_row(
     req: HttpRequest,
-    data: web::Json<RowJs>,
+    data: web::Json<Value>,
     path: web::Path<(String, String, String, usize)>,
 ) -> std::io::Result<usize> {
     let ns = Namespace::new(&path.0, &path.1, &path.2);
     let actor = get_shared_state(&req)?.actor.to_owned();
     let columns = get_columns!(actor, ns)?;
-    append_row!(actor, ns, Row::from_row_js(&columns, &data.0))
+    append_row!(actor, ns, Row::from_json(&columns, &data.0))
 }
 
 async fn delete_row_by_id(
@@ -334,7 +333,7 @@ async fn get_range_by_id(
 ) -> std::io::Result<(Vec<Column>, Vec<Row>)> {
     let (ns, a, b) = (Namespace::new(&path.0, &path.1, &path.2), path.3, path.4);
     let actor = get_shared_state(&req)?.actor.to_owned();
-    read_range!(actor, ns, a..b)
+    read_range!(actor, ns, a, b)
 }
 
 async fn get_row_by_id(
@@ -357,24 +356,24 @@ async fn get_row_metadata_by_id(
 
 async fn overwrite_row_by_id(
     req: HttpRequest,
-    data: web::Json<RowJs>,
+    data: web::Json<Value>,
     path: web::Path<(String, String, String, usize)>,
 ) -> std::io::Result<usize> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.to_owned();
     let columns = get_columns!(actor, ns)?;
-    overwrite_row!(actor, ns, Row::from_row_js(&columns, &data.0).with_row_id(id))
+    overwrite_row!(actor, ns, Row::from_json(&columns, &data.0).with_row_id(id))
 }
 
 async fn update_row_by_id(
     req: HttpRequest,
-    data: web::Json<RowJs>,
+    data: web::Json<Value>,
     path: web::Path<(String, String, String, usize)>,
 ) -> std::io::Result<usize> {
     let (ns, id) = (Namespace::new(&path.0, &path.1, &path.2), path.3);
     let actor = get_shared_state(&req)?.actor.to_owned();
     let columns = get_columns!(actor, ns)?;
-    update_row!(actor, ns, Row::from_row_js(&columns, &data.0).with_row_id(id))
+    update_row!(actor, ns, Row::from_json(&columns, &data.0).with_row_id(id))
 }
 
 // Unit tests
@@ -386,9 +385,9 @@ mod tests {
     use tokio_tungstenite::connect_async;
     use tokio_tungstenite::tungstenite::Message;
 
-    use shared_lib::{ns_uri, range_uri, row_uri};
-
     use super::*;
+    use crate::typed_values::TypedValue;
+    use shared_lib::{ns_uri, range_uri, row_uri};
 
     #[actix::test]
     async fn test_dataframe_config_lifecycle() {
@@ -456,21 +455,15 @@ mod tests {
 
         // POST to append a new stock quote
         let req = test::TestRequest::post().uri(&row_uri(database, schema, name, 0))
-            .set_json(&json!({"fields": [
-                {"name": "symbol", "value": "ATOM"},
-                {"name": "exchange","value": "NYSE"},
-                {"name": "last_sale","value": 24.17}]
-            })).to_request();
+            .set_json(&json!({"symbol":"ATOM","exchange":"NYSE","last_sale":24.17}))
+            .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
 
         // POST to append a second stock quote
         let req = test::TestRequest::post().uri(&row_uri(database, schema, name, 0))
-            .set_json(&json!({"fields": [
-                {"name": "symbol", "value": "BABY"},
-                {"name": "exchange","value": "NYSE"},
-                {"name": "last_sale","value": 13.66}]
-            })).to_request();
+            .set_json(&json!({"symbol":"BABY","exchange":"NYSE","last_sale":13.66}))
+            .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
 
@@ -479,11 +472,12 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"id":0,"fields":[{"name":"symbol","value":"ATOM"},{"name":"exchange","value":"NYSE"},{"name":"last_sale","value":24.17}]}"#);
+        let json_value: Value = serde_json::from_str(body.as_str()).unwrap();
+        assert_eq!(json_value, json!({"exchange":"NYSE","last_sale":24.17,"symbol":"ATOM"}));
 
         // PATCH one of the previously POSTed stock quotes with a new price
         let req = test::TestRequest::patch().uri(&row_uri(database, schema, name, 1))
-            .set_json(&json!({"id": 1, "fields": [{"name": "last_sale","value": 13.33}]})).to_request();
+            .set_json(&json!({"id":1,"last_sale":13.33})).to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
 
@@ -492,15 +486,16 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"[{"id":0,"fields":[{"name":"symbol","value":"ATOM"},{"name":"exchange","value":"NYSE"},{"name":"last_sale","value":24.17}]},{"id":1,"fields":[{"name":"symbol","value":"BABY"},{"name":"exchange","value":"NYSE"},{"name":"last_sale","value":13.33}]}]"#);
+        let json_value: Value = serde_json::from_str(body.as_str()).unwrap();
+        assert_eq!(json_value, json!([
+            {"symbol":"ATOM","exchange":"NYSE","last_sale":24.17},
+            {"symbol":"BABY","exchange":"NYSE","last_sale":13.33}
+        ]));
 
         // PUT to overwrite the row
         let req = test::TestRequest::put().uri(&row_uri(database, schema, name, 0))
-            .set_json(&json!({"fields": [
-                {"name": "symbol", "value": "CRY"},
-                {"name": "exchange","value": "NYSE"},
-                {"name": "last_sale","value": 88.11}]
-            })).to_request();
+            .set_json(&json!({"symbol":"CRY","exchange":"NYSE","last_sale":88.11}))
+            .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
 
@@ -509,7 +504,8 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"id":0,"fields":[{"name":"symbol","value":"CRY"},{"name":"exchange","value":"NYSE"},{"name":"last_sale","value":88.11}]}"#);
+        let json_value: Value = serde_json::from_str(body.as_str()).unwrap();
+        assert_eq!(json_value, json!({"last_sale":88.11,"symbol":"CRY","exchange":"NYSE"}));
 
         // DELETE the first row
         let req = test::TestRequest::delete().uri(&row_uri(database, schema, name, 0)).to_request();
@@ -544,12 +540,11 @@ mod tests {
         // set up the sessions
         let _app = test::init_service(web_routes!(SharedState::new())).await;
         match send_message("Hello, WebSocket Server!").await {
-            Ok(_) => {
+            Ok(_) =>
                 match send_message("I need some info!").await {
                     Ok(_) => {}
                     Err(e) => eprintln!("Error: {}", e)
                 }
-            }
             Err(e) => eprintln!("Error: {}", e)
         }
     }
@@ -558,7 +553,7 @@ mod tests {
         // Connect to the WebSocket server
         let (mut ws_stream, response) =
             connect_async("ws://localhost:8080/ws").await?;
-        println!("response: {:?}", response);
+        println!("send_message - response: {:?}", response);
 
         // Send a message
         ws_stream.send(Message::Text(message.to_string())).await?;

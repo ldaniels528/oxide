@@ -2,137 +2,61 @@
 // REPL module
 ////////////////////////////////////////////////////////////////////
 
-use std::io::{stdout, Write};
-
-use chrono::Local;
-use crossterm::execute;
-use crossterm::style::{Print, ResetColor};
-use crossterm::terminal::{Clear, ClearType};
-use num_traits::ToPrimitive;
-use serde::{Deserialize, Serialize};
-
-use crate::errors::Errors::Exact;
-use shared_lib::{cnv_error, RemoteCallRequest, RemoteCallResponse};
-
 use crate::expression::ACK;
+use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
+use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
 use crate::parameter::Parameter;
+use crate::platform::PlatformOps;
+use crate::repl;
+use crate::rest_server::SharedState;
 use crate::row_collection::RowCollection;
-use crate::rows::{Row, RowJs};
+use crate::rows::Row;
 use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
-use crate::table_writer::TableWriter;
+use crate::table_values::TableValues::Model;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Function, TableValue};
-
-pub const HISTORY_TABLE_NAME: &str = "history";
-
-/// REPL connection type
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum REPLConnection {
-    LocalConnection,
-    RemoteConnection {
-        host: String,
-        port: u32,
-    },
-}
+use crate::typed_values::TypedValue::*;
+use chrono::Local;
+use crossterm::terminal;
+use log::info;
+use num_traits::ToPrimitive;
+use serde::{Deserialize, Serialize};
+use shared_lib::get_host_and_port;
+use std::fs::File;
+use std::io;
+use std::io::{stdout, Read, Write};
 
 /// REPL application state
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct REPLState {
     database: String,
     schema: String,
-    pub interpreter: Interpreter,
+    interpreter: Interpreter,
+    session_id: i64,
+    user_id: i64,
     counter: usize,
     is_alive: bool,
-    connection: REPLConnection,
 }
 
 impl REPLState {
-    /// Connect to remote peer
-    pub fn connect(host: String, port: u32) -> REPLState {
-        REPLState {
-            database: "oxide".into(),
-            schema: "public".into(),
-            interpreter: Interpreter::new(),
-            counter: 0,
-            is_alive: true,
-            connection: REPLConnection::RemoteConnection { host, port },
-        }
-    }
-
     /// default constructor
     pub fn new() -> REPLState {
         REPLState {
             database: "oxide".into(),
             schema: "public".into(),
-            interpreter: Self::attach_builtin_functions(Interpreter::new()),
+            interpreter: Interpreter::new(),
+            session_id: Local::now().timestamp_millis(),
+            user_id: users::get_current_uid().to_i64().unwrap_or(-1),
             counter: 0,
             is_alive: true,
-            connection: REPLConnection::LocalConnection,
         }
-    }
-
-    pub fn attach_builtin_functions(mut interpreter: Interpreter) -> Interpreter {
-        interpreter.with_variable("assert", Function {
-            params: vec![
-                Parameter::new("condition", Some("Boolean".into()), None)
-            ],
-            code: Box::new(ACK),
-        });
-        interpreter
     }
 
     /// instructs the REPL to quit after the current statement has been processed
     pub fn die(&mut self) {
         self.is_alive = false
-    }
-
-    /// creates a new history table
-    fn create_history_table() -> std::io::Result<ModelRowCollection> {
-        Ok(ModelRowCollection::with_rows(
-            Column::from_parameters(&vec![
-                Parameter::new("input", Some("String(65536)".into()), None),
-            ])?, Vec::new(),
-        ))
-    }
-
-    /// return the REPL input history
-    pub async fn get_history(&mut self) -> Vec<String> {
-        let mut listing = Vec::new();
-        let outcome = self.interpreter
-            .evaluate_async(HISTORY_TABLE_NAME).await;
-        if let Ok(TypedValue::TableValue(mrc)) = outcome {
-            for row in mrc.get_rows() {
-                listing.push(format!("[{}] {}",
-                                     &row.get_id(), row.get(0).unwrap_value()));
-            }
-        }
-        listing
-    }
-
-    /// stores the user input to history
-    pub async fn put_history(&mut self, input: &str) -> std::io::Result<()> {
-        // get or create the history table
-        let mut mrc = match self.interpreter.evaluate_async(HISTORY_TABLE_NAME).await {
-            Ok(TypedValue::TableValue(mrc)) => mrc,
-            _ => Self::create_history_table()?
-        };
-        // cleanup the user input
-        let clean_input = input.trim().split('\n').map(|s| s.trim())
-            .collect::<Vec<&str>>().join("; ");
-        // create a new row
-        let id = mrc.len()?;
-        let row = Row::new(id, vec![
-            TypedValue::StringValue(clean_input),
-        ]);
-        // write the row
-        let _ = mrc.overwrite_row(id, row);
-        // replace the history table in memory
-        self.interpreter.with_variable(HISTORY_TABLE_NAME, TypedValue::TableValue(mrc));
-        self.counter += 1;
-        Ok(())
     }
 
     /// return the REPL prompt string (e.g. "oxide.public[4]>")
@@ -145,185 +69,300 @@ impl REPLState {
     }
 }
 
-/// Starts the interactive shell
-pub async fn run(mut state: REPLState) -> std::io::Result<()> {
-    println!("Welcome to Oxide REPL. Enter \"q!\" to quit.\n");
+pub fn do_terminal(
+    mut repl_state: REPLState,
+    args: Vec<String>,
+    mut reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>
+) -> std::io::Result<()> {
+    use crate::platform::{MAJOR_VERSION, MINOR_VERSION};
     let mut stdout = stdout();
-    while state.is_alive {
-        // show the prompt
-        stdout.write(state.get_prompt().as_bytes())?;
+
+    // show title
+    println!("Welcome to Oxide v{MAJOR_VERSION}.{MINOR_VERSION}\n");
+    stdout.flush()?;
+
+    // setup system variables
+    repl_state = setup_system_variables(repl_state, args);
+
+    // handle user input
+    loop {
+        // display the prompt
+        print!("{}", repl_state.get_prompt());
         stdout.flush()?;
 
-        // read and process the input - capturing the processing time
-        if let Some(input) = read_line()? {
-            match input.trim() {
-                "" => {}
-                "q!" => return Ok(()),
-                input => {
-                    let pid = state.counter;
-                    let t0 = Local::now();
-                    let result = process_statement(&mut state, input)
-                        .await
-                        .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())));
-                    let t1 = Local::now();
-                    let t2 = t1 - t0;
-
-                    // write the outcome result
-                    let execution_time = match t2.num_nanoseconds() {
+        // get and process the input
+        let raw_input = read_until_blank(reader())?;
+        let input = raw_input.trim();
+        if !input.is_empty() {
+            let pid = repl_state.counter;
+            let t0 = Local::now();
+            match repl_state.interpreter.evaluate(input) {
+                Ok(result) => {
+                    // compute the execution-time
+                    let dt = Local::now() - t0;
+                    let execution_time = match dt.num_nanoseconds() {
                         Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
-                        None => t2.num_milliseconds().to_f64().unwrap_or(0.)
+                        None => dt.num_milliseconds().to_f64().unwrap_or(0.)
                     };
+                    // record the request
+                    update_history(&repl_state, input, execution_time).ok();
+                    // gather the value info
                     let type_name = result.get_type_name();
                     let extras = match &result {
-                        TableValue(mrc) => format!(" ~ {} row(s)", &mrc.len()?),
+                        TableValue(rcv) => format!(" ~ {} row(s)", &rcv.len()?),
                         _ => "".to_string()
                     };
-                    stdout.write(format!("[{}] {}{} in {:.1} millis\n", pid, type_name, extras, execution_time).as_bytes())?;
-
-                    // show the output
-                    match result {
-                        TableValue(mrc) => {
-                            let rc: Box<dyn RowCollection> = Box::from(mrc);
-                            let raw_lines = TableRenderer::from_table_with_ids(&rc)?;
-                            let lines = state.interpreter.get("__COLUMNS__")
-                                .map(|limit_v| {
-                                    let limit = limit_v.to_usize();
-                                    raw_lines.iter()
-                                        .map(|s| if s.len() > limit { s[0..limit].to_string() } else { s.to_string() })
-                                        .collect::<Vec<_>>()
-                                })
-                                .unwrap_or(raw_lines);
-                            for line in lines { stdout.write((line + "\n").as_bytes())?; }
-                        }
-                        z => {
-                            stdout.write((z.unwrap_value() + "\n").as_bytes())?;
-                        }
-                    };
-                    stdout.flush()?;
+                    // display the output
+                    stdout.write(format!("[{pid}] {type_name}{extras} in {execution_time:.1} millis\n").as_bytes())?;
+                    repl_state = print_result(repl_state, result)?;
                 }
+                Err(err) => eprintln!("{}", err)
             }
+            repl_state.counter += 1;
         }
     }
+}
+
+fn print_result(state: REPLState, result: TypedValue) -> std::io::Result<REPLState> {
+    match result {
+        TableValue(rcv) => {
+            let rc: Box<dyn RowCollection> = Box::from(rcv);
+            let raw_lines = TableRenderer::from_table_with_ids(&rc)?;
+            let lines = state.interpreter.get("__COLUMNS__")
+                .map(|limit_v| {
+                    let limit = limit_v.to_usize();
+                    raw_lines.iter()
+                        .map(|s| if s.len() > limit { s[0..limit].to_string() } else { s.to_string() })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or(raw_lines);
+            lines.iter().for_each(|s| println!("{}", s))
+        }
+        z =>
+            println!("{}", z.unwrap_value())
+    }
+    Ok(state)
+}
+
+fn read_line_from(lines: Vec<String>) -> Box<dyn FnMut() -> std::io::Result<Option<String>>> {
+    let mut index = 0;
+    Box::new(move || {
+        Ok(if index < lines.len() {
+            let result = Some(format!("{}\n", lines[index]));
+            index += 1;
+            result
+        } else {
+            None
+        })
+    })
+}
+
+pub fn read_line_from_stdin() -> Box<dyn FnMut() -> std::io::Result<Option<String>>> {
+    Box::new(move || {
+        let mut line = String::new();
+        io::stdin().read_line(&mut line)?;
+        Ok(Some(line))
+    })
+}
+
+/// Reads lines of input until a blank line is entered.
+/// Returns the accumulated input as a single `String`.
+fn read_until_blank(
+    mut reader: Box<dyn FnMut() -> std::io::Result<Option<String>>>
+) -> std::io::Result<String> {
+    let mut input_buffer = String::new();
+    let mut done = false;
+    while !done {
+        // read a line of input
+        match reader()? {
+            Some(line) => {
+                // check for blank line (empty or only whitespace)
+                if line.trim().is_empty() { break; }
+
+                // append line to buffer
+                input_buffer.push_str(&line);
+            }
+            None => done = true
+        }
+    }
+
+    Ok(input_buffer)
+}
+
+/// Executes a script
+fn run_script(script_path: &str) -> std::io::Result<TypedValue> {
+    // read the script file contents into the string
+    let mut file = File::open(script_path)?;
+    let mut script_code = String::new();
+    file.read_to_string(&mut script_code)?;
+
+    // execute the script code
+    let mut interpreter = Interpreter::new();
+    interpreter.evaluate(script_code.as_str())
+}
+
+fn setup_system_variables(mut repl_state: REPLState, args: Vec<String>) -> REPLState {
+    // capture the commandline arguments
+    repl_state.interpreter.with_variable("__ARGS__", Array(args.iter()
+        .map(|s| StringValue(s.to_string()))
+        .collect::<Vec<_>>()
+    ));
+
+    // capture the terminal width and height
+    if let Ok((width, height)) = terminal::size() {
+        repl_state.interpreter
+            .with_variable("__COLUMNS__", Number(U16Value(width)));
+        repl_state.interpreter
+            .with_variable("__HEIGHT__", Number(U16Value(height)));
+    }
+    repl_state
+}
+
+/// Starts the listener server
+async fn start_server(args: Vec<String>) -> std::io::Result<()> {
+    use crate::rest_server::*;
+    use crate::web_routes;
+    use actix_web::web::Data;
+    use crate::platform::{MAJOR_VERSION, MINOR_VERSION};
+    use actix_web::web;
+    use log::info;
+    use shared_lib::{cnv_error, get_host_and_port};
+
+    // get the commandline arguments
+    let (host, port) = get_host_and_port(args)?;
+
+    // start the server
+    info!("Welcome to Oxide Server.\n");
+    info!("Starting server on port {}:{}.", host, port);
+    let server = actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
+        .bind(format!("{}:{}", host, port))?
+        .run();
+    server.await?;
     Ok(())
 }
 
-fn read_line() -> std::io::Result<Option<String>> {
-    use crossterm::event::{self, Event, KeyCode};
-    use std::io::Write;
-    let mut buffer = String::new();
-    let mut lines = Vec::new();
-    let mut last_char = '\n';
-
-    fn chars_available() -> bool {
-        event::poll(std::time::Duration::from_millis(250)).unwrap_or_else(|_| false)
+fn update_history(
+    state: &REPLState,
+    input: &str,
+    processing_time: f64,
+) -> std::io::Result<TypedValue> {
+    fn cleanup(raw: &str) -> String {
+        raw.split(|c| "\n\r\t".contains(c))
+            .map(|s| s.trim())
+            .collect::<Vec<_>>()
+            .join("; ")
     }
-
-    loop {
-        stdout().flush()?;
-        if chars_available() {
-            if let Event::Key(key_event) = event::read()? {
-                match key_event.code {
-                    KeyCode::Enter =>
-                        match last_char {
-                            '\\' => {
-                                buffer.pop();
-                                lines.push(buffer.to_string());
-                                buffer.clear();
-                                last_char = '\n';
-                            }
-                            _ => {
-                                lines.push(buffer.to_string());
-                                break;
-                            }
-                        }
-                    KeyCode::Char(c) => {
-                        buffer.push(c);
-                        last_char = c;
-                    }
-                    KeyCode::Esc => break,
-                    _ => {}
-                }
-            }
-        } else if !buffer.is_empty() { break; }
-    }
-    Ok(if lines.is_empty() { None } else { Some(lines.join("\n")) })
+    let ns = PlatformOps::get_oxide_history_ns();
+    let mut frc = FileRowCollection::open_or_create(&ns)?;
+    let result = frc.append_row(Row::new(0, vec![
+        Number(I64Value(state.session_id)),
+        Number(I64Value(state.user_id)),
+        Number(F64Value(processing_time)),
+        StringValue(cleanup(input))
+    ]));
+    Ok(result)
 }
 
-/// Processes user input against a local Oxide instance or a remote Oxide peer
-pub async fn process_statement(state: &mut REPLState, user_input: &str) -> std::io::Result<TypedValue> {
-    state.put_history(user_input).await?;
-    match &state.connection {
-        REPLConnection::LocalConnection =>
-            state.interpreter.evaluate_async(user_input).await,
-        REPLConnection::RemoteConnection { host, port } => {
-            let body = serde_json::to_string(&RemoteCallRequest::new(user_input.to_string()))?;
-            let response = reqwest::Client::new()
-                .post(format!("http://{}:{}/rpc", host, port))
-                .body(body)
-                .header("Content-Type", "application/json")
-                .send()
-                .await.map_err(|e| cnv_error!(e))?;
-            let response_body = response.text().await.map_err(|e| cnv_error!(e))?;
-            let outcome = RemoteCallResponse::from_string(response_body.as_str())?;
-            if let Some(message) = outcome.get_message() {
-                Ok(ErrorValue(Exact(message)))
-            } else {
-                Ok(TypedValue::from_json(outcome.get_result()))
-            }
-        }
-    }
-}
-
-// prints messages to STDOUT
-fn say(message: &str) -> std::io::Result<()> {
-    let lines = match message {
-        // is it JSON array?
-        s if s.starts_with("[") => {
-            let rows = RowJs::vec_from_string(s)?;
-            TableWriter::from_rows(&rows).join("\n")
-        }
-        // is it JSON object?
-        s if s.starts_with("{") => RowJs::from_string(s)?.to_json_string(),
-        s => String::from(s)
-    };
-    execute!(
-        stdout(),
-        Clear(ClearType::CurrentLine),
-        Print(format!("{}\n", lines)),
-        ResetColor
-    )?;
-    Ok(())
-}
-
-// Unit tests
+/// Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::repl::REPLState;
-
     use super::*;
+    use crate::compiler::Compiler;
+    use crate::machine::Machine;
+    use crate::repl::REPLState;
+    use std::cmp::max;
+    use std::fs;
 
+    #[ignore]
     #[test]
-    fn test_say() {
-        say("Hello").unwrap()
-    }
-
-    #[actix::test]
-    async fn test_get_put_history() {
-        let mut r: REPLState = REPLState::new();
-        r.put_history("abc".into()).await.unwrap();
-        r.put_history("123".into()).await.unwrap();
-        r.put_history("iii".into()).await.unwrap();
-
-        let h = r.get_history().await;
-        assert_eq!(h, vec!["[0] abc", "[1] 123", "[2] iii"])
+    fn test_do_terminal() {
+        do_terminal(REPLState::new(), vec![], || read_line_from(vec![
+            "import oxide".into(),
+            "help()".into(),
+        ])).unwrap();
     }
 
     #[test]
-    fn test_lifecycle() {
-        let mut r: REPLState = REPLState::new();
-        assert_eq!(r.is_alive(), true);
+    fn test_get_prompt() {
+        let mut state: REPLState = REPLState::new();
+        let prompt = state.get_prompt();
+        assert_eq!(prompt, "oxide.public[0]> ".to_string());
+    }
 
-        r.die();
-        assert_eq!(r.is_alive(), false);
+    #[test]
+    fn test_is_alive() {
+        let mut state: REPLState = REPLState::new();
+        assert_eq!(state.is_alive(), true);
+
+        state.die();
+        assert_eq!(state.is_alive(), false);
+    }
+
+    #[test]
+    fn test_print_result() {
+        let state = REPLState::new();
+        let state = print_result(state, Number(I64Value(100))).unwrap();
+        let model = Compiler::build(r#"
+            tools::to_table(["abc", "123"])
+        "#).unwrap();
+        let (_, table) = Machine::new().evaluate(&model).unwrap();
+        print_result(state, table).unwrap();
+    }
+
+    #[test]
+    fn test_read_line_from() {
+        let mut reader = read_line_from(vec![
+            "abc".into(),
+            "def".into(),
+            "ghi".into()
+        ]);
+        assert_eq!(reader().unwrap(), Some("abc\n".into()));
+        assert_eq!(reader().unwrap(), Some("def\n".into()));
+        assert_eq!(reader().unwrap(), Some("ghi\n".into()));
+    }
+
+    #[test]
+    fn test_read_until_blank() {
+        let reader = read_line_from(vec![
+            "import oxide".into(),
+            "help()".into(),
+        ]);
+        let code = read_until_blank(reader).unwrap();
+        assert_eq!(code, "import oxide\nhelp()\n")
+    }
+
+    #[test]
+    fn test_run_script() {
+        let file_path = "dummy.oxide";
+        fs::remove_file(file_path).ok();
+        let mut file = File::create_new(file_path).unwrap();
+        file.write(b"5 + 5").unwrap();
+        let result = run_script(file_path).unwrap();
+        assert_eq!(result, Number(I64Value(10)));
+        fs::remove_file(file_path).ok();
+    }
+
+    #[test]
+    fn test_setup_system_variables() {
+        let state = REPLState::new();
+        let state = setup_system_variables(state, vec![]);
+        assert!(matches!(state.interpreter.get("__ARGS__"), Some(Array(..))));
+        assert!(matches!(state.interpreter.get("__COLUMNS__"), Some(Number(..))));
+        assert!(matches!(state.interpreter.get("__HEIGHT__"), Some(Number(..))));
+    }
+
+    #[test]
+    fn test_update_history() {
+        let state = REPLState::new();
+        let _ = update_history(&state, "oxide::help()", 3.5).unwrap();
+
+        let ns = PlatformOps::get_oxide_history_ns();
+        let mut frc = FileRowCollection::open_or_create(&ns).unwrap();
+        let count = frc.len().unwrap() as i64;
+        let last = max(count - 1, -1);
+        let row_id = last as usize;
+        let row = frc.read_one(row_id).unwrap();
+        assert!(row.is_some());
+        frc.resize(row_id);
     }
 }

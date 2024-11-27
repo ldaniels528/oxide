@@ -10,7 +10,7 @@ use crate::cnv_error;
 use crate::namespaces::Namespace;
 use crate::parameter::Parameter;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct DataFrameConfig {
     columns: Vec<Parameter>,
     indices: Vec<HashIndexConfig>,
@@ -59,7 +59,7 @@ impl DataFrameConfig {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct HashIndexConfig {
     indexed_column_names: Vec<String>,
     is_unique: bool,

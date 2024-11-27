@@ -2,7 +2,7 @@
 // Platform class
 ////////////////////////////////////////////////////////////////////
 
-use crate::codec::Codec;
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
@@ -13,15 +13,16 @@ use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::*;
-use crate::numbers::NumberValue::*;
+use crate::numbers::Numbers::*;
 use crate::outcomes::OutcomeKind::Acked;
 use crate::outcomes::Outcomes::Ack;
 use crate::parameter::Parameter;
-use crate::platform::PlatformFunctions::*;
+use crate::platform::PlatformOps::*;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::structures::Structure;
 use crate::table_columns::Column;
+use crate::table_values::TableValues::{Disk, Model};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use chrono::{Datelike, Local, TimeZone, Timelike};
@@ -38,20 +39,29 @@ use uuid::Uuid;
 pub const MAJOR_VERSION: u8 = 0;
 pub const MINOR_VERSION: u8 = 2;
 
-/// Represents Platform Function Information
+/// Represents a Platform Function
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct PlatformFunctionInfo {
+pub struct PlatformFunction {
     pub name: String,
     pub description: String,
     pub package_name: String,
     pub parameters: Vec<Parameter>,
     pub return_type: DataType,
-    pub opcode: PlatformFunctions,
+    pub opcode: PlatformOps,
 }
 
 /// Represents an enumeration of Oxide Platform Functions
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum PlatformFunctions {
+pub enum PlatformOps {
+    // cal
+    CalDate,
+    CalDateDay,
+    CalDateHour12,
+    CalDateHour24,
+    CalDateMinute,
+    CalDateMonth,
+    CalDateSecond,
+    CalDateYear,
     // io package
     IoFileCreate,
     IoFileExists,
@@ -67,6 +77,7 @@ pub enum PlatformFunctions {
     OxideAssert,
     OxideEval,
     OxideHelp,
+    OxideHistory,
     OxideHome,
     OxideMatches,
     OxidePrintln,
@@ -86,33 +97,27 @@ pub enum PlatformFunctions {
     StrStartsWith,
     StrSubstring,
     StrToString,
+    // tools
+    ToolsCompact,
+    ToolsDescribe,
+    ToolsFetch,
+    ToolsReverse,
+    ToolsScan,
+    ToolsToArray,
+    ToolsToCSV,
+    ToolsToJSON,
+    ToolsToTable,
     // util package
     UtilBase64,
-    UtilCompact,
-    UtilDateDay,
-    UtilDateHour12,
-    UtilDateHour24,
-    UtilDateMinute,
-    UtilDateMonth,
-    UtilDateSecond,
-    UtilDateYear,
-    UtilDescribe,
-    UtilFetch,
     UtilMD5,
-    UtilNow,
-    UtilReverse,
-    UtilScan,
-    UtilToArray,
-    UtilToCSV,
+    UtilToASCII,
     UtilToF32,
     UtilToF64,
-    UtilToJSON,
     UtilToI8,
     UtilToI16,
     UtilToI32,
     UtilToI64,
     UtilToI128,
-    UtilToTable,
     UtilToU8,
     UtilToU16,
     UtilToU32,
@@ -124,26 +129,27 @@ pub enum PlatformFunctions {
     WwwURLEncode,
 }
 
-pub const PLATFORM_OPCODES: [PlatformFunctions; 64] = {
-    use PlatformFunctions::*;
+const PLATFORM_OPCODES: [PlatformOps; 66] = {
+    use PlatformOps::*;
     [
+        // cal
+        CalDate, CalDateDay, CalDateHour12, CalDateHour24, CalDateMinute,
+        CalDateMonth, CalDateSecond, CalDateYear,
         // io
         IoFileCreate, IoFileExists, IoFileReadText, IoStdErr, IoStdOut,
         // os
         OsCall, OsClear, OsCurrentDir, OsEnv,
         // oxide
-        OxideAssert, OxideEval, OxideHelp, OxideHome, OxideMatches,
+        OxideAssert, OxideEval, OxideHelp, OxideHistory, OxideHome, OxideMatches,
         OxidePrintln, OxideReset, OxideTypeOf, OxideUUID, OxideVersion,
         // str
         StrEndsWith, StrFormat, StrIndexOf, StrJoin, StrLeft, StrLen,
         StrRight, StrSplit, StrStartsWith, StrSubstring, StrToString,
-        // tbl
-        UtilCompact, UtilDescribe, UtilFetch, UtilReverse, UtilScan,
-        UtilToArray, UtilToCSV, UtilToJSON, UtilToTable,
+        // tools
+        ToolsCompact, ToolsDescribe, ToolsFetch, ToolsReverse, ToolsScan,
+        ToolsToArray, ToolsToCSV, ToolsToJSON, ToolsToTable,
         // util
-        UtilBase64, UtilDateDay, UtilDateHour12, UtilDateHour24,
-        UtilDateMinute, UtilDateMonth, UtilDateSecond, UtilDateYear,
-        UtilMD5, UtilNow, UtilToF32, UtilToF64,
+        UtilBase64, UtilMD5, UtilToASCII, UtilToF32, UtilToF64,
         UtilToI8, UtilToI16, UtilToI32, UtilToI64, UtilToI128,
         UtilToU8, UtilToU16, UtilToU32, UtilToU64, UtilToU128,
         // www
@@ -151,9 +157,9 @@ pub const PLATFORM_OPCODES: [PlatformFunctions; 64] = {
     ]
 };
 
-impl PlatformFunctions {
+impl PlatformOps {
     /// Builds a mapping of package name to function vector
-    pub fn create_packages() -> HashMap<String, Vec<PlatformFunctions>> {
+    pub fn create_packages() -> HashMap<String, Vec<PlatformOps>> {
         PLATFORM_OPCODES.iter()
             .fold(HashMap::new(), |mut hm, key| {
                 hm.entry(key.get_package_name())
@@ -163,12 +169,12 @@ impl PlatformFunctions {
             })
     }
 
-    pub fn decode(bytes: Vec<u8>) -> std::io::Result<PlatformFunctions> {
-        Codec::unwrap_as_result(bincode::deserialize(bytes.as_slice()))
+    pub fn decode(bytes: Vec<u8>) -> std::io::Result<PlatformOps> {
+        ByteCodeCompiler::unwrap_as_result(bincode::deserialize(bytes.as_slice()))
     }
 
     pub fn encode(&self) -> std::io::Result<Vec<u8>> {
-        Codec::unwrap_as_result(bincode::serialize(self))
+        ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
     }
 
     /// Evaluates the platform function
@@ -178,74 +184,76 @@ impl PlatformFunctions {
         args: Vec<TypedValue>,
     ) -> (Machine, TypedValue) {
         match self {
-            PlatformFunctions::IoFileCreate => self.adapter_fn2(ms, args, Self::do_io_create_file),
-            PlatformFunctions::IoFileExists => self.adapter_fn1(ms, args, Self::do_io_exists),
-            PlatformFunctions::IoFileReadText => self.adapter_fn1(ms, args, Self::do_io_read_text_file),
-            PlatformFunctions::IoStdErr => self.adapter_fn1(ms, args, Self::do_io_stderr),
-            PlatformFunctions::IoStdOut => self.adapter_fn1(ms, args, Self::do_io_stdout),
-            PlatformFunctions::OsCall => Self::do_os_call(ms, args),
-            PlatformFunctions::OsCurrentDir => self.adapter_fn0(ms, args, Self::do_os_current_dir),
-            PlatformFunctions::OsClear => self.adapter_fn0(ms, args, Self::do_os_clear_screen),
-            PlatformFunctions::OsEnv => self.adapter_fn0(ms, args, Self::do_os_env),
-            PlatformFunctions::OxideAssert => self.adapter_fn1(ms, args, Self::do_oxide_assert),
-            PlatformFunctions::OxideEval => self.adapter_fn1(ms, args, Self::do_oxide_eval),
-            PlatformFunctions::OxideHelp => self.adapter_fn0(ms, args, Self::do_oxide_help),
-            PlatformFunctions::OxideHome => self.adapter_fn0(ms, args, Self::do_oxide_home),
-            PlatformFunctions::OxideMatches => self.adapter_fn2(ms, args, Self::do_oxide_matches),
-            PlatformFunctions::OxidePrintln => self.adapter_fn1(ms, args, Self::do_io_stdout),
-            PlatformFunctions::OxideReset => self.adapter_fn0(ms, args, Self::do_oxide_reset),
-            PlatformFunctions::OxideTypeOf => self.adapter_fn1(ms, args, Self::do_oxide_type_of),
-            PlatformFunctions::OxideUUID => Self::do_util_uuid(ms, args),
-            PlatformFunctions::OxideVersion => self.adapter_fn0(ms, args, Self::do_oxide_version),
-            PlatformFunctions::StrEndsWith => self.adapter_fn2(ms, args, Self::do_str_ends_with),
-            PlatformFunctions::StrFormat => Self::do_str_format(ms, args),
-            PlatformFunctions::StrIndexOf => self.adapter_fn2(ms, args, Self::do_str_index_of),
-            PlatformFunctions::StrJoin => self.adapter_fn2(ms, args, Self::do_str_join),
-            PlatformFunctions::StrLeft => self.adapter_fn2(ms, args, Self::do_str_left),
-            PlatformFunctions::StrLen => self.adapter_fn1(ms, args, Self::do_str_len),
-            PlatformFunctions::StrRight => self.adapter_fn2(ms, args, Self::do_str_right),
-            PlatformFunctions::StrSplit => self.adapter_fn2(ms, args, Self::do_str_split),
-            PlatformFunctions::StrStartsWith => self.adapter_fn2(ms, args, Self::do_str_start_with),
-            PlatformFunctions::StrSubstring => self.adapter_fn3(ms, args, Self::do_str_substring),
-            PlatformFunctions::StrToString => self.adapter_fn1(ms, args, Self::do_str_to_string),
-            PlatformFunctions::UtilBase64 => self.adapter_fn1(ms, args, Self::do_util_base64),
-            PlatformFunctions::UtilCompact => self.adapter_fn1(ms, args, Self::do_util_compact),
-            PlatformFunctions::UtilDateDay => self.adapter_fn1_pf(ms, args, Self::do_util_date_part),
-            PlatformFunctions::UtilDateHour24 => self.adapter_fn1_pf(ms, args, Self::do_util_date_part),
-            PlatformFunctions::UtilDateHour12 => self.adapter_fn1_pf(ms, args, Self::do_util_date_part),
-            PlatformFunctions::UtilDateMinute => self.adapter_fn1_pf(ms, args, Self::do_util_date_part),
-            PlatformFunctions::UtilDateMonth => self.adapter_fn1_pf(ms, args, Self::do_util_date_part),
-            PlatformFunctions::UtilDateSecond => self.adapter_fn1_pf(ms, args, Self::do_util_date_part),
-            PlatformFunctions::UtilDateYear => self.adapter_fn1_pf(ms, args, Self::do_util_date_part),
-            PlatformFunctions::UtilDescribe => self.adapter_fn1(ms, args, Self::do_util_describe),
-            PlatformFunctions::UtilFetch => self.adapter_fn2(ms, args, Self::do_util_fetch),
-            PlatformFunctions::UtilMD5 => self.adapter_fn1(ms, args, Self::do_util_md5),
-            PlatformFunctions::UtilNow => Self::do_util_now(ms, args),
-            PlatformFunctions::UtilReverse => self.adapter_fn1(ms, args, Self::do_util_reverse),
-            PlatformFunctions::UtilScan => self.adapter_fn1(ms, args, Self::do_util_scan),
-            PlatformFunctions::UtilToArray => self.adapter_fn1(ms, args, Self::do_util_to_array),
-            PlatformFunctions::UtilToCSV => self.adapter_fn1(ms, args, Self::do_util_to_csv),
-            PlatformFunctions::UtilToF32 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToF64 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToI8 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToI16 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToI32 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToI64 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToI128 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToJSON => self.adapter_fn1(ms, args, Self::do_util_to_json),
-            PlatformFunctions::UtilToTable => self.adapter_fn1(ms, args, Self::do_util_to_table),
-            PlatformFunctions::UtilToU8 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToU16 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToU32 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToU64 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::UtilToU128 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
-            PlatformFunctions::WwwURLDecode => self.adapter_fn1(ms, args, Self::do_www_url_decode),
-            PlatformFunctions::WwwURLEncode => self.adapter_fn1(ms, args, Self::do_www_url_encode),
-            PlatformFunctions::WwwServe => self.adapter_fn1(ms, args, Self::do_www_serve),
+            PlatformOps::CalDate => Self::do_cal_date(ms, args),
+            PlatformOps::CalDateDay => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateHour24 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateHour12 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateMinute => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateMonth => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateSecond => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateYear => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::IoFileCreate => self.adapter_fn2(ms, args, Self::do_io_create_file),
+            PlatformOps::IoFileExists => self.adapter_fn1(ms, args, Self::do_io_exists),
+            PlatformOps::IoFileReadText => self.adapter_fn1(ms, args, Self::do_io_read_text_file),
+            PlatformOps::IoStdErr => self.adapter_fn1(ms, args, Self::do_io_stderr),
+            PlatformOps::IoStdOut => self.adapter_fn1(ms, args, Self::do_io_stdout),
+            PlatformOps::OsCall => Self::do_os_call(ms, args),
+            PlatformOps::OsCurrentDir => self.adapter_fn0(ms, args, Self::do_os_current_dir),
+            PlatformOps::OsClear => self.adapter_fn0(ms, args, Self::do_os_clear_screen),
+            PlatformOps::OsEnv => self.adapter_fn0(ms, args, Self::do_os_env),
+            PlatformOps::OxideAssert => self.adapter_fn1(ms, args, Self::do_oxide_assert),
+            PlatformOps::OxideEval => self.adapter_fn1(ms, args, Self::do_oxide_eval),
+            PlatformOps::OxideHelp => self.adapter_fn0(ms, args, Self::do_oxide_help),
+            PlatformOps::OxideHistory => Self::do_oxide_history(ms, args),
+            PlatformOps::OxideHome => self.adapter_fn0(ms, args, Self::do_oxide_home),
+            PlatformOps::OxideMatches => self.adapter_fn2(ms, args, Self::do_oxide_matches),
+            PlatformOps::OxidePrintln => self.adapter_fn1(ms, args, Self::do_io_stdout),
+            PlatformOps::OxideReset => self.adapter_fn0(ms, args, Self::do_oxide_reset),
+            PlatformOps::OxideTypeOf => self.adapter_fn1(ms, args, Self::do_oxide_type_of),
+            PlatformOps::OxideUUID => Self::do_util_uuid(ms, args),
+            PlatformOps::OxideVersion => self.adapter_fn0(ms, args, Self::do_oxide_version),
+            PlatformOps::StrEndsWith => self.adapter_fn2(ms, args, Self::do_str_ends_with),
+            PlatformOps::StrFormat => Self::do_str_format(ms, args),
+            PlatformOps::StrIndexOf => self.adapter_fn2(ms, args, Self::do_str_index_of),
+            PlatformOps::StrJoin => self.adapter_fn2(ms, args, Self::do_str_join),
+            PlatformOps::StrLeft => self.adapter_fn2(ms, args, Self::do_str_left),
+            PlatformOps::StrLen => self.adapter_fn1(ms, args, Self::do_str_len),
+            PlatformOps::StrRight => self.adapter_fn2(ms, args, Self::do_str_right),
+            PlatformOps::StrSplit => self.adapter_fn2(ms, args, Self::do_str_split),
+            PlatformOps::StrStartsWith => self.adapter_fn2(ms, args, Self::do_str_start_with),
+            PlatformOps::StrSubstring => self.adapter_fn3(ms, args, Self::do_str_substring),
+            PlatformOps::StrToString => self.adapter_fn1(ms, args, Self::do_str_to_string),
+            PlatformOps::ToolsCompact => self.adapter_fn1(ms, args, Self::do_tools_compact),
+            PlatformOps::ToolsDescribe => self.adapter_fn1(ms, args, Self::do_tools_describe),
+            PlatformOps::ToolsFetch => self.adapter_fn2(ms, args, Self::do_tools_fetch),
+            PlatformOps::ToolsReverse => self.adapter_fn1(ms, args, Self::do_tools_reverse),
+            PlatformOps::ToolsScan => self.adapter_fn1(ms, args, Self::do_tools_scan),
+            PlatformOps::ToolsToArray => self.adapter_fn1(ms, args, Self::do_tools_to_array),
+            PlatformOps::ToolsToCSV => self.adapter_fn1(ms, args, Self::do_tools_to_csv),
+            PlatformOps::ToolsToJSON => self.adapter_fn1(ms, args, Self::do_tools_to_json),
+            PlatformOps::ToolsToTable => self.adapter_fn1(ms, args, Self::do_tools_to_table),
+            PlatformOps::UtilBase64 => self.adapter_fn1(ms, args, Self::do_util_base64),
+            PlatformOps::UtilMD5 => self.adapter_fn1(ms, args, Self::do_util_md5),
+            PlatformOps::UtilToASCII => self.adapter_fn1(ms, args, Self::do_util_to_ascii),
+            PlatformOps::UtilToF32 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToF64 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToI8 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToI16 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToI32 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToI64 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToI128 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToU8 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToU16 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToU32 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToU64 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::UtilToU128 => self.adapter_fn1_pf(ms, args, Self::do_util_math_conv),
+            PlatformOps::WwwURLDecode => self.adapter_fn1(ms, args, Self::do_www_url_decode),
+            PlatformOps::WwwURLEncode => self.adapter_fn1(ms, args, Self::do_www_url_encode),
+            PlatformOps::WwwServe => self.adapter_fn1(ms, args, Self::do_www_serve),
         }
     }
 
-    pub fn find_function(package: &str, name: &str) -> Option<PlatformFunctionInfo> {
+    pub fn find_function(package: &str, name: &str) -> Option<PlatformFunction> {
         PLATFORM_OPCODES.iter()
             .map(|p| p.get_info())
             .find(|pfi| pfi.package_name == package && pfi.name == name)
@@ -253,76 +261,78 @@ impl PlatformFunctions {
 
     pub fn get_description(&self) -> String {
         let result = match self {
-            PlatformFunctions::IoFileCreate => "Creates a new file",
-            PlatformFunctions::OsCurrentDir => "Returns the current directory",
-            PlatformFunctions::IoFileExists => "Returns true if the source path exists",
-            PlatformFunctions::IoFileReadText => "Reads the contents of a text file into memory",
-            PlatformFunctions::IoStdErr => "Writes a string to STDERR",
-            PlatformFunctions::IoStdOut => "Writes a string to STDOUT",
-            PlatformFunctions::OxideAssert => "Evaluates an assertion returning Ack or an error",
-            PlatformFunctions::OxideMatches => "Compares two values",
-            PlatformFunctions::OxidePrintln => "Print line function",
-            PlatformFunctions::OxideTypeOf => "Returns the type of a value",
-            PlatformFunctions::OsCall => "Invokes an operating system application",
-            PlatformFunctions::OsClear => "Clears the terminal/screen",
-            PlatformFunctions::OsEnv => "Returns a table of the OS environment variables",
-            PlatformFunctions::OxideEval => "Evaluates a string containing Oxide code",
-            PlatformFunctions::OxideHome => "Returns the Oxide home directory path",
-            PlatformFunctions::OxideReset => "Clears the scope of all user-defined objects",
-            PlatformFunctions::WwwServe => "Starts a local HTTP service",
-            PlatformFunctions::OxideHelp => "Integrated help function",
-            PlatformFunctions::OxideVersion => "Returns the Oxide version",
-            PlatformFunctions::StrEndsWith => "Returns true if string A ends with string B",
-            PlatformFunctions::StrFormat => "Returns an argument-formatted string",
-            PlatformFunctions::StrIndexOf => "Returns the index of string 'b' in string 'a'",
-            PlatformFunctions::StrJoin => "Combines an array into a string",
-            PlatformFunctions::StrLeft => "Returns n-characters from left-to-right",
-            PlatformFunctions::StrLen => "Returns the number of characters contained in the string",
-            PlatformFunctions::StrRight => "Returns n-characters from right-to-left",
-            PlatformFunctions::StrSplit => "Splits string A by delimiter string B",
-            PlatformFunctions::StrStartsWith => "Returns true if string A starts with string B",
-            PlatformFunctions::StrSubstring => "Returns a substring of string A from B to C",
-            PlatformFunctions::StrToString => "Converts a value to its text-based representation",
-            PlatformFunctions::UtilBase64 => "Translates bytes into Base 64",
-            PlatformFunctions::UtilCompact => "Shrinks a table by removing deleted rows",
-            PlatformFunctions::UtilDateDay => "Returns the day of the month of a Date",
-            PlatformFunctions::UtilDateHour12 => "Returns the hour of the day of a Date",
-            PlatformFunctions::UtilDateHour24 => "Returns the hour (military time) of the day of a Date",
-            PlatformFunctions::UtilDateMinute => "Returns the minute of the hour of a Date",
-            PlatformFunctions::UtilDateMonth => "Returns the month of the year of a Date",
-            PlatformFunctions::UtilDateSecond => "Returns the seconds of the minute of a Date",
-            PlatformFunctions::UtilDateYear => "Returns the year of a Date",
-            PlatformFunctions::UtilDescribe => "Describes a table or structure",
-            PlatformFunctions::UtilFetch => "Retrieves a raw structure from a table",
-            PlatformFunctions::UtilMD5 => "Creates a MD5 digest",
-            PlatformFunctions::UtilNow => "Returns the current local date and time",
-            PlatformFunctions::UtilReverse => "Returns a reverse copy of a table, string or array",
-            PlatformFunctions::UtilScan => "Returns existence metadata for a table",
-            PlatformFunctions::UtilToArray => "Converts a collection into an array",
-            PlatformFunctions::UtilToCSV => "Converts a collection to CSV format",
-            PlatformFunctions::UtilToJSON => "Converts a collection to JSON format",
-            PlatformFunctions::UtilToF32 => "Converts a value to f32",
-            PlatformFunctions::UtilToF64 => "Converts a value to f64",
-            PlatformFunctions::UtilToI8 => "Converts a value to i8",
-            PlatformFunctions::UtilToI16 => "Converts a value to i16",
-            PlatformFunctions::UtilToI32 => "Converts a value to i32",
-            PlatformFunctions::UtilToI64 => "Converts a value to i64",
-            PlatformFunctions::UtilToI128 => "Converts a value to i128",
-            PlatformFunctions::UtilToTable => "Converts an object into a to_table",
-            PlatformFunctions::UtilToU8 => "Converts a value to u8",
-            PlatformFunctions::UtilToU16 => "Converts a value to u16",
-            PlatformFunctions::UtilToU32 => "Converts a value to u32",
-            PlatformFunctions::UtilToU64 => "Converts a value to u64",
-            PlatformFunctions::UtilToU128 => "Converts a value to u128",
-            PlatformFunctions::OxideUUID => "Returns a random 128-bit UUID",
-            PlatformFunctions::WwwURLDecode => "Decodes a URL-encoded string",
-            PlatformFunctions::WwwURLEncode => "Encodes a URL string",
+            PlatformOps::IoFileCreate => "Creates a new file",
+            PlatformOps::IoFileExists => "Returns true if the source path exists",
+            PlatformOps::IoFileReadText => "Reads the contents of a text file into memory",
+            PlatformOps::IoStdErr => "Writes a string to STDERR",
+            PlatformOps::IoStdOut => "Writes a string to STDOUT",
+            PlatformOps::OxideAssert => "Evaluates an assertion returning Ack or an error",
+            PlatformOps::OxideMatches => "Compares two values",
+            PlatformOps::OxidePrintln => "Print line function",
+            PlatformOps::OxideTypeOf => "Returns the type of a value",
+            PlatformOps::OsCall => "Invokes an operating system application",
+            PlatformOps::OsClear => "Clears the terminal/screen",
+            PlatformOps::OsCurrentDir => "Returns the current directory",
+            PlatformOps::OsEnv => "Returns a table of the OS environment variables",
+            PlatformOps::OxideEval => "Evaluates a string containing Oxide code",
+            PlatformOps::OxideHelp => "Integrated help function",
+            PlatformOps::OxideHistory => "Returns all commands successfully executed during the session",
+            PlatformOps::OxideHome => "Returns the Oxide home directory path",
+            PlatformOps::OxideReset => "Clears the scope of all user-defined objects",
+            PlatformOps::OxideVersion => "Returns the Oxide version",
+            PlatformOps::StrEndsWith => "Returns true if string `a` ends with string B",
+            PlatformOps::StrFormat => "Returns an argument-formatted string",
+            PlatformOps::StrIndexOf => "Returns the index of string `b` in string `a`",
+            PlatformOps::StrJoin => "Combines an array into a string",
+            PlatformOps::StrLeft => "Returns n-characters from left-to-right",
+            PlatformOps::StrLen => "Returns the number of characters contained in the string",
+            PlatformOps::StrRight => "Returns n-characters from right-to-left",
+            PlatformOps::StrSplit => "Splits string `a` by delimiter string `b`",
+            PlatformOps::StrStartsWith => "Returns true if string `a` starts with string `b`",
+            PlatformOps::StrSubstring => "Returns a substring of string `s` from `m` to `n`",
+            PlatformOps::StrToString => "Converts a value to its text-based representation",
+            PlatformOps::CalDate => "Returns the current local date and time",
+            PlatformOps::CalDateDay => "Returns the day of the month of a Date",
+            PlatformOps::CalDateHour12 => "Returns the hour of the day of a Date",
+            PlatformOps::CalDateHour24 => "Returns the hour (military time) of the day of a Date",
+            PlatformOps::CalDateMinute => "Returns the minute of the hour of a Date",
+            PlatformOps::CalDateMonth => "Returns the month of the year of a Date",
+            PlatformOps::CalDateSecond => "Returns the seconds of the minute of a Date",
+            PlatformOps::CalDateYear => "Returns the year of a Date",
+            PlatformOps::ToolsCompact => "Shrinks a table by removing deleted rows",
+            PlatformOps::ToolsDescribe => "Describes a table or structure",
+            PlatformOps::ToolsFetch => "Retrieves a raw structure from a table",
+            PlatformOps::ToolsReverse => "Returns a reverse copy of a table, string or array",
+            PlatformOps::ToolsScan => "Returns existence metadata for a table",
+            PlatformOps::ToolsToArray => "Converts a collection into an array",
+            PlatformOps::ToolsToCSV => "Converts a collection to CSV format",
+            PlatformOps::ToolsToJSON => "Converts a collection to JSON format",
+            PlatformOps::ToolsToTable => "Converts an object into a to_table",
+            PlatformOps::UtilBase64 => "Translates bytes into Base 64",
+            PlatformOps::UtilMD5 => "Creates a MD5 digest",
+            PlatformOps::UtilToASCII => "Converts an integer to ASCII",
+            PlatformOps::UtilToF32 => "Converts a value to f32",
+            PlatformOps::UtilToF64 => "Converts a value to f64",
+            PlatformOps::UtilToI8 => "Converts a value to i8",
+            PlatformOps::UtilToI16 => "Converts a value to i16",
+            PlatformOps::UtilToI32 => "Converts a value to i32",
+            PlatformOps::UtilToI64 => "Converts a value to i64",
+            PlatformOps::UtilToI128 => "Converts a value to i128",
+            PlatformOps::UtilToU8 => "Converts a value to u8",
+            PlatformOps::UtilToU16 => "Converts a value to u16",
+            PlatformOps::UtilToU32 => "Converts a value to u32",
+            PlatformOps::UtilToU64 => "Converts a value to u64",
+            PlatformOps::UtilToU128 => "Converts a value to u128",
+            PlatformOps::OxideUUID => "Returns a random 128-bit UUID",
+            PlatformOps::WwwServe => "Starts a local HTTP service",
+            PlatformOps::WwwURLDecode => "Decodes a URL-encoded string",
+            PlatformOps::WwwURLEncode => "Encodes a URL string",
         };
         result.to_string()
     }
 
-    pub fn get_info(&self) -> PlatformFunctionInfo {
-        PlatformFunctionInfo {
+    pub fn get_info(&self) -> PlatformFunction {
+        PlatformFunction {
             name: self.get_name(),
             description: self.get_description(),
             package_name: self.get_package_name(),
@@ -334,96 +344,101 @@ impl PlatformFunctions {
 
     pub fn get_name(&self) -> String {
         let result = match self {
-            PlatformFunctions::IoFileCreate => "create_file",
-            PlatformFunctions::OsCurrentDir => "current_dir",
-            PlatformFunctions::IoFileExists => "exists",
-            PlatformFunctions::IoFileReadText => "read_text_file",
-            PlatformFunctions::IoStdErr => "stderr",
-            PlatformFunctions::IoStdOut => "stdout",
-            PlatformFunctions::OxideAssert => "assert",
-            PlatformFunctions::OxideMatches => "matches",
-            PlatformFunctions::OxidePrintln => "println",
-            PlatformFunctions::OxideTypeOf => "type_of",
-            PlatformFunctions::OsCall => "call",
-            PlatformFunctions::OsClear => "clear",
-            PlatformFunctions::OsEnv => "env",
-            PlatformFunctions::OxideEval => "eval",
-            PlatformFunctions::OxideHome => "home",
-            PlatformFunctions::OxideReset => "reset",
-            PlatformFunctions::WwwServe => "serve",
-            PlatformFunctions::OxideHelp => "help",
-            PlatformFunctions::OxideVersion => "version",
-            PlatformFunctions::StrEndsWith => "ends_with",
-            PlatformFunctions::StrFormat => "format",
-            PlatformFunctions::StrIndexOf => "index_of",
-            PlatformFunctions::StrJoin => "join",
-            PlatformFunctions::StrLeft => "left",
-            PlatformFunctions::StrLen => "len",
-            PlatformFunctions::StrRight => "right",
-            PlatformFunctions::StrSplit => "split",
-            PlatformFunctions::StrStartsWith => "starts_with",
-            PlatformFunctions::StrSubstring => "substring",
-            PlatformFunctions::StrToString => "to_string",
-            PlatformFunctions::UtilBase64 => "base64",
-            PlatformFunctions::UtilCompact => "compact",
-            PlatformFunctions::UtilDateDay => "day_of",
-            PlatformFunctions::UtilDateHour12 => "hour12",
-            PlatformFunctions::UtilDateHour24 => "hour24",
-            PlatformFunctions::UtilDateMinute => "minute_of",
-            PlatformFunctions::UtilDateMonth => "month_of",
-            PlatformFunctions::UtilDateSecond => "second_of",
-            PlatformFunctions::UtilDateYear => "year_of",
-            PlatformFunctions::UtilDescribe => "describe",
-            PlatformFunctions::UtilFetch => "fetch",
-            PlatformFunctions::UtilMD5 => "md5",
-            PlatformFunctions::UtilNow => "now",
-            PlatformFunctions::UtilReverse => "reverse",
-            PlatformFunctions::UtilScan => "scan",
-            PlatformFunctions::UtilToArray => "to_array",
-            PlatformFunctions::UtilToCSV => "to_csv",
-            PlatformFunctions::UtilToJSON => "to_json",
-            PlatformFunctions::UtilToF32 => "to_f32",
-            PlatformFunctions::UtilToF64 => "to_f64",
-            PlatformFunctions::UtilToI8 => "to_i8",
-            PlatformFunctions::UtilToI16 => "to_i16",
-            PlatformFunctions::UtilToI32 => "to_i32",
-            PlatformFunctions::UtilToI64 => "to_i64",
-            PlatformFunctions::UtilToI128 => "to_i128",
-            PlatformFunctions::UtilToTable => "to_table",
-            PlatformFunctions::UtilToU8 => "to_u8",
-            PlatformFunctions::UtilToU16 => "to_u16",
-            PlatformFunctions::UtilToU32 => "to_u32",
-            PlatformFunctions::UtilToU64 => "to_u64",
-            PlatformFunctions::UtilToU128 => "to_u128",
-            PlatformFunctions::OxideUUID => "uuid",
-            PlatformFunctions::WwwURLDecode => "url_decode",
-            PlatformFunctions::WwwURLEncode => "url_encode",
+            PlatformOps::CalDate => "now",
+            PlatformOps::CalDateDay => "day_of",
+            PlatformOps::CalDateHour12 => "hour12",
+            PlatformOps::CalDateHour24 => "hour24",
+            PlatformOps::CalDateMinute => "minute_of",
+            PlatformOps::CalDateMonth => "month_of",
+            PlatformOps::CalDateSecond => "second_of",
+            PlatformOps::CalDateYear => "year_of",
+            PlatformOps::IoFileCreate => "create_file",
+            PlatformOps::IoFileExists => "exists",
+            PlatformOps::IoFileReadText => "read_text_file",
+            PlatformOps::IoStdErr => "stderr",
+            PlatformOps::IoStdOut => "stdout",
+            PlatformOps::OsCall => "call",
+            PlatformOps::OsClear => "clear",
+            PlatformOps::OsCurrentDir => "current_dir",
+            PlatformOps::OsEnv => "env",
+            PlatformOps::OxideAssert => "assert",
+            PlatformOps::OxideEval => "eval",
+            PlatformOps::OxideHelp => "help",
+            PlatformOps::OxideHistory => "history",
+            PlatformOps::OxideHome => "home",
+            PlatformOps::OxideMatches => "matches",
+            PlatformOps::OxidePrintln => "println",
+            PlatformOps::OxideReset => "reset",
+            PlatformOps::OxideTypeOf => "type_of",
+            PlatformOps::OxideUUID => "uuid",
+            PlatformOps::OxideVersion => "version",
+            PlatformOps::StrEndsWith => "ends_with",
+            PlatformOps::StrFormat => "format",
+            PlatformOps::StrIndexOf => "index_of",
+            PlatformOps::StrJoin => "join",
+            PlatformOps::StrLeft => "left",
+            PlatformOps::StrLen => "len",
+            PlatformOps::StrRight => "right",
+            PlatformOps::StrSplit => "split",
+            PlatformOps::StrStartsWith => "starts_with",
+            PlatformOps::StrSubstring => "substring",
+            PlatformOps::StrToString => "to_string",
+            PlatformOps::ToolsCompact => "compact",
+            PlatformOps::ToolsDescribe => "describe",
+            PlatformOps::ToolsFetch => "fetch",
+            PlatformOps::ToolsReverse => "reverse",
+            PlatformOps::ToolsScan => "scan",
+            PlatformOps::ToolsToArray => "to_array",
+            PlatformOps::ToolsToCSV => "to_csv",
+            PlatformOps::ToolsToJSON => "to_json",
+            PlatformOps::ToolsToTable => "to_table",
+            PlatformOps::UtilBase64 => "base64",
+            PlatformOps::UtilMD5 => "md5",
+            PlatformOps::UtilToASCII => "to_ascii",
+            PlatformOps::UtilToF32 => "to_f32",
+            PlatformOps::UtilToF64 => "to_f64",
+            PlatformOps::UtilToI8 => "to_i8",
+            PlatformOps::UtilToI16 => "to_i16",
+            PlatformOps::UtilToI32 => "to_i32",
+            PlatformOps::UtilToI64 => "to_i64",
+            PlatformOps::UtilToI128 => "to_i128",
+            PlatformOps::UtilToU8 => "to_u8",
+            PlatformOps::UtilToU16 => "to_u16",
+            PlatformOps::UtilToU32 => "to_u32",
+            PlatformOps::UtilToU64 => "to_u64",
+            PlatformOps::UtilToU128 => "to_u128",
+            PlatformOps::WwwServe => "serve",
+            PlatformOps::WwwURLDecode => "url_decode",
+            PlatformOps::WwwURLEncode => "url_encode",
         };
         result.to_string()
     }
 
     pub fn get_package_name(&self) -> String {
-        use PlatformFunctions::*;
+        use PlatformOps::*;
         let result = match self {
+            // cal
+            CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
+            CalDateMonth | CalDateSecond | CalDateYear | CalDate => "cal",
             // io
             IoFileCreate | IoFileExists | IoFileReadText | IoStdErr | IoStdOut => "io",
             // oxide
-            OxideAssert | OxideMatches | OxidePrintln | OxideTypeOf => "oxide",
+            OxideAssert | OxideEval | OxideHelp | OxideHistory |
+            OxideHome | OxideMatches | OxidePrintln | OxideReset |
+            OxideTypeOf | OxideUUID | OxideVersion => "oxide",
             // os
             OsCall | OsClear | OsCurrentDir | OsEnv => "os",
-            // oxide
-            OxideEval | OxideHome | OxideReset | OxideHelp | OxideUUID | OxideVersion => "oxide",
             // str
-            StrEndsWith | StrFormat | StrIndexOf | StrJoin | StrLeft | StrLen | StrRight |
-            StrSplit | StrStartsWith | StrSubstring | StrToString => "str",
+            StrEndsWith | StrFormat | StrIndexOf | StrJoin |
+            StrLeft | StrLen | StrRight | StrSplit |
+            StrStartsWith | StrSubstring | StrToString => "str",
+            // tools
+            ToolsCompact | ToolsDescribe | ToolsFetch | ToolsReverse | ToolsScan |
+            ToolsToArray | ToolsToCSV | ToolsToJSON | ToolsToTable => "tools",
             // util
-            UtilBase64 | UtilCompact | UtilDateDay | UtilDateHour12 | UtilDateHour24 |
-            UtilDateMinute | UtilDateMonth | UtilDateSecond | UtilDateYear |
-            UtilDescribe | UtilFetch | UtilMD5 | UtilNow | UtilReverse | UtilScan |
-            UtilToArray | UtilToCSV | UtilToJSON | UtilToF32 | UtilToF64 |
+            UtilBase64 | UtilMD5 | UtilToASCII | UtilToF32 | UtilToF64 |
             UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 | UtilToI128 |
-            UtilToTable | UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 |
-            UtilToU128 => "util",
+            UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128 => "util",
             // www
             WwwURLDecode | WwwURLEncode | WwwServe => "www",
         };
@@ -431,34 +446,34 @@ impl PlatformFunctions {
     }
 
     pub fn get_parameter_types(&self) -> Vec<DataType> {
-        use PlatformFunctions::*;
+        use PlatformOps::*;
         match self {
             // zero-parameter
             OsCurrentDir | OsEnv | OxideHome | OxideReset | OsClear |
-            OxideHelp | OxideVersion | UtilNow | OxideUUID
+            OxideHelp | OxideHistory | OxideVersion | CalDate | OxideUUID
             => vec![],
             // single-parameter (boolean)
             OxideAssert
             => vec![BooleanType],
             // single-parameter (date)
-            UtilDateDay | UtilDateHour12 | UtilDateHour24 | UtilDateMinute |
-            UtilDateMonth | UtilDateSecond | UtilDateYear
+            CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
+            CalDateMonth | CalDateSecond | CalDateYear
             => vec![DateType],
             // single-parameter (int)
-            StrLen | WwwServe
+            UtilToASCII | WwwServe
             => vec![NumberType(U32Kind)],
             // single-parameter (lazy)
             OxideTypeOf | StrToString | UtilBase64 | UtilMD5 | UtilToF32 | UtilToF64 |
-            UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 | UtilToI128 | UtilToTable |
+            UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 | UtilToI128 | ToolsToTable |
             UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128
             => vec![LazyType],
             // single-parameter (string)
             IoFileExists | IoFileReadText | IoStdErr | IoStdOut |
-            OxidePrintln | OsCall | OxideEval | WwwURLDecode | WwwURLEncode
+            OxidePrintln | OsCall | OxideEval | StrLen | WwwURLDecode | WwwURLEncode
             => vec![StringType(BLOB)],
             // single-parameter (table)
-            UtilCompact | UtilDescribe | UtilReverse | UtilScan |
-            UtilToArray | UtilToCSV | UtilToJSON
+            ToolsCompact | ToolsDescribe | ToolsReverse | ToolsScan |
+            ToolsToArray | ToolsToCSV | ToolsToJSON
             => vec![TableType(Vec::new(), BLOB)],
             // two-parameter (lazy, lazy)
             OxideMatches
@@ -470,7 +485,7 @@ impl PlatformFunctions {
             StrIndexOf | StrLeft | StrRight
             => vec![StringType(BLOB), NumberType(I64Kind)],
             // two-parameter (table, u64)
-            UtilFetch
+            ToolsFetch
             => vec![TableType(vec![], BLOB), NumberType(U64Kind)],
             // two-parameter (array, string)
             StrJoin
@@ -482,22 +497,26 @@ impl PlatformFunctions {
     }
 
     pub fn get_parameters(&self) -> Vec<Parameter> {
+        fn to_char(n: usize) -> char { ((n + 97) as u8) as char }
         let names = match self.get_parameter_types().as_slice() {
-            [BooleanType] => vec!["b".to_string()],
-            [DateType] => vec!["d".to_string()],
-            [LazyType] => vec!["x".to_string()],
-            [NumberType(..)] => vec!["n".to_string()],
-            [StringType(..)] => vec!["s".to_string()],
-            [TableType(..)] => vec!["t".to_string()],
+            [BooleanType] => vec!['b'],
+            [DateType] => vec!['d'],
+            [LazyType] => vec!['x'],
+            [NumberType(..)] => vec!['n'],
+            [StringType(..)] => vec!['s'],
+            [StringType(..), NumberType(..)] => vec!['s', 'n'],
+            [TableType(..)] => vec!['t'],
+            [TableType(..), NumberType(..)] => vec!['t', 'n'],
+            [StringType(..), NumberType(..), NumberType(..)] => vec!['s', 'm', 'n'],
             params => params.iter().enumerate()
-                .map(|(n, dt)| format!("{}", ((n + 97) as u8) as char))
+                .map(|(n, _)| to_char(n))
                 .collect()
         };
 
         names.iter().zip(self.get_parameter_types().iter()).enumerate()
             .map(|(n, (name, dt))|
                 Parameter::new(
-                    name,
+                    name.to_string(),
                     dt.to_type_declaration(),
                     None,
                 ))
@@ -505,26 +524,26 @@ impl PlatformFunctions {
     }
 
     pub fn get_return_type(&self) -> DataType {
-        use PlatformFunctions::*;
+        use PlatformOps::*;
         match self {
             // array
-            UtilToArray => ArrayType(Box::from(LazyType)),
-            IoFileReadText | StrSplit | UtilToCSV | UtilToJSON => ArrayType(Box::from(StringType(BLOB))),
+            ToolsToArray => ArrayType(Box::from(LazyType)),
+            IoFileReadText | StrSplit | ToolsToCSV | ToolsToJSON => ArrayType(Box::from(StringType(BLOB))),
             // boolean
             IoFileExists | OxideMatches | StrEndsWith | StrStartsWith => BooleanType,
             // bytes
             UtilMD5 => ByteArrayType(FixedSize(16)),
             // date
-            UtilNow => DateType,
+            CalDate => DateType,
             // number
             StrIndexOf | StrLen => NumberType(I64Kind),
-            UtilDateDay | UtilDateHour12 | UtilDateHour24 | UtilDateMinute |
-            UtilDateMonth | UtilDateSecond => NumberType(U32Kind),
+            CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
+            CalDateMonth | CalDateSecond => NumberType(U32Kind),
             UtilToF32 => NumberType(F32Kind),
             UtilToF64 => NumberType(F64Kind),
             UtilToI8 => NumberType(I8Kind),
             UtilToI16 => NumberType(I16Kind),
-            UtilToI32 | UtilDateYear => NumberType(I32Kind),
+            UtilToI32 | CalDateYear => NumberType(I32Kind),
             UtilToI64 => NumberType(I64Kind),
             UtilToI128 => NumberType(I128Kind),
             UtilToU8 => NumberType(U8Kind),
@@ -539,13 +558,14 @@ impl PlatformFunctions {
             IoStdErr | IoStdOut | OxideTypeOf |
             OsCall | OsCurrentDir | OxideEval | OxideHome | OxideVersion |
             StrFormat | StrJoin | StrLeft | StrRight | StrSubstring | StrToString |
-            UtilBase64 | WwwURLDecode | WwwURLEncode => StringType(BLOB),
+            UtilBase64 | UtilToASCII | WwwURLDecode | WwwURLEncode => StringType(BLOB),
             // table
             OsEnv => TableType(Self::get_os_env_parameters(), BLOB),
             OxideHelp => TableType(Self::get_oxide_help_parameters(), BLOB),
-            UtilCompact | UtilFetch | UtilReverse | UtilScan |
-            UtilToTable => TableType(Vec::new(), BLOB),
-            UtilDescribe => TableType(Self::get_util_describe_parameters(), BLOB),
+            OxideHistory => TableType(Self::get_oxide_history_parameters(), BLOB),
+            ToolsCompact | ToolsFetch | ToolsReverse | ToolsScan |
+            ToolsToTable => TableType(Vec::new(), BLOB),
+            ToolsDescribe => TableType(Self::get_tools_describe_parameters(), BLOB),
         }
     }
 
@@ -599,7 +619,7 @@ impl PlatformFunctions {
         &self,
         ms: Machine,
         args: Vec<TypedValue>,
-        f: fn(Machine, &TypedValue, &PlatformFunctions) -> (Machine, TypedValue),
+        f: fn(Machine, &TypedValue, &PlatformOps) -> (Machine, TypedValue),
     ) -> (Machine, TypedValue) {
         match args.as_slice() {
             [a] => f(ms, a, self),
@@ -628,6 +648,40 @@ impl PlatformFunctions {
         match args.as_slice() {
             [a, b, c] => f(ms, a, b, c),
             args => (ms, ErrorValue(ArgumentsMismatched(3, args.len())))
+        }
+    }
+
+    fn do_cal_date(ms: Machine, args: Vec<TypedValue>) -> (Machine, TypedValue) {
+        if !args.is_empty() {
+            return (ms, ErrorValue(Exact(format!("No arguments expected, but found {}", args.len()))));
+        }
+        (ms, DateValue(Local::now().timestamp_millis()))
+    }
+
+    fn do_cal_date_part(
+        ms: Machine,
+        value: &TypedValue,
+        plat: &PlatformOps,
+    ) -> (Machine, TypedValue) {
+        match value {
+            DateValue(epoch_millis) => {
+                let datetime = {
+                    let seconds = epoch_millis / 1000;
+                    let millis_part = epoch_millis % 1000;
+                    Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
+                };
+                match plat {
+                    PlatformOps::CalDateDay => (ms, Number(U32Value(datetime.day()))),
+                    PlatformOps::CalDateHour12 => (ms, Number(U32Value(datetime.hour12().1))),
+                    PlatformOps::CalDateHour24 => (ms, Number(U32Value(datetime.hour()))),
+                    PlatformOps::CalDateMinute => (ms, Number(U32Value(datetime.minute()))),
+                    PlatformOps::CalDateMonth => (ms, Number(U32Value(datetime.second()))),
+                    PlatformOps::CalDateSecond => (ms, Number(U32Value(datetime.second()))),
+                    PlatformOps::CalDateYear => (ms, Number(I32Value(datetime.year()))),
+                    pf => (ms, ErrorValue(ConversionError(pf.to_code())))
+                }
+            }
+            other => (ms, ErrorValue(DateExpected(other.to_code())))
         }
     }
 
@@ -705,22 +759,6 @@ impl PlatformFunctions {
         (ms, Outcome(Ack))
     }
 
-    fn do_oxide_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        match value {
-            ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
-            Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
-            z => (ms, z.to_owned())
-        }
-    }
-
-    fn do_oxide_matches(ms: Machine, a: &TypedValue, b: &TypedValue) -> (Machine, TypedValue) {
-        (ms, a.matches(b))
-    }
-
-    fn do_oxide_type_of(ms: Machine, a: &TypedValue) -> (Machine, TypedValue) {
-        (ms, StringValue(a.get_type_name()))
-    }
-
     fn do_os_call(ms: Machine, args: Vec<TypedValue>) -> (Machine, TypedValue) {
         fn split_first<T>(vec: Vec<T>) -> Option<(T, Vec<T>)> {
             let mut iter = vec.into_iter();
@@ -777,7 +815,30 @@ impl PlatformFunctions {
             }
         }
 
-        (ms, TableValue(mrc))
+        (ms, TableValue(Model(mrc)))
+    }
+
+    fn do_oxide_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        match value {
+            ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
+            Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
+            z => (ms, z.to_owned())
+        }
+    }
+
+    fn do_oxide_eval(ms: Machine, query_value: &TypedValue) -> (Machine, TypedValue) {
+        match query_value {
+            StringValue(ql) =>
+                match Compiler::build(ql.as_str()) {
+                    Ok(opcode) =>
+                        match ms.evaluate(&opcode) {
+                            Ok((machine, tv)) => (machine, tv),
+                            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+                        }
+                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+                }
+            x => (ms, ErrorValue(StringExpected(x.get_type_name())))
+        }
     }
 
     /// returns a table describing all modules
@@ -796,12 +857,12 @@ impl PlatformFunctions {
                             StringValue(func.to_code()),
                             // description
                             match func {
-                                PlatformFunction(pf) => StringValue(pf.get_description()),
+                                PlatformOp(pf) => StringValue(pf.get_description()),
                                 _ => Null,
                             },
                             // returns
                             match func {
-                                PlatformFunction(pf) => StringValue(pf.get_return_type().to_type_declaration().unwrap_or("".into())),
+                                PlatformOp(pf) => StringValue(pf.get_return_type().to_type_declaration().unwrap_or("".into())),
                                 _ => Null,
                             }
                         ]));
@@ -809,25 +870,40 @@ impl PlatformFunctions {
                 _ => {}
             }
         }
-        (ms, TableValue(mrc))
+        (ms, TableValue(Model(mrc)))
     }
 
-    fn do_oxide_version(ms: Machine) -> (Machine, TypedValue) {
-        (ms, StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))
-    }
+    fn do_oxide_history(ms: Machine, args: Vec<TypedValue>) -> (Machine, TypedValue) {
+        // re-executes a saved command
+        fn re_run(ms: Machine, pid: usize) -> std::io::Result<(Machine, TypedValue)> {
+            let frc = FileRowCollection::open_or_create(&PlatformOps::get_oxide_history_ns())?;
+            let row_maybe = frc.read_one(pid)?;
+            let code = row_maybe.map(|r| r.get_values().last()
+                .map(|v| v.unwrap_value()).unwrap_or("".to_string())
+            ).unwrap_or("".to_string());
+            for line in code.split(|c| c == ';').collect::<Vec<_>>() {
+                println!(">>> {}", line);
+            }
+            let model = Compiler::build(code.as_str())?;
+            ms.evaluate(&model)
+        }
 
-    fn do_oxide_eval(ms: Machine, query_value: &TypedValue) -> (Machine, TypedValue) {
-        match query_value {
-            StringValue(ql) =>
-                match Compiler::compile_script(ql.as_str()) {
-                    Ok(opcode) =>
-                        match ms.evaluate(&opcode) {
-                            Ok((machine, tv)) => (machine, tv),
-                            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                        }
+        // evaluate based on the arguments
+        match args.as_slice() {
+            // history()
+            [] =>
+                match FileRowCollection::open_or_create(&Self::get_oxide_history_ns()) {
+                    Ok(frc) => (ms, TableValue(Disk(frc))),
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
-            x => (ms, ErrorValue(StringExpected(x.get_type_name())))
+            // history(11)
+            [Number(pid)] =>
+                match re_run(ms.to_owned(), pid.to_usize()) {
+                    Ok(result) => result,
+                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+                }
+            // history(..)
+            other => (ms, ErrorValue(ArgumentsMismatched(other.len(), 1)))
         }
     }
 
@@ -835,8 +911,20 @@ impl PlatformFunctions {
         (ms, StringValue(Machine::oxide_home()))
     }
 
+    fn do_oxide_matches(ms: Machine, a: &TypedValue, b: &TypedValue) -> (Machine, TypedValue) {
+        (ms, a.matches(b))
+    }
+
     fn do_oxide_reset(_ms: Machine) -> (Machine, TypedValue) {
         (Machine::new_platform(), Outcome(Ack))
+    }
+
+    fn do_oxide_type_of(ms: Machine, a: &TypedValue) -> (Machine, TypedValue) {
+        (ms, StringValue(a.get_type_name()))
+    }
+
+    fn do_oxide_version(ms: Machine) -> (Machine, TypedValue) {
+        (ms, StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))
     }
 
     fn do_str_ends_with(
@@ -1040,14 +1128,7 @@ impl PlatformFunctions {
         (ms, StringValue(a.unwrap_value()))
     }
 
-    fn do_util_base64(
-        ms: Machine,
-        a: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        (ms, StringValue(base64::encode(a.to_bytes())))
-    }
-
-    fn do_util_compact(ms: Machine, table: &TypedValue) -> (Machine, TypedValue) {
+    fn do_tools_compact(ms: Machine, table: &TypedValue) -> (Machine, TypedValue) {
         match table {
             ErrorValue(err) => (ms, ErrorValue(err.to_owned())),
             NamespaceValue(d, s, n) => {
@@ -1056,39 +1137,12 @@ impl PlatformFunctions {
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
             }
-            TableValue(mrc) => (ms, mrc.to_owned().compact()),
+            TableValue(rcv) => (ms, rcv.to_owned().compact()),
             z => (ms, ErrorValue(CollectionExpected(z.to_code())))
         }
     }
 
-    fn do_util_date_part(
-        ms: Machine,
-        value: &TypedValue,
-        plat: &PlatformFunctions,
-    ) -> (Machine, TypedValue) {
-        match value {
-            DateValue(epoch_millis) => {
-                let datetime = {
-                    let seconds = epoch_millis / 1000;
-                    let millis_part = epoch_millis % 1000;
-                    Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
-                };
-                match plat {
-                    PlatformFunctions::UtilDateDay => (ms, Number(U32Value(datetime.day()))),
-                    PlatformFunctions::UtilDateHour12 => (ms, Number(U32Value(datetime.hour12().1))),
-                    PlatformFunctions::UtilDateHour24 => (ms, Number(U32Value(datetime.hour()))),
-                    PlatformFunctions::UtilDateMinute => (ms, Number(U32Value(datetime.minute()))),
-                    PlatformFunctions::UtilDateMonth => (ms, Number(U32Value(datetime.second()))),
-                    PlatformFunctions::UtilDateSecond => (ms, Number(U32Value(datetime.second()))),
-                    PlatformFunctions::UtilDateYear => (ms, Number(I32Value(datetime.year()))),
-                    pf => (ms, ErrorValue(ConversionError(pf.to_code())))
-                }
-            }
-            other => (ms, ErrorValue(DateExpected(other.to_code())))
-        }
-    }
-
-    fn do_util_describe(
+    fn do_tools_describe(
         ms: Machine,
         item: &TypedValue,
     ) -> (Machine, TypedValue) {
@@ -1101,7 +1155,7 @@ impl PlatformFunctions {
                 }
             StructureHard(sh) => (ms, sh.to_table().describe()),
             StructureSoft(ss) => (ms, ss.to_table().describe()),
-            TableValue(mrc) => (ms, mrc.describe()),
+            TableValue(rcv) => (ms, rcv.describe()),
             other =>
                 (ms, ErrorValue(TableExpected("table or struct".to_string(), other.to_code())))
         }
@@ -1110,7 +1164,7 @@ impl PlatformFunctions {
     /// Retrieves a raw structure from a table
     /// ex: util::fetch(stocks, 5)
     /// ex: stocks:::fetch(5)
-    fn do_util_fetch(
+    fn do_tools_fetch(
         ms: Machine,
         table: &TypedValue,
         row_offset: &TypedValue,
@@ -1119,21 +1173,20 @@ impl PlatformFunctions {
         match table {
             NamespaceValue(d, s, n) =>
                 match FileRowCollection::open(&Namespace::new(d, s, n)) {
-                    Ok(frc) => {
-                        let columns = frc.get_columns();
+                    Ok(frc) =>
                         match frc.read_row(offset) {
-                            Ok((row, _)) =>
-                                (ms, TableValue(ModelRowCollection::from_rows(columns.clone(), vec![row]))),
+                            Ok((row, _)) => (ms, TableValue(Model(
+                                ModelRowCollection::from_rows(frc.get_columns(), &vec![row])
+                            ))),
                             Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                         }
-                    }
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
-            TableValue(mrc) => {
-                let columns = mrc.get_columns();
-                match mrc.read_row(offset) {
+            TableValue(rcv) => {
+                let columns = rcv.get_columns();
+                match rcv.read_row(offset) {
                     Ok((row, _)) =>
-                        (ms, TableValue(ModelRowCollection::from_rows(columns.clone(), vec![row]))),
+                        (ms, TableValue(Model(ModelRowCollection::from_rows(columns, &vec![row])))),
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
             }
@@ -1142,74 +1195,38 @@ impl PlatformFunctions {
         }
     }
 
-    fn do_util_math_conv(
-        ms: Machine,
-        value: &TypedValue,
-        plat: &PlatformFunctions,
-    ) -> (Machine, TypedValue) {
-        let result = match plat {
-            PlatformFunctions::UtilToF32 => Number(F32Value(value.to_f32())),
-            PlatformFunctions::UtilToF64 => Number(F64Value(value.to_f64())),
-            PlatformFunctions::UtilToI8 => Number(I8Value(value.to_i8())),
-            PlatformFunctions::UtilToI16 => Number(I16Value(value.to_i16())),
-            PlatformFunctions::UtilToI32 => Number(I32Value(value.to_i32())),
-            PlatformFunctions::UtilToI64 => Number(I64Value(value.to_i64())),
-            PlatformFunctions::UtilToI128 => Number(I128Value(value.to_i128())),
-            PlatformFunctions::UtilToU8 => Number(U8Value(value.to_u8())),
-            PlatformFunctions::UtilToU16 => Number(U16Value(value.to_u16())),
-            PlatformFunctions::UtilToU32 => Number(U32Value(value.to_u32())),
-            PlatformFunctions::UtilToU64 => Number(U64Value(value.to_u64())),
-            PlatformFunctions::UtilToU128 => Number(U128Value(value.to_u128())),
-            plat => ErrorValue(ConversionError(plat.to_code()))
-        };
-        (ms, result)
-    }
-
-    fn do_util_md5(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        match md5::compute(value.to_bytes()) {
-            md5::Digest(bytes) => (ms, ByteArray(bytes.to_vec()))
-        }
-    }
-
-    fn do_util_now(ms: Machine, args: Vec<TypedValue>) -> (Machine, TypedValue) {
-        if !args.is_empty() {
-            return (ms, ErrorValue(Exact(format!("No arguments expected, but found {}", args.len()))));
-        }
-        (ms, DateValue(Local::now().timestamp_millis()))
-    }
-
-    fn do_util_reverse(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+    fn do_tools_reverse(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
         match value {
             Array(a) => (ms, Array(a.iter().rev()
                 .map(|v| v.to_owned())
                 .collect::<Vec<_>>())),
             NamespaceValue(a, b, c) =>
                 (ms.clone(), match Self::open_namespace(&Namespace::new(a, b, c)) {
-                    TableValue(mrc) => mrc.reverse_table_value(),
+                    TableValue(rcv) => rcv.reverse_table_value(),
                     other => ErrorValue(TypeMismatch("Table".to_string(), other.to_code()))
                 }),
             StringValue(s) => (ms, StringValue(s.to_owned().reverse().to_string())),
-            TableValue(mrc) => (ms, mrc.reverse_table_value()),
+            TableValue(rcv) => (ms, rcv.reverse_table_value()),
             other => (ms, ErrorValue(TypeMismatch("Array, String or Table".into(), other.to_string())))
         }
     }
 
-    fn do_util_scan(machine: Machine, tv_table: &TypedValue) -> (Machine, TypedValue) {
+    fn do_tools_scan(machine: Machine, tv_table: &TypedValue) -> (Machine, TypedValue) {
         Self::orchestrate_rc(machine, tv_table.to_owned(), |machine, rc| {
             match rc.examine_rows() {
                 Ok(rows) => {
                     let columns = rows.first()
                         .map(|row| rc.get_columns().to_owned())
                         .unwrap_or(Vec::new());
-                    let mrc = ModelRowCollection::from_rows(columns, rows);
-                    (machine, TableValue(mrc))
+                    let mrc = ModelRowCollection::from_rows(&columns, &rows);
+                    (machine, TableValue(Model(mrc)))
                 }
                 Err(err) => (machine, ErrorValue(Exact(err.to_string())))
             }
         })
     }
 
-    fn do_util_to_array(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+    fn do_tools_to_array(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
         match value {
             Array(items) => (ms, Array(items.to_owned())),
             Number(nv) => (ms, Array(nv.encode().iter()
@@ -1220,9 +1237,9 @@ impl PlatformFunctions {
                 .collect::<Vec<_>>())),
             StructureHard(hs) => (ms, Array(hs.get_values())),
             StructureSoft(ss) => (ms, Array(ss.get_values())),
-            TableValue(mrc) => {
-                let columns = mrc.get_columns();
-                (ms, Array(mrc.get_rows().iter()
+            TableValue(rcv) => {
+                let columns = rcv.get_columns();
+                (ms, Array(rcv.iter()
                     .map(|r| StructureHard(r.to_struct(columns)))
                     .collect::<Vec<_>>()))
             }
@@ -1230,11 +1247,11 @@ impl PlatformFunctions {
         }
     }
 
-    fn do_util_to_csv(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        Self::do_util_to_csv_or_json(ms, value, true)
+    fn do_tools_to_csv(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        Self::do_tools_to_csv_or_json(ms, value, true)
     }
 
-    fn do_util_to_csv_or_json(
+    fn do_tools_to_csv_or_json(
         ms: Machine,
         value: &TypedValue,
         is_csv: bool,
@@ -1251,7 +1268,7 @@ impl PlatformFunctions {
             ms: Machine,
             rc: Box<dyn RowCollection>,
         ) -> (Machine, TypedValue) {
-            (ms, Array(rc.iter().map(|row| row.to_json(rc.get_columns()))
+            (ms, Array(rc.iter().map(|row| row.to_json_string(rc.get_columns()))
                 .map(StringValue).collect()))
         }
 
@@ -1264,20 +1281,71 @@ impl PlatformFunctions {
                     }
                     Err(err) => (ms.to_owned(), ErrorValue(Exact(err.to_string())))
                 }
-            TableValue(mrc) => {
-                let rc = Box::new(mrc.to_owned());
+            TableValue(rcv) => {
+                let rc = Box::new(rcv.to_owned());
                 if is_csv { convert_to_csv(ms, rc) } else { convert_to_json(ms, rc) }
             }
             _ => (ms.to_owned(), ErrorValue(Exact(format!("Cannot convert to {}", if is_csv { "CSV" } else { "JSON" }))))
         }
     }
 
-    fn do_util_to_json(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        Self::do_util_to_csv_or_json(ms, value, false)
+    fn do_tools_to_json(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        Self::do_tools_to_csv_or_json(ms, value, false)
     }
 
-    fn do_util_to_table(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        (ms, value.to_table_value())
+    fn do_tools_to_table(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        fn convert(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+            let rc = value.to_table()?;
+            let columns = rc.get_columns();
+            let rows = rc.read_active_rows()?;
+            let mrc = ModelRowCollection::from_rows(columns, &rows);
+            Ok((ms, TableValue(Model(mrc))))
+        }
+        // convert the value to a RowCollection
+        match convert(ms.clone(), value) {
+            Ok(result) => result,
+            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+        }
+    }
+
+    fn do_util_base64(
+        ms: Machine,
+        a: &TypedValue,
+    ) -> (Machine, TypedValue) {
+        (ms, StringValue(base64::encode(a.to_bytes())))
+    }
+
+    fn do_util_math_conv(
+        ms: Machine,
+        value: &TypedValue,
+        plat: &PlatformOps,
+    ) -> (Machine, TypedValue) {
+        let result = match plat {
+            PlatformOps::UtilToF32 => Number(F32Value(value.to_f32())),
+            PlatformOps::UtilToF64 => Number(F64Value(value.to_f64())),
+            PlatformOps::UtilToI8 => Number(I8Value(value.to_i8())),
+            PlatformOps::UtilToI16 => Number(I16Value(value.to_i16())),
+            PlatformOps::UtilToI32 => Number(I32Value(value.to_i32())),
+            PlatformOps::UtilToI64 => Number(I64Value(value.to_i64())),
+            PlatformOps::UtilToI128 => Number(I128Value(value.to_i128())),
+            PlatformOps::UtilToU8 => Number(U8Value(value.to_u8())),
+            PlatformOps::UtilToU16 => Number(U16Value(value.to_u16())),
+            PlatformOps::UtilToU32 => Number(U32Value(value.to_u32())),
+            PlatformOps::UtilToU64 => Number(U64Value(value.to_u64())),
+            PlatformOps::UtilToU128 => Number(U128Value(value.to_u128())),
+            plat => ErrorValue(ConversionError(plat.to_code()))
+        };
+        (ms, result)
+    }
+
+    fn do_util_md5(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        match md5::compute(value.to_bytes()) {
+            md5::Digest(bytes) => (ms, ByteArray(bytes.to_vec()))
+        }
+    }
+
+    fn do_util_to_ascii(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        (ms, StringValue(format!("{}", value.to_u8() as char)))
     }
 
     fn do_util_uuid(
@@ -1285,26 +1353,9 @@ impl PlatformFunctions {
         args: Vec<TypedValue>,
     ) -> (Machine, TypedValue) {
         if !args.is_empty() {
-            return (ms, ErrorValue(Exact(format!("No arguments expected, but found {}", args.len()))));
+            return (ms, ErrorValue(ArgumentsMismatched(0, args.len())));
         }
         (ms, Number(U128Value(Uuid::new_v4().as_u128())))
-    }
-
-    fn do_www_url_decode(ms: Machine, url: &TypedValue) -> (Machine, TypedValue) {
-        match url {
-            StringValue(uri) => match urlencoding::decode(uri) {
-                Ok(decoded) => (ms, StringValue(decoded.to_string())),
-                Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-            }
-            other => (ms, ErrorValue(StringExpected(other.to_code())))
-        }
-    }
-
-    fn do_www_url_encode(ms: Machine, url: &TypedValue) -> (Machine, TypedValue) {
-        match url {
-            StringValue(uri) => (ms, StringValue(urlencoding::encode(uri).to_string())),
-            other => (ms, ErrorValue(StringExpected(other.to_code())))
-        }
     }
 
     fn do_www_serve(
@@ -1328,6 +1379,23 @@ impl PlatformFunctions {
         (ms, Outcome(Ack))
     }
 
+    fn do_www_url_decode(ms: Machine, url: &TypedValue) -> (Machine, TypedValue) {
+        match url {
+            StringValue(uri) => match urlencoding::decode(uri) {
+                Ok(decoded) => (ms, StringValue(decoded.to_string())),
+                Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+            }
+            other => (ms, ErrorValue(StringExpected(other.to_code())))
+        }
+    }
+
+    fn do_www_url_encode(ms: Machine, url: &TypedValue) -> (Machine, TypedValue) {
+        match url {
+            StringValue(uri) => (ms, StringValue(urlencoding::encode(uri).to_string())),
+            other => (ms, ErrorValue(StringExpected(other.to_code())))
+        }
+    }
+
     pub fn get_os_env_parameters() -> Vec<Parameter> {
         vec![
             Parameter::new("key", Some("String(256)".into()), None),
@@ -1345,7 +1413,20 @@ impl PlatformFunctions {
         ]
     }
 
-    pub fn get_util_describe_parameters() -> Vec<Parameter> {
+    pub fn get_oxide_history_ns() -> Namespace {
+        Namespace::new("oxide", "public", "history")
+    }
+
+    pub fn get_oxide_history_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("session_id", Some("i64".into()), None),
+            Parameter::new("user_id", Some("i64".into()), None),
+            Parameter::new("cpu_time_ms", Some("f64".into()), None),
+            Parameter::new("input", Some("String(65536)".into()), None),
+        ]
+    }
+
+    pub fn get_tools_describe_parameters() -> Vec<Parameter> {
         vec![
             Parameter::new("name", Some("String(128)".into()), None),
             Parameter::new("type", Some("String(128)".into()), None),
@@ -1358,10 +1439,10 @@ impl PlatformFunctions {
         match FileRowCollection::open(ns) {
             Err(err) => ErrorValue(Exact(err.to_string())),
             Ok(frc) => {
-                let columns = frc.get_columns().to_owned();
+                let columns = frc.get_columns();
                 match frc.read_active_rows() {
                     Err(err) => ErrorValue(Exact(err.to_string())),
-                    Ok(rows) => TableValue(ModelRowCollection::from_rows(columns, rows))
+                    Ok(rows) => TableValue(Model(ModelRowCollection::from_rows(columns, &rows)))
                 }
             }
         }
@@ -1382,7 +1463,7 @@ impl PlatformFunctions {
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
             }
-            TableValue(mrc) => f(ms, Box::new(mrc)),
+            TableValue(rcv) => f(ms, Box::new(rcv)),
             z => (ms, ErrorValue(CollectionExpected(z.to_code())))
         }
     }
@@ -1393,12 +1474,13 @@ impl PlatformFunctions {
 mod tests {
     use super::*;
     use crate::interpreter::Interpreter;
-    use crate::platform::{PlatformFunctions, PLATFORM_OPCODES};
+    use crate::platform::{PlatformOps, PLATFORM_OPCODES};
     use crate::structures::{HardStructure, SoftStructure};
     use crate::table_columns::Column;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
-    use PlatformFunctions::*;
+    use serde_json::{json, Value};
+    use PlatformOps::*;
 
     #[test]
     fn test_encode_decode() {
@@ -1406,14 +1488,14 @@ mod tests {
             let bytes = expected.encode().unwrap();
             assert_eq!(bytes.len(), 4);
 
-            let actual = PlatformFunctions::decode(bytes).unwrap();
+            let actual = PlatformOps::decode(bytes).unwrap();
             assert_eq!(actual, expected);
         }
     }
 
     #[test]
     fn test_get_info_oxide_matches() {
-        assert_eq!(OxideMatches.get_info(), PlatformFunctionInfo {
+        assert_eq!(OxideMatches.get_info(), PlatformFunction {
             name: "matches".into(),
             description: "Compares two values".into(),
             package_name: "oxide".into(),
@@ -1428,13 +1510,13 @@ mod tests {
 
     #[test]
     fn test_get_info_str_left() {
-        assert_eq!(StrLeft.get_info(), PlatformFunctionInfo {
+        assert_eq!(StrLeft.get_info(), PlatformFunction {
             name: "left".into(),
             description: "Returns n-characters from left-to-right".into(),
             package_name: "str".into(),
             parameters: vec![
-                Parameter::new("a", Some("String()".into()), None),
-                Parameter::new("b", Some("i64".into()), None),
+                Parameter::new("s", Some("String()".into()), None),
+                Parameter::new("n", Some("i64".into()), None),
             ],
             return_type: StringType(BLOB),
             opcode: StrLeft,
@@ -1443,14 +1525,14 @@ mod tests {
 
     #[test]
     fn test_get_info_str_substring() {
-        assert_eq!(StrSubstring.get_info(), PlatformFunctionInfo {
+        assert_eq!(StrSubstring.get_info(), PlatformFunction {
             name: "substring".into(),
-            description: "Returns a substring of string A from B to C".into(),
+            description: "Returns a substring of string `s` from `m` to `n`".into(),
             package_name: "str".into(),
             parameters: vec![
-                Parameter::new("a", Some("String()".into()), None),
-                Parameter::new("b", Some("i64".into()), None),
-                Parameter::new("c", Some("i64".into()), None)
+                Parameter::new("s", Some("String()".into()), None),
+                Parameter::new("m", Some("i64".into()), None),
+                Parameter::new("n", Some("i64".into()), None)
             ],
             return_type: StringType(BLOB),
             opcode: StrSubstring,
@@ -1459,13 +1541,13 @@ mod tests {
 
     #[test]
     fn test_get_info_util_now() {
-        assert_eq!(UtilNow.get_info(), PlatformFunctionInfo {
+        assert_eq!(CalDate.get_info(), PlatformFunction {
             name: "now".into(),
             description: "Returns the current local date and time".into(),
-            package_name: "util".into(),
+            package_name: "cal".into(),
             parameters: Vec::new(),
             return_type: DateType,
-            opcode: UtilNow,
+            opcode: CalDate,
         });
     }
 
@@ -1483,7 +1565,11 @@ mod tests {
         // postfix
         verify_exact(r#"
             import io
-            "quote.json":::create_file({ symbol: "TRX", exchange: "NYSE", last_sale: 45.32 })
+            "quote.json":::create_file({
+                symbol: "TRX",
+                exchange: "NYSE",
+                last_sale: 45.32
+            })
         "#, Number(U64Value(51)));
 
         verify_exact(r#"
@@ -1504,11 +1590,11 @@ mod tests {
     #[test]
     fn test_io_create_and_read_text_file() {
         verify_exact(r#"
-            import io
+            import io, util
             file := "temp_secret.txt"
-            file:::create_file("**keep**this**secret**")
+            file:::create_file(md5("**keep**this**secret**"))
             file:::read_text_file()
-        "#, StringValue("**keep**this**secret**".to_string()))
+        "#, StringValue("47338bd5f35bbb239092c36e30775b4a".to_string()))
     }
 
     #[test]
@@ -1595,19 +1681,29 @@ mod tests {
     }
 
     #[test]
+    fn test_oxide_history() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate("oxide::history()").unwrap();
+        assert!(matches!(result, TableValue(..)))
+    }
+
+    #[test]
     fn test_oxide_home() {
         verify_exact("oxide::home()", StringValue(Machine::oxide_home()));
     }
 
     #[test]
-    fn test_oxide_matches() {
+    fn test_oxide_matches_exact() {
         // test a perfect match
         verify_exact(r#"
             a := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
             b := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
             oxide::matches(a, b)
         "#, Boolean(true));
+    }
 
+    #[test]
+    fn test_oxide_matches_unordered() {
         // test an unordered match
         verify_exact(r#"
             import oxide::matches
@@ -1615,7 +1711,10 @@ mod tests {
             b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
             matches(a, b)
         "#, Boolean(true));
+    }
 
+    #[test]
+    fn test_oxide_matches_not_match_1() {
         // test when things do not match 1
         verify_exact(r#"
             import oxide
@@ -1623,7 +1722,10 @@ mod tests {
             b := { first: "Jerry", last: "Lane" }
             a:::matches(b)
         "#, Boolean(false));
+    }
 
+    #[test]
+    fn test_oxide_matches_not_match_2() {
         // test when things do not match 2
         verify_exact(r#"
             a := { key: "123", values: [1, 74, 88] }
@@ -1647,7 +1749,7 @@ mod tests {
         interpreter = verify_where(interpreter, "type_of([12, 'hello', 76.78])", StringValue("Array<f64>".into()));
         interpreter = verify_where(interpreter, "type_of(false)", StringValue("Boolean".into()));
         interpreter = verify_where(interpreter, "type_of(true)", StringValue("Boolean".into()));
-        interpreter = verify_where(interpreter, "type_of(util::now())", StringValue("Date".into()));
+        interpreter = verify_where(interpreter, "type_of(cal::now())", StringValue("Date".into()));
         interpreter = verify_where(interpreter, "type_of(fn(a, b) => a + b)", StringValue("fn(a, b)".into()));
         interpreter = verify_where(interpreter, "type_of(1234)", StringValue("i64".into()));
         interpreter = verify_where(interpreter, "type_of(12.394)", StringValue("f64".into()));
@@ -1879,14 +1981,7 @@ mod tests {
     }
 
     #[test]
-    fn test_util_base64() {
-        verify_exact(
-            "util::base64('Hello World')",
-            StringValue("SGVsbG8gV29ybGQ=".into()))
-    }
-
-    #[test]
-    fn test_util_compact() {
+    fn test_tools_compact() {
         let mut interpreter = Interpreter::new();
         interpreter = verify_exact_table_where(interpreter, r#"
             [+] stocks := ns("platform.compact.stocks")
@@ -1911,7 +2006,7 @@ mod tests {
         ]);
 
         verify_exact_table_where(interpreter, r#"
-            [+] import util
+            [+] import tools
             [+] stocks:::compact()
             [+] from stocks
         "#, vec![
@@ -1926,10 +2021,10 @@ mod tests {
     }
 
     #[test]
-    fn test_util_describe() {
+    fn test_tools_describe() {
         // fully-qualified
         verify_exact_table_with_ids(r#"
-            util::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
+            tools::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
         "#, vec![
             "|----------------------------------------------------------|",
             "| id | name      | type      | default_value | is_nullable |",
@@ -1942,7 +2037,7 @@ mod tests {
 
         // postfix
         verify_exact_table_with_ids(r#"
-            [+] import util
+            [+] import tools
             [+] stocks := ns("platform.describe.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             stocks:::describe()
@@ -1958,7 +2053,7 @@ mod tests {
     }
 
     #[test]
-    fn test_util_fetch() {
+    fn test_tools_fetch() {
         // fully-qualified
         verify_exact_table_with_ids(r#"
             [+] stocks := ns("platform.fetch.stocks")
@@ -1966,7 +2061,7 @@ mod tests {
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-            [+] util::fetch(stocks, 2)
+            [+] tools::fetch(stocks, 2)
         "#, vec![
             "|------------------------------------|",
             "| id | symbol | exchange | last_sale |",
@@ -1977,7 +2072,7 @@ mod tests {
 
         // postfix
         verify_exact_table_with_ids(r#"
-            [+] import util
+            [+] import tools
             [+] stocks := to_table([
                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -1994,33 +2089,9 @@ mod tests {
     }
 
     #[test]
-    fn test_util_md5() {
-        verify_exact(
-            "util::md5('Hello World')",
-            ByteArray(vec![177, 10, 141, 177, 100, 224, 117, 65, 5, 183, 169, 155, 231, 46, 63, 229]))
-    }
-
-    #[test]
-    fn test_util_now_and_date_functions() {
-        let mut interpreter = Interpreter::new();
-        let result = interpreter.evaluate(r#"
-            ts := util::now()
-        "#).unwrap();
-        assert_eq!(result, Outcome(Ack));
-        interpreter.evaluate("import util").unwrap();
-        interpreter = verify_whence(interpreter, "ts:::day_of()", |n| matches!(n, Number(U32Value(..))));
-        interpreter = verify_whence(interpreter, "ts:::hour24()", |n| matches!(n, Number(U32Value(..))));
-        interpreter = verify_whence(interpreter, "ts:::hour12()", |n| matches!(n, Number(U32Value(..))));
-        interpreter = verify_whence(interpreter, "ts:::minute_of()", |n| matches!(n, Number(U32Value(..))));
-        interpreter = verify_whence(interpreter, "ts:::month_of()", |n| matches!(n, Number(U32Value(..))));
-        interpreter = verify_whence(interpreter, "ts:::second_of()", |n| matches!(n, Number(U32Value(..))));
-        interpreter = verify_whence(interpreter, "ts:::year_of()", |n| matches!(n, Number(I32Value(..))));
-    }
-
-    #[test]
-    fn test_util_reverse_arrays() {
+    fn test_tools_reverse_arrays() {
         verify_exact_table_with_ids(r#"
-            import util
+            import tools
             to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
         "#, vec![
             "|-------------|",
@@ -2035,16 +2106,16 @@ mod tests {
     }
 
     #[test]
-    fn test_util_reverse_tables() {
+    fn test_tools_reverse_tables() {
         // fully-qualified (ephemeral)
         verify_exact_table_with_ids(r#"
-            import util
-            stocks := util::to_table([
+            import tools
+            stocks := to_table([
                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
                 { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
                 { symbol: "XYZ", exchange: "NASDAQ", last_sale: 89.11 }
             ])
-            util::reverse(stocks)
+            reverse(stocks)
         "#, vec![
             "|------------------------------------|",
             "| id | symbol | exchange | last_sale |",
@@ -2057,7 +2128,7 @@ mod tests {
 
         // postfix (durable)
         verify_exact_table_with_ids(r#"
-            [+] import util
+            [+] import tools
             [+] stocks := ns("platform.reverse.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -2076,10 +2147,10 @@ mod tests {
     }
 
     #[test]
-    fn test_util_scan() {
+    fn test_tools_scan() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            [+] import util
+            [+] import tools
             [+] stocks := ns("platform.scan.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
@@ -2100,10 +2171,10 @@ mod tests {
     }
 
     #[test]
-    fn test_util_to_array_with_strings() {
+    fn test_tools_to_array_with_strings() {
         // fully-qualified
         verify_exact(r#"
-             util::to_array("Hello")
+             tools::to_array("Hello")
         "#, Array(vec![
             StringValue("H".into()), StringValue("e".into()),
             StringValue("l".into()), StringValue("l".into()),
@@ -2112,7 +2183,7 @@ mod tests {
 
         // postfix
         verify_exact(r#"
-            import util
+            import tools
             "World":::to_array()
         "#, Array(vec![
             StringValue("W".into()), StringValue("o".into()),
@@ -2122,11 +2193,11 @@ mod tests {
     }
 
     #[test]
-    fn test_util_to_array_with_tables() {
+    fn test_tools_to_array_with_tables() {
         // fully qualified
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-             util::to_array(util::to_table([
+             tools::to_array(tools::to_table([
                  { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                  { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
              ]))
@@ -2147,9 +2218,9 @@ mod tests {
     }
 
     #[test]
-    fn test_util_to_csv() {
+    fn test_tools_to_csv() {
         verify_exact(r#"
-            import util::to_csv
+            import tools::to_csv
             [+] stocks := ns("platform.csv.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
@@ -2168,9 +2239,9 @@ mod tests {
     }
 
     #[test]
-    fn test_util_to_json() {
+    fn test_tools_to_json() {
         verify_exact(r#"
-            import util::to_json
+            import tools::to_json
             [+] stocks := ns("platform.json.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
@@ -2189,9 +2260,9 @@ mod tests {
     }
 
     #[test]
-    fn test_util_to_table_with_arrays() {
+    fn test_tools_to_table_with_arrays() {
         verify_exact_table_with_ids(r#"
-            util::to_table(['cat', 'dog', 'ferret', 'mouse'])
+            tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
         "#, vec![
             "|-------------|",
             "| id | value  |",
@@ -2205,9 +2276,9 @@ mod tests {
     }
 
     #[test]
-    fn test_util_to_table_with_hard_structures() {
+    fn test_tools_to_table_with_hard_structures() {
         verify_exact_table_with_ids(r#"
-            util::to_table(struct(
+            tools::to_table(struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 45.67
@@ -2222,14 +2293,14 @@ mod tests {
     }
 
     #[test]
-    fn test_util_to_table_with_soft_and_hard_structures() {
+    fn test_tools_to_table_with_soft_and_hard_structures() {
         verify_exact_table_with_ids(r#"
-             stocks := util::to_table([
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
-             ])
+            stocks := tools::to_table([
+                { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
+            ])
 
-            util::to_table([
+            tools::to_table([
                 stocks,
                 struct(
                     symbol: String(8) = "ABC",
@@ -2252,8 +2323,39 @@ mod tests {
     }
 
     #[test]
+    fn test_util_base64() {
+        verify_exact(
+            "util::base64('Hello World')",
+            StringValue("SGVsbG8gV29ybGQ=".into()))
+    }
+
+    #[test]
+    fn test_util_md5() {
+        verify_exact_text(
+            "util::md5('Hello World')",
+            "b10a8db164e0754105b7a99be72e3fe5")
+    }
+
+    #[test]
+    fn test_util_now_and_date_functions() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            ts := cal::now()
+        "#).unwrap();
+        assert_eq!(result, Outcome(Ack));
+        interpreter.evaluate("import cal").unwrap();
+        interpreter = verify_whence(interpreter, "ts:::day_of()", |n| matches!(n, Number(U32Value(..))));
+        interpreter = verify_whence(interpreter, "ts:::hour24()", |n| matches!(n, Number(U32Value(..))));
+        interpreter = verify_whence(interpreter, "ts:::hour12()", |n| matches!(n, Number(U32Value(..))));
+        interpreter = verify_whence(interpreter, "ts:::minute_of()", |n| matches!(n, Number(U32Value(..))));
+        interpreter = verify_whence(interpreter, "ts:::month_of()", |n| matches!(n, Number(U32Value(..))));
+        interpreter = verify_whence(interpreter, "ts:::second_of()", |n| matches!(n, Number(U32Value(..))));
+        interpreter = verify_whence(interpreter, "ts:::year_of()", |n| matches!(n, Number(I32Value(..))));
+    }
+
+    #[test]
     fn test_util_to_f32_to_u128() {
-        use crate::numbers::NumberValue::*;
+        use crate::numbers::Numbers::*;
         let mut interpreter = Interpreter::new();
         interpreter.evaluate("import util").unwrap();
 
@@ -2289,11 +2391,11 @@ mod tests {
         interpreter.evaluate("import util").unwrap();
 
         // after the import, 'to_u8' should be in scope
-        assert_eq!(interpreter.get("to_u8"), Some(PlatformFunction(PlatformFunctions::UtilToU8)));
-        assert_eq!(interpreter.get("to_u16"), Some(PlatformFunction(PlatformFunctions::UtilToU16)));
-        assert_eq!(interpreter.get("to_u32"), Some(PlatformFunction(PlatformFunctions::UtilToU32)));
-        assert_eq!(interpreter.get("to_u64"), Some(PlatformFunction(PlatformFunctions::UtilToU64)));
-        assert_eq!(interpreter.get("to_u128"), Some(PlatformFunction(PlatformFunctions::UtilToU128)));
+        assert_eq!(interpreter.get("to_u8"), Some(PlatformOp(PlatformOps::UtilToU8)));
+        assert_eq!(interpreter.get("to_u16"), Some(PlatformOp(PlatformOps::UtilToU16)));
+        assert_eq!(interpreter.get("to_u32"), Some(PlatformOp(PlatformOps::UtilToU32)));
+        assert_eq!(interpreter.get("to_u64"), Some(PlatformOp(PlatformOps::UtilToU64)));
+        assert_eq!(interpreter.get("to_u128"), Some(PlatformOp(PlatformOps::UtilToU128)));
     }
 
     #[test]
@@ -2315,14 +2417,35 @@ mod tests {
             StringValue("http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998".to_string()))
     }
 
-    #[actix::test]
-    async fn test_www_serve() {
+    #[test]
+    fn test_www_serve() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            [+] www::serve(8822)
+            [+] stocks := ns("platform.www.quotes")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
+                 { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
+            GET "http://localhost:8822/platform/www/quotes/1/4"
+        "#).unwrap();
+        assert_eq!(result.to_json(), json!([
+            {"symbol": "BOX", "exchange": "NYSE", "last_sale": 56.88},
+            {"symbol": "JET", "exchange": "NASDAQ", "last_sale": 32.12},
+            {"symbol": "ABC", "exchange": "AMEX", "last_sale": 12.49}
+        ]));
+    }
+
+    #[test]
+    fn test_www_serve_workflow() {
         let mut interpreter = Interpreter::new();
 
         // set up a listener on port 8833
-        let result = interpreter.evaluate_async(r#"
+        let result = interpreter.evaluate(r#"
             www::serve(8833)
-        "#).await.unwrap();
+        "#).unwrap();
         assert_eq!(result, Outcome(Ack));
 
         // create the table
@@ -2331,127 +2454,73 @@ mod tests {
                 symbol: String(8),
                 exchange: String(8),
                 last_sale: f64
-            )"#).unwrap();
+            )
+        "#).unwrap();
         assert_eq!(result, Outcome(Ack));
 
         // append a new row
-        let row_id = interpreter.evaluate_async(r#"
+        let row_id = interpreter.evaluate(r#"
             POST "http://localhost:8833/platform/www/stocks/0" FROM {
-                fields:[
-                    { name: "symbol", value: "ABC" },
-                    { name: "exchange", value: "AMEX" },
-                    { name: "last_sale", value: 11.77 }
-                ]
-            }"#).await.unwrap();
+                symbol: "ABC", exchange: "AMEX", last_sale: 11.77
+            }
+        "#).unwrap();
         assert!(matches!(row_id, Number(I64Value(..))));
 
         // fetch the previously created row
-        let row = interpreter.evaluate_async(format!(r#"
+        let row = interpreter.evaluate(format!(r#"
             GET "http://localhost:8833/platform/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
-        assert_eq!(row, StructureSoft(SoftStructure::new(&vec![
-            ("id".into(), Number(I64Value(0))),
-            ("fields".into(), Array(vec![
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name", StringValue("symbol".into())),
-                    ("value", StringValue("ABC".into())),
-                ])),
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name", StringValue("exchange".into())),
-                    ("value", StringValue("AMEX".into())),
-                ])),
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name", StringValue("last_sale".into())),
-                    ("value", Number(F64Value(11.77))),
-                ])),
-            ])),
-        ])));
+        "#).as_str()).unwrap();
+        assert_eq!(row.to_json(), json!({"exchange":"AMEX","symbol":"ABC","last_sale":11.77}));
 
         // replace the previously created row
-        let result = interpreter.evaluate_async(r#"
+        let result = interpreter.evaluate(r#"
             PUT "http://localhost:8833/platform/www/stocks/:id" FROM {
-                fields:[
-                    { name: "symbol", value: "ABC" },
-                    { name: "exchange", value: "AMEX" },
-                    { name: "last_sale", value: 11.79 }
-                ]
-            }"#
+                symbol: "ABC", exchange: "AMEX", last_sale: 11.79
+            }
+        "#
             .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
-            .as_str()).await.unwrap();
+            .as_str()).unwrap();
         assert_eq!(result, Number(I64Value(1)));
 
         // re-fetch the previously updated row
-        let row = interpreter.evaluate_async(format!(r#"
+        let row = interpreter.evaluate(format!(r#"
             GET "http://localhost:8833/platform/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
-        assert_eq!(row, StructureSoft(SoftStructure::new(&vec![
-            ("id".into(), Number(I64Value(0))),
-            ("fields".into(), Array(vec![
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name", StringValue("symbol".into())),
-                    ("value", StringValue("ABC".into())),
-                ])),
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name", StringValue("exchange".into())),
-                    ("value", StringValue("AMEX".into())),
-                ])),
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name", StringValue("last_sale".into())),
-                    ("value", Number(F64Value(11.79))),
-                ])),
-            ])),
-        ])));
+        "#).as_str()).unwrap();
+        assert_eq!(row.to_json(), json!({"symbol":"ABC","exchange":"AMEX","last_sale":11.79}));
 
         // update the previously created row
-        let result = interpreter.evaluate_async(r#"
+        let result = interpreter.evaluate(r#"
             PATCH "http://localhost:8833/platform/www/stocks/:id" FROM {
-                fields:[
-                    { name: "last_sale", value: 11.81 }
-                ]
-            }"#
+                last_sale: 11.81
+            }
+        "#
             .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
-            .as_str()).await.unwrap();
+            .as_str()).unwrap();
         assert_eq!(result, Number(I64Value(1)));
 
         // re-fetch the previously updated row
-        let row = interpreter.evaluate_async(format!(r#"
+        let row = interpreter.evaluate(format!(r#"
             GET "http://localhost:8833/platform/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
-        assert_eq!(row, StructureSoft(SoftStructure::new(&vec![
-            ("id".into(), Number(I64Value(0))),
-            ("fields".into(), Array(vec![
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name".into(), StringValue("symbol".into())),
-                    ("value".into(), StringValue("ABC".into())),
-                ])),
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name".into(), StringValue("exchange".into())),
-                    ("value".into(), StringValue("AMEX".into())),
-                ])),
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name".into(), StringValue("last_sale".into())),
-                    ("value".into(), Number(F64Value(11.81))),
-                ])),
-            ])),
-        ])));
+        "#).as_str()).unwrap();
+        assert_eq!(row.to_json(), json!({"last_sale":11.81,"symbol":"ABC","exchange":"AMEX"}));
 
         // fetch the headers for the previously updated row
-        let result = interpreter.evaluate_async(format!(r#"
+        let result = interpreter.evaluate(format!(r#"
             HEAD "http://localhost:8833/platform/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
+        "#).as_str()).unwrap();
         println!("HEAD: {}", result.to_string());
         assert!(matches!(result, StructureSoft(..)));
 
         // delete the previously updated row
-        let result = interpreter.evaluate_async(format!(r#"
+        let result = interpreter.evaluate(format!(r#"
             DELETE "http://localhost:8833/platform/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
+        "#).as_str()).unwrap();
         assert_eq!(result, Number(I64Value(1)));
 
         // verify the deleted row is empty
-        let row = interpreter.evaluate_async(format!(r#"
+        let row = interpreter.evaluate(format!(r#"
             GET "http://localhost:8833/platform/www/stocks/{row_id}"
-        "#).as_str()).await.unwrap();
+        "#).as_str()).unwrap();
         assert_eq!(row, StructureSoft(SoftStructure::empty()));
     }
 
@@ -2470,6 +2539,15 @@ mod tests {
 
     #[test]
     fn test_to_code() {
+        // cal
+        assert_eq!(CalDate.to_code(), "cal::now()");
+        assert_eq!(CalDateDay.to_code(), "cal::day_of(d: Date)");
+        assert_eq!(CalDateHour12.to_code(), "cal::hour12(d: Date)");
+        assert_eq!(CalDateHour24.to_code(), "cal::hour24(d: Date)");
+        assert_eq!(CalDateMinute.to_code(), "cal::minute_of(d: Date)");
+        assert_eq!(CalDateMonth.to_code(), "cal::month_of(d: Date)");
+        assert_eq!(CalDateSecond.to_code(), "cal::second_of(d: Date)");
+        assert_eq!(CalDateYear.to_code(), "cal::year_of(d: Date)");
         // io
         assert_eq!(IoFileCreate.to_code(), "io::create_file(a: String(), b: String())");
         assert_eq!(IoFileExists.to_code(), "io::exists(s: String())");
@@ -2485,6 +2563,7 @@ mod tests {
         assert_eq!(OxideAssert.to_code(), "oxide::assert(b: Boolean)");
         assert_eq!(OxideEval.to_code(), "oxide::eval(s: String())");
         assert_eq!(OxideHelp.to_code(), "oxide::help()");
+        assert_eq!(OxideHistory.to_code(), "oxide::history()");
         assert_eq!(OxideHome.to_code(), "oxide::home()");
         assert_eq!(OxideMatches.to_code(), "oxide::matches(a, b)");
         assert_eq!(OxidePrintln.to_code(), "oxide::println(s: String())");
@@ -2495,35 +2574,29 @@ mod tests {
         // str
         assert_eq!(StrEndsWith.to_code(), "str::ends_with(a: String(), b: String())");
         assert_eq!(StrFormat.to_code(), "str::format(a: String(), b: String())");
-        assert_eq!(StrIndexOf.to_code(), "str::index_of(a: String(), b: i64)");
+        assert_eq!(StrIndexOf.to_code(), "str::index_of(s: String(), n: i64)");
         assert_eq!(StrJoin.to_code(), "str::join(a: Array<>, b: String())");
-        assert_eq!(StrLeft.to_code(), "str::left(a: String(), b: i64)");
-        assert_eq!(StrLen.to_code(), "str::len(n: u32)");
-        assert_eq!(StrRight.to_code(), "str::right(a: String(), b: i64)");
+        assert_eq!(StrLeft.to_code(), "str::left(s: String(), n: i64)");
+        assert_eq!(StrLen.to_code(), "str::len(s: String())");
+        assert_eq!(StrRight.to_code(), "str::right(s: String(), n: i64)");
         assert_eq!(StrSplit.to_code(), "str::split(a: String(), b: String())");
         assert_eq!(StrStartsWith.to_code(), "str::starts_with(a: String(), b: String())");
-        assert_eq!(StrSubstring.to_code(), "str::substring(a: String(), b: i64, c: i64)");
+        assert_eq!(StrSubstring.to_code(), "str::substring(s: String(), m: i64, n: i64)");
         assert_eq!(StrToString.to_code(), "str::to_string(x)");
+        // tools
+        assert_eq!(ToolsCompact.to_code(), "tools::compact(t: Table())");
+        assert_eq!(ToolsDescribe.to_code(), "tools::describe(t: Table())");
+        assert_eq!(ToolsFetch.to_code(), "tools::fetch(t: Table(), n: u64)");
+        assert_eq!(ToolsReverse.to_code(), "tools::reverse(t: Table())");
+        assert_eq!(ToolsScan.to_code(), "tools::scan(t: Table())");
+        assert_eq!(ToolsToArray.to_code(), "tools::to_array(t: Table())");
+        assert_eq!(ToolsToCSV.to_code(), "tools::to_csv(t: Table())");
+        assert_eq!(ToolsToJSON.to_code(), "tools::to_json(t: Table())");
+        assert_eq!(ToolsToTable.to_code(), "tools::to_table(x)");
         // util
-        assert_eq!(UtilCompact.to_code(), "util::compact(t: Table())");
-        assert_eq!(UtilDescribe.to_code(), "util::describe(t: Table())");
-        assert_eq!(UtilFetch.to_code(), "util::fetch(a: Table(), b: u64)");
-        assert_eq!(UtilReverse.to_code(), "util::reverse(t: Table())");
-        assert_eq!(UtilScan.to_code(), "util::scan(t: Table())");
-        assert_eq!(UtilToArray.to_code(), "util::to_array(t: Table())");
-        assert_eq!(UtilToCSV.to_code(), "util::to_csv(t: Table())");
-        assert_eq!(UtilToJSON.to_code(), "util::to_json(t: Table())");
-        assert_eq!(UtilToTable.to_code(), "util::to_table(x)");
         assert_eq!(UtilBase64.to_code(), "util::base64(x)");
-        assert_eq!(UtilDateDay.to_code(), "util::day_of(d: Date)");
-        assert_eq!(UtilDateHour12.to_code(), "util::hour12(d: Date)");
-        assert_eq!(UtilDateHour24.to_code(), "util::hour24(d: Date)");
-        assert_eq!(UtilDateMinute.to_code(), "util::minute_of(d: Date)");
-        assert_eq!(UtilDateMonth.to_code(), "util::month_of(d: Date)");
-        assert_eq!(UtilDateSecond.to_code(), "util::second_of(d: Date)");
-        assert_eq!(UtilDateYear.to_code(), "util::year_of(d: Date)");
         assert_eq!(UtilMD5.to_code(), "util::md5(x)");
-        assert_eq!(UtilNow.to_code(), "util::now()");
+        assert_eq!(UtilToASCII.to_code(), "util::to_ascii(n: u32)");
         assert_eq!(UtilToF32.to_code(), "util::to_f32(x)");
         assert_eq!(UtilToF64.to_code(), "util::to_f64(x)");
         assert_eq!(UtilToI8.to_code(), "util::to_i8(x)");

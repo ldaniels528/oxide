@@ -18,7 +18,7 @@ use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::outcomes::OutcomeKind;
 use crate::parameter::Parameter;
-use crate::platform::PlatformFunctions;
+use crate::platform::PlatformOps;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token::Atom;
 use crate::typed_values::TypedValue::{ErrorValue, Number};
@@ -63,7 +63,7 @@ pub enum DataType {
     LazyType, // TODO ^ absorb via FunctionType
     NumberType(NumberKind),
     OutcomeType(OutcomeKind),
-    PlatformFunctionType(PlatformFunctions),
+    PlatformFunctionType(PlatformOps),
     StringType(StorageTypes),
     StructureType(Vec<Parameter>),
     TableType(Vec<Parameter>, StorageTypes),

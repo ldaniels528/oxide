@@ -42,8 +42,8 @@ impl DataFrame {
     }
 
     /// loads a dataframe from disk.
-    pub fn load(ns: Namespace) -> std::io::Result<Self> {
-        let device = Box::new(FileRowCollection::open(&ns)?);
+    pub fn load(ns: &Namespace) -> std::io::Result<Self> {
+        let device = Box::new(FileRowCollection::open(ns)?);
         Ok(Self::new(device))
     }
 
@@ -398,6 +398,10 @@ impl RowCollection for DataFrame {
         self.device.get_record_size()
     }
 
+    fn get_rows(&self) -> Vec<Row> {
+        self.device.get_rows()
+    }
+
     fn len(&self) -> std::io::Result<usize> {
         self.device.len()
     }
@@ -457,7 +461,7 @@ mod tests {
     use crate::machine::Machine;
     use crate::namespaces::Namespace;
     use crate::number_kind::NumberKind::F64Kind;
-    use crate::numbers::NumberValue::*;
+    use crate::numbers::Numbers::*;
     use crate::rows::Row;
     use crate::table_columns::Column;
     use crate::testdata::*;
@@ -596,7 +600,7 @@ mod tests {
         let columns = make_quote_columns();
         df.append(make_quote(0, "SPAM", "NYSE", 11.99)).unwrap();
 
-        let df0 = DataFrame::load(ns.to_owned()).unwrap();
+        let df0 = DataFrame::load(&ns).unwrap();
         let (row, metadata) = df0.read_row(0).unwrap();
         assert!(metadata.is_allocated);
         assert_eq!(row, make_quote(0, "SPAM", "NYSE", 11.99));

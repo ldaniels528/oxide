@@ -4,8 +4,8 @@
 
 use std::fmt::{Display, Formatter};
 
-use crate::codec::Codec;
 use serde::{Deserialize, Serialize};
+use crate::byte_code_compiler::ByteCodeCompiler;
 
 /// Represents an Outcome type/kind
 #[repr(u8)]
@@ -26,11 +26,11 @@ pub enum Outcomes {
 
 impl Outcomes {
     pub fn decode(bytes: &Vec<u8>) -> std::io::Result<Outcomes> {
-        Codec::unwrap_as_result(bincode::deserialize(bytes))
+        ByteCodeCompiler::unwrap_as_result(bincode::deserialize(bytes))
     }
 
     pub fn encode(&self) -> std::io::Result<Vec<u8>> {
-        Codec::unwrap_as_result(bincode::serialize(self))
+        ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
     }
 
     pub fn to_bool(&self) -> bool {

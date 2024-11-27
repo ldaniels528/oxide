@@ -7,13 +7,7 @@ use std::fmt::Display;
 use std::mem::size_of;
 use std::ops::Index;
 
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-use shared_lib::cnv_error;
-
 use crate::byte_code_compiler::ByteCodeCompiler;
-use crate::codec;
 use crate::data_types::DataType;
 use crate::expression::Conditions;
 use crate::field_metadata::FieldMetadata;
@@ -23,9 +17,11 @@ use crate::structures::HardStructure;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, Null, Undefined};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Represents a row of a table structure.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Row {
     id: usize,
     values: Vec<TypedValue>,
@@ -36,6 +32,15 @@ impl Row {
     ////////////////////////////////////////////////////////////////////
     //      Constructors
     ////////////////////////////////////////////////////////////////////
+
+    pub fn from_json(columns: &Vec<Column>, value: &Value) -> Row {
+        let values = columns.iter()
+            .map(|column| value.get(column.get_name())
+                .map(|value| TypedValue::from_json(value))
+                .unwrap_or(Undefined))
+            .collect::<Vec<_>>();
+        Row::new(0, values)
+    }
 
     /// Primary Constructor
     pub fn new(id: usize, values: Vec<TypedValue>) -> Self {
@@ -59,7 +64,7 @@ impl Row {
             return (Self::empty(columns), RowMetadata::new(false));
         }
         let metadata = RowMetadata::from_bytes(buffer, 0);
-        let id = codec::decode_row_id(buffer, 1);
+        let id = ByteCodeCompiler::decode_row_id(buffer, 1);
         let values: Vec<TypedValue> = columns.iter().map(|t| {
             Self::decode_value(&t.get_data_type(), &buffer, t.get_offset())
         }).collect();
@@ -127,14 +132,6 @@ impl Row {
         Ok(value)
     }
 
-    pub fn from_row_js(columns: &Vec<Column>, form: &RowJs) -> Self {
-        let mut values = Vec::new();
-        for tc in columns {
-            values.push(form.determine_column_value(tc.get_name()));
-        }
-        Row::new(form.id.unwrap_or(0), values)
-    }
-
     pub fn from_tuples(
         id: usize,
         columns: &Vec<Column>,
@@ -171,7 +168,7 @@ impl Row {
         let mut buf = Vec::with_capacity(capacity);
         // include the field metadata and row ID
         buf.push(RowMetadata::new(true).encode());
-        buf.extend(codec::encode_row_id(self.id));
+        buf.extend(ByteCodeCompiler::encode_row_id(self.id));
         // include the fields
         let bb: Vec<u8> = self.values.iter().zip(phys_columns.iter())
             .flat_map(|(v, c)|
@@ -211,27 +208,37 @@ impl Row {
         } else { true }
     }
 
-    /// Transforms the row into CSV
+    pub fn rows_to_json(columns: &Vec<Column>, rows: &Vec<Row>) -> Vec<HashMap<String, Value>> {
+        rows.iter().fold(Vec::new(), |mut vec, row| {
+            vec.push(row.to_json(columns));
+            vec
+        })
+    }
+
+    /// Transforms the row into CSV format
     pub fn to_csv(&self) -> String {
         self.get_values().iter()
             .map(|v| v.to_code())
             .collect::<Vec<_>>().join(",")
     }
 
+    /// Transforms the row into JSON format
+    pub fn to_json(&self, columns: &Vec<Column>) -> HashMap<String, Value> {
+        columns.iter().zip(self.get_values().iter())
+            .fold(HashMap::new(), |mut hm, (c, v)| {
+                hm.insert(c.get_name().to_string(), v.to_json());
+                hm
+            })
+    }
+
     /// Transforms the row into JSON
-    pub fn to_json(&self, columns: &Vec<Column>) -> String {
+    pub fn to_json_string(&self, columns: &Vec<Column>) -> String {
         let inside = columns.iter().zip(self.values.iter())
             .map(|(k, v)|
                 format!(r#""{}":{}"#, k.get_name(), v.to_code()))
             .collect::<Vec<_>>()
             .join(",");
         format!("{{{}}}", inside)
-    }
-
-    /// Transforms the row into a Row model
-    pub fn to_row_js(&self, columns: &Vec<Column>) -> RowJs {
-        RowJs::new(Some(self.get_id()), self.get_values().iter().zip(columns)
-            .map(|(v, c)| FieldJs::new(c.get_name(), v.to_json())).collect())
     }
 
     pub fn to_string(&self) -> String {
@@ -274,92 +281,12 @@ impl Index<usize> for Row {
     }
 }
 
-// JSON representation of a field
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct FieldJs {
-    name: String,
-    value: Value,
-}
-
-impl FieldJs {
-    pub fn new(name: &str, value: Value) -> Self {
-        Self { name: name.into(), value }
-    }
-
-    pub fn get_name(&self) -> &String {
-        &self.name
-    }
-
-    pub fn get_value(&self) -> Value {
-        self.value.to_owned()
-    }
-}
-
-// JSON representation of a row
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct RowJs {
-    pub id: Option<usize>,
-    pub fields: Vec<FieldJs>,
-}
-
-impl RowJs {
-    pub fn determine_column_value(&self, name: &str) -> TypedValue {
-        for c in &self.fields {
-            if *c.get_name() == *name { return TypedValue::from_json(c.get_value()); }
-        }
-        Undefined
-    }
-
-    pub fn from_string(json_string: &str) -> std::io::Result<Self> {
-        serde_json::from_str(json_string).map_err(|e| cnv_error!(e))
-    }
-
-    pub fn vec_from_string(json_string: &str) -> std::io::Result<Vec<Self>> {
-        serde_json::from_str(json_string).map_err(|e| cnv_error!(e))
-    }
-
-    pub fn new(id: Option<usize>, fields: Vec<FieldJs>) -> Self { Self { id, fields } }
-
-    pub fn get_id(&self) -> Option<usize> { self.id }
-
-    pub fn get_fields(&self) -> &Vec<FieldJs> { &self.fields }
-
-    pub fn tabulate_body_cells_from_rows(rows: &Vec<RowJs>) -> Vec<Vec<String>> {
-        let mut body_cells = Vec::new();
-        for row in rows {
-            let mut row_vec = Vec::new();
-            for field in row.get_fields() {
-                row_vec.push(format!(" {} ", field.get_value()))
-            }
-            body_cells.push(row_vec)
-        }
-        body_cells
-    }
-
-    pub fn tabulate_header_cells(rows: &Vec<RowJs>) -> Vec<Vec<String>> {
-        let mut headers = Vec::new();
-        for field in rows[0].get_fields() {
-            headers.push(format!(" {} ", field.get_name()))
-        }
-
-        let mut header_cells = Vec::new();
-        header_cells.push(headers);
-        header_cells
-    }
-
-    pub fn to_json_string(&self) -> String { serde_json::to_string(self).unwrap() }
-}
-
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::data_types::DataType::{NumberType, StringType};
-    use crate::data_types::StorageTypes;
-    use crate::number_kind::NumberKind::F64Kind;
-    use crate::numbers::NumberValue::*;
+    use crate::numbers::Numbers::*;
     use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::*;
-    use shared_lib::tabulate_cells;
 
     use super::*;
 
@@ -483,63 +410,5 @@ mod tests {
         assert_eq!(row.unwrap(), vec![
             &StringValue("ZZZ".into()), &StringValue("AMEX".into()), &Number(F64Value(0.9876)),
         ]);
-    }
-
-    #[test]
-    fn test_tabulate_cells() {
-        let rows = RowJs::vec_from_string(r#"
-            [{"fields":[{"name":"symbol","value":"ABC"},{"name":"exchange","value":"AMEX"},
-            {"name":"last_sale","value":11.77}],"id":0},{"fields":[{"name":"symbol","value":"BIZ"},
-            {"name":"exchange","value":"NYSE"},{"name":"last_sale","value":23.66}],"id":2},
-            {"fields":[{"name":"symbol","value":"BOOM"},{"name":"exchange","value":"NASDAQ"},
-            {"name":"last_sale","value":56.87}],"id":4}]
-        "#).unwrap();
-        let header_cells = RowJs::tabulate_header_cells(&rows);
-        let body_cells = RowJs::tabulate_body_cells_from_rows(&rows);
-        let lines = tabulate_cells(header_cells, body_cells);
-        assert_eq!(lines, vec![
-            "|-------------------------------|".to_string(),
-            "| symbol | exchange | last_sale |".to_string(),
-            "|-------------------------------|".to_string(),
-            "| \"ABC\"  | \"AMEX\"   | 11.77     |".to_string(),
-            "| \"BIZ\"  | \"NYSE\"   | 23.66     |".to_string(),
-            "| \"BOOM\" | \"NASDAQ\" | 56.87     |".to_string(),
-            "|-------------------------------|".to_string(),
-        ])
-    }
-
-    #[test]
-    fn test_transformations_between_row_and_row_json() {
-        // define a row
-        let columns = vec![
-            Column::new("symbol", StringType(StorageTypes::FixedSize(4)), Null, 9),
-            Column::new("exchange", StringType(StorageTypes::FixedSize(4)), Null, 22),
-            Column::new("last_sale", NumberType(F64Kind), Null, 35),
-        ];
-        let row = Row::new(123, vec![
-            StringValue("FOX".into()), StringValue("NYSE".into()), Number(F64Value(37.65)),
-        ]);
-        // define a row-js
-        let fields_js = vec![
-            FieldJs::new("symbol", serde_json::json!("FOX")),
-            FieldJs::new("exchange", serde_json::json!("NYSE")),
-            FieldJs::new("last_sale", serde_json::json!(37.65)),
-        ];
-        let row_js = RowJs::new(Some(123), fields_js.to_owned());
-        // verify the accessors
-        assert_eq!(row_js.get_id(), Some(123));
-        assert_eq!(row_js.get_fields(), &vec![
-            FieldJs::new("symbol", serde_json::json!("FOX")),
-            FieldJs::new("exchange", serde_json::json!("NYSE")),
-            FieldJs::new("last_sale", serde_json::json!(37.65)),
-        ]);
-        assert_eq!(row_js, RowJs::new(Some(123), fields_js));
-        // verify the value extraction
-        assert_eq!(row_js.determine_column_value("symbol"), StringValue("FOX".into()));
-        assert_eq!(row_js.determine_column_value("exchange"), StringValue("NYSE".into()));
-        assert_eq!(row_js.determine_column_value("last_sale"), Number(F64Value(37.65)));
-        // cross-convert and verify
-        assert_eq!(row.to_row_js(&columns), row_js.to_owned());
-        assert_eq!(Row::from_row_js(&columns, &row_js), row);
     }
 }

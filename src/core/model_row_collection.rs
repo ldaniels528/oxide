@@ -25,7 +25,7 @@ pub struct ModelRowCollection {
 
 impl ModelRowCollection {
     /// Creates a new [ModelRowCollection] prefilled with all rows from the given tables.
-    pub fn combine(columns: Vec<Column>, tables: Vec<&ModelRowCollection>) -> std::io::Result<ModelRowCollection> {
+    pub fn combine(columns: Vec<Column>, tables: Vec<&dyn RowCollection>) -> std::io::Result<ModelRowCollection> {
         let mut mrc = ModelRowCollection::new(columns);
         for table in tables {
             mrc.append_rows(table.get_rows());
@@ -60,11 +60,11 @@ impl ModelRowCollection {
     }
 
     /// Creates a new [ModelRowCollection] prefilled with the given rows.
-    pub fn from_rows(columns: Vec<Column>, rows: Vec<Row>) -> ModelRowCollection {
+    pub fn from_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> ModelRowCollection {
         let row_data = rows.iter()
             .map(|r| (r.to_owned(), RowMetadata::new(true)))
             .collect();
-        Self::with_rows(columns, row_data)
+        Self::with_rows(columns.to_owned(), row_data)
     }
 
     /// Creates a new [ModelRowCollection] prefilled with all rows from the given table.
@@ -76,15 +76,6 @@ impl ModelRowCollection {
             }
         }
         Ok(mrc)
-    }
-
-    /// Returns all active rows
-    pub fn get_rows(&self) -> Vec<Row> {
-        let mut rows = Vec::new();
-        for (row, rmd) in &self.row_data {
-            if rmd.is_allocated { rows.push(row.to_owned()) }
-        }
-        rows
     }
 
     /// Creates a new [ModelRowCollection] from abstract columns
@@ -112,6 +103,14 @@ impl RowCollection for ModelRowCollection {
     fn get_columns(&self) -> &Vec<Column> { &self.columns }
 
     fn get_record_size(&self) -> usize { self.record_size }
+
+    fn get_rows(&self) -> Vec<Row> {
+        let mut rows = Vec::new();
+        for (row, rmd) in &self.row_data {
+            if rmd.is_allocated { rows.push(row.to_owned()) }
+        }
+        rows
+    }
 
     fn iter(&self) -> Box<dyn Iterator<Item=Row> + '_> {
         let my_iter = self.row_data.iter()
@@ -225,7 +224,7 @@ impl RowCollection for ModelRowCollection {
 #[cfg(test)]
 mod tests {
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::NumberValue::U64Value;
+    use crate::numbers::Numbers::U64Value;
     use crate::row_collection::RowCollection;
     use crate::table_columns::Column;
     use crate::testdata::{make_quote, make_quote_parameters};
@@ -275,7 +274,7 @@ mod tests {
     fn create_data_set() -> (ModelRowCollection, Vec<Column>) {
         let columns = make_quote_parameters();
         let phys_columns = Column::from_parameters(&columns).unwrap();
-        let mrc = ModelRowCollection::from_rows(phys_columns.clone(), vec![
+        let mrc = ModelRowCollection::from_rows(&phys_columns, &vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "BIZ", "NYSE", 9.775),

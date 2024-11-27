@@ -31,7 +31,7 @@ impl DataframeActor {
         }
     }
 
-    fn append_row(&mut self, ns: Namespace, row: Row) -> std::io::Result<usize> {
+    fn append_row(&mut self, ns: &Namespace, row: Row) -> std::io::Result<usize> {
         self.get_or_load_dataframe(ns)?.append(row)
     }
 
@@ -39,11 +39,11 @@ impl DataframeActor {
         self.get_or_create_dataframe(ns, cfg)
     }
 
-    fn delete_row(&mut self, ns: Namespace, id: usize) -> std::io::Result<usize> {
+    fn delete_row(&mut self, ns: &Namespace, id: usize) -> std::io::Result<usize> {
         self.get_or_load_dataframe(ns)?.delete(id)
     }
 
-    fn get_columns(&mut self, ns: Namespace) -> std::io::Result<&Vec<Column>> {
+    fn get_columns(&mut self, ns: &Namespace) -> std::io::Result<&Vec<Column>> {
         Ok(&self.get_or_load_dataframe(ns)?.get_columns())
     }
 
@@ -59,20 +59,20 @@ impl DataframeActor {
         }
     }
 
-    fn get_or_load_dataframe(&mut self, ns: Namespace) -> std::io::Result<&mut DataFrame> {
+    fn get_or_load_dataframe(&mut self, ns: &Namespace) -> std::io::Result<&mut DataFrame> {
         match self.resources.entry(ns.id()) {
             Entry::Occupied(v) => Ok(v.into_mut()),
             Entry::Vacant(x) => Ok(x.insert(DataFrame::load(ns)?))
         }
     }
 
-    fn overwrite_row(&mut self, ns: Namespace, row: Row) -> std::io::Result<usize> {
+    fn overwrite_row(&mut self, ns: &Namespace, row: Row) -> std::io::Result<usize> {
         self.get_or_load_dataframe(ns)?.overwrite(row)
     }
 
     fn read_fully(
         &mut self,
-        ns: Namespace,
+        ns: &Namespace,
     ) -> std::io::Result<(Vec<Column>, Vec<Row>)> {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = Vec::new();
@@ -84,7 +84,7 @@ impl DataframeActor {
 
     fn read_range(
         &mut self,
-        ns: Namespace,
+        ns: &Namespace,
         range: Range<usize>,
     ) -> std::io::Result<(Vec<Column>, Vec<Row>)> {
         let df = self.get_or_load_dataframe(ns)?;
@@ -97,7 +97,7 @@ impl DataframeActor {
 
     fn read_row(
         &mut self,
-        ns: Namespace,
+        ns: &Namespace,
         id: usize,
     ) -> std::io::Result<(Vec<Column>, Option<Row>)> {
         let df = self.get_or_load_dataframe(ns)?;
@@ -107,11 +107,19 @@ impl DataframeActor {
         })
     }
 
-    fn read_row_metadata(&mut self, ns: Namespace, id: usize) -> std::io::Result<RowMetadata> {
+    fn read_row_metadata(
+        &mut self,
+        ns: &Namespace,
+        id: usize
+    ) -> std::io::Result<RowMetadata> {
         self.get_or_load_dataframe(ns)?.read_row_metadata(id)
     }
 
-    fn update_row(&mut self, ns: Namespace, row: Row) -> std::io::Result<usize> {
+    fn update_row(
+        &mut self,
+        ns: &Namespace,
+        row: Row
+    ) -> std::io::Result<usize> {
         self.get_or_load_dataframe(ns)?.update(row)
     }
 }
@@ -126,27 +134,27 @@ impl Handler<IORequest> for DataframeActor {
     fn handle(&mut self, msg: IORequest, _: &mut Self::Context) -> Self::Result {
         match msg {
             IORequest::AppendRow { ns, row } =>
-                handle_result(self.append_row(ns, row)),
+                handle_result(self.append_row(&ns, row)),
             IORequest::CreateTable { ns, cfg } =>
                 handle_result(self.create_table(ns, cfg).map(|_| 1usize)),
             IORequest::DeleteRow { ns, id } =>
-                handle_result(self.delete_row(ns, id)),
+                handle_result(self.delete_row(&ns, id)),
             IORequest::GetColumns { ns } =>
-                handle_result(self.get_columns(ns)),
+                handle_result(self.get_columns(&ns)),
             IORequest::GetNamespaces =>
                 handle_result(self.get_namespaces()),
             IORequest::ReadFully { ns } =>
-                handle_result(self.read_fully(ns)),
-            IORequest::ReadRange { ns, range } =>
-                handle_result(self.read_range(ns, range)),
+                handle_result(self.read_fully(&ns)),
+            IORequest::ReadRange { ns, offset0, offset1 } =>
+                handle_result(self.read_range(&ns, offset0..offset1)),
             IORequest::ReadRow { ns, id } =>
-                handle_result(self.read_row(ns, id)),
+                handle_result(self.read_row(&ns, id)),
             IORequest::ReadRowMetadata { ns, id } =>
-                handle_result(self.read_row_metadata(ns, id)),
+                handle_result(self.read_row_metadata(&ns, id)),
             IORequest::OverwriteRow { ns, row } =>
-                handle_result(self.overwrite_row(ns, row)),
+                handle_result(self.overwrite_row(&ns, row)),
             IORequest::UpdateRow { ns, row } =>
-                handle_result(self.update_row(ns, row)),
+                handle_result(self.update_row(&ns, row)),
         }
     }
 }
@@ -162,7 +170,7 @@ fn handle_result<T: serde::Serialize>(result: std::io::Result<T>) -> String {
 // actor messages
 ////////////////////////////////////////////////////////////////////
 
-#[derive(Clone, Debug, Message, Serialize, Deserialize)]
+#[derive(Clone, Debug, Message, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[rtype(result = "String")]
 pub enum IORequest {
     AppendRow { ns: Namespace, row: Row },
@@ -173,7 +181,7 @@ pub enum IORequest {
     ReadFully { ns: Namespace },
     ReadRow { ns: Namespace, id: usize },
     ReadRowMetadata { ns: Namespace, id: usize },
-    ReadRange { ns: Namespace, range: Range<usize> },
+    ReadRange { ns: Namespace, offset0: usize, offset1: usize },
     OverwriteRow { ns: Namespace, row: Row },
     UpdateRow { ns: Namespace, row: Row },
 }
@@ -275,10 +283,11 @@ macro_rules! read_fully {
 
 #[macro_export]
 macro_rules! read_range {
-    ($actor:expr, $ns:expr, $range:expr) => {
+    ($actor:expr, $ns:expr, $offset0:expr, $offset1:expr) => {
         $actor.send(crate::dataframe_actor::IORequest::ReadRange {
             ns: $ns.to_owned(),
-            range: $range
+            offset0: $offset0,
+            offset1: $offset1
         }).await
             .map(|s|serde_json::from_str::<(Vec<Column>, Vec<Row>)>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
@@ -334,7 +343,7 @@ mod tests {
     use crate::data_types::DataType::*;
     use crate::data_types::StorageTypes;
     use crate::number_kind::NumberKind::F64Kind;
-    use crate::numbers::NumberValue::*;
+    use crate::numbers::Numbers::*;
     use crate::testdata::{make_quote_columns, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
 
@@ -398,7 +407,7 @@ mod tests {
         ])).unwrap());
 
         // read rows
-        let (columns, rows) = read_range!(actor, ns, 0..2).unwrap();
+        let (columns, rows) = read_range!(actor, ns, 0, 2).unwrap();
         assert_eq!(rows, vec![
             Row::new(0, vec![
                 StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(22.88)),

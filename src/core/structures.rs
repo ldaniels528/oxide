@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 
-use crate::codec::Codec;
+
 use crate::errors::Errors::Exact;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
@@ -16,6 +16,7 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use crate::byte_code_compiler::ByteCodeCompiler;
 
 /// Represents a JSON-like data structure
 pub trait Structure {
@@ -79,7 +80,7 @@ pub trait Structure {
         let row = self.to_row();
         let columns = Column::from_parameters(&self.get_parameters())
             .unwrap_or(Vec::new());
-        ModelRowCollection::from_rows(columns, vec![row])
+        ModelRowCollection::from_rows(&columns, &vec![row])
     }
 
     fn update(&self, name: &str, value: TypedValue) -> TypedValue;
@@ -116,7 +117,7 @@ impl HardStructure {
     ////////////////////////////////////////////////////////////////////
 
     pub fn decode(bytes: Vec<u8>) -> std::io::Result<Self> {
-        Codec::unwrap_as_result(bincode::deserialize(bytes.as_slice()))
+        ByteCodeCompiler::unwrap_as_result(bincode::deserialize(bytes.as_slice()))
     }
 
     pub fn from_fields(
@@ -160,8 +161,8 @@ impl HardStructure {
         Ok(Self::new(fields, values))
     }
 
-    pub fn from_row(columns: Vec<Column>, row: &Row) -> HardStructure {
-        Self::new(columns, row.get_values())
+    pub fn from_row(columns: &Vec<Column>, row: &Row) -> HardStructure {
+        Self::new(columns.to_owned(), row.get_values())
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -191,7 +192,7 @@ impl Display for HardStructure {
 impl Structure for HardStructure {
     /// Encodes the [HardStructure] into a byte vector
     fn encode(&self) -> std::io::Result<Vec<u8>> {
-        Codec::unwrap_as_result(bincode::serialize(self))
+        ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
     }
 
     fn get_parameters(&self) -> Vec<Parameter> {
@@ -206,6 +207,7 @@ impl Structure for HardStructure {
         tuples.extend(self.columns.iter().zip(self.values.iter())
             .map(|(c, v)| (c.get_name().to_string(), v.to_owned()))
             .collect::<Vec<_>>());
+        tuples.sort_by(|(s0, t0), (s1, t1)| s1.cmp(&s0));
         tuples
     }
 
@@ -253,7 +255,7 @@ impl Structure for HardStructure {
     }
 
     fn to_table(&self) -> ModelRowCollection {
-        ModelRowCollection::from_rows(self.columns.clone(), vec![self.to_row()])
+        ModelRowCollection::from_rows(&self.columns, &vec![self.to_row()])
     }
 
     fn update(&self, name: &str, value: TypedValue) -> TypedValue {
@@ -273,7 +275,7 @@ pub struct SoftStructure {
 
 impl SoftStructure {
     pub fn decode(bytes: Vec<u8>) -> std::io::Result<Self> {
-        Codec::unwrap_as_result(bincode::deserialize(bytes.as_slice()))
+        ByteCodeCompiler::unwrap_as_result(bincode::deserialize(bytes.as_slice()))
     }
 
     pub fn empty() -> Self {
@@ -322,7 +324,7 @@ impl Display for SoftStructure {
 impl Structure for SoftStructure {
     /// Encodes the [SoftStructure] into a byte vector
     fn encode(&self) -> std::io::Result<Vec<u8>> {
-        Codec::unwrap_as_result(bincode::serialize(self))
+        ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
     }
 
     fn get_parameters(&self) -> Vec<Parameter> {
@@ -376,12 +378,13 @@ mod hard_structure_tests {
     use crate::data_types::DataType::*;
     use crate::data_types::StorageTypes;
     use crate::number_kind::NumberKind::F64Kind;
-    use crate::numbers::NumberValue::F64Value;
+    use crate::numbers::Numbers::F64Value;
     use crate::structures::{HardStructure, Structure};
     use crate::table_columns::Column;
     use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
     use std::collections::HashMap;
+    use crate::row_collection::RowCollection;
 
     #[test]
     fn test_encode_decode_nonempty() {
@@ -441,7 +444,7 @@ mod hard_structure_tests {
     fn test_from_row() {
         let columns = make_quote_parameters();
         let phys_columns = Column::from_parameters(&columns).unwrap();
-        let structure = HardStructure::from_row(phys_columns.clone(),
+        let structure = HardStructure::from_row(&phys_columns,
                                                 &make_quote(0, "ABC", "AMEX", 11.77),
         );
         assert_eq!(structure.get("symbol"), StringValue("ABC".to_string()));
@@ -534,7 +537,7 @@ mod hard_structure_tests {
             Number(F64Value(37.25)),
         ]);
         let table = structure.to_table();
-        let values = table.get_rows().iter()
+        let values = table.iter()
             .map(|row| row.get_values())
             .collect::<Vec<_>>();
         assert_eq!(values, vec![
@@ -574,7 +577,7 @@ mod hard_structure_tests {
 #[cfg(test)]
 mod soft_structure_tests {
     use super::*;
-    use crate::numbers::NumberValue::U8Value;
+    use crate::numbers::Numbers::U8Value;
     use crate::typed_values::TypedValue::{Number, StringValue};
 
     #[test]

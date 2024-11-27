@@ -31,16 +31,8 @@ impl Interpreter {
 
     /// Executes the supplied source code returning the result of the evaluation
     pub(crate) fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
-        let opcode = Compiler::compile_script(source_code)?;
+        let opcode = Compiler::build(source_code)?;
         let (machine, result) = self.machine.evaluate(&opcode)?;
-        self.machine = machine;
-        Ok(result)
-    }
-
-    /// Executes the supplied source code returning the result of the evaluation
-    pub async fn evaluate_async(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
-        let opcode = Compiler::compile_script(source_code)?;
-        let (machine, result) = self.machine.evaluate_async(&opcode).await?;
         self.machine = machine;
         Ok(result)
     }
@@ -63,16 +55,18 @@ mod tests {
     use crate::expression::Expression::*;
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::NumberValue::{F64Value, I64Value, NaNValue, U128Value};
+    use crate::numbers::Numbers::{F64Value, I64Value, NaNValue, U128Value};
     use crate::outcomes::Outcomes::{Ack, RowsAffected};
+    use crate::table_values::TableValues::Model;
     use crate::structures::*;
     use crate::table_columns::Column;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
+    use serde_json::json;
 
     #[test]
     fn test_array_definition() {
-        use crate::numbers::NumberValue::*;
+        use crate::numbers::Numbers::*;
         verify_exact("[0, 1, 3, 5]", Array(vec![
             Number(I64Value(0)), Number(I64Value(1)),
             Number(I64Value(3)), Number(I64Value(5)),
@@ -81,45 +75,35 @@ mod tests {
 
     #[test]
     fn test_array_access_element_at_index() {
-        verify_exact("[-0.01, 8.25, 3.8, -4.5][2]", Number(F64Value(3.8)));
+        verify_exact_text("[-0.01, 8.25, 3.8, -4.5][2]", "3.8");
     }
 
     #[test]
     fn test_array_addition() {
-        verify_exact(r#"
+        verify_exact_text(r#"
             a := ['cat', 'dog']
             b := ['mouse', 'rat']
             a + b
-        "#, Array(vec![
-            StringValue("cat".into()), StringValue("dog".into()),
-            StringValue("mouse".into()), StringValue("rat".into())
-        ]));
+        "#, r#"["cat", "dog", "mouse", "rat"]"#);
     }
 
     #[test]
     fn test_array_multiplication() {
-        verify_exact(r#"
+        verify_exact_text(r#"
             a := ['cat', 'dog']
             a * 3
-        "#, Array(vec![
-            StringValue("cat".into()), StringValue("dog".into()),
-            StringValue("cat".into()), StringValue("dog".into()),
-            StringValue("cat".into()), StringValue("dog".into()),
-        ]));
+        "#, r#"["cat", "dog", "cat", "dog", "cat", "dog"]"#);
     }
 
     #[test]
     fn test_array_ranges() {
-        use crate::numbers::NumberValue::*;
-        verify_exact("0..4", Array(vec![
-            Number(I64Value(0)), Number(I64Value(1)),
-            Number(I64Value(2)), Number(I64Value(3)),
-        ]));
+        use crate::numbers::Numbers::*;
+        verify_exact_text("0..4", r#"[0, 1, 2, 3]"#);
     }
 
     #[test]
     fn test_basic_state_manipulation() {
-        use crate::numbers::NumberValue::*;
+        use crate::numbers::Numbers::*;
         let mut interpreter = Interpreter::new();
         assert_eq!(interpreter.evaluate("x := 5").unwrap(), Outcome(Ack));
         assert_eq!(interpreter.evaluate("$x").unwrap(), Number(I64Value(5)));
@@ -139,14 +123,14 @@ mod tests {
 
     #[test]
     fn test_between() {
-        verify_exact("20 between 1 and 20", Boolean(true));
-        verify_exact("21 between 1 and 20", Boolean(false));
+        verify_exact_text("20 between 1 and 20", "true");
+        verify_exact_text("21 between 1 and 20", "false");
     }
 
     #[test]
     fn test_betwixt() {
-        verify_exact("20 betwixt 1 and 20", Boolean(false));
-        verify_exact("19 betwixt 1 and 20", Boolean(true));
+        verify_exact_text("20 betwixt 1 and 20", "false");
+        verify_exact_text("19 betwixt 1 and 20", "true");
     }
 
     #[test]
@@ -156,7 +140,7 @@ mod tests {
 
     #[test]
     fn test_directive_ignore_failure() {
-        verify_exact(r#"[~] 7 / 0"#, Outcome(Ack));
+        verify_exact_text(r#"[~] 7 / 0"#, "ack");
     }
 
     #[test]
@@ -169,7 +153,7 @@ mod tests {
 
     #[test]
     fn test_directive_must_be_true() {
-        verify_exact("[+] x := 67", Outcome(Ack));
+        verify_exact_text("[+] x := 67", "ack");
     }
 
     #[test]
@@ -340,11 +324,9 @@ mod tests {
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
             )
-
             mod stock {
-                fn is_this_you(symbol) => symbol == self::symbol
+                fn is_this_you(symbol) => symbol is self::symbol
             }
-
             stock::is_this_you('ABC')
         "#, Boolean(true));
     }
@@ -454,24 +436,24 @@ mod tests {
 
     #[test]
     fn test_soft_structure_field() {
-        verify_exact(r#"
+        verify_exact_text(r#"
             stock := { symbol:"AAA", price:123.45 }
             stock::symbol
-        "#, StringValue("AAA".into()));
+        "#, "\"AAA\"".into());
     }
 
     #[test]
     fn test_soft_structure_field_assignment() {
-        verify_exact(r#"
+        verify_exact_text(r#"
             stock := { symbol:"AAA", price:123.45 }
             stock::price := 124.11
             stock::price
-        "#, Number(F64Value(124.11)));
+        "#, "124.11");
     }
 
     #[test]
     fn test_soft_structure_method() {
-        verify_exact(r#"
+        verify_exact_text(r#"
             stock := {
                 symbol:"ABC",
                 price:123.45,
@@ -479,24 +461,22 @@ mod tests {
                 is_this_you: fn(symbol) => symbol == self::symbol
             }
             stock::is_this_you('ABC')
-        "#, Boolean(true));
+        "#, "true");
     }
 
     #[test]
     fn test_soft_structure_module_method() {
-        verify_exact(r#"
+        verify_exact_text(r#"
             stock := {
                 symbol: "ABC",
                 exchange: "NYSE",
                 last_sale: 23.67
             }
-
             mod stock {
                 fn is_this_you(symbol) => symbol == self::symbol
             }
-
             stock::is_this_you('ABC')
-        "#, Boolean(true));
+        "#, "true");
     }
 
     #[test]
@@ -513,7 +493,7 @@ mod tests {
 
     #[test]
     fn test_soft_structure_json_literal_1() {
-        verify_exact(r#"
+        verify_exact_json(r#"
             {
               "columns": [{
                   "name": "symbol",
@@ -531,27 +511,23 @@ mod tests {
               "indices": [],
               "partitions": []
             }
-        "#, StructureSoft(SoftStructure::new(&vec![
-            ("columns", Array(vec![
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name", StringValue("symbol".into())),
-                    ("param_type", StringValue("String(8)".into())),
-                    ("default_value", Null),
-                ])),
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name", StringValue("exchange".into())),
-                    ("param_type", StringValue("String(8)".into())),
-                    ("default_value", Null)
-                ])),
-                StructureSoft(SoftStructure::new(&vec![
-                    ("name", StringValue("last_sale".into())),
-                    ("param_type", StringValue("f64".into())),
-                    ("default_value", Null),
-                ])),
-            ])),
-            ("indices", Array(Vec::new())),
-            ("partitions", Array(Vec::new())),
-        ])));
+        "#, json!({
+              "columns": [{
+                  "name": "symbol",
+                  "param_type": "String(8)",
+                  "default_value": null
+                }, {
+                  "name": "exchange",
+                  "param_type": "String(8)",
+                  "default_value": null
+                }, {
+                  "name": "last_sale",
+                  "param_type": "f64",
+                  "default_value": null
+                }],
+              "indices": [],
+              "partitions": []
+            }));
     }
 
     #[test]
@@ -618,9 +594,9 @@ mod tests {
             symbol: String(8),
             exchange: String(8),
             last_sale: f64
-        )"#, TableValue(ModelRowCollection::with_rows(
+        )"#, TableValue(Model(ModelRowCollection::with_rows(
             make_quote_columns(), Vec::new(),
-        )))
+        ))))
     }
 
     #[test]
@@ -682,16 +658,16 @@ mod tests {
         assert_eq!(Outcome(RowsAffected(1)), interpreter.evaluate(r#"
             overwrite stocks
             via {symbol: "GOTO", exchange: "OTC", last_sale: 0.1421}
-            where symbol == "GOTO"
+            where symbol is "GOTO"
         "#).unwrap());
 
         // verify the remaining rows
         assert_eq!(
             interpreter.evaluate("from stocks").unwrap(),
-            TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+            TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
                 make_quote(1, "UNO", "OTC", 0.2456),
                 make_quote(3, "GOTO", "OTC", 0.1421),
-            ]))
+            ])))
         );
 
         // restore the previously deleted rows
@@ -702,14 +678,14 @@ mod tests {
         // verify the existing rows
         assert_eq!(
             interpreter.evaluate("from stocks").unwrap(),
-            TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+            TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
                 make_quote(0, "ABC", "AMEX", 11.77),
                 make_quote(1, "UNO", "OTC", 0.2456),
                 make_quote(2, "BIZ", "NYSE", 23.66),
                 make_quote(3, "GOTO", "OTC", 0.1421),
                 make_quote(4, "BOOM", "NASDAQ", 56.87),
                 make_quote(5, "TRX", "NASDAQ", 7.9311),
-            ]))
+            ])))
         );
     }
 
@@ -739,10 +715,10 @@ mod tests {
             where last_sale > 1.0
             order by symbol
             limit 5
-        "#).unwrap(), TableValue(ModelRowCollection::from_rows(phys_columns.clone(), vec![
+        "#).unwrap(), TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(2, "BIZ", "NYSE", 23.66),
-        ])));
+        ]))));
     }
 
     #[test]

@@ -64,6 +64,11 @@ impl RowCollection for FileEmbeddedRowCollection {
         self.record_size
     }
 
+    fn get_rows(&self) -> Vec<Row> {
+        self.get_embedded_table().map(|d|d.get_rows())
+            .unwrap_or_else(|err| vec![])
+    }
+
     fn len(&self) -> std::io::Result<usize> {
         self.get_embedded_table()?.len()
     }

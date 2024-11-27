@@ -11,7 +11,7 @@ use crate::errors::Errors;
 use crate::errors::Errors::*;
 use crate::field_metadata::FieldMetadata;
 use crate::number_kind::NumberKind::*;
-use crate::numbers::NumberValue::U64Value;
+use crate::numbers::Numbers::U64Value;
 use crate::outcomes::Outcomes;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
@@ -278,6 +278,10 @@ impl RowCollection for HashTableRowCollection {
         self.data_table.get_record_size()
     }
 
+    fn get_rows(&self) -> Vec<Row> {
+        self.data_table.get_rows()
+    }
+
     fn len(&self) -> std::io::Result<usize> {
         self.data_table.len()
     }
@@ -380,7 +384,7 @@ mod tests {
 
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
-    use crate::numbers::NumberValue::F64Value;
+    use crate::numbers::Numbers::F64Value;
     use crate::row_collection::RowCollection;
     use crate::rows::Row;
     use crate::table_renderer::TableRenderer;

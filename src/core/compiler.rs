@@ -13,7 +13,7 @@ use crate::expression::MutateTarget::TableTarget;
 use crate::expression::Mutation::IntoNs;
 use crate::expression::{BitwiseOps, Conditions, Expression, ImportOps, ACK, FALSE, NULL, TRUE, UNDEFINED};
 use crate::expression::{Directives, Excavation, Infrastructure, MutateTarget, Mutation, Queryable};
-use crate::numbers::NumberValue::*;
+use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::structures::HardStructure;
 use crate::token_slice::TokenSlice;
@@ -37,7 +37,7 @@ impl Compiler {
 
     /// compiles the source code into a [Vec<Expression>]; a graph representing
     /// the program's executable code
-    pub fn compile_script(source_code: &str) -> std::io::Result<Expression> {
+    pub fn build(source_code: &str) -> std::io::Result<Expression> {
         let mut compiler = Compiler::new();
         let (code, _) = compiler.compile(TokenSlice::from_string(source_code))?;
         Ok(code)
@@ -1119,14 +1119,14 @@ mod tests {
     #[test]
     fn test_alias() {
         assert_eq!(
-            Compiler::compile_script(r#"symbol: "ABC""#).unwrap(),
+            Compiler::build(r#"symbol: "ABC""#).unwrap(),
             AsValue("symbol".into(), Box::new(Literal(StringValue("ABC".into())))));
     }
 
     #[test]
     fn test_array_declaration() {
         assert_eq!(
-            Compiler::compile_script("[7, 5, 8, 2, 4, 1]").unwrap(),
+            Compiler::build("[7, 5, 8, 2, 4, 1]").unwrap(),
             ArrayExpression(vec![
                 Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
                 Literal(Number(I64Value(2))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
@@ -1136,7 +1136,7 @@ mod tests {
     #[test]
     fn test_array_indexing() {
         assert_eq!(
-            Compiler::compile_script("[7, 5, 8, 2, 4, 1][3]").unwrap(),
+            Compiler::build("[7, 5, 8, 2, 4, 1][3]").unwrap(),
             ElementAt(
                 Box::new(ArrayExpression(vec![
                     Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
@@ -1148,7 +1148,7 @@ mod tests {
     #[test]
     fn test_between() {
         assert_eq!(
-            Compiler::compile_script("20 between 1 and 20").unwrap(),
+            Compiler::build("20 between 1 and 20").unwrap(),
             Condition(Between(
                 Box::new(Literal(Number(I64Value(20)))),
                 Box::new(Literal(Number(I64Value(1)))),
@@ -1159,7 +1159,7 @@ mod tests {
     #[test]
     fn test_betwixt() {
         assert_eq!(
-            Compiler::compile_script("20 betwixt 1 and 21").unwrap(),
+            Compiler::build("20 betwixt 1 and 21").unwrap(),
             Condition(Betwixt(
                 Box::new(Literal(Number(I64Value(20)))),
                 Box::new(Literal(Number(I64Value(1)))),
@@ -1170,7 +1170,7 @@ mod tests {
     #[test]
     fn test_bitwise_and() {
         assert_eq!(
-            Compiler::compile_script("20 & 3").unwrap(),
+            Compiler::build("20 & 3").unwrap(),
             BitwiseOp(BitwiseOps::And(
                 Box::new(Literal(Number(I64Value(20)))),
                 Box::new(Literal(Number(I64Value(3)))),
@@ -1180,7 +1180,7 @@ mod tests {
     #[test]
     fn test_bitwise_or() {
         assert_eq!(
-            Compiler::compile_script("20 | 3").unwrap(),
+            Compiler::build("20 | 3").unwrap(),
             BitwiseOp(BitwiseOps::Or(
                 Box::new(Literal(Number(I64Value(20)))),
                 Box::new(Literal(Number(I64Value(3)))),
@@ -1190,7 +1190,7 @@ mod tests {
     #[test]
     fn test_bitwise_shl() {
         assert_eq!(
-            Compiler::compile_script("20 << 3").unwrap(),
+            Compiler::build("20 << 3").unwrap(),
             BitwiseOp(BitwiseOps::ShiftLeft(
                 Box::new(Literal(Number(I64Value(20)))),
                 Box::new(Literal(Number(I64Value(3)))),
@@ -1200,7 +1200,7 @@ mod tests {
     #[test]
     fn test_bitwise_shr() {
         assert_eq!(
-            Compiler::compile_script("20 >> 3").unwrap(),
+            Compiler::build("20 >> 3").unwrap(),
             BitwiseOp(BitwiseOps::ShiftRight(
                 Box::new(Literal(Number(I64Value(20)))),
                 Box::new(Literal(Number(I64Value(3)))),
@@ -1212,7 +1212,7 @@ mod tests {
         // examples:
         // fn add(a: u64, b: u64) => a + b
         // fn add(a: u64, b: u64) : u64 => a + b
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             fn add(a, b) => a + b
         "#).unwrap();
         assert_eq!(code, SetVariable("add".to_string(), Box::new(
@@ -1236,7 +1236,7 @@ mod tests {
         // examples:
         // fn (a: u64, b: u64) : u64 => a + b
         // fn (a, b) => a + b
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             fn (a, b) => a * b
         "#).unwrap();
         assert_eq!(code, Literal(Function {
@@ -1255,7 +1255,7 @@ mod tests {
 
     #[test]
     fn test_function_call() {
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             f(2, 3)
         "#).unwrap();
         assert_eq!(code, FunctionCall {
@@ -1269,7 +1269,7 @@ mod tests {
 
     #[test]
     fn test_create_index_in_namespace() {
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             create index ns("compiler.create.stocks") on [symbol, exchange]
         "#).unwrap();
         assert_eq!(code, Quarry(Excavation::Construct(Infrastructure::Create {
@@ -1286,7 +1286,7 @@ mod tests {
     #[test]
     fn test_create_table_in_namespace() {
         let ns_path = "compiler.create.stocks";
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             create table ns("compiler.create.stocks") (
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
@@ -1307,7 +1307,7 @@ mod tests {
 
     #[test]
     fn test_declare_table() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
             table(
                 symbol: String(8),
                 exchange: String(8),
@@ -1325,7 +1325,7 @@ mod tests {
 
     #[test]
     fn test_drop_table() {
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             drop table ns('finance.securities.stocks')
         "#).unwrap();
         assert_eq!(code,
@@ -1336,8 +1336,19 @@ mod tests {
     }
 
     #[test]
+    fn test_extraction() {
+        let code = Compiler::build(r#"
+            oxide::tools::compact
+        "#).unwrap();
+        assert_eq!(code,
+            Extraction(Box::from(Variable("oxide".to_string())),
+                       Box::from(Extraction(Box::from(Variable("tools".to_string())),
+                                            Box::from(Variable("compact".to_string()))))))
+    }
+
+    #[test]
     fn test_feature_with_a_scenario() {
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             feature "Karate translator" {
                 scenario "Translate Karate Scenario to Oxide Scenario" {
                     assert(true)
@@ -1362,7 +1373,7 @@ mod tests {
 
     #[test]
     fn test_if() {
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             if(n > 100) "Yes"
         "#).unwrap();
         assert_eq!(code, If {
@@ -1377,7 +1388,7 @@ mod tests {
 
     #[test]
     fn test_if_else() {
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             if(n > 100) n else m
         "#).unwrap();
         assert_eq!(code, If {
@@ -1392,7 +1403,7 @@ mod tests {
 
     #[test]
     fn test_iff() {
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             iff(n > 5, a, b)
         "#).unwrap();
         assert_eq!(code, If {
@@ -1408,7 +1419,7 @@ mod tests {
     #[test]
     fn test_imports() {
         // single import
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             import "os"
         "#).unwrap();
         assert_eq!(code, Import(vec![
@@ -1416,7 +1427,7 @@ mod tests {
         ]));
 
         // multiple imports
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             import os, util
         "#).unwrap();
         assert_eq!(code, Import(vec![
@@ -1427,7 +1438,7 @@ mod tests {
 
     #[test]
     fn test_json_literal_value() {
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
             {symbol: "ABC", exchange: "NYSE", last_sale: 16.79}
         "#).unwrap();
         assert_eq!(code,
@@ -1442,7 +1453,7 @@ mod tests {
     #[test]
     fn test_like() {
         assert_eq!(
-            Compiler::compile_script("'Hello' like 'H.ll.'").unwrap(),
+            Compiler::build("'Hello' like 'H.ll.'").unwrap(),
             Condition(Like(
                 Box::new(Literal(StringValue("Hello".into()))),
                 Box::new(Literal(StringValue("H.ll.".into()))),
@@ -1451,22 +1462,22 @@ mod tests {
 
     #[test]
     fn test_numeric_literal_value() {
-        assert_eq!(Compiler::compile_script("1_234_567_890").unwrap(),
+        assert_eq!(Compiler::build("1_234_567_890").unwrap(),
                    Literal(Number(I64Value(1_234_567_890))));
 
-        assert_eq!(Compiler::compile_script("1_234_567.890").unwrap(),
+        assert_eq!(Compiler::build("1_234_567.890").unwrap(),
                    Literal(Number(F64Value(1_234_567.890))));
     }
 
     #[test]
     fn test_not_expression() {
-        assert_eq!(Compiler::compile_script("!false").unwrap(), Condition(Not(Box::new(FALSE))));
-        assert_eq!(Compiler::compile_script("!true").unwrap(), Condition(Not(Box::new(TRUE))));
+        assert_eq!(Compiler::build("!false").unwrap(), Condition(Not(Box::new(FALSE))));
+        assert_eq!(Compiler::build("!true").unwrap(), Condition(Not(Box::new(TRUE))));
     }
 
     #[test]
     fn test_mathematical_addition() {
-        let opcodes = Compiler::compile_script("n + 3").unwrap();
+        let opcodes = Compiler::build("n + 3").unwrap();
         assert_eq!(opcodes, Plus(
             Box::new(Variable("n".into())),
             Box::new(Literal(Number(I64Value(3)))),
@@ -1475,7 +1486,7 @@ mod tests {
 
     #[test]
     fn test_mathematical_division() {
-        let opcodes = Compiler::compile_script("n / 3").unwrap();
+        let opcodes = Compiler::build("n / 3").unwrap();
         assert_eq!(opcodes, Divide(
             Box::new(Variable("n".into())),
             Box::new(Literal(Number(I64Value(3)))),
@@ -1484,7 +1495,7 @@ mod tests {
 
     #[test]
     fn test_mathematical_exponent() {
-        let opcodes = Compiler::compile_script("5 ** 2").unwrap();
+        let opcodes = Compiler::build("5 ** 2").unwrap();
         assert_eq!(opcodes, Pow(
             Box::new(Literal(Number(I64Value(5)))),
             Box::new(Literal(Number(I64Value(2)))),
@@ -1496,7 +1507,7 @@ mod tests {
         let symbols = vec!["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
         let mut num = 0;
         for symbol in symbols {
-            let opcodes = Compiler::compile_script(format!("5{}", symbol).as_str()).unwrap();
+            let opcodes = Compiler::build(format!("5{}", symbol).as_str()).unwrap();
             assert_eq!(opcodes, Pow(
                 Box::new(Literal(Number(I64Value(5)))),
                 Box::new(Literal(Number(I64Value(num)))),
@@ -1507,20 +1518,20 @@ mod tests {
 
     #[test]
     fn test_mathematical_factorial() {
-        let opcodes = Compiler::compile_script("5¡").unwrap();
+        let opcodes = Compiler::build("5¡").unwrap();
         assert_eq!(opcodes, Factorial(Box::new(Literal(Number(I64Value(5))))));
     }
 
     #[test]
     fn test_mathematical_modulus() {
-        let opcodes = Compiler::compile_script("n % 4").unwrap();
+        let opcodes = Compiler::build("n % 4").unwrap();
         assert_eq!(opcodes,
                    Modulo(Box::new(Variable("n".into())), Box::new(Literal(Number(I64Value(4))))));
     }
 
     #[test]
     fn test_mathematical_multiplication() {
-        let opcodes = Compiler::compile_script("n * 10").unwrap();
+        let opcodes = Compiler::build("n * 10").unwrap();
         assert_eq!(opcodes, Multiply(
             Box::new(Variable("n".into())),
             Box::new(Literal(Number(I64Value(10)))),
@@ -1529,7 +1540,7 @@ mod tests {
 
     #[test]
     fn test_mathematical_subtraction() {
-        let opcodes = Compiler::compile_script("_ - 7").unwrap();
+        let opcodes = Compiler::build("_ - 7").unwrap();
         assert_eq!(opcodes,
                    Minus(Box::new(Variable("_".into())), Box::new(Literal(Number(I64Value(7))))));
     }
@@ -1586,7 +1597,7 @@ mod tests {
 
     #[test]
     fn test_order_of_operations_1() {
-        let opcodes = Compiler::compile_script("2 + (4 * 3)").unwrap();
+        let opcodes = Compiler::build("2 + (4 * 3)").unwrap();
         assert_eq!(opcodes, Plus(
             Box::new(Literal(Number(I64Value(2)))),
             Box::new(Multiply(
@@ -1598,7 +1609,7 @@ mod tests {
 
     #[test]
     fn test_order_of_operations_2() {
-        let opcodes = Compiler::compile_script("(4.0 / 3.0) + (4 * 3)").unwrap();
+        let opcodes = Compiler::build("(4.0 / 3.0) + (4 * 3)").unwrap();
         assert_eq!(opcodes, Plus(
             Box::new(Divide(
                 Box::new(Literal(Number(F64Value(4.0)))),
@@ -1614,7 +1625,7 @@ mod tests {
     #[ignore]
     #[test]
     fn test_order_of_operations_3() {
-        let opcodes = Compiler::compile_script("2 - 4 * 3").unwrap();
+        let opcodes = Compiler::build("2 - 4 * 3").unwrap();
         assert_eq!(opcodes, Minus(
             Box::new(Literal(Number(F64Value(2.)))),
             Box::new(Multiply(
@@ -1626,7 +1637,7 @@ mod tests {
 
     #[test]
     fn test_delete() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         delete from stocks
         "#).unwrap();
         assert_eq!(opcodes, Quarry(Excavation::Mutate(
@@ -1639,7 +1650,7 @@ mod tests {
 
     #[test]
     fn test_delete_where_limit() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         delete from stocks
         where last_sale >= 1.0
         limit 100
@@ -1656,7 +1667,7 @@ mod tests {
 
     #[test]
     fn test_http_delete() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
             DELETE "http://localhost:9000/comments?id=675af"
         "#).unwrap();
         assert_eq!(model, HTTP {
@@ -1670,7 +1681,7 @@ mod tests {
 
     #[test]
     fn test_http_get() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
             GET "http://localhost:9000/comments?id=675af"
         "#).unwrap();
         assert_eq!(model, HTTP {
@@ -1684,7 +1695,7 @@ mod tests {
 
     #[test]
     fn test_http_head() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
             HEAD "http://localhost:9000/quotes/AMD/NYSE"
         "#).unwrap();
         assert_eq!(model, HTTP {
@@ -1698,7 +1709,7 @@ mod tests {
 
     #[test]
     fn test_http_patch() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
             PATCH "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE"
         "#).unwrap();
         assert_eq!(model, HTTP {
@@ -1712,7 +1723,7 @@ mod tests {
 
     #[test]
     fn test_http_post() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
             POST "http://localhost:9000/quotes/AMD/NASDAQ"
         "#).unwrap();
         assert_eq!(model, HTTP {
@@ -1726,7 +1737,7 @@ mod tests {
 
     #[test]
     fn test_http_post_with_body() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
             POST "http://localhost:8080/machine/www/stocks" FROM (
                 "Hello World"
             )
@@ -1742,7 +1753,7 @@ mod tests {
 
     #[test]
     fn test_http_post_with_multipart() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
             POST "http://localhost:8080/machine/www/stocks" MULTIPART ({
                 file: "./demoes/language/include_file.ox"
             })
@@ -1760,7 +1771,7 @@ mod tests {
 
     #[test]
     fn test_http_put() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
             PUT "http://localhost:9000/quotes/AMD/NASDAQ"
         "#).unwrap();
         assert_eq!(model, HTTP {
@@ -1774,7 +1785,7 @@ mod tests {
 
     #[test]
     fn test_undelete() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         undelete from stocks
         "#).unwrap();
         assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Undelete {
@@ -1786,7 +1797,7 @@ mod tests {
 
     #[test]
     fn test_undelete_where_limit() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         undelete from stocks
         where last_sale >= 1.0
         limit 100
@@ -1803,13 +1814,13 @@ mod tests {
 
     #[test]
     fn test_from() {
-        let opcodes = Compiler::compile_script("from stocks").unwrap();
+        let opcodes = Compiler::build("from stocks").unwrap();
         assert_eq!(opcodes, From(Box::new(Variable("stocks".into()))));
     }
 
     #[test]
     fn test_from_where_limit() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         from stocks where last_sale >= 1.0 limit 20
         "#).unwrap();
         assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Limit {
@@ -1828,7 +1839,7 @@ mod tests {
 
     #[test]
     fn test_write_json_into_namespace() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
          { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
          { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
@@ -1859,7 +1870,7 @@ mod tests {
 
     #[test]
     fn test_append_from_variable() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         append ns("compiler.append.stocks") from stocks
         "#).unwrap();
         assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
@@ -1870,7 +1881,7 @@ mod tests {
 
     #[test]
     fn test_append_from_json_literal() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         append ns("compiler.append2.stocks")
         from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
         "#).unwrap();
@@ -1886,7 +1897,7 @@ mod tests {
 
     #[test]
     fn test_append_from_json_array() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         append ns("compiler.into.stocks")
         from [
             { symbol: "CAT", exchange: "NYSE", last_sale: 11.1234 },
@@ -1920,7 +1931,7 @@ mod tests {
 
     #[test]
     fn test_ns() {
-        let code = Compiler::compile_script(r#"
+        let code = Compiler::build(r#"
         ns("securities.etf.stocks")
         "#).unwrap();
         assert_eq!(code, Ns(Box::new(Literal(StringValue("securities.etf.stocks".to_string())))))
@@ -1928,7 +1939,7 @@ mod tests {
 
     #[test]
     fn test_overwrite() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         overwrite stocks
         via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
         where symbol == "ABCQ"
@@ -1951,7 +1962,7 @@ mod tests {
 
     #[test]
     fn test_select_from_variable() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         select symbol, exchange, last_sale from stocks
         "#).unwrap();
         assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Select {
@@ -1967,7 +1978,7 @@ mod tests {
 
     #[test]
     fn test_select_from_where() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale >= 1.0
         "#).unwrap();
@@ -1988,7 +1999,7 @@ mod tests {
 
     #[test]
     fn test_select_from_where_limit() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale <= 1.0
         limit 5
@@ -2009,7 +2020,7 @@ mod tests {
 
     #[test]
     fn test_select_from_where_order_by_limit() {
-        let opcode = Compiler::compile_script(r#"
+        let opcode = Compiler::build(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale < 1.0
         order by symbol
@@ -2031,7 +2042,7 @@ mod tests {
 
     #[test]
     fn test_system_call() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
         syscall("cat", "LICENSE")
         "#).unwrap();
         assert_eq!(
@@ -2047,7 +2058,7 @@ mod tests {
 
     #[test]
     fn test_type_of() {
-        let model = Compiler::compile_script(r#"
+        let model = Compiler::build(r#"
         type_of("cat")
         "#).unwrap();
         assert_eq!(
@@ -2062,7 +2073,7 @@ mod tests {
 
     #[test]
     fn test_update() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
         update stocks
         via { last_sale: 0.1111 }
         where symbol == "ABC"
@@ -2083,7 +2094,7 @@ mod tests {
 
     #[test]
     fn test_while_loop() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
             while (x < 5) x := x + 1
         "#).unwrap();
         assert_eq!(opcodes, While {
@@ -2100,7 +2111,7 @@ mod tests {
 
     #[test]
     fn test_while_loop_fix() {
-        let opcodes = Compiler::compile_script(r#"
+        let opcodes = Compiler::build(r#"
             x := 0
             while x < 7 x := x + 1
             x

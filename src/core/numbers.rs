@@ -9,15 +9,14 @@ use std::ops::*;
 
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
-
-use crate::codec;
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
-use crate::numbers::NumberValue::*;
+use crate::numbers::Numbers::*;
 
 /// Represents a numeric value
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub enum NumberValue {
+pub enum Numbers {
     F32Value(f32),
     F64Value(f64),
     I8Value(i8),
@@ -33,32 +32,32 @@ pub enum NumberValue {
     NaNValue,
 }
 
-impl NumberValue {
+impl Numbers {
 
     ////////////////////////////////////////////////////////////////////
     //  STATIC METHODS
     ////////////////////////////////////////////////////////////////////
 
     /// decodes the typed value based on the supplied data type and buffer
-    pub fn decode(buffer: &Vec<u8>, offset: usize, kind: NumberKind) -> NumberValue {
+    pub fn decode(buffer: &Vec<u8>, offset: usize, kind: NumberKind) -> Numbers {
         match kind {
-            F32Kind => codec::decode_u8x4(buffer, offset, |b| F32Value(f32::from_be_bytes(b))),
-            F64Kind => codec::decode_u8x8(buffer, offset, |b| F64Value(f64::from_be_bytes(b))),
-            I8Kind => codec::decode_u8(buffer, offset, |b| I8Value(b.to_i8().unwrap())),
-            I16Kind => codec::decode_u8x2(buffer, offset, |b| I16Value(i16::from_be_bytes(b))),
-            I32Kind => codec::decode_u8x4(buffer, offset, |b| I32Value(i32::from_be_bytes(b))),
-            I64Kind => codec::decode_u8x8(buffer, offset, |b| I64Value(i64::from_be_bytes(b))),
-            I128Kind => codec::decode_u8x16(buffer, offset, |b| I128Value(i128::from_be_bytes(b))),
-            U8Kind => codec::decode_u8(buffer, offset, |b| U8Value(b)),
-            U16Kind => codec::decode_u8x2(buffer, offset, |b| U16Value(u16::from_be_bytes(b))),
-            U32Kind => codec::decode_u8x4(buffer, offset, |b| U32Value(u32::from_be_bytes(b))),
-            U64Kind => codec::decode_u8x8(buffer, offset, |b| U64Value(u64::from_be_bytes(b))),
-            U128Kind => codec::decode_u8x16(buffer, offset, |b| U128Value(u128::from_be_bytes(b))),
+            F32Kind => ByteCodeCompiler::decode_u8x4(buffer, offset, |b| F32Value(f32::from_be_bytes(b))),
+            F64Kind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| F64Value(f64::from_be_bytes(b))),
+            I8Kind => ByteCodeCompiler::decode_u8(buffer, offset, |b| I8Value(b.to_i8().unwrap())),
+            I16Kind => ByteCodeCompiler::decode_u8x2(buffer, offset, |b| I16Value(i16::from_be_bytes(b))),
+            I32Kind => ByteCodeCompiler::decode_u8x4(buffer, offset, |b| I32Value(i32::from_be_bytes(b))),
+            I64Kind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| I64Value(i64::from_be_bytes(b))),
+            I128Kind => ByteCodeCompiler::decode_u8x16(buffer, offset, |b| I128Value(i128::from_be_bytes(b))),
+            U8Kind => ByteCodeCompiler::decode_u8(buffer, offset, |b| U8Value(b)),
+            U16Kind => ByteCodeCompiler::decode_u8x2(buffer, offset, |b| U16Value(u16::from_be_bytes(b))),
+            U32Kind => ByteCodeCompiler::decode_u8x4(buffer, offset, |b| U32Value(u32::from_be_bytes(b))),
+            U64Kind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| U64Value(u64::from_be_bytes(b))),
+            U128Kind => ByteCodeCompiler::decode_u8x16(buffer, offset, |b| U128Value(u128::from_be_bytes(b))),
             NaNKind => NaNValue,
         }
     }
 
-    pub fn from_string(number_str: String) -> NumberValue {
+    pub fn from_string(number_str: String) -> Numbers {
         match number_str.parse::<f64>() {
             Ok(num) => match number_str.parse::<i64>() {
                 Ok(num) => I64Value(num),
@@ -74,7 +73,7 @@ impl NumberValue {
 
     /// encodes the numeric value
     pub fn encode(&self) -> Vec<u8> {
-        use NumberValue::*;
+        use Numbers::*;
         match self.to_owned() {
             F32Value(number) => number.to_be_bytes().to_vec(),
             F64Value(number) => number.to_be_bytes().to_vec(),
@@ -422,8 +421,8 @@ impl NumberValue {
     }
 }
 
-impl Add for NumberValue {
-    type Output = NumberValue;
+impl Add for Numbers {
+    type Output = Numbers;
 
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -446,8 +445,8 @@ impl Add for NumberValue {
     }
 }
 
-impl BitAnd for NumberValue {
-    type Output = NumberValue;
+impl BitAnd for Numbers {
+    type Output = Numbers;
 
     fn bitand(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -470,8 +469,8 @@ impl BitAnd for NumberValue {
     }
 }
 
-impl BitOr for NumberValue {
-    type Output = NumberValue;
+impl BitOr for Numbers {
+    type Output = Numbers;
 
     fn bitor(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -494,8 +493,8 @@ impl BitOr for NumberValue {
     }
 }
 
-impl BitXor for NumberValue {
-    type Output = NumberValue;
+impl BitXor for Numbers {
+    type Output = Numbers;
 
     fn bitxor(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -518,14 +517,14 @@ impl BitXor for NumberValue {
     }
 }
 
-impl Display for NumberValue {
+impl Display for Numbers {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.unwrap_value())
     }
 }
 
-impl Div for NumberValue {
-    type Output = NumberValue;
+impl Div for Numbers {
+    type Output = Numbers;
 
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -549,8 +548,8 @@ impl Div for NumberValue {
     }
 }
 
-impl Mul for NumberValue {
-    type Output = NumberValue;
+impl Mul for Numbers {
+    type Output = Numbers;
 
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -573,8 +572,8 @@ impl Mul for NumberValue {
     }
 }
 
-impl Neg for NumberValue {
-    type Output = NumberValue;
+impl Neg for Numbers {
+    type Output = Numbers;
 
     fn neg(self) -> Self::Output {
         match self {
@@ -595,8 +594,8 @@ impl Neg for NumberValue {
     }
 }
 
-impl Not for NumberValue {
-    type Output = NumberValue;
+impl Not for Numbers {
+    type Output = Numbers;
 
     fn not(self) -> Self::Output {
         match self {
@@ -617,18 +616,18 @@ impl Not for NumberValue {
     }
 }
 
-impl RangeBounds<NumberValue> for NumberValue {
-    fn start_bound(&self) -> Bound<&NumberValue> {
+impl RangeBounds<Numbers> for Numbers {
+    fn start_bound(&self) -> Bound<&Numbers> {
         std::ops::Bound::Included(&self)
     }
 
-    fn end_bound(&self) -> Bound<&NumberValue> {
+    fn end_bound(&self) -> Bound<&Numbers> {
         std::ops::Bound::Excluded(&self)
     }
 }
 
-impl Rem for NumberValue {
-    type Output = NumberValue;
+impl Rem for Numbers {
+    type Output = Numbers;
 
     fn rem(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -651,7 +650,7 @@ impl Rem for NumberValue {
     }
 }
 
-impl PartialOrd for NumberValue {
+impl PartialOrd for Numbers {
     fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
         match (self, rhs) {
             (F32Value(a), F32Value(b)) => a.partial_cmp(b),
@@ -671,8 +670,8 @@ impl PartialOrd for NumberValue {
     }
 }
 
-impl Shl for NumberValue {
-    type Output = NumberValue;
+impl Shl for Numbers {
+    type Output = Numbers;
 
     fn shl(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -695,8 +694,8 @@ impl Shl for NumberValue {
     }
 }
 
-impl Shr for NumberValue {
-    type Output = NumberValue;
+impl Shr for Numbers {
+    type Output = Numbers;
 
     fn shr(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -719,8 +718,8 @@ impl Shr for NumberValue {
     }
 }
 
-impl Sub for NumberValue {
-    type Output = NumberValue;
+impl Sub for Numbers {
+    type Output = Numbers;
 
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
@@ -804,8 +803,8 @@ mod tests {
 
     #[test]
     fn test_encode_decode() {
-        fn verify_codec(expected: NumberValue) {
-            let actual = NumberValue::decode(&expected.encode(), 0, expected.kind());
+        fn verify_codec(expected: Numbers) {
+            let actual = Numbers::decode(&expected.encode(), 0, expected.kind());
             assert_eq!(actual, expected)
         }
 

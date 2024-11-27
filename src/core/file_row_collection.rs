@@ -2,25 +2,31 @@
 // file row-collection module
 ////////////////////////////////////////////////////////////////////
 
-use std::fmt::{Debug, Formatter};
-use std::fs;
-use std::fs::{File, OpenOptions};
-use std::os::unix::fs::FileExt;
-use std::path::Path;
-use std::sync::Arc;
-
+use crate::byte_row_collection::ByteRowCollection;
 use crate::dataframe_config::DataFrameConfig;
 use crate::errors::Errors;
 use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
+use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::outcomes::Outcomes;
+use crate::platform::PlatformOps;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{ErrorValue, Outcome};
+use serde::de::Error;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use shared_lib::fail;
+use std::fmt::{Debug, Formatter};
+use std::fs;
+use std::fs::{File, OpenOptions};
+use std::os::unix::fs::FileExt;
+use std::path::Path;
+use std::sync::Arc;
 
 /// File-based RowCollection implementation
 #[derive(Clone)]
@@ -37,6 +43,15 @@ impl FileRowCollection {
         let path = ns.get_table_file_path();
         let file = Arc::new(Self::table_file_create(ns)?);
         Ok(Self::new(columns, file, path.as_str()))
+    }
+
+    /// Encodes the [ByteRowCollection] into a byte vector
+    pub fn encode(&self) -> Vec<u8> {
+        let mut mrc = ModelRowCollection::new(self.columns.clone());
+        for row in self.iter() {
+            mrc.push_row(row);
+        }
+        mrc.encode()
     }
 
     pub fn get_related_filename(path: &str, extension: &str) -> (String, String) {
@@ -72,11 +87,33 @@ impl FileRowCollection {
     }
 
     pub fn open(ns: &Namespace) -> std::io::Result<Self> {
+        Self::open_file(ns, Self::table_file_open(&ns)?)
+    }
+
+    fn open_file(ns: &Namespace, file: File) -> std::io::Result<Self> {
         let cfg = DataFrameConfig::load(&ns)?;
-        let columns = Column::from_parameters(cfg.get_columns())?;
         let path = ns.get_table_file_path();
-        let file = Arc::new(Self::table_file_open(&ns)?);
-        Ok(Self::new(columns, file, path.as_str()))
+        let columns = Column::from_parameters(cfg.get_columns())?;
+        Ok(Self::new(columns, Arc::new(file), path.as_str()))
+    }
+
+    pub fn open_or_create(ns: &Namespace) -> std::io::Result<Self> {
+        match Self::table_file_open(&ns) {
+            Ok(file) => Self::open_file(ns, file),
+            Err(err) if err.to_string().starts_with("No such file") => {
+                match Self::table_file_create(&ns) {
+                    Ok(file) => {
+                        let cfg = DataFrameConfig::new(
+                            PlatformOps::get_oxide_history_parameters(), vec![], vec![]
+                        );
+                        cfg.save(&ns)?;
+                        Self::open_file(ns, file)
+                    },
+                    Err(err) => fail(err.to_string())
+                }
+            }
+            Err(err) => fail(err.to_string())
+        }
     }
 
     /// convenience function to create, read or write a table file
@@ -120,6 +157,10 @@ impl RowCollection for FileRowCollection {
     }
 
     fn get_columns(&self) -> &Vec<Column> { &self.columns }
+
+    fn get_rows(&self) -> Vec<Row> {
+        self.iter().collect()
+    }
 
     fn get_record_size(&self) -> usize { self.record_size }
 
@@ -223,6 +264,44 @@ impl RowCollection for FileRowCollection {
             Ok(..) => Outcome(Outcomes::Ack),
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
+    }
+}
+
+impl PartialEq for FileRowCollection {
+    fn eq(&self, other: &Self) -> bool {
+        self.columns == other.columns
+            && self.path == other.path
+            && self.record_size == other.record_size
+    }
+}
+
+impl Serialize for FileRowCollection {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("FileRowCollection", 2)?;
+        state.serialize_field("columns", &self.columns)?;
+        state.serialize_field("path", &self.path)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for FileRowCollection {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // define a helper struct for deserialization
+        #[derive(Deserialize)]
+        struct FileRowCollectionHelper {
+            columns: Vec<Column>,
+            path: String,
+        }
+
+        let helper = FileRowCollectionHelper::deserialize(deserializer)?;
+        let file = File::open(&helper.path).map_err(D::Error::custom)?;
+        Ok(FileRowCollection::new(helper.columns, Arc::new(file), helper.path.as_str()))
     }
 }
 
