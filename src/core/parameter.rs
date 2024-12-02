@@ -2,7 +2,6 @@
 // Parameter class
 ////////////////////////////////////////////////////////////////////
 
-use log::error;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
@@ -23,13 +22,6 @@ impl Parameter {
     ////////////////////////////////////////////////////////////////////
     //  STATIC METHODS
     ////////////////////////////////////////////////////////////////////
-
-    pub fn decode(buf: &Vec<u8>) -> Self {
-        bincode::deserialize(buf).unwrap_or_else(|err| {
-            error!("{}", err);
-            Parameter::new(err.to_string(), Some("String(255)".into()), None)
-        })
-    }
 
     pub fn from_column(column: &Column) -> Self {
         Parameter::new(column.get_name(), column.get_data_type().to_type_declaration(), match &column.get_default_value() {
@@ -56,8 +48,8 @@ impl Parameter {
         Parameter { name: name.into(), param_type, default_value }
     }
 
-    pub fn render(columns: &Vec<Parameter>) -> String {
-        columns.iter().map(|c| c.to_code())
+    pub fn render(params: &Vec<Parameter>) -> String {
+        params.iter().map(|p| p.to_code())
             .collect::<Vec<String>>()
             .join(", ")
     }
@@ -65,13 +57,6 @@ impl Parameter {
     ////////////////////////////////////////////////////////////////////
     //  INSTANCE METHODS
     ////////////////////////////////////////////////////////////////////
-
-    pub fn encode(&self) -> Vec<u8> {
-        bincode::serialize(self).unwrap_or_else(|err| {
-            error!("{}", err);
-            Vec::new()
-        })
-    }
 
     pub fn get_name(&self) -> &str { &self.name }
 
@@ -91,7 +76,7 @@ impl Parameter {
             }
         }
         if let Some(value) = self.get_default_value() {
-            buf = format!("{} = {}", buf, value)
+            buf = format!("{} := {}", buf, value)
         }
         buf
     }
@@ -111,7 +96,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_parameter_conversion() {
+    fn test_from_columns() {
         let parameters = Parameter::from_columns(&make_quote_columns());
         assert_eq!(parameters, make_quote_parameters());
     }

@@ -7,7 +7,6 @@ use std::fmt::{Display, Formatter};
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
 use crate::errors::Errors::IllegalOperator;
-use crate::expression::Conditions::{False, True};
 use crate::expression::Expression::*;
 use crate::inferences::Inferences;
 use crate::numbers::Numbers;
@@ -233,6 +232,7 @@ pub enum Expression {
     Ns(Box<Expression>),
     Parameters(Vec<Parameter>),
     Plus(Box<Expression>, Box<Expression>),
+    PlusPlus(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
     Quarry(Excavation),
     Range(Box<Expression>, Box<Expression>),
@@ -313,6 +313,8 @@ impl Expression {
             Parameters(parameters) => Self::decompile_parameters(parameters),
             Plus(a, b) =>
                 format!("{} + {}", Self::decompile(a), Self::decompile(b)),
+            PlusPlus(a, b) =>
+                format!("{} ++ {}", Self::decompile(a), Self::decompile(b)),
             Pow(a, b) =>
                 format!("{} ** {}", Self::decompile(a), Self::decompile(b)),
             Quarry(job) =>
@@ -580,15 +582,15 @@ fn to_ns(path: Expression) -> Expression {
 #[cfg(test)]
 mod tests {
     use crate::expression::Conditions::*;
+    use crate::expression::CreationEntity::{IndexEntity, TableEntity};
     use crate::expression::Excavation::{Mutate, Query};
+    use crate::expression::Expression::{AsValue, Literal};
     use crate::expression::*;
     use crate::machine::Machine;
+    use crate::numbers::Numbers::I64Value;
     use crate::numbers::Numbers::*;
     use crate::tokenizer;
     use crate::typed_values::TypedValue::*;
-    use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-    use crate::expression::Expression::{AsValue, Literal};
-    use crate::numbers::Numbers::I64Value;
     use crate::typed_values::TypedValue::{Function, Number, StringValue};
 
     use super::*;
@@ -1033,7 +1035,7 @@ mod tests {
         }));
         assert_eq!(
             Expression::decompile(&model),
-            r#"create table ns("compiler.create.stocks") (symbol: String(8) = "ABC", exchange: String(8) = "NYSE", last_sale: f64 = 0.00)"#)
+            r#"create table ns("compiler.create.stocks") (symbol: String(8) := "ABC", exchange: String(8) := "NYSE", last_sale: f64 := 0.00)"#)
     }
 
     #[test]

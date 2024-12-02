@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 
 
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::errors::Errors::Exact;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
@@ -16,7 +17,6 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use crate::byte_code_compiler::ByteCodeCompiler;
 
 /// Represents a JSON-like data structure
 pub trait Structure {
@@ -379,12 +379,12 @@ mod hard_structure_tests {
     use crate::data_types::StorageTypes;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::F64Value;
+    use crate::row_collection::RowCollection;
     use crate::structures::{HardStructure, Structure};
     use crate::table_columns::Column;
     use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
     use std::collections::HashMap;
-    use crate::row_collection::RowCollection;
 
     #[test]
     fn test_encode_decode_nonempty() {

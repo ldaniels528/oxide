@@ -4,6 +4,8 @@
 
 use std::cmp::max;
 
+use chrono::TimeDelta;
+use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -55,6 +57,13 @@ impl RemoteCallResponse {
     pub fn get_message(&self) -> Option<String> { self.message.to_owned() }
 
     pub fn get_result(&self) -> Value { self.result.to_owned() }
+}
+
+pub fn compute_time_millis(dt: TimeDelta) -> f64 {
+    match dt.num_nanoseconds() {
+        Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
+        None => dt.num_milliseconds().to_f64().unwrap_or(0.)
+    }
 }
 
 /// Transforms the cells into a textual table

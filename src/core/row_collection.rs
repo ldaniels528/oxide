@@ -803,7 +803,7 @@ mod tests {
     use chrono::Local;
     use num_traits::ToPrimitive;
     use rand::{thread_rng, Rng, RngCore};
-    use shared_lib::cnv_error;
+    use shared_lib::{cnv_error, compute_time_millis};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -816,8 +816,8 @@ mod tests {
     use crate::outcomes::Outcomes::RowsAffected;
     use crate::parameter::Parameter;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::*;
     use crate::table_values::TableValues;
+    use crate::testdata::*;
 
     #[test]
     fn test_from_bytes() {
@@ -1782,12 +1782,7 @@ mod tests {
             println!("Testing: {name} -> {kind}");
             let t0 = Local::now();
             let processed = tester(name, kind, columns.clone(), test);
-            let t1 = Local::now();
-            let t = t1 - t0;
-            let execution_time = match t.num_nanoseconds() {
-                Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
-                None => t.num_milliseconds().to_f64().unwrap_or(0.)
-            };
+            let execution_time = compute_time_millis(Local::now() - t0);
 
             // record this test
             let rate = processed.to_f64().unwrap_or(0.) / execution_time;

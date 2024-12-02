@@ -2,6 +2,7 @@
 // REPL module
 ////////////////////////////////////////////////////////////////////
 
+use crate::arrays::Array;
 use crate::expression::ACK;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
@@ -15,15 +16,16 @@ use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
+use crate::table_values::TableValues;
 use crate::table_values::TableValues::Model;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use chrono::Local;
+use chrono::{DateTime, Local, TimeDelta};
 use crossterm::terminal;
 use log::info;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use shared_lib::get_host_and_port;
+use shared_lib::{compute_time_millis, get_host_and_port};
 use std::fs::File;
 use std::io;
 use std::io::{stdout, Read, Write};
@@ -70,9 +72,9 @@ impl REPLState {
 }
 
 pub fn do_terminal(
-    mut repl_state: REPLState,
+    mut state: REPLState,
     args: Vec<String>,
-    mut reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>
+    reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>,
 ) -> std::io::Result<()> {
     use crate::platform::{MAJOR_VERSION, MINOR_VERSION};
     let mut stdout = stdout();
@@ -82,66 +84,101 @@ pub fn do_terminal(
     stdout.flush()?;
 
     // setup system variables
-    repl_state = setup_system_variables(repl_state, args);
+    state = setup_system_variables(state, args);
 
     // handle user input
-    loop {
-        // display the prompt
-        print!("{}", repl_state.get_prompt());
-        stdout.flush()?;
+    while state.is_alive {
+        (stdout, state) = do_terminal_input(state, stdout, reader)?
+    }
+    Ok(())
+}
 
-        // get and process the input
-        let raw_input = read_until_blank(reader())?;
-        let input = raw_input.trim();
+fn do_terminal_input(
+    mut state: REPLState,
+    mut stdout: std::io::Stdout,
+    mut reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>,
+) -> std::io::Result<(std::io::Stdout, REPLState)> {
+    // display the prompt
+    print!("{}", state.get_prompt());
+    stdout.flush()?;
+
+    // get and process the input
+    let raw_input = read_until_blank(reader())?;
+    let input = raw_input.trim();
+    if input == "q!" { state.die() } else {
         if !input.is_empty() {
-            let pid = repl_state.counter;
             let t0 = Local::now();
-            match repl_state.interpreter.evaluate(input) {
+            match state.interpreter.evaluate(input) {
                 Ok(result) => {
                     // compute the execution-time
-                    let dt = Local::now() - t0;
-                    let execution_time = match dt.num_nanoseconds() {
-                        Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
-                        None => dt.num_milliseconds().to_f64().unwrap_or(0.)
-                    };
-                    // record the request
-                    update_history(&repl_state, input, execution_time).ok();
-                    // gather the value info
-                    let type_name = result.get_type_name();
-                    let extras = match &result {
-                        TableValue(rcv) => format!(" ~ {} row(s)", &rcv.len()?),
-                        _ => "".to_string()
-                    };
-                    // display the output
-                    stdout.write(format!("[{pid}] {type_name}{extras} in {execution_time:.1} millis\n").as_bytes())?;
-                    repl_state = print_result(repl_state, result)?;
+                    let execution_time = compute_time_millis(Local::now() - t0);
+                    // record the request in the history table
+                    update_history(&state, input, execution_time).ok();
+                    // process the result
+                    let limit = state.interpreter.get("__COLUMNS__")
+                        .map(|v| v.to_usize());
+                    let raw_lines = build_output(state.counter, result, execution_time)?;
+                    let lines = limit.map(|n| limit_width(raw_lines.clone(), n))
+                        .unwrap_or(raw_lines);
+                    for line in lines { println!("{}", line) }
                 }
                 Err(err) => eprintln!("{}", err)
             }
-            repl_state.counter += 1;
+            state.counter += 1;
+            stdout.flush()?
         }
     }
+    Ok((stdout, state))
 }
 
-fn print_result(state: REPLState, result: TypedValue) -> std::io::Result<REPLState> {
+/// Builds the execution result output
+fn build_output(
+    pid: usize,
+    result: TypedValue,
+    execution_time: f64,
+) -> std::io::Result<Vec<String>> {
+    let mut out: Vec<String> = vec![];
+    out.push(build_output_header(pid, &result, execution_time)?);
     match result {
         TableValue(rcv) => {
             let rc: Box<dyn RowCollection> = Box::from(rcv);
-            let raw_lines = TableRenderer::from_table_with_ids(&rc)?;
-            let lines = state.interpreter.get("__COLUMNS__")
-                .map(|limit_v| {
-                    let limit = limit_v.to_usize();
-                    raw_lines.iter()
-                        .map(|s| if s.len() > limit { s[0..limit].to_string() } else { s.to_string() })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or(raw_lines);
-            lines.iter().for_each(|s| println!("{}", s))
+            let lines = TableRenderer::from_table_with_ids(&rc)?;
+            out.extend(lines)
         }
-        z =>
-            println!("{}", z.unwrap_value())
+        z => out.push(z.to_code())
     }
-    Ok(state)
+    Ok(out)
+}
+
+/// Builds the execution result output header
+/// ex: "12: 5 row(s) in 13.2 ms ~ Table(String(128), String(128), String(128), Boolean)"
+fn build_output_header(
+    pid: usize,
+    result: &TypedValue,
+    execution_time: f64,
+) -> std::io::Result<String> {
+    let label = match &result {
+        TableValue(tv) =>
+            format!("{} row(s) in {execution_time:.1} ms ~ {}", tv.len()?, get_table_type(tv)),
+        _ => format!("returned type `{}` in {execution_time:.1} ms", result.get_type_name())
+    };
+    Ok(format!("{pid}: {label}"))
+}
+
+/// Generates a less verbose table signature
+// ex: Table(String(128), String(128), String(128), Boolean)
+fn get_table_type(tv: &TableValues) -> String {
+    let columns = tv.get_columns().iter()
+        .map(|c| c.get_data_type().to_type_declaration().unwrap_or("Any".into()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Table({})", columns)
+}
+
+fn limit_width(lines: Vec<String>, limit: usize) -> Vec<String> {
+    lines.iter()
+        .map(|s| if s.len() > limit { s[0..limit].to_string() } else { s.to_string() })
+        .collect::<Vec<_>>()
 }
 
 fn read_line_from(lines: Vec<String>) -> Box<dyn FnMut() -> std::io::Result<Option<String>>> {
@@ -201,21 +238,29 @@ fn run_script(script_path: &str) -> std::io::Result<TypedValue> {
     interpreter.evaluate(script_code.as_str())
 }
 
-fn setup_system_variables(mut repl_state: REPLState, args: Vec<String>) -> REPLState {
+fn setup_system_variables(mut state: REPLState, args: Vec<String>) -> REPLState {
     // capture the commandline arguments
-    repl_state.interpreter.with_variable("__ARGS__", Array(args.iter()
+    state.interpreter.with_variable("__ARGS__", ArrayValue(Array::from(args.iter()
         .map(|s| StringValue(s.to_string()))
         .collect::<Vec<_>>()
-    ));
+    )));
+
+    // capture the session ID
+    state.interpreter
+        .with_variable("__SESSION_ID__", Number(I64Value(state.session_id)));
+
+    // capture the user ID
+    state.interpreter
+        .with_variable("__USER_ID__", Number(I64Value(state.user_id)));
 
     // capture the terminal width and height
     if let Ok((width, height)) = terminal::size() {
-        repl_state.interpreter
+        state.interpreter
             .with_variable("__COLUMNS__", Number(U16Value(width)));
-        repl_state.interpreter
+        state.interpreter
             .with_variable("__HEIGHT__", Number(U16Value(height)));
     }
-    repl_state
+    state
 }
 
 /// Starts the listener server
@@ -267,19 +312,21 @@ fn update_history(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::Compiler;
-    use crate::machine::Machine;
     use crate::repl::REPLState;
     use std::cmp::max;
     use std::fs;
 
-    #[ignore]
     #[test]
-    fn test_do_terminal() {
-        do_terminal(REPLState::new(), vec![], || read_line_from(vec![
+    fn test_do_terminal_input() {
+        let state = REPLState::new();
+        let stdout = stdout();
+        let reader = || read_line_from(vec![
             "import oxide".into(),
             "help()".into(),
-        ])).unwrap();
+            "\n".into(),
+        ]);
+        let (_, new_state) = do_terminal_input(state, stdout, reader).unwrap();
+        println!("new_state {:?}", new_state);
     }
 
     #[test]
@@ -299,14 +346,76 @@ mod tests {
     }
 
     #[test]
-    fn test_print_result() {
-        let state = REPLState::new();
-        let state = print_result(state, Number(I64Value(100))).unwrap();
-        let model = Compiler::build(r#"
-            tools::to_table(["abc", "123"])
+    fn test_build_output_header_string() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            "Hello World"
         "#).unwrap();
-        let (_, table) = Machine::new().evaluate(&model).unwrap();
-        print_result(state, table).unwrap();
+
+        let lines = build_output_header(12, &result, 0.1).unwrap();
+        assert_eq!(
+            lines,
+            "12: returned type `String(11)` in 0.1 ms")
+    }
+
+    #[test]
+    fn test_build_output_header_table() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            tools::describe(oxide::help())
+        "#).unwrap();
+
+        let lines = build_output_header(12, &result, 13.2).unwrap();
+        assert_eq!(
+            lines,
+            "12: 5 row(s) in 13.2 ms ~ Table(String(128), String(128), String(128), Boolean)")
+    }
+
+    #[test]
+    fn test_build_output() {
+        let mut interpreter = Interpreter::new();
+        let result = interpreter.evaluate(r#"
+            tools::describe(oxide::help())
+        "#).unwrap();
+
+        let lines = build_output(12, result, 13.2).unwrap();
+        assert_eq!(lines, vec![
+            "12: 5 row(s) in 13.2 ms ~ Table(String(128), String(128), String(128), Boolean)",
+            "|-------------------------------------------------------------|",
+            "| id | name        | type       | default_value | is_nullable |",
+            "|-------------------------------------------------------------|",
+            "| 0  | name        | String(20) | null          | true        |",
+            "| 1  | module      | String(20) | null          | true        |",
+            "| 2  | signature   | String(32) | null          | true        |",
+            "| 3  | description | String(60) | null          | true        |",
+            "| 4  | returns     | String(32) | null          | true        |",
+            "|-------------------------------------------------------------|"])
+    }
+
+    #[test]
+    fn test_limit_width() {
+        let lines0 = vec![
+            "|-------------------------------------------------------------|".into(),
+            "| id | name        | type       | default_value | is_nullable |".into(),
+            "|-------------------------------------------------------------|".into(),
+            "| 0  | name        | String(20) | null          | true        |".into(),
+            "| 1  | module      | String(20) | null          | true        |".into(),
+            "| 2  | signature   | String(32) | null          | true        |".into(),
+            "| 3  | description | String(60) | null          | true        |".into(),
+            "| 4  | returns     | String(32) | null          | true        |".into(),
+            "|-------------------------------------------------------------|".into(),
+        ];
+        let lines1 = limit_width(lines0, 50);
+        assert_eq!(lines1, vec![
+            "|-------------------------------------------------",
+            "| id | name        | type       | default_value | ",
+            "|-------------------------------------------------",
+            "| 0  | name        | String(20) | null          | ",
+            "| 1  | module      | String(20) | null          | ",
+            "| 2  | signature   | String(32) | null          | ",
+            "| 3  | description | String(60) | null          | ",
+            "| 4  | returns     | String(32) | null          | ",
+            "|-------------------------------------------------"])
     }
 
     #[test]
@@ -346,7 +455,7 @@ mod tests {
     fn test_setup_system_variables() {
         let state = REPLState::new();
         let state = setup_system_variables(state, vec![]);
-        assert!(matches!(state.interpreter.get("__ARGS__"), Some(Array(..))));
+        assert!(matches!(state.interpreter.get("__ARGS__"), Some(ArrayValue(..))));
         assert!(matches!(state.interpreter.get("__COLUMNS__"), Some(Number(..))));
         assert!(matches!(state.interpreter.get("__HEIGHT__"), Some(Number(..))));
     }

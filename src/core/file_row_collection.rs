@@ -2,7 +2,6 @@
 // file row-collection module
 ////////////////////////////////////////////////////////////////////
 
-use crate::byte_row_collection::ByteRowCollection;
 use crate::dataframe_config::DataFrameConfig;
 use crate::errors::Errors;
 use crate::field_metadata::FieldMetadata;

@@ -2,26 +2,26 @@
 // DataType class
 ////////////////////////////////////////////////////////////////////
 
+use serde::{Deserialize, Serialize};
+use shared_lib::fail;
 use std::fmt::{Debug, Display};
 use std::io;
+use std::ops::Deref;
 
-use serde::{Deserialize, Serialize};
-
-use shared_lib::fail;
-
-use crate::compiler::{fail_near, Compiler};
+use crate::compiler::Compiler;
 use crate::data_types::DataType::*;
-use crate::data_types::StorageTypes::{FixedSize, BLOB};
-use crate::errors::Errors::Syntax;
-use crate::expression::Expression::{Literal, Parameters};
+use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
+use crate::errors::Errors;
+use crate::errors::Errors::{ArgumentsMismatched, Syntax};
+use crate::expression::Expression;
+use crate::expression::Expression::{AsValue, FunctionCall, Literal, SetVariable, Variable};
 use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::outcomes::OutcomeKind;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
-use crate::token_slice::TokenSlice;
-use crate::tokens::Token::Atom;
-use crate::typed_values::TypedValue::{ErrorValue, Number};
+use crate::structures::Structure;
+use crate::typed_values::TypedValue::{Function, Number, StructureHard};
 
 const PTR_LEN: usize = 8;
 
@@ -29,14 +29,14 @@ const PTR_LEN: usize = 8;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
 pub enum StorageTypes {
     FixedSize(usize),
-    BLOB,
+    BLOBSized,
 }
 
 impl StorageTypes {
     pub fn to_size(&self) -> usize {
         match self {
             FixedSize(size) => *size,
-            BLOB => PTR_LEN
+            BLOBSized => PTR_LEN
         }
     }
 }
@@ -45,7 +45,7 @@ impl Display for StorageTypes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", match self {
             FixedSize(size) => size.to_string(),
-            BLOB => "".to_string()
+            BLOBSized => "".to_string()
         })
     }
 }
@@ -54,119 +54,112 @@ impl Display for StorageTypes {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DataType {
     ArrayType(Box<DataType>), // Array(Structure(..)) is Table(..)
+    BinaryType(StorageTypes),
+    BLOBType(Box<DataType>),
     BooleanType,
-    ByteArrayType(StorageTypes),
     DateType,
     EnumType(Vec<Parameter>),
     ErrorType,
     FunctionType(Vec<Parameter>),
-    LazyType, // TODO ^ absorb via FunctionType
     NumberType(NumberKind),
     OutcomeType(OutcomeKind),
-    PlatformFunctionType(PlatformOps),
+    PlatformOpsType(PlatformOps),
     StringType(StorageTypes),
     StructureType(Vec<Parameter>),
     TableType(Vec<Parameter>, StorageTypes),
+    UnionType(Vec<DataType>),
 }
 
 impl DataType {
-
     ////////////////////////////////////////////////////////////////////
     //  STATIC METHODS
     ////////////////////////////////////////////////////////////////////
 
     /// parses a datatype expression (e.g. "String(20)")
-    pub fn compile(param_type: &str) -> io::Result<DataType> {
-        let ts = TokenSlice::from_string(param_type);
-        Self::compile_tokens(ts)
+    fn decipher_type(model: &Expression) -> std::io::Result<DataType> {
+        fn expect_size(args: &Vec<Expression>, f: fn(StorageTypes) -> DataType) -> std::io::Result<DataType> {
+            match args.as_slice() {
+                [] => Ok(f(BLOBSized)),
+                [Literal(Number(n))] => Ok(f(FixedSize(n.to_usize()))),
+                [other] => throw(Syntax(other.to_code())),
+                other => throw(ArgumentsMismatched(1, other.len()))
+            }
+        }
+        fn expect_type(args: &Vec<Expression>, f: fn(DataType) -> DataType) -> std::io::Result<DataType> {
+            match args.as_slice() {
+                [item] => Ok(f(decipher(item)?)),
+                other => throw(ArgumentsMismatched(1, other.len()))
+            }
+        }
+        fn expect_params(args: &Vec<Expression>, f: fn(Vec<Parameter>) -> DataType) -> std::io::Result<DataType> {
+            let mut params: Vec<Parameter> = vec![];
+            for arg in args {
+                let param = match arg {
+                    AsValue(name, model) => Parameter::new(name, decipher(model)?.to_type_declaration(), None),
+                    SetVariable(name, value) => Parameter::new(name, None, Some(value.to_code())),
+                    Variable(name) => Parameter::new(name, None, None),
+                    other => return throw(Syntax(other.to_code()))
+                };
+                params.push(param);
+            }
+            Ok(f(params))
+        }
+        fn decipher(model: &Expression) -> std::io::Result<DataType> {
+            match model {
+                Literal(Function { params, .. }) =>
+                    Ok(FunctionType(params.clone())),
+                Literal(StructureHard(hs)) =>
+                    Ok(StructureType(hs.get_parameters())),
+                Variable(name) => match name.as_str() {
+                    "Ack" => Ok(OutcomeType(OutcomeKind::Acked)),
+                    "Boolean" => Ok(BooleanType),
+                    "Date" => Ok(DateType),
+                    "Error" => Ok(ErrorType),
+                    "f32" => Ok(NumberType(F32Kind)),
+                    "f64" => Ok(NumberType(F64Kind)),
+                    "i8" => Ok(NumberType(I8Kind)),
+                    "i16" => Ok(NumberType(I16Kind)),
+                    "i32" => Ok(NumberType(I32Kind)),
+                    "i64" => Ok(NumberType(I64Kind)),
+                    "i128" => Ok(NumberType(I128Kind)),
+                    "RowId" => Ok(OutcomeType(OutcomeKind::RowInserted)),
+                    "RowsAffected" => Ok(OutcomeType(OutcomeKind::RowsUpdated)),
+                    "u8" => Ok(NumberType(U8Kind)),
+                    "u16" => Ok(NumberType(U16Kind)),
+                    "u32" => Ok(NumberType(U32Kind)),
+                    "u64" => Ok(NumberType(U64Kind)),
+                    "u128" => Ok(NumberType(U128Kind)),
+                    type_name => fail(format!("unrecognized type {}", type_name))
+                }
+                FunctionCall { fx, args } =>
+                    match fx.deref() {
+                        Variable(name) =>
+                            match name.as_str() {
+                                "Array" => expect_type(args, |kind| match kind {
+                                    StructureType(p) => TableType(p, BLOBSized),
+                                    kind => ArrayType(Box::new(kind))
+                                }),
+                                "Binary" => expect_size(args, |size| BinaryType(size)),
+                                "BLOB" => expect_type(args, |kind| BLOBType(Box::new(kind))),
+                                "enum" => expect_params(args, |params| EnumType(params)),
+                                "fn" => expect_params(args, |params| FunctionType(params)),
+                                "String" => expect_size(args, |size| StringType(size)),
+                                "struct" => expect_params(args, |params| StructureType(params)),
+                                "Table" => expect_params(args, |params| TableType(params, BLOBSized)),
+                                type_name => throw(Syntax(type_name.into()))
+                            }
+                        other => throw(Syntax(other.to_code()))
+                    }
+                other => throw(Syntax(other.to_code()))
+            }
+        }
+        decipher(model)
     }
 
     /// parses a datatype expression (e.g. "String(20)")
-    pub fn compile_tokens(ts: TokenSlice) -> io::Result<DataType> {
-        if let (Some(Atom { text: name, .. }), ts) = ts.next() {
-            match name.as_str() {
-                "Ack" => Ok(OutcomeType(OutcomeKind::Acked)),
-                "Array" => DataType::compile_type(ts, |kind| match kind {
-                    StructureType(p) => TableType(p, BLOB),
-                    kind => ArrayType(Box::new(kind))
-                }),
-                "ByteArray" => DataType::compile_size(ts, |size| ByteArrayType(size)),
-                "Boolean" => Ok(BooleanType),
-                "Date" => Ok(DateType),
-                "enum" => DataType::compile_parameters(ts, |params| EnumType(params)),
-                "Error" => Ok(ErrorType),
-                "f32" => Ok(NumberType(F32Kind)),
-                "f64" => Ok(NumberType(F64Kind)),
-                "fn" => DataType::compile_parameters(ts, |params| FunctionType(params)),
-                "i8" => Ok(NumberType(I8Kind)),
-                "i16" => Ok(NumberType(I16Kind)),
-                "i32" => Ok(NumberType(I32Kind)),
-                "i64" => Ok(NumberType(I64Kind)),
-                "i128" => Ok(NumberType(I128Kind)),
-                "RowId" => Ok(OutcomeType(OutcomeKind::RowInserted)),
-                "RowsAffected" => Ok(OutcomeType(OutcomeKind::RowsUpdated)),
-                "String" => DataType::compile_size(ts, |size| StringType(size)),
-                "struct" => DataType::compile_parameters(ts, |params| StructureType(params)),
-                "Table" => DataType::compile_parameters(ts, |params| TableType(params, BLOB)),
-                "u8" => Ok(NumberType(U8Kind)),
-                "u16" => Ok(NumberType(U16Kind)),
-                "u32" => Ok(NumberType(U32Kind)),
-                "u64" => Ok(NumberType(U64Kind)),
-                "u128" => Ok(NumberType(U128Kind)),
-                type_name => fail(format!("unrecognized type {}", type_name))
-            }
-        } else {
-            fail_near("identifier expected", &ts)
-        }
-    }
-
-    fn compile_parameters(ts: TokenSlice, f: fn(Vec<Parameter>) -> DataType) -> io::Result<DataType> {
-        let mut compiler = Compiler::new();
-        if let (Parameters(params), _) = compiler.expect_parameters(ts)? {
-            //assert!(ts.is_empty());
-            Ok(f(params))
-        } else { fail("parameters are expected for this type") }
-    }
-
-    fn compile_size(ts: TokenSlice, f: fn(StorageTypes) -> DataType) -> io::Result<DataType> {
-        let mut compiler = Compiler::new();
-        let (args, _ts) = compiler.expect_arguments(ts)?;
-        let kind = match args.as_slice() {
-            // String()
-            [] => BLOB,
-            // String(40)
-            [Literal(Number(size))] => FixedSize(size.to_usize()),
-            // enum(a, b, c)?
-            other => return fail(ErrorValue(
-                Syntax(other.iter()
-                    .map(|e| e.to_code())
-                    .collect::<Vec<_>>()
-                    .join(", "))
-            ).to_string())
-        };
-        Ok(f(kind))
-    }
-
-    fn compile_type(ts: TokenSlice, f: fn(DataType) -> DataType) -> io::Result<DataType> {
-        let mut args = Vec::new();
-        let mut ts = ts.expect("<")?;
-        while ts.has_next() && ts.isnt(">") {
-            match ts.next() {
-                (Some(tok), new_ts) => {
-                    args.push(tok);
-                    ts = new_ts;
-                }
-                (None, ts) =>
-                    return fail_near("Type declaration expected", &ts)
-            }
-        }
-        let ts = ts.expect(">")?;
-        if !ts.is_empty() {
-            return fail_near("Syntax error", &ts);
-        }
-
-        let kind = if args.is_empty() { LazyType } else { Self::compile_tokens(TokenSlice::new(args))? };
-        Ok(f(kind))
+    pub fn from_str(param_type: &str) -> io::Result<DataType> {
+        let model = Compiler::build(param_type)?;
+        Self::decipher_type(&model)
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -178,74 +171,50 @@ impl DataType {
         use crate::data_types::DataType::*;
         let width: usize = match self {
             ArrayType(kind) => 10 * kind.compute_max_physical_size(),
-            ByteArrayType(size) => size.to_size(),
+            BinaryType(size) => size.to_size(),
+            BLOBType(..) => 8,
             BooleanType => 1,
             DateType => 8,
             EnumType(..) => 2,
             ErrorType => 256,
             FunctionType(columns) => columns.len() * 8,
-            LazyType => 0,
-            NumberType(kind) => match kind {
-                I8Kind | U8Kind => 1,
-                I16Kind | U16Kind => 2,
-                F32Kind | I32Kind | U32Kind => 4,
-                F64Kind | I64Kind | U64Kind => 8,
-                I128Kind | U128Kind => 16,
-                NaNKind => 0,
-            },
-            OutcomeType(kind) => match kind {
-                OutcomeKind::Acked => 8,
-                OutcomeKind::RowInserted => 16,
-                OutcomeKind::RowsUpdated => 16,
-            },
-            PlatformFunctionType(..) => 4,
+            NumberType(nk) => nk.compute_max_physical_size(),
+            OutcomeType(ok) => ok.compute_max_physical_size(),
+            PlatformOpsType(..) => 4,
             StringType(size) => match size {
                 FixedSize(size) => *size + size.to_be_bytes().len(),
-                BLOB => PTR_LEN
+                BLOBSized => PTR_LEN
             },
             StructureType(columns) => columns.len() * 8,
             TableType(columns, ..) => columns.len() * 8,
-            LazyType => 0,
+            UnionType(dts) => dts.iter()
+                .map(|t| t.compute_max_physical_size())
+                .max().unwrap_or(0),
         };
         width + 1 // +1 for field metadata
     }
 
     pub fn to_type_declaration(&self) -> Option<String> {
         let type_name = match self {
-            ArrayType(kind) =>
-                format!("Array<{}>", kind.to_type_declaration()
+            ArrayType(dt) =>
+                format!("Array({})", dt.to_type_declaration()
                     .unwrap_or("".to_string())),
-            ByteArrayType(size) => format!("ByteArray({})", size),
+            BinaryType(st) => format!("Binary({})", st),
+            BLOBType(dt) => format!("BLOB({})", dt.to_type_declaration().unwrap_or("".to_string())),
             BooleanType => "Boolean".into(),
             DateType => "Date".into(),
             EnumType(labels) => format!("enum({})", Parameter::render(labels)),
             ErrorType => "Error".into(),
-            FunctionType(columns) => format!("fn({})", Parameter::render(columns)),
-            LazyType => "".into(),
-            NumberType(index) => match *index {
-                F32Kind => "f32".into(),
-                F64Kind => "f64".into(),
-                I8Kind => "i8".into(),
-                I16Kind => "i16".into(),
-                I32Kind => "i32".into(),
-                I64Kind => "i64".into(),
-                I128Kind => "i128".into(),
-                U8Kind => "u8".into(),
-                U16Kind => "u16".into(),
-                U32Kind => "u32".into(),
-                U64Kind => "u64".into(),
-                U128Kind => "u128".into(),
-                NaNKind => "NaN".into()
-            },
-            OutcomeType(kind) => match kind {
-                OutcomeKind::Acked => "Ack".into(),
-                OutcomeKind::RowInserted => "RowId".into(),
-                OutcomeKind::RowsUpdated => "RowsAffected".into(),
-            },
-            PlatformFunctionType(pf) => pf.to_code(),
-            StringType(size) => format!("String({})", size),
+            FunctionType(params) => format!("fn({})", Parameter::render(params)),
+            UnionType(kinds) => kinds.iter()
+                .flat_map(|k| k.to_type_declaration())
+                .collect::<Vec<_>>().join("|"),
+            NumberType(nk) => nk.get_type_name(),
+            OutcomeType(ok) => ok.get_type_name(),
+            PlatformOpsType(pf) => pf.to_code(),
+            StringType(st) => format!("String({})", st),
             StructureType(params) => format!("struct({})", Parameter::render(params)),
-            TableType(columns, ..) => format!("Table({})", Parameter::render(columns)),
+            TableType(params, ..) => format!("Table({})", Parameter::render(params)),
         };
         if type_name.is_empty() { None } else { Some(type_name) }
     }
@@ -257,20 +226,38 @@ impl Display for DataType {
     }
 }
 
+pub fn throw<A>(error: Errors) -> std::io::Result<A> {
+    Err(std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType;
     use crate::data_types::DataType::*;
-    use crate::data_types::StorageTypes::{FixedSize, BLOB};
+    use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
     use crate::number_kind::NumberKind::*;
     use crate::outcomes::OutcomeKind;
     use crate::parameter::Parameter;
     use crate::testdata::make_quote_parameters;
 
     #[test]
-    fn test_byte_array() {
-        verify_type_construction("ByteArray(5566)", ByteArrayType(FixedSize(5566)));
+    fn test_array() {
+        verify_type_construction(
+            "Array(String(12))",
+            ArrayType(Box::from(StringType(FixedSize(12)))));
+    }
+
+    #[test]
+    fn test_binary() {
+        verify_type_construction("Binary(5566)", BinaryType(FixedSize(5566)));
+    }
+
+    #[test]
+    fn test_blob() {
+        verify_type_construction(
+            "BLOB(Table(symbol: String(8), exchange: String(8), last_sale: f64))",
+            BLOBType(Box::from(TableType(make_quote_parameters(), BLOBSized))));
     }
 
     #[test]
@@ -284,7 +271,7 @@ mod tests {
     }
 
     #[test]
-    fn test_enums() {
+    fn test_enums_0() {
         verify_type_construction(
             "enum(A, B, C)",
             EnumType(vec![
@@ -292,9 +279,12 @@ mod tests {
                 Parameter::new("B", None, None),
                 Parameter::new("C", None, None),
             ]));
+    }
 
+    #[test]
+    fn test_enums_1() {
         verify_type_construction(
-            "enum(AMEX = 1, NASDAQ = 2, NYSE = 3, OTCBB = 4)",
+            "enum(AMEX := 1, NASDAQ := 2, NYSE := 3, OTCBB := 4)",
             EnumType(vec![
                 Parameter::new("AMEX", None, Some("1".to_string())),
                 Parameter::new("NASDAQ", None, Some("2".to_string())),
@@ -354,7 +344,7 @@ mod tests {
 
     #[test]
     fn test_string() {
-        verify_type_construction("String()", StringType(BLOB));
+        verify_type_construction("String()", StringType(BLOBSized));
         verify_type_construction("String(10)", StringType(FixedSize(10)));
     }
 
@@ -369,7 +359,7 @@ mod tests {
     fn test_table() {
         verify_type_construction(
             "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
-            TableType(make_quote_parameters(), BLOB));
+            TableType(make_quote_parameters(), BLOBSized));
     }
 
     #[test]
@@ -398,8 +388,8 @@ mod tests {
     }
 
     fn verify_type_construction(type_decl: &str, data_type: DataType) {
-        let dt: DataType = DataType::compile(type_decl)
-            .expect("Failed to parse column type");
+        let dt: DataType = DataType::from_str(type_decl)
+            .expect(format!("Failed to parse type {}", data_type).as_str());
         assert_eq!(dt, data_type);
         assert_eq!(data_type.to_type_declaration(), Some(type_decl.into()));
         assert_eq!(format!("{}", data_type), type_decl.to_string())

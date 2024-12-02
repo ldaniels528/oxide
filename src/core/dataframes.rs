@@ -176,8 +176,8 @@ impl DataFrame {
                 if row.matches(machine, condition, self.get_columns()) {
                     let (machine, my_fields) =
                         machine.with_row(self.get_columns(), &row).evaluate_as_atoms(fields)?;
-                    if let (_, TypedValue::Array(my_values)) = machine.evaluate_array(values)? {
-                        let new_row = self.transform(&row, &my_fields, &my_values)?;
+                    if let (_, TypedValue::ArrayValue(my_values)) = machine.evaluate_array(values)? {
+                        let new_row = self.transform(&row, &my_fields, my_values.values())?;
                         overwritten += self.overwrite(new_row)?;
                     }
                 }
@@ -349,8 +349,8 @@ impl DataFrame {
                 if row.matches(machine, condition, self.get_columns()) {
                     let (machine, field_names) =
                         machine.with_row(self.device.get_columns(), &row).evaluate_as_atoms(fields)?;
-                    if let (_, TypedValue::Array(field_values)) = machine.evaluate_array(values)? {
-                        let new_row = self.transform(&row, &field_names, &field_values)?;
+                    if let (_, TypedValue::ArrayValue(field_values)) = machine.evaluate_array(values)? {
+                        let new_row = self.transform(&row, &field_names, field_values.values())?;
                         if self.device.overwrite_row(id, new_row).is_ok() {
                             updated += 1
                         }

@@ -8,6 +8,7 @@ use std::env;
 use crate::repl::{read_line_from_stdin, REPLState};
 use log::LevelFilter;
 
+mod arrays;
 mod byte_code_compiler;
 mod byte_row_collection;
 mod compiler;
@@ -52,6 +53,7 @@ mod tokens;
 mod typed_values;
 mod view_row_collection;
 mod websockets;
+mod query_engine;
 
 /// Starts the Oxide server
 fn main() -> std::io::Result<()> {

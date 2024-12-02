@@ -4,8 +4,7 @@
 
 use std::ops::Range;
 
-use log::warn;
-
+use crate::arrays::Array;
 use crate::data_types::DataType::NumberType;
 use crate::errors::Errors;
 use crate::errors::Errors::*;
@@ -20,6 +19,7 @@ use crate::rows::Row;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use log::warn;
 
 /// Hash-Table-based RowCollection implementation
 #[derive(Debug)]
@@ -132,7 +132,7 @@ impl HashTableRowCollection {
                 }
             }
         }
-        TypedValue::Array(collisions)
+        TypedValue::ArrayValue(Array::from(collisions))
     }
 
     /// Translates a key into its hash-key row offset
@@ -380,8 +380,7 @@ impl RowCollection for HashTableRowCollection {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
-
+    use crate::arrays::Array;
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
     use crate::numbers::Numbers::F64Value;
@@ -389,6 +388,7 @@ mod tests {
     use crate::rows::Row;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote_columns, StockQuote};
+    use std::time::Instant;
 
     use super::*;
 
@@ -528,14 +528,14 @@ mod tests {
 
         // perform an audit of the hash
         let collisions = match measure_time(|| stocks.audit()) {
-            (TypedValue::Array(collisions), msec) => {
-                println!("[{:.4} msec] audit_collisions ({}) -> {}", msec, collisions.len(), TypedValue::Array(collisions.to_owned()));
+            (TypedValue::ArrayValue(collisions), msec) => {
+                println!("[{:.4} msec] audit_collisions ({}) -> {}", msec, collisions.len(), TypedValue::ArrayValue(collisions.to_owned()));
                 collisions
             }
             (other, _) => {
                 println!("[{:.4} msec] audit_collisions -> {}", msec, other);
-                assert_eq!(other, TypedValue::Array(Vec::new()));
-                Vec::new()
+                assert_eq!(other, TypedValue::ArrayValue(Array::new()));
+                Array::new()
             }
         };
 

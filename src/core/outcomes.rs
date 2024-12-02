@@ -4,8 +4,8 @@
 
 use std::fmt::{Display, Formatter};
 
-use serde::{Deserialize, Serialize};
 use crate::byte_code_compiler::ByteCodeCompiler;
+use serde::{Deserialize, Serialize};
 
 /// Represents an Outcome type/kind
 #[repr(u8)]
@@ -14,6 +14,24 @@ pub enum OutcomeKind {
     Acked = 0,
     RowInserted = 1,
     RowsUpdated = 2,
+}
+
+impl OutcomeKind {
+    pub fn compute_max_physical_size(&self) -> usize {
+        match self {
+            OutcomeKind::Acked => 8,
+            OutcomeKind::RowInserted => 16,
+            OutcomeKind::RowsUpdated => 16,
+        }
+    }
+
+    pub fn get_type_name(&self) -> String {
+        match self {
+            OutcomeKind::Acked => "Ack".into(),
+            OutcomeKind::RowInserted => "RowId".into(),
+            OutcomeKind::RowsUpdated => "RowsAffected".into(),
+        }
+    }
 }
 
 /// Represents a non-error Operation Outcome

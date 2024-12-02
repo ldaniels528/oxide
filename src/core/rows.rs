@@ -208,6 +208,12 @@ impl Row {
         } else { true }
     }
 
+    pub fn pollute(&self, ms: &Machine, columns: &Vec<Column>) -> Machine {
+        columns.iter().zip(self.values.iter())
+            .fold(ms.clone(), |ms, (column, value)|
+                ms.with_variable(column.get_name(), value.clone()))
+    }
+
     pub fn rows_to_json(columns: &Vec<Column>, rows: &Vec<Row>) -> Vec<HashMap<String, Value>> {
         rows.iter().fold(Vec::new(), |mut vec, row| {
             vec.push(row.to_json(columns));

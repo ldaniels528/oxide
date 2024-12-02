@@ -4,17 +4,16 @@
 
 use std::fs::File;
 
-use chrono::Utc;
-use rand::distributions::Uniform;
-use rand::prelude::ThreadRng;
-use rand::{thread_rng, Rng, RngCore};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use crate::compiler::Compiler;
+use crate::data_types::DataType;
+use crate::data_types::DataType::{NumberType, UnionType};
 use crate::dataframe_config::DataFrameConfig;
 use crate::dataframes::DataFrame;
 use crate::file_row_collection::FileRowCollection;
+use crate::inferences::Inferences;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
+use crate::number_kind::NumberKind::{F64Kind, I64Kind};
 use crate::numbers::Numbers::{F64Value, U64Value};
 use crate::parameter::Parameter;
 use crate::rows::Row;
@@ -22,6 +21,12 @@ use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use chrono::Utc;
+use rand::distributions::Uniform;
+use rand::prelude::ThreadRng;
+use rand::{thread_rng, Rng, RngCore};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<DataFrame> {
     make_dataframe_ns(Namespace::new(database, schema, name), columns)
@@ -85,6 +90,22 @@ pub fn make_table_file(
     let ns = Namespace::new(database, schema, name);
     let file = FileRowCollection::table_file_create(&ns).unwrap();
     (ns.get_table_file_path(), file, table_columns, record_size)
+}
+
+pub fn verify_data_type(code: &str, expected: DataType) {
+    let model = Compiler::build(code).unwrap();
+    assert_eq!(Inferences::infer(&model), expected);
+}
+
+pub fn verify_bit_operator(op: &str) {
+    verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
+    verify_data_type(format!("a {} b", op).as_str(), UnionType(vec![]));
+}
+
+pub fn verify_math_operator(op: &str) {
+    verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
+    verify_data_type(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
+    verify_data_type(format!("a {} b", op).as_str(), UnionType(vec![]));
 }
 
 pub fn verify_exact(code: &str, expected: TypedValue) {

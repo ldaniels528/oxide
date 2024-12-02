@@ -549,10 +549,10 @@ mod tests {
     use crate::expression::{Excavation, Mutation, Queryable};
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::{F64Value, I64Value};
-    use crate::testdata::{make_quote, make_quote_columns};
     use crate::table_values::TableValues::Model;
-    use crate::typed_values::TypedValue::{Number, StringValue, TableValue};
     use crate::testdata::make_quote_parameters;
+    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::typed_values::TypedValue::{Number, StringValue, TableValue};
 
     use super::*;
 

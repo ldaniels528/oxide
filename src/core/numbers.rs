@@ -5,14 +5,15 @@
 use std::cmp::Ordering;
 use std::collections::Bound;
 use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 use std::ops::*;
 
-use num_traits::ToPrimitive;
-use serde::{Deserialize, Serialize};
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers::*;
+use num_traits::ToPrimitive;
+use serde::{Deserialize, Serialize};
 
 /// Represents a numeric value
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -30,6 +31,28 @@ pub enum Numbers {
     U64Value(u64),
     U128Value(u128),
     NaNValue,
+}
+
+impl Hash for Numbers {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Numbers::F32Value(v) => v.to_bits().hash(state), // Convert to bits for hashing
+            Numbers::F64Value(v) => v.to_bits().hash(state), // Convert to bits for hashing
+            Numbers::I8Value(v) => v.hash(state),
+            Numbers::I16Value(v) => v.hash(state),
+            Numbers::I32Value(v) => v.hash(state),
+            Numbers::I64Value(v) => v.hash(state),
+            Numbers::I128Value(v) => v.hash(state),
+            Numbers::U8Value(v) => v.hash(state),
+            Numbers::U16Value(v) => v.hash(state),
+            Numbers::U32Value(v) => v.hash(state),
+            Numbers::U64Value(v) => v.hash(state),
+            Numbers::U128Value(v) => v.hash(state),
+            Numbers::NaNValue => {
+                0_u64.hash(state); // Use a fixed hash for NaN values
+            }
+        }
+    }
 }
 
 impl Numbers {
@@ -213,7 +236,7 @@ impl Numbers {
             I32Value(n) => n as i8,
             I64Value(n) => n as i8,
             I128Value(n) => n as i8,
-            NaNValue => 0,
+            NaNValue => 0i8,
             U8Value(n) => n as i8,
             U16Value(n) => n as i8,
             U32Value(n) => n as i8,
@@ -231,7 +254,7 @@ impl Numbers {
             I32Value(n) => n as i16,
             I64Value(n) => n as i16,
             I128Value(n) => n as i16,
-            NaNValue => 0,
+            NaNValue => 0i16,
             U8Value(n) => n as i16,
             U16Value(n) => n as i16,
             U32Value(n) => n as i16,
@@ -249,7 +272,7 @@ impl Numbers {
             I32Value(n) => n,
             I64Value(n) => n as i32,
             I128Value(n) => n as i32,
-            NaNValue => 0,
+            NaNValue => 0i32,
             U8Value(n) => n as i32,
             U16Value(n) => n as i32,
             U32Value(n) => n as i32,
@@ -267,7 +290,7 @@ impl Numbers {
             I32Value(n) => n as i64,
             I64Value(n) => n,
             I128Value(n) => n as i64,
-            NaNValue => 0,
+            NaNValue => 0i64,
             U8Value(n) => n as i64,
             U16Value(n) => n as i64,
             U32Value(n) => n as i64,
@@ -285,7 +308,7 @@ impl Numbers {
             I32Value(n) => n as i128,
             I64Value(n) => n as i128,
             I128Value(n) => n,
-            NaNValue => 0,
+            NaNValue => 0i128,
             U8Value(n) => n as i128,
             U16Value(n) => n as i128,
             U32Value(n) => n as i128,
@@ -303,7 +326,7 @@ impl Numbers {
             I32Value(n) => n as u8,
             I64Value(n) => n as u8,
             I128Value(n) => n as u8,
-            NaNValue => 0,
+            NaNValue => 0u8,
             U8Value(n) => n,
             U16Value(n) => n as u8,
             U32Value(n) => n as u8,
@@ -321,7 +344,7 @@ impl Numbers {
             I32Value(n) => n as u16,
             I64Value(n) => n as u16,
             I128Value(n) => n as u16,
-            NaNValue => 0,
+            NaNValue => 0u16,
             U8Value(n) => n as u16,
             U16Value(n) => n,
             U32Value(n) => n as u16,
@@ -339,7 +362,7 @@ impl Numbers {
             I32Value(n) => n as u32,
             I64Value(n) => n as u32,
             I128Value(n) => n as u32,
-            NaNValue => 0,
+            NaNValue => 0u32,
             U8Value(n) => n as u32,
             U16Value(n) => n as u32,
             U32Value(n) => n,
@@ -357,7 +380,7 @@ impl Numbers {
             I32Value(n) => n as u64,
             I64Value(n) => n as u64,
             I128Value(n) => n as u64,
-            NaNValue => 0,
+            NaNValue => 0u64,
             U8Value(n) => n as u64,
             U16Value(n) => n as u64,
             U32Value(n) => n as u64,
@@ -375,7 +398,7 @@ impl Numbers {
             I32Value(n) => n as u128,
             I64Value(n) => n as u128,
             I128Value(n) => n as u128,
-            NaNValue => 0,
+            NaNValue => 0u128,
             U8Value(n) => n as u128,
             U16Value(n) => n as u128,
             U32Value(n) => n as u128,
@@ -393,7 +416,7 @@ impl Numbers {
             I32Value(n) => n as usize,
             I64Value(n) => n as usize,
             I128Value(n) => n as usize,
-            NaNValue => 0,
+            NaNValue => 0usize,
             U8Value(n) => n as usize,
             U16Value(n) => n as usize,
             U32Value(n) => n as usize,

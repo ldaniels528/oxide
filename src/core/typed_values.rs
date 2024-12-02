@@ -16,14 +16,13 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use shared_lib::fail;
-
+use crate::arrays::Array;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::cnv_error;
 use crate::compiler::fail_value;
 use crate::data_types::DataType::*;
-use crate::data_types::StorageTypes::{FixedSize, BLOB};
+use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
 use crate::data_types::*;
 use crate::errors::Errors;
 use crate::errors::Errors::{CannotSubtract, Exact, TypeMismatch, Various};
@@ -40,13 +39,14 @@ use crate::outcomes::{OutcomeKind, Outcomes};
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::row_collection::RowCollection;
-use crate::table_values::TableValues;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::structures::*;
 use crate::table_columns::Column;
+use crate::table_values::TableValues;
 use crate::table_values::TableValues::Model;
 use crate::typed_values::TypedValue::*;
+use shared_lib::fail;
 
 const ISO_DATE_FORMAT: &str =
     r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$";
@@ -58,13 +58,14 @@ const UUID_FORMAT: &str =
 /// Basic value unit
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
-    Array(Vec<TypedValue>),
+    ArrayValue(Array),
+    Binary(Vec<u8>),
+    BLOB(Box<TypedValue>),
     Boolean(bool),
-    ByteArray(Vec<u8>),
     DateValue(i64),
     ErrorValue(Errors),
     Function { params: Vec<Parameter>, code: Box<Expression> },
-    NamespaceValue(String, String, String),
+    NamespaceValue(Namespace),
     Null,
     Number(Numbers),
     Outcome(Outcomes),
@@ -85,14 +86,14 @@ impl TypedValue {
     /// decodes the typed value based on the supplied data type and buffer
     pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
         match data_type {
-            ArrayType(_kind) => Array(Vec::new()),
-            ByteArrayType(_size) => ByteArray(Vec::new()),
+            ArrayType(_kind) => ArrayValue(Array::new()),
+            BinaryType(_size) => Binary(Vec::new()),
             BooleanType => ByteCodeCompiler::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             DateType => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
             ErrorType => ErrorValue(Exact(ByteCodeCompiler::decode_string(buffer, offset, 255).to_string())),
-            LazyType => Null,
+            UnionType(..) => Null,
             NumberType(kind) => Number(Numbers::decode(buffer, offset, *kind)),
-            PlatformFunctionType(pf) => PlatformOp(pf.to_owned()),
+            PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
             StringType(size) => StringValue(ByteCodeCompiler::decode_string(buffer, offset, size.to_size()).to_string()),
             StructureType(params) =>
                 match HardStructure::from_parameters(params) {
@@ -100,7 +101,7 @@ impl TypedValue {
                     Err(err) => ErrorValue(Errors::Exact(err.to_string()))
                 }
             TableType(columns, ..) => TableValue(Model(ModelRowCollection::construct(columns))),
-            LazyType => Undefined,
+            UnionType(..) => Undefined,
             _ => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec())
         }
     }
@@ -111,8 +112,9 @@ impl TypedValue {
         buffer: &mut ByteCodeCompiler,
     ) -> std::io::Result<TypedValue> {
         let tv = match data_type {
-            ArrayType(..) => Array(buffer.next_array()?),
-            ByteArrayType(..) => ByteArray(buffer.next_blob()),
+            ArrayType(..) => ArrayValue(Array::from(buffer.next_array()?)),
+            BinaryType(..) => Binary(buffer.next_blob()),
+            BLOBType(dt) => BLOB(Box::from(Self::from_buffer(dt, buffer)?)),
             BooleanType => Boolean(buffer.next_bool()),
             DateType => DateValue(buffer.next_i64()),
             EnumType(labels) => {
@@ -124,7 +126,7 @@ impl TypedValue {
                 params: columns.to_owned(),
                 code: Box::new(ByteCodeCompiler::disassemble(buffer)?),
             },
-            LazyType => Null,
+            UnionType(..) => Null,
             NumberType(kind) =>
                 Number(match *kind {
                     F32Kind => F32Value(buffer.next_f32()),
@@ -146,11 +148,11 @@ impl TypedValue {
                 OutcomeKind::RowInserted => Outcome(Outcomes::RowId(buffer.next_row_id())),
                 OutcomeKind::RowsUpdated => Outcome(Outcomes::RowsAffected(buffer.next_row_id())),
             },
-            PlatformFunctionType(pf) => PlatformOp(pf.to_owned()),
+            PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
             StringType(..) => StringValue(buffer.next_string()),
             StructureType(params) => StructureHard(buffer.next_struct_with_parameters(params)?),
             TableType(columns, ..) => TableValue(Model(buffer.next_table_with_columns(columns)?)),
-            LazyType => Undefined,
+            UnionType(..) => Undefined,
         };
         Ok(tv)
     }
@@ -161,7 +163,7 @@ impl TypedValue {
             serde_json::Value::Bool(b) => Boolean(*b),
             serde_json::Value::Number(n) => n.as_f64().map(|v| Number(F64Value(v))).unwrap_or(Null),
             serde_json::Value::String(s) => StringValue(s.to_owned()),
-            serde_json::Value::Array(a) => Array(a.iter().map(Self::from_json).collect()),
+            serde_json::Value::Array(a) => ArrayValue(Array::from(a.iter().map(Self::from_json).collect())),
             serde_json::Value::Object(args) =>
                 match HardStructure::from_parameters(&args.iter()
                     .map(|(name, value)| {
@@ -236,9 +238,10 @@ impl TypedValue {
     /// returns true, if:
     /// 1. the host value is an array, and the item value is found within it,
     /// 2. the host value is a table, and the item value matches a row found within it,
+    /// 3. the host value is a struct, and the item value matches a name (key) found within it,
     pub fn contains(&self, value: &TypedValue) -> TypedValue {
         match &self {
-            Array(items) => Boolean(items.contains(value)),
+            ArrayValue(items) => Boolean(items.contains(value)),
             StructureHard(hard) => match value {
                 StringValue(name) => Boolean(hard.contains(name)),
                 _ => Boolean(false)
@@ -258,19 +261,19 @@ impl TypedValue {
 
     pub fn encode(&self) -> Vec<u8> {
         match self {
-            Array(items) => {
+            ArrayValue(items) => {
                 let mut bytes = Vec::new();
                 bytes.extend(items.len().to_be_bytes());
-                for item in items { bytes.extend(item.encode()); }
+                for item in items.iter() { bytes.extend(item.encode()); }
                 bytes
             }
             PlatformOp(pf) => pf.encode().unwrap_or(vec![]),
-            ByteArray(bytes) => ByteCodeCompiler::encode_u8x_n(bytes.to_vec()),
+            Binary(bytes) => ByteCodeCompiler::encode_u8x_n(bytes.to_vec()),
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
             DateValue(number) => number.to_be_bytes().to_vec(),
             ErrorValue(err) => ByteCodeCompiler::encode_string(err.to_string().as_str()),
-            NamespaceValue(a, b, c) =>
-                ByteCodeCompiler::encode_string(format!("{a}.{b}.{c}").as_str()),
+            NamespaceValue(ns) =>
+                ByteCodeCompiler::encode_string(ns.get_full_name().as_str()),
             Number(number) => number.encode(),
             StringValue(string) => ByteCodeCompiler::encode_string(string),
             TableValue(rc) => rc.encode(),
@@ -282,26 +285,27 @@ impl TypedValue {
     }
 
     pub fn get_type(&self) -> DataType {
-        match self.to_owned() {
-            Array(items) => ArrayType(Box::new(Inferences::infer_values(&items))),
-            ByteArray(v) => ByteArrayType(FixedSize(v.len())),
+        match self {
+            ArrayValue(a) => ArrayType(Box::new(Inferences::infer_values(a.values()))),
+            Binary(v) => BinaryType(FixedSize(v.len())),
+            BLOB(tv) => BLOBType(Box::from(tv.get_type())),
             Boolean(..) => BooleanType,
             DateValue(..) => DateType,
             ErrorValue(..) => ErrorType,
-            Function { params, .. } => FunctionType(params),
-            NamespaceValue(..) => TableType(Vec::new(), BLOB),
-            Null | Undefined => LazyType,
-            Number(nv) => NumberType(nv.kind()),
+            Function { params, .. } => FunctionType(params.clone()),
+            NamespaceValue(..) => TableType(Vec::new(), BLOBSized),
+            Null | Undefined => UnionType(Vec::new()),
+            Number(n) => NumberType(n.kind()),
             Outcome(oc) => match oc {
                 Outcomes::Ack => OutcomeType(OutcomeKind::Acked),
                 Outcomes::RowId(..) => OutcomeType(OutcomeKind::RowInserted),
                 Outcomes::RowsAffected(..) => OutcomeType(OutcomeKind::RowsUpdated),
             },
-            PlatformOp(pf) => pf.get_type(),
+            PlatformOp(op) => op.get_type(),
             StructureHard(hard) => StructureType(hard.get_parameters()),
             StructureSoft(soft) => StructureType(soft.get_parameters()),
             StringValue(s) => StringType(FixedSize(s.len())),
-            TableValue(tv) => TableType(Parameter::from_columns(tv.get_columns()), BLOB),
+            TableValue(tv) => TableType(Parameter::from_columns(tv.get_columns()), BLOBSized),
         }
     }
 
@@ -345,7 +349,7 @@ impl TypedValue {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
-            ByteArray(bytes) => bytes.to_vec(),
+            Binary(bytes) => bytes.to_vec(),
             StringValue(s) => s.bytes().collect(),
             z => z.encode()
         }
@@ -353,7 +357,7 @@ impl TypedValue {
 
     pub fn to_code(&self) -> String {
         match self {
-            Array(items) =>
+            ArrayValue(items) =>
                 format!("[{}]", items.iter()
                     .map(|v| v.to_code())
                     .collect::<Vec<_>>().join(", ")),
@@ -444,10 +448,11 @@ impl TypedValue {
 
     pub fn to_json(&self) -> serde_json::Value {
         match self {
-            Array(items) => serde_json::json!(items.iter()
+            ArrayValue(items) => serde_json::json!(items.iter()
                     .map(|v|v.to_json())
                     .collect::<Vec<_>>()),
-            ByteArray(bytes) => serde_json::json!(bytes),
+            Binary(bytes) => serde_json::json!(bytes),
+            BLOB(tv) => tv.to_json(),
             Boolean(b) => serde_json::json!(b),
             DateValue(millis) => serde_json::json!(Self::millis_to_iso_date(*millis)),
             ErrorValue(message) => serde_json::json!(message),
@@ -456,8 +461,7 @@ impl TypedValue {
                     .map(|c| c.to_json()).collect());
                 serde_json::json!({ "params": my_params, "code": code.to_code() })
             }
-            NamespaceValue(d, s, n) =>
-                serde_json::json!(format!("{d}.{s}.{n}")),
+            NamespaceValue(ns) => serde_json::json!(ns.get_full_name()),
             Null => serde_json::Value::Null,
             Number(nv) => nv.to_json(),
             Outcome(Outcomes::Ack) => serde_json::Value::Bool(true),
@@ -486,13 +490,9 @@ impl TypedValue {
             }
         }
         match self {
-            Array(items) => to_device(self.convert_array_to_table(items)),
+            ArrayValue(items) => to_device(self.convert_array_to_table(items.values())),
             ErrorValue(message) => fail(message.to_string()),
-            NamespaceValue(d, s, n) => {
-                let ns = Namespace::new(d, s, n);
-                let frc = FileRowCollection::open(&ns)?;
-                Ok(Box::new(frc))
-            }
+            NamespaceValue(ns) => Ok(Box::new(FileRowCollection::open(ns)?)),
             StructureHard(s) => Ok(Box::new(s.to_table())),
             StructureSoft(s) => Ok(Box::new(s.to_table())),
             TableValue(rcv) => Ok(Box::new(rcv.to_owned())),
@@ -608,13 +608,12 @@ impl TypedValue {
 
     pub fn unwrap_value(&self) -> String {
         match self {
-            Outcome(Outcomes::Ack) => "ack".to_string(),
-            Array(items) => {
+            ArrayValue(items) => {
                 let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
                 format!("[{}]", values.join(", "))
             }
-            PlatformOp(nf) => format!("{:?}", nf),
-            ByteArray(bytes) => hex::encode(bytes),
+            Binary(bytes) => hex::encode(bytes),
+            BLOB(tv) => tv.unwrap_value(),
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
             DateValue(millis) => Self::millis_to_iso_date(*millis).unwrap_or("".into()),
             ErrorValue(message) => message.to_string(),
@@ -627,10 +626,12 @@ impl TypedValue {
                 serde_json::json!(rcv.iter().map(|r|r.to_json(columns))
                     .collect::<Vec<_>>()).to_string()
             }
-            NamespaceValue(d, s, n) => format!("{d}.{s}.{n}"),
+            NamespaceValue(ns) => ns.get_full_name(),
             Null => "null".into(),
             Number(number) => number.unwrap_value(),
+            Outcome(Outcomes::Ack) => "ack".to_string(),
             Outcome(outcome) => outcome.to_string(),
+            PlatformOp(nf) => format!("{:?}", nf),
             StringValue(string) => string.into(),
             StructureHard(structure) => structure.to_code(),
             StructureSoft(structure) => structure.to_code(),
@@ -674,7 +675,7 @@ impl TypedValue {
     pub fn range(&self, rhs: &Self) -> Option<Self> {
         let mut values = Vec::new();
         for n in self.to_i64()..rhs.to_i64() { values.push(Number(I64Value(n))) }
-        Some(Array(values))
+        Some(ArrayValue(Array::from(values)))
     }
 }
 
@@ -683,11 +684,12 @@ impl Add for TypedValue {
 
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (Array(a), Array(b)) => {
-                let mut c = a.clone();
-                c.extend(b);
-                Array(c)
-            }
+            (ArrayValue(a), b) => ArrayValue(Array::from(a.values().iter()
+                .map(|i| i.clone() + b.clone())
+                .collect::<Vec<_>>())),
+            (b, ArrayValue(a)) => ArrayValue(Array::from(a.values().iter()
+                .map(|i| i.clone() + b.clone())
+                .collect::<Vec<_>>())),
             (Boolean(..), Outcome(Outcomes::Ack)) => Boolean(true),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
             (ErrorValue(Various(mut errors0)), ErrorValue(Various(errors1))) => {
@@ -724,7 +726,7 @@ impl Add for TypedValue {
                     Ok(mrc) => TableValue(Model(mrc)),
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 },
-            (a, b) => ErrorValue(TypeMismatch(a.unwrap_value(), b.unwrap_value()))
+            (a, b) => ErrorValue(TypeMismatch(a.get_type(), b.get_type()))
         }
     }
 }
@@ -785,7 +787,7 @@ impl Index<usize> for TypedValue {
 
     fn index(&self, index: usize) -> &Self::Output {
         match self {
-            Array(items) =>
+            ArrayValue(items) =>
                 if index < items.len() { &items[index] } else { &Undefined },
             Null => &Null,
             TableValue(rcv) => {
@@ -816,15 +818,19 @@ impl Mul for TypedValue {
 
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (Array(a), Number(n)) => {
-                let mut b = a.clone();
-                for _ in 1..n.to_usize() {
-                    b.extend(a.clone());
-                }
-                Array(b)
-            }
+            // multiply each element of the array by the other value
+            (ArrayValue(a), b) => ArrayValue(Array::from(a.values().iter()
+                .map(|i| i.clone() * b.clone())
+                .collect::<Vec<_>>())),
+            (b, ArrayValue(a)) => ArrayValue(Array::from(a.values().iter()
+                .map(|i| i.clone() * b.clone())
+                .collect::<Vec<_>>())),
+            // multiply two numbers
             (Number(a), Number(b)) => Number(a * b),
-            _ => Undefined
+            // repeat a string `n` times
+            (StringValue(a), Number(n)) => StringValue(a.repeat(n.to_usize())),
+            // fallback for unsupported types
+            _ => Undefined,
         }
     }
 }
@@ -835,31 +841,18 @@ impl Neg for TypedValue {
     fn neg(self) -> Self::Output {
         let error: fn(String) -> TypedValue = |s| ErrorValue(Exact(format!("{} cannot be negated", s)));
         match self {
-            Array(v) => Array(v.iter().map(|tv| tv.to_owned().neg()).collect::<Vec<_>>()),
-            PlatformOp(..) => error("PlatformFunction".into()),
-            ByteArray(..) => error("ByteArray".into()),
+            ArrayValue(v) => ArrayValue(v.map(|tv| tv.to_owned().neg())),
+            Binary(..) => error("Binary".into()),
+            BLOB(tv) => BLOB(Box::from(tv.neg())),
             Boolean(n) => Boolean(!n),
             DateValue(v) => Number(I64Value(-v)),
             ErrorValue(msg) => ErrorValue(msg),
             Function { .. } => error("Function".into()),
-            NamespaceValue(a, b, c) => error(format!("ns({}, {}, {})", a, b, c)),
+            NamespaceValue(ns) => error(format!("ns({})", ns.get_full_name())),
             Null => Null,
-            Number(nv) => Number(match nv {
-                F32Value(n) => F32Value(-n),
-                F64Value(n) => F64Value(-n),
-                I8Value(n) => I8Value(-n),
-                I16Value(n) => I16Value(-n),
-                I32Value(n) => I32Value(-n),
-                I64Value(n) => I64Value(-n),
-                I128Value(n) => I128Value(-n),
-                NaNValue => NaNValue,
-                U8Value(n) => I16Value(-(n as i16)),
-                U16Value(n) => I32Value(-(n as i32)),
-                U32Value(n) => I64Value(-(n as i64)),
-                U64Value(n) => I128Value(-(n as i128)),
-                U128Value(z) => I128Value(-(z as i128)),
-            }),
+            Number(nv) => Number(nv.neg()),
             Outcome(oc) => Number(I64Value(-oc.to_i64())),
+            PlatformOp(..) => error("PlatformFunction".into()),
             StringValue(..) => error("String".into()),
             StructureHard(..) => error("Structure".into()),
             StructureSoft(..) => error("Structure".into()),
@@ -874,6 +867,7 @@ impl Not for TypedValue {
 
     fn not(self) -> Self::Output {
         match self {
+            ArrayValue(a) => ArrayValue(a.map(|i| i.to_owned().neg())),
             Boolean(v) => Boolean(!v),
             Number(a) => Number(-a),
             _ => Undefined
@@ -905,8 +899,8 @@ impl Rem for TypedValue {
 impl PartialOrd for TypedValue {
     fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
         match (&self, &rhs) {
-            (Array(a), Array(b)) => a.partial_cmp(b),
-            (ByteArray(a), ByteArray(b)) => a.partial_cmp(b),
+            (ArrayValue(a), ArrayValue(b)) => a.partial_cmp(b),
+            (Binary(a), Binary(b)) => a.partial_cmp(b),
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
             (DateValue(a), DateValue(b)) => a.partial_cmp(b),
             (Number(a), Number(b)) => a.partial_cmp(b),
@@ -1013,12 +1007,12 @@ mod tests {
 
     #[test]
     fn test_array_contains() {
-        let array = Array(vec![
+        let array = ArrayValue(Array::from(vec![
             StringValue("ABC".into()),
             StringValue("R2X2".into()),
             StringValue("123".into()),
             StringValue("Hello".into()),
-        ]);
+        ]));
         assert_eq!(array.contains(&StringValue("123".into())), Boolean(true))
     }
 
@@ -1142,7 +1136,11 @@ mod tests {
     #[test]
     fn test_gt() {
         use Numbers::*;
-        assert!(Array(vec![Number(U8Value(0xCE)), Number(U8Value(0xCE))]) > Array(vec![Number(U8Value(0x23)), Number(U8Value(0xBE))]));
+        assert!({
+            let a = ArrayValue(Array::from(vec![Number(U8Value(0xCE)), Number(U8Value(0xCE))]));
+            let b = ArrayValue(Array::from(vec![Number(U8Value(0x23)), Number(U8Value(0xBE))]));
+            a > b
+        });
         assert!(U8Value(0xCE) > U8Value(0xAA));
         assert!(I16Value(0x7ACE) > I16Value(0x1111));
         assert!(I32Value(0x1111_BEEF) > I32Value(0x0ABC_BEEF));

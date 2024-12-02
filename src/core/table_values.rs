@@ -2,7 +2,6 @@
 // RowCollectionValue module
 ////////////////////////////////////////////////////////////////////
 
-use serde::{Deserialize, Serialize};
 use crate::byte_row_collection::ByteRowCollection;
 use crate::field_metadata::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
@@ -12,6 +11,7 @@ use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
+use serde::{Deserialize, Serialize};
 
 /// Table Value Types
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

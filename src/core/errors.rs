@@ -6,6 +6,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
+use crate::data_types::DataType;
 
 /// Represents an Error Message
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -35,7 +36,7 @@ pub enum Errors {
     StructExpected(String, String),
     Syntax(String),
     TableExpected(String, String),
-    TypeMismatch(String, String),
+    TypeMismatch(DataType, DataType),
     Various(Vec<Errors>),
     ViewsCannotBeResized,
     WriteProtected,
@@ -115,6 +116,8 @@ impl Display for Errors {
 mod tests {
     use super::*;
     use Errors::*;
+    use crate::data_types::DataType::{NumberType, StructureType};
+    use crate::number_kind::NumberKind::I128Kind;
 
     #[test]
     fn test_errors() {
@@ -149,7 +152,7 @@ mod tests {
         verify(StructExpected("count".into(), "i64".into()), "count is not a structure (i64)");
         verify(Syntax("cannot do it".into()), "Syntax error: cannot do it");
         verify(TableExpected("stocks".into(), "Date".into()), "stocks is not a table (Date)");
-        verify(TypeMismatch("item".into(), "i128".into()), "TypeMismatch: item is not convertible to i128");
+        verify(TypeMismatch(StructureType(vec![]), NumberType(I128Kind)), "TypeMismatch: struct() is not convertible to i128");
         verify(
             Various(vec![ViewsCannotBeResized, WriteProtected]),
             "Multiple errors detected:\nViews cannot be resized\nWrite operations are not allowed");

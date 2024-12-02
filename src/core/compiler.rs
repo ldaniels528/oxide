@@ -3,7 +3,6 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
-use std::convert::From;
 
 use crate::errors::Errors;
 use crate::expression::Conditions::*;
@@ -447,45 +446,49 @@ impl Compiler {
     ///     }
     fn parse_keyword_http(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(Atom { text: method, .. }), ts) = ts.next() {
-            // get the URL
+            // get the HTTP URL
             let (url, ts) = self.compile_next(ts)?;
+
             // is there a "FROM" clause?
             // ex: PUT "http://localhost:9000/quotes" FROM stocks
-            let (body, ts) = match ts.next() {
-                (Some(Atom { text: s, .. }), ts) if s == "FROM" => {
-                    let (expr, ts) = self.compile_next(ts)?;
-                    (Some(Box::new(expr)), ts)
-                }
-                _ => (None, ts)
-            };
+            let (body, ts) =
+                self.parse_keyword_http_clause("FROM", ts)?;
+
             // is there a "HEADERS" clause?
             // ex: POST "http://localhost:9000/quotes" HEADERS {
             //         `Content-Type`: "application/json"
             //     }
-            let (headers, ts) = match ts.next() {
-                (Some(Atom { text: s, .. }), ts) if s == "HEADERS" => {
-                    let (expr, ts) = self.compile_next(ts)?;
-                    (Some(Box::new(expr)), ts)
-                }
-                _ => (None, ts)
-            };
+            let (headers, ts) =
+                self.parse_keyword_http_clause("HEADERS", ts)?;
+
             // is there a "MULTIPART" clause?
             // ex: POST "http://localhost:9000/quotes" MULTIPART {
             //         file: "./stocks.csv"
             //     }
-            let (multipart, ts) = match ts.next() {
-                (Some(Atom { text: s, .. }), ts) if s == "MULTIPART" => {
-                    let (expr, ts) = self.compile_next(ts)?;
-                    (Some(Box::new(expr)), ts)
-                }
-                _ => (None, ts)
-            };
+            let (multipart, ts) =
+                self.parse_keyword_http_clause("MULTIPART", ts)?;
+
             // return the HTTP expression
             let method = Box::new(Literal(StringValue(method.to_ascii_uppercase())));
             let url = Box::new(url);
             Ok((HTTP { method, url, body, headers, multipart }, ts))
         } else {
             fail_near("HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT", &ts)
+        }
+    }
+
+    /// Parses an optional HTTP clause
+    fn parse_keyword_http_clause(
+        &mut self,
+        keyword: &str,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Option<Box<Expression>>, TokenSlice)> {
+        match ts.next() {
+            (Some(Atom { text: s, .. }), ts) if s == keyword => {
+                let (expr, ts) = self.compile_next(ts)?;
+                Ok((Some(Box::new(expr)), ts))
+            }
+            _ => Ok((None, ts))
         }
     }
 
@@ -776,6 +779,7 @@ impl Compiler {
                         "!=" => self.parse_conditional_2a(ts, op0, NotEqual),
                         "||" => self.parse_conditional_2a(ts, op0, Or),
                         "+" => self.parse_expression_2a(ts, op0, Plus),
+                        "++" => self.parse_expression_2a(ts, op0, PlusPlus),
                         "**" => self.parse_expression_2a(ts, op0, Pow),
                         ".." => self.parse_expression_2a(ts, op0, Range),
                         ":=" => self.parse_expression_2nv(ts, op0, SetVariable),
@@ -922,13 +926,22 @@ impl Compiler {
         // extract the function parameters
         if let (Parameters(params), ts) = self.expect_parameters(ts.to_owned())? {
             // extract the function body
-            let ts = ts.expect("=>")?;
-            let (body, ts) = self.compile_next(ts)?;
-            // build the model
-            let func = Literal(Function { params, code: Box::new(body) });
-            match name {
-                Some(name) => Ok((SetVariable(name, Box::new(func)), ts)),
-                None => Ok((func, ts))
+            match ts.next() {
+                (Some(Operator { text: symbol , .. }), ts) if symbol == "=>" => {
+                    let (body, ts) = self.compile_next(ts)?;
+                    // build the model
+                    let func = Literal(Function { params, code: Box::new(body) });
+                    match name {
+                        Some(name) => Ok((SetVariable(name, Box::new(func)), ts)),
+                        None => Ok((func, ts))
+                    }
+                }
+                // if there's not a body, must be an anonymous function head
+                // ex: fn(symbol: String(8), exchange: String(8), last_sale: f64)
+                _ => match name {
+                    Some(..) => fail_near("Symbol expected '=>'", &ts),
+                    None => Ok((Literal(Function { params, code: Box::new(UNDEFINED) }), ts))
+                }
             }
         } else {
             fail_near("Function parameters expected", &ts)
@@ -1108,796 +1121,754 @@ pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io:
     fail(format!("{} near {}", message.into(), value.unwrap_value()))
 }
 
-// Unit tests
+/// Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::expression::CreationEntity::TableEntity;
-    use crate::parameter::Parameter;
+    /// Core tests
+    #[cfg(test)]
+    mod core_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Conditions::True;
+        use crate::expression::Expression::{Condition, Feature, FunctionCall, Literal, Scenario, Variable};
+        use crate::numbers::Numbers::{F64Value, I64Value};
+        use crate::token_slice::TokenSlice;
+        use crate::typed_values::TypedValue::{Number, StringValue};
 
-    use super::*;
-
-    #[test]
-    fn test_alias() {
-        assert_eq!(
-            Compiler::build(r#"symbol: "ABC""#).unwrap(),
-            AsValue("symbol".into(), Box::new(Literal(StringValue("ABC".into())))));
-    }
-
-    #[test]
-    fn test_array_declaration() {
-        assert_eq!(
-            Compiler::build("[7, 5, 8, 2, 4, 1]").unwrap(),
-            ArrayExpression(vec![
-                Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
-                Literal(Number(I64Value(2))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
-            ]))
-    }
-
-    #[test]
-    fn test_array_indexing() {
-        assert_eq!(
-            Compiler::build("[7, 5, 8, 2, 4, 1][3]").unwrap(),
-            ElementAt(
-                Box::new(ArrayExpression(vec![
-                    Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
-                    Literal(Number(I64Value(2))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
-                ])),
-                Box::new(Literal(Number(I64Value(3))))));
-    }
-
-    #[test]
-    fn test_between() {
-        assert_eq!(
-            Compiler::build("20 between 1 and 20").unwrap(),
-            Condition(Between(
-                Box::new(Literal(Number(I64Value(20)))),
-                Box::new(Literal(Number(I64Value(1)))),
-                Box::new(Literal(Number(I64Value(20)))),
-            )));
-    }
-
-    #[test]
-    fn test_betwixt() {
-        assert_eq!(
-            Compiler::build("20 betwixt 1 and 21").unwrap(),
-            Condition(Betwixt(
-                Box::new(Literal(Number(I64Value(20)))),
-                Box::new(Literal(Number(I64Value(1)))),
-                Box::new(Literal(Number(I64Value(21)))),
-            )));
-    }
-
-    #[test]
-    fn test_bitwise_and() {
-        assert_eq!(
-            Compiler::build("20 & 3").unwrap(),
-            BitwiseOp(BitwiseOps::And(
-                Box::new(Literal(Number(I64Value(20)))),
-                Box::new(Literal(Number(I64Value(3)))),
-            )));
-    }
-
-    #[test]
-    fn test_bitwise_or() {
-        assert_eq!(
-            Compiler::build("20 | 3").unwrap(),
-            BitwiseOp(BitwiseOps::Or(
-                Box::new(Literal(Number(I64Value(20)))),
-                Box::new(Literal(Number(I64Value(3)))),
-            )));
-    }
-
-    #[test]
-    fn test_bitwise_shl() {
-        assert_eq!(
-            Compiler::build("20 << 3").unwrap(),
-            BitwiseOp(BitwiseOps::ShiftLeft(
-                Box::new(Literal(Number(I64Value(20)))),
-                Box::new(Literal(Number(I64Value(3)))),
-            )));
-    }
-
-    #[test]
-    fn test_bitwise_shr() {
-        assert_eq!(
-            Compiler::build("20 >> 3").unwrap(),
-            BitwiseOp(BitwiseOps::ShiftRight(
-                Box::new(Literal(Number(I64Value(20)))),
-                Box::new(Literal(Number(I64Value(3)))),
-            )));
-    }
-
-    #[test]
-    fn test_define_named_function() {
-        // examples:
-        // fn add(a: u64, b: u64) => a + b
-        // fn add(a: u64, b: u64) : u64 => a + b
-        let code = Compiler::build(r#"
-            fn add(a, b) => a + b
-        "#).unwrap();
-        assert_eq!(code, SetVariable("add".to_string(), Box::new(
-            Literal(Function {
-                params: vec![
-                    Parameter::new("a", None, None),
-                    Parameter::new("b", None, None),
-                ],
-                code: Box::new(Plus(Box::new(
-                    Variable("a".into())
-                ), Box::new(
-                    Variable("b".into())
-                ))),
-            })
-        ))
-        )
-    }
-
-    #[test]
-    fn test_define_anonymous_function() {
-        // examples:
-        // fn (a: u64, b: u64) : u64 => a + b
-        // fn (a, b) => a + b
-        let code = Compiler::build(r#"
-            fn (a, b) => a * b
-        "#).unwrap();
-        assert_eq!(code, Literal(Function {
-            params: vec![
-                Parameter::new("a", None, None),
-                Parameter::new("b", None, None),
-            ],
-            code: Box::new(Multiply(Box::new(
-                Variable("a".into())
-            ), Box::new(
-                Variable("b".into())
-            ))),
-        })
-        )
-    }
-
-    #[test]
-    fn test_function_call() {
-        let code = Compiler::build(r#"
-            f(2, 3)
-        "#).unwrap();
-        assert_eq!(code, FunctionCall {
-            fx: Box::new(Variable("f".into())),
-            args: vec![
-                Literal(Number(I64Value(2))),
-                Literal(Number(I64Value(3))),
-            ],
-        })
-    }
-
-    #[test]
-    fn test_create_index_in_namespace() {
-        let code = Compiler::build(r#"
-            create index ns("compiler.create.stocks") on [symbol, exchange]
-        "#).unwrap();
-        assert_eq!(code, Quarry(Excavation::Construct(Infrastructure::Create {
-            path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
-            entity: IndexEntity {
-                columns: vec![
-                    Variable("symbol".into()),
-                    Variable("exchange".into()),
-                ],
-            },
-        })));
-    }
-
-    #[test]
-    fn test_create_table_in_namespace() {
-        let ns_path = "compiler.create.stocks";
-        let code = Compiler::build(r#"
-            create table ns("compiler.create.stocks") (
-                symbol: String(8) = "ABC",
-                exchange: String(8) = "NYSE",
-                last_sale: f64 = 23.54)
-            "#).unwrap();
-        assert_eq!(code, Quarry(Excavation::Construct(Infrastructure::Create {
-            path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
-            entity: TableEntity {
-                columns: vec![
-                    Parameter::new("symbol", Some("String(8)".into()), Some("ABC".into())),
-                    Parameter::new("exchange", Some("String(8)".into()), Some("NYSE".into())),
-                    Parameter::new("last_sale", Some("f64".into()), Some("23.54".into())),
-                ],
-                from: None,
-            },
-        })));
-    }
-
-    #[test]
-    fn test_declare_table() {
-        let model = Compiler::build(r#"
-            table(
-                symbol: String(8),
-                exchange: String(8),
-                last_sale: f64
-            )"#).unwrap();
-        assert_eq!(model, Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
-            columns: vec![
-                Parameter::new("symbol", Some("String(8)".into()), None),
-                Parameter::new("exchange", Some("String(8)".into()), None),
-                Parameter::new("last_sale", Some("f64".into()), None),
-            ],
-            from: None,
-        }))));
-    }
-
-    #[test]
-    fn test_drop_table() {
-        let code = Compiler::build(r#"
-            drop table ns('finance.securities.stocks')
-        "#).unwrap();
-        assert_eq!(code,
-                   Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget {
-                       path: Box::new(Ns(Box::new(Literal(StringValue("finance.securities.stocks".into()))))),
-                   })))
-        );
-    }
-
-    #[test]
-    fn test_extraction() {
-        let code = Compiler::build(r#"
-            oxide::tools::compact
-        "#).unwrap();
-        assert_eq!(code,
-            Extraction(Box::from(Variable("oxide".to_string())),
-                       Box::from(Extraction(Box::from(Variable("tools".to_string())),
-                                            Box::from(Variable("compact".to_string()))))))
-    }
-
-    #[test]
-    fn test_feature_with_a_scenario() {
-        let code = Compiler::build(r#"
+        #[test]
+        fn test_feature_with_a_scenario() {
+            let code = Compiler::build(r#"
             feature "Karate translator" {
                 scenario "Translate Karate Scenario to Oxide Scenario" {
                     assert(true)
                 }
             } "#).unwrap();
-        assert_eq!(code, Feature {
-            title: Box::new(Literal(StringValue("Karate translator".to_string()))),
-            scenarios: vec![
-                Scenario {
-                    title: Box::new(Literal(StringValue("Translate Karate Scenario to Oxide Scenario".to_string()))),
-                    verifications: vec![
-                        FunctionCall {
-                            fx: Box::new(Variable("assert".to_string())),
-                            args: vec![Condition(True)],
-                        }
+            assert_eq!(code, Feature {
+                title: Box::new(Literal(StringValue("Karate translator".to_string()))),
+                scenarios: vec![
+                    Scenario {
+                        title: Box::new(Literal(StringValue("Translate Karate Scenario to Oxide Scenario".to_string()))),
+                        verifications: vec![
+                            FunctionCall {
+                                fx: Box::new(Variable("assert".to_string())),
+                                args: vec![Condition(True)],
+                            }
+                        ],
+                        inherits: None,
+                    }
+                ],
+            })
+        }
+
+        #[test]
+        fn test_next_argument_list() {
+            let mut compiler = Compiler::new();
+            let ts = TokenSlice::from_string("(abc, 123, 'Hello')");
+            let (items, _) = compiler.expect_arguments(ts).unwrap();
+            assert_eq!(items, vec![
+                Variable("abc".into()),
+                Literal(Number(I64Value(123))),
+                Literal(StringValue("Hello".into())),
+            ])
+        }
+
+        #[test]
+        fn test_next_expression() {
+            let mut compiler = Compiler::new();
+            let ts = TokenSlice::from_string("abc");
+            let (expr, _) = compiler.compile_next(ts).unwrap();
+            assert_eq!(expr, Variable("abc".into()))
+        }
+
+        #[test]
+        fn test_next_expression_list() {
+            let mut compiler = Compiler::new();
+            let ts = TokenSlice::from_string("abc, 123.0, 'Hello'");
+            let (items, _) = compiler.next_expression_list(ts).unwrap();
+            assert_eq!(items, Some(vec![
+                Variable("abc".into()),
+                Literal(Number(F64Value(123.))),
+                Literal(StringValue("Hello".into())),
+            ]))
+        }
+
+        #[test]
+        fn test_system_call() {
+            let model = Compiler::build(r#"
+                syscall("cat", "LICENSE")
+            "#).unwrap();
+            assert_eq!(
+                model,
+                FunctionCall {
+                    fx: Box::new(Variable("syscall".into())),
+                    args: vec![
+                        Literal(StringValue("cat".into())),
+                        Literal(StringValue("LICENSE".into())),
                     ],
-                    inherits: None,
-                }
-            ],
-        })
-    }
+                });
+        }
 
-    #[test]
-    fn test_if() {
-        let code = Compiler::build(r#"
-            if(n > 100) "Yes"
-        "#).unwrap();
-        assert_eq!(code, If {
-            condition: Box::new(Condition(GreaterThan(
-                Box::new(Variable("n".to_string())),
-                Box::new(Literal(Number(I64Value(100)))),
-            ))),
-            a: Box::new(Literal(StringValue("Yes".to_string()))),
-            b: None,
-        });
-    }
-
-    #[test]
-    fn test_if_else() {
-        let code = Compiler::build(r#"
-            if(n > 100) n else m
-        "#).unwrap();
-        assert_eq!(code, If {
-            condition: Box::new(Condition(GreaterThan(
-                Box::new(Variable("n".to_string())),
-                Box::new(Literal(Number(I64Value(100)))),
-            ))),
-            a: Box::new(Variable("n".to_string())),
-            b: Some(Box::new(Variable("m".to_string()))),
-        });
-    }
-
-    #[test]
-    fn test_iff() {
-        let code = Compiler::build(r#"
-            iff(n > 5, a, b)
-        "#).unwrap();
-        assert_eq!(code, If {
-            condition: Box::new(Condition(GreaterThan(
-                Box::new(Variable("n".to_string())),
-                Box::new(Literal(Number(I64Value(5)))),
-            ))),
-            a: Box::new(Variable("a".to_string())),
-            b: Some(Box::new(Variable("b".to_string()))),
-        });
-    }
-
-    #[test]
-    fn test_imports() {
-        // single import
-        let code = Compiler::build(r#"
-            import "os"
-        "#).unwrap();
-        assert_eq!(code, Import(vec![
-            ImportOps::Everything("os".into())
-        ]));
-
-        // multiple imports
-        let code = Compiler::build(r#"
-            import os, util
-        "#).unwrap();
-        assert_eq!(code, Import(vec![
-            ImportOps::Everything("os".into()),
-            ImportOps::Everything("util".into()),
-        ]));
-    }
-
-    #[test]
-    fn test_json_literal_value() {
-        let code = Compiler::build(r#"
-            {symbol: "ABC", exchange: "NYSE", last_sale: 16.79}
-        "#).unwrap();
-        assert_eq!(code,
-                   JSONExpression(vec![
-                       ("symbol".to_string(), Literal(StringValue("ABC".into()))),
-                       ("exchange".to_string(), Literal(StringValue("NYSE".into()))),
-                       ("last_sale".to_string(), Literal(Number(F64Value(16.79)))),
-                   ])
-        );
-    }
-
-    #[test]
-    fn test_like() {
-        assert_eq!(
-            Compiler::build("'Hello' like 'H.ll.'").unwrap(),
-            Condition(Like(
-                Box::new(Literal(StringValue("Hello".into()))),
-                Box::new(Literal(StringValue("H.ll.".into()))),
-            )));
-    }
-
-    #[test]
-    fn test_numeric_literal_value() {
-        assert_eq!(Compiler::build("1_234_567_890").unwrap(),
-                   Literal(Number(I64Value(1_234_567_890))));
-
-        assert_eq!(Compiler::build("1_234_567.890").unwrap(),
-                   Literal(Number(F64Value(1_234_567.890))));
-    }
-
-    #[test]
-    fn test_not_expression() {
-        assert_eq!(Compiler::build("!false").unwrap(), Condition(Not(Box::new(FALSE))));
-        assert_eq!(Compiler::build("!true").unwrap(), Condition(Not(Box::new(TRUE))));
-    }
-
-    #[test]
-    fn test_mathematical_addition() {
-        let opcodes = Compiler::build("n + 3").unwrap();
-        assert_eq!(opcodes, Plus(
-            Box::new(Variable("n".into())),
-            Box::new(Literal(Number(I64Value(3)))),
-        ));
-    }
-
-    #[test]
-    fn test_mathematical_division() {
-        let opcodes = Compiler::build("n / 3").unwrap();
-        assert_eq!(opcodes, Divide(
-            Box::new(Variable("n".into())),
-            Box::new(Literal(Number(I64Value(3)))),
-        ));
-    }
-
-    #[test]
-    fn test_mathematical_exponent() {
-        let opcodes = Compiler::build("5 ** 2").unwrap();
-        assert_eq!(opcodes, Pow(
-            Box::new(Literal(Number(I64Value(5)))),
-            Box::new(Literal(Number(I64Value(2)))),
-        ));
-    }
-
-    #[test]
-    fn test_mathematical_exponent_via_symbol() {
-        let symbols = vec!["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
-        let mut num = 0;
-        for symbol in symbols {
-            let opcodes = Compiler::build(format!("5{}", symbol).as_str()).unwrap();
-            assert_eq!(opcodes, Pow(
-                Box::new(Literal(Number(I64Value(5)))),
-                Box::new(Literal(Number(I64Value(num)))),
-            ));
-            num += 1
+        #[test]
+        fn test_type_of() {
+            let model = Compiler::build(r#"
+                type_of("cat")
+            "#).unwrap();
+            assert_eq!(
+                model,
+                FunctionCall {
+                    fx: Box::new(Variable("type_of".to_string())),
+                    args: vec![
+                        Literal(StringValue("cat".to_string()))
+                    ],
+                });
         }
     }
 
-    #[test]
-    fn test_mathematical_factorial() {
-        let opcodes = Compiler::build("5¡").unwrap();
-        assert_eq!(opcodes, Factorial(Box::new(Literal(Number(I64Value(5))))));
+    /// Bitwise tests
+    #[cfg(test)]
+    mod bitwise_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::BitwiseOps;
+        use crate::expression::Expression::{BitwiseOp, Literal};
+        use crate::numbers::Numbers::I64Value;
+        use crate::typed_values::TypedValue::Number;
+
+        #[test]
+        fn test_bitwise_and() {
+            assert_eq!(
+                Compiler::build("20 & 3").unwrap(),
+                BitwiseOp(BitwiseOps::And(
+                    Box::new(Literal(Number(I64Value(20)))),
+                    Box::new(Literal(Number(I64Value(3)))),
+                )));
+        }
+
+        #[test]
+        fn test_bitwise_or() {
+            assert_eq!(
+                Compiler::build("20 | 3").unwrap(),
+                BitwiseOp(BitwiseOps::Or(
+                    Box::new(Literal(Number(I64Value(20)))),
+                    Box::new(Literal(Number(I64Value(3)))),
+                )));
+        }
+
+        #[test]
+        fn test_bitwise_shl() {
+            assert_eq!(
+                Compiler::build("20 << 3").unwrap(),
+                BitwiseOp(BitwiseOps::ShiftLeft(
+                    Box::new(Literal(Number(I64Value(20)))),
+                    Box::new(Literal(Number(I64Value(3)))),
+                )));
+        }
+
+        #[test]
+        fn test_bitwise_shr() {
+            assert_eq!(
+                Compiler::build("20 >> 3").unwrap(),
+                BitwiseOp(BitwiseOps::ShiftRight(
+                    Box::new(Literal(Number(I64Value(20)))),
+                    Box::new(Literal(Number(I64Value(3)))),
+                )));
+        }
+
+        #[test]
+        fn test_bitwise_xor() {
+            assert_eq!(
+                Compiler::build("19 ^ 13").unwrap(),
+                BitwiseOp(BitwiseOps::Xor(
+                    Box::new(Literal(Number(I64Value(19)))),
+                    Box::new(Literal(Number(I64Value(13)))),
+                )));
+        }
     }
 
-    #[test]
-    fn test_mathematical_modulus() {
-        let opcodes = Compiler::build("n % 4").unwrap();
-        assert_eq!(opcodes,
-                   Modulo(Box::new(Variable("n".into())), Box::new(Literal(Number(I64Value(4))))));
-    }
+    /// Function tests
+    #[cfg(test)]
+    mod function_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Expression::{FunctionCall, Literal, Multiply, Plus, SetVariable, Variable};
+        use crate::numbers::Numbers::I64Value;
+        use crate::parameter::Parameter;
+        use crate::typed_values::TypedValue::{Function, Number};
 
-    #[test]
-    fn test_mathematical_multiplication() {
-        let opcodes = Compiler::build("n * 10").unwrap();
-        assert_eq!(opcodes, Multiply(
-            Box::new(Variable("n".into())),
-            Box::new(Literal(Number(I64Value(10)))),
-        ));
-    }
-
-    #[test]
-    fn test_mathematical_subtraction() {
-        let opcodes = Compiler::build("_ - 7").unwrap();
-        assert_eq!(opcodes,
-                   Minus(Box::new(Variable("_".into())), Box::new(Literal(Number(I64Value(7))))));
-    }
-
-    #[test]
-    fn test_maybe_curly_brackets() {
-        let ts = TokenSlice::from_string(r#"{w:'abc', x:1.0, y:2, z:[1, 2, 3]}"#);
-        let mut compiler = Compiler::new();
-        let (result, _) = compiler.maybe_curly_brackets(ts).unwrap();
-        let result = result.unwrap();
-        assert_eq!(result, JSONExpression(vec![
-            ("w".to_string(), Literal(StringValue("abc".into()))),
-            ("x".to_string(), Literal(Number(F64Value(1.)))),
-            ("y".to_string(), Literal(Number(I64Value(2)))),
-            ("z".to_string(), ArrayExpression(vec![
-                Literal(Number(I64Value(1))),
-                Literal(Number(I64Value(2))),
-                Literal(Number(I64Value(3))),
-            ])),
-        ]));
-    }
-
-    #[test]
-    fn test_next_argument_list() {
-        let mut compiler = Compiler::new();
-        let ts = TokenSlice::from_string("(abc, 123, 'Hello')");
-        let (items, _) = compiler.expect_arguments(ts).unwrap();
-        assert_eq!(items, vec![
-            Variable("abc".into()),
-            Literal(Number(I64Value(123))),
-            Literal(StringValue("Hello".into())),
-        ])
-    }
-
-    #[test]
-    fn test_next_expression() {
-        let mut compiler = Compiler::new();
-        let ts = TokenSlice::from_string("abc");
-        let (expr, _) = compiler.compile_next(ts).unwrap();
-        assert_eq!(expr, Variable("abc".into()))
-    }
-
-    #[test]
-    fn test_next_expression_list() {
-        let mut compiler = Compiler::new();
-        let ts = TokenSlice::from_string("abc, 123.0, 'Hello'");
-        let (items, _) = compiler.next_expression_list(ts).unwrap();
-        assert_eq!(items, Some(vec![
-            Variable("abc".into()),
-            Literal(Number(F64Value(123.))),
-            Literal(StringValue("Hello".into())),
-        ]))
-    }
-
-    #[test]
-    fn test_order_of_operations_1() {
-        let opcodes = Compiler::build("2 + (4 * 3)").unwrap();
-        assert_eq!(opcodes, Plus(
-            Box::new(Literal(Number(I64Value(2)))),
-            Box::new(Multiply(
-                Box::new(Literal(Number(I64Value(4)))),
-                Box::new(Literal(Number(I64Value(3)))),
-            )),
-        ));
-    }
-
-    #[test]
-    fn test_order_of_operations_2() {
-        let opcodes = Compiler::build("(4.0 / 3.0) + (4 * 3)").unwrap();
-        assert_eq!(opcodes, Plus(
-            Box::new(Divide(
-                Box::new(Literal(Number(F64Value(4.0)))),
-                Box::new(Literal(Number(F64Value(3.0)))),
-            )),
-            Box::new(Multiply(
-                Box::new(Literal(Number(I64Value(4)))),
-                Box::new(Literal(Number(I64Value(3)))),
-            )),
-        ));
-    }
-
-    #[ignore]
-    #[test]
-    fn test_order_of_operations_3() {
-        let opcodes = Compiler::build("2 - 4 * 3").unwrap();
-        assert_eq!(opcodes, Minus(
-            Box::new(Literal(Number(F64Value(2.)))),
-            Box::new(Multiply(
-                Box::new(Literal(Number(F64Value(4.)))),
-                Box::new(Literal(Number(F64Value(3.)))),
-            )),
-        ));
-    }
-
-    #[test]
-    fn test_delete() {
-        let opcodes = Compiler::build(r#"
-        delete from stocks
+        #[test]
+        fn test_define_named_function() {
+            // examples:
+            // fn add(a: u64, b: u64) => a + b
+            // fn add(a: u64, b: u64) : u64 => a + b
+            let code = Compiler::build(r#"
+            fn add(a, b) => a + b
         "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(
-            Mutation::Delete {
-                path: Box::new(Variable("stocks".into())),
-                condition: None,
-                limit: None,
-            })))
-    }
+            assert_eq!(code, SetVariable("add".to_string(), Box::new(
+                Literal(Function {
+                    params: vec![
+                        Parameter::new("a", None, None),
+                        Parameter::new("b", None, None),
+                    ],
+                    code: Box::new(Plus(Box::new(
+                        Variable("a".into())
+                    ), Box::new(
+                        Variable("b".into())
+                    ))),
+                })
+            ))
+            )
+        }
 
-    #[test]
-    fn test_delete_where_limit() {
-        let opcodes = Compiler::build(r#"
-        delete from stocks
-        where last_sale >= 1.0
-        limit 100
+        #[test]
+        fn test_define_anonymous_function() {
+            // examples:
+            // fn (a: u64, b: u64) : u64 => a + b
+            // fn (a, b) => a + b
+            let code = Compiler::build(r#"
+            fn (a, b) => a * b
         "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Delete {
-            path: Box::new(Variable("stocks".into())),
-            condition: Some(GreaterOrEqual(
-                Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Number(F64Value(1.0)))),
-            )),
-            limit: Some(Box::new(Literal(Number(I64Value(100))))),
-        })))
+            assert_eq!(code, Literal(Function {
+                params: vec![
+                    Parameter::new("a", None, None),
+                    Parameter::new("b", None, None),
+                ],
+                code: Box::new(Multiply(Box::new(
+                    Variable("a".into())
+                ), Box::new(
+                    Variable("b".into())
+                ))),
+            })
+            )
+        }
+
+        #[test]
+        fn test_function_call() {
+            let code = Compiler::build(r#"
+            f(2, 3)
+        "#).unwrap();
+            assert_eq!(code, FunctionCall {
+                fx: Box::new(Variable("f".into())),
+                args: vec![
+                    Literal(Number(I64Value(2))),
+                    Literal(Number(I64Value(3))),
+                ],
+            })
+        }
     }
 
-    #[test]
-    fn test_http_delete() {
-        let model = Compiler::build(r#"
+    /// HTTP tests
+    #[cfg(test)]
+    mod http_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Expression::{JSONExpression, Literal, HTTP};
+        use crate::typed_values::TypedValue::StringValue;
+
+        #[test]
+        fn test_http_delete() {
+            let model = Compiler::build(r#"
             DELETE "http://localhost:9000/comments?id=675af"
         "#).unwrap();
-        assert_eq!(model, HTTP {
-            method: Box::new(Literal(StringValue("DELETE".to_string()))),
-            url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
-            body: None,
-            headers: None,
-            multipart: None,
-        });
-    }
+            assert_eq!(model, HTTP {
+                method: Box::new(Literal(StringValue("DELETE".to_string()))),
+                url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
+                body: None,
+                headers: None,
+                multipart: None,
+            });
+        }
 
-    #[test]
-    fn test_http_get() {
-        let model = Compiler::build(r#"
+        #[test]
+        fn test_http_get() {
+            let model = Compiler::build(r#"
             GET "http://localhost:9000/comments?id=675af"
         "#).unwrap();
-        assert_eq!(model, HTTP {
-            method: Box::new(Literal(StringValue("GET".to_string()))),
-            url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
-            body: None,
-            headers: None,
-            multipart: None,
-        });
-    }
+            assert_eq!(model, HTTP {
+                method: Box::new(Literal(StringValue("GET".to_string()))),
+                url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
+                body: None,
+                headers: None,
+                multipart: None,
+            });
+        }
 
-    #[test]
-    fn test_http_head() {
-        let model = Compiler::build(r#"
+        #[test]
+        fn test_http_head() {
+            let model = Compiler::build(r#"
             HEAD "http://localhost:9000/quotes/AMD/NYSE"
         "#).unwrap();
-        assert_eq!(model, HTTP {
-            method: Box::new(Literal(StringValue("HEAD".to_string()))),
-            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".to_string()))),
-            body: None,
-            headers: None,
-            multipart: None,
-        });
-    }
+            assert_eq!(model, HTTP {
+                method: Box::new(Literal(StringValue("HEAD".to_string()))),
+                url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".to_string()))),
+                body: None,
+                headers: None,
+                multipart: None,
+            });
+        }
 
-    #[test]
-    fn test_http_patch() {
-        let model = Compiler::build(r#"
+        #[test]
+        fn test_http_patch() {
+            let model = Compiler::build(r#"
             PATCH "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE"
         "#).unwrap();
-        assert_eq!(model, HTTP {
-            method: Box::new(Literal(StringValue("PATCH".to_string()))),
-            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".to_string()))),
-            body: None,
-            headers: None,
-            multipart: None,
-        });
-    }
+            assert_eq!(model, HTTP {
+                method: Box::new(Literal(StringValue("PATCH".to_string()))),
+                url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".to_string()))),
+                body: None,
+                headers: None,
+                multipart: None,
+            });
+        }
 
-    #[test]
-    fn test_http_post() {
-        let model = Compiler::build(r#"
+        #[test]
+        fn test_http_post() {
+            let model = Compiler::build(r#"
             POST "http://localhost:9000/quotes/AMD/NASDAQ"
         "#).unwrap();
-        assert_eq!(model, HTTP {
-            method: Box::new(Literal(StringValue("POST".to_string()))),
-            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
-            body: None,
-            headers: None,
-            multipart: None,
-        });
-    }
+            assert_eq!(model, HTTP {
+                method: Box::new(Literal(StringValue("POST".to_string()))),
+                url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
+                body: None,
+                headers: None,
+                multipart: None,
+            });
+        }
 
-    #[test]
-    fn test_http_post_with_body() {
-        let model = Compiler::build(r#"
+        #[test]
+        fn test_http_post_with_body() {
+            let model = Compiler::build(r#"
             POST "http://localhost:8080/machine/www/stocks" FROM (
                 "Hello World"
             )
         "#).unwrap();
-        assert_eq!(model, HTTP {
-            method: Box::new(Literal(StringValue("POST".to_string()))),
-            url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
-            body: Some(Box::new(Literal(StringValue("Hello World".to_string())))),
-            headers: None,
-            multipart: None,
-        });
-    }
+            assert_eq!(model, HTTP {
+                method: Box::new(Literal(StringValue("POST".to_string()))),
+                url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
+                body: Some(Box::new(Literal(StringValue("Hello World".to_string())))),
+                headers: None,
+                multipart: None,
+            });
+        }
 
-    #[test]
-    fn test_http_post_with_multipart() {
-        let model = Compiler::build(r#"
+        #[test]
+        fn test_http_post_with_multipart() {
+            let model = Compiler::build(r#"
             POST "http://localhost:8080/machine/www/stocks" MULTIPART ({
                 file: "./demoes/language/include_file.ox"
             })
         "#).unwrap();
-        assert_eq!(model, HTTP {
-            method: Box::new(Literal(StringValue("POST".to_string()))),
-            url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
-            body: None,
-            headers: None,
-            multipart: Some(Box::new(JSONExpression(vec![
-                ("file".to_string(), Literal(StringValue("./demoes/language/include_file.ox".to_string()))),
-            ]))),
-        });
-    }
+            assert_eq!(model, HTTP {
+                method: Box::new(Literal(StringValue("POST".to_string()))),
+                url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
+                body: None,
+                headers: None,
+                multipart: Some(Box::new(JSONExpression(vec![
+                    ("file".to_string(), Literal(StringValue("./demoes/language/include_file.ox".to_string()))),
+                ]))),
+            });
+        }
 
-    #[test]
-    fn test_http_put() {
-        let model = Compiler::build(r#"
+        #[test]
+        fn test_http_put() {
+            let model = Compiler::build(r#"
             PUT "http://localhost:9000/quotes/AMD/NASDAQ"
         "#).unwrap();
-        assert_eq!(model, HTTP {
-            method: Box::new(Literal(StringValue("PUT".to_string()))),
-            url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
-            body: None,
-            headers: None,
-            multipart: None,
-        });
+            assert_eq!(model, HTTP {
+                method: Box::new(Literal(StringValue("PUT".to_string()))),
+                url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
+                body: None,
+                headers: None,
+                multipart: None,
+            });
+        }
     }
 
-    #[test]
-    fn test_undelete() {
-        let opcodes = Compiler::build(r#"
-        undelete from stocks
-        "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Undelete {
-            path: Box::new(Variable("stocks".into())),
-            condition: None,
-            limit: None,
-        })))
+    /// Import tests
+    #[cfg(test)]
+    mod import_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Expression::{Extraction, Import, Variable};
+        use crate::expression::ImportOps;
+
+        #[test]
+        fn test_extraction() {
+            let code = Compiler::build(r#"
+                oxide::tools::compact
+            "#).unwrap();
+            assert_eq!(
+                code,
+                Extraction(Box::from(Variable("oxide".to_string())),
+                           Box::from(Extraction(Box::from(Variable("tools".to_string())),
+                                                Box::from(Variable("compact".to_string()))
+                           ))
+                ))
+        }
+
+        #[test]
+        fn test_imports() {
+            // single import
+            let code = Compiler::build(r#"
+                import "os"
+            "#).unwrap();
+            assert_eq!(code, Import(vec![
+                ImportOps::Everything("os".into())
+            ]));
+
+            // multiple imports
+            let code = Compiler::build(r#"
+                import os, util
+            "#).unwrap();
+            assert_eq!(code, Import(vec![
+                ImportOps::Everything("os".into()),
+                ImportOps::Everything("util".into()),
+            ]));
+        }
     }
 
-    #[test]
-    fn test_undelete_where_limit() {
-        let opcodes = Compiler::build(r#"
-        undelete from stocks
-        where last_sale >= 1.0
-        limit 100
-        "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Undelete {
-            path: Box::new(Variable("stocks".into())),
-            condition: Some(GreaterOrEqual(
-                Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Number(F64Value(1.0)))),
-            )),
-            limit: Some(Box::new(Literal(Number(I64Value(100))))),
-        })))
-    }
+    /// Array tests
+    #[cfg(test)]
+    mod literal_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Expression::{ArrayExpression, AsValue, ElementAt, JSONExpression, Literal};
+        use crate::numbers::Numbers::{F64Value, I64Value};
+        use crate::token_slice::TokenSlice;
+        use crate::typed_values::TypedValue::{Number, StringValue};
 
-    #[test]
-    fn test_from() {
-        let opcodes = Compiler::build("from stocks").unwrap();
-        assert_eq!(opcodes, From(Box::new(Variable("stocks".into()))));
-    }
+        #[test]
+        fn test_aliasing() {
+            assert_eq!(
+                Compiler::build(r#"symbol: "ABC""#).unwrap(),
+                AsValue("symbol".into(), Box::new(Literal(StringValue("ABC".into())))));
 
-    #[test]
-    fn test_from_where_limit() {
-        let opcodes = Compiler::build(r#"
-        from stocks where last_sale >= 1.0 limit 20
-        "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Limit {
-            from: Box::new(
-                Quarry(Excavation::Query(Queryable::Where {
-                    from: Box::new(From(Box::new(Variable("stocks".into())))),
-                    condition: GreaterOrEqual(
-                        Box::new(Variable("last_sale".into())),
-                        Box::new(Literal(Number(F64Value(1.0)))),
-                    ),
-                }))),
-            limit: Box::new(Literal(Number(I64Value(20)))),
-        })
-        ));
-    }
+            assert_eq!(
+                Compiler::build(r#""name": "Bill Bass""#).unwrap(),
+                AsValue("name".into(), Box::new(Literal(StringValue("Bill Bass".into())))));
+        }
 
-    #[test]
-    fn test_write_json_into_namespace() {
-        let opcodes = Compiler::build(r#"
-        [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-         { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-         { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
-                ~> ns("interpreter.into.stocks")
-        "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(IntoNs(
-            Box::new(ArrayExpression(vec![
+        #[test]
+        fn test_array_declaration() {
+            assert_eq!(
+                Compiler::build("[7, 5, 8, 2, 4, 1]").unwrap(),
+                ArrayExpression(vec![
+                    Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
+                    Literal(Number(I64Value(2))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
+                ]))
+        }
+
+        #[test]
+        fn test_array_indexing() {
+            assert_eq!(
+                Compiler::build("[7, 5, 8, 2, 4, 1][3]").unwrap(),
+                ElementAt(
+                    Box::new(ArrayExpression(vec![
+                        Literal(Number(I64Value(7))), Literal(Number(I64Value(5))), Literal(Number(I64Value(8))),
+                        Literal(Number(I64Value(2))), Literal(Number(I64Value(4))), Literal(Number(I64Value(1))),
+                    ])),
+                    Box::new(Literal(Number(I64Value(3))))));
+        }
+
+        #[test]
+        fn test_json_literal_value() {
+            let code = Compiler::build(r#"
+                {symbol: "ABC", exchange: "NYSE", last_sale: 16.79}
+            "#).unwrap();
+            assert_eq!(
+                code,
                 JSONExpression(vec![
-                    ("symbol".into(), Literal(StringValue("ABC".into()))),
-                    ("exchange".into(), Literal(StringValue("AMEX".into()))),
-                    ("last_sale".into(), Literal(Number(F64Value(12.49)))),
-                ]),
-                JSONExpression(vec![
-                    ("symbol".into(), Literal(StringValue("BOOM".into()))),
-                    ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                    ("last_sale".into(), Literal(Number(F64Value(56.88)))),
-                ]),
-                JSONExpression(vec![
-                    ("symbol".into(), Literal(StringValue("JET".into()))),
-                    ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
-                    ("last_sale".into(), Literal(Number(F64Value(32.12)))),
-                ]),
-            ])),
-            Box::new(Ns(Box::new(Literal(StringValue("interpreter.into.stocks".into()))))),
-        ))
-        ));
+                    ("symbol".to_string(), Literal(StringValue("ABC".into()))),
+                    ("exchange".to_string(), Literal(StringValue("NYSE".into()))),
+                    ("last_sale".to_string(), Literal(Number(F64Value(16.79)))),
+                ])
+            );
+        }
+
+        #[test]
+        fn test_maybe_curly_brackets() {
+            let ts = TokenSlice::from_string(r#"{w:'abc', x:1.0, y:2, z:[1, 2, 3]}"#);
+            let mut compiler = Compiler::new();
+            let (result, _) = compiler.maybe_curly_brackets(ts).unwrap();
+            let result = result.unwrap();
+            assert_eq!(result, JSONExpression(vec![
+                ("w".to_string(), Literal(StringValue("abc".into()))),
+                ("x".to_string(), Literal(Number(F64Value(1.)))),
+                ("y".to_string(), Literal(Number(I64Value(2)))),
+                ("z".to_string(), ArrayExpression(vec![
+                    Literal(Number(I64Value(1))),
+                    Literal(Number(I64Value(2))),
+                    Literal(Number(I64Value(3))),
+                ])),
+            ]));
+        }
+
+        #[test]
+        fn test_numeric_literal_value() {
+            assert_eq!(Compiler::build("1_234_567_890").unwrap(),
+                       Literal(Number(I64Value(1_234_567_890))));
+
+            assert_eq!(Compiler::build("1_234_567.890").unwrap(),
+                       Literal(Number(F64Value(1_234_567.890))));
+        }
     }
 
-    #[test]
-    fn test_append_from_variable() {
-        let opcodes = Compiler::build(r#"
-        append ns("compiler.append.stocks") from stocks
-        "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
-            path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append.stocks".to_string()))))),
-            source: Box::new(From(Box::new(Variable("stocks".into())))),
-        })))
+    /// Logical tests
+    #[cfg(test)]
+    mod logical_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Conditions::{GreaterThan, LessThan, Not};
+        use crate::expression::Expression::{CodeBlock, Condition, If, Literal, Plus, SetVariable, Variable, While};
+        use crate::expression::{FALSE, TRUE};
+        use crate::numbers::Numbers::I64Value;
+        use crate::typed_values::TypedValue::{Number, StringValue};
+
+        #[test]
+        fn test_if() {
+            let code = Compiler::build(r#"
+                if(n > 100) "Yes"
+            "#).unwrap();
+            assert_eq!(code, If {
+                condition: Box::new(Condition(GreaterThan(
+                    Box::new(Variable("n".to_string())),
+                    Box::new(Literal(Number(I64Value(100)))),
+                ))),
+                a: Box::new(Literal(StringValue("Yes".to_string()))),
+                b: None,
+            });
+        }
+
+        #[test]
+        fn test_if_else() {
+            let code = Compiler::build(r#"
+                if(n > 100) n else m
+            "#).unwrap();
+            assert_eq!(code, If {
+                condition: Box::new(Condition(GreaterThan(
+                    Box::new(Variable("n".to_string())),
+                    Box::new(Literal(Number(I64Value(100)))),
+                ))),
+                a: Box::new(Variable("n".to_string())),
+                b: Some(Box::new(Variable("m".to_string()))),
+            });
+        }
+
+        #[test]
+        fn test_iff() {
+            let code = Compiler::build(r#"
+                iff(n > 5, a, b)
+            "#).unwrap();
+            assert_eq!(code, If {
+                condition: Box::new(Condition(GreaterThan(
+                    Box::new(Variable("n".to_string())),
+                    Box::new(Literal(Number(I64Value(5)))),
+                ))),
+                a: Box::new(Variable("a".to_string())),
+                b: Some(Box::new(Variable("b".to_string()))),
+            });
+        }
+
+        #[test]
+        fn test_not_expression() {
+            assert_eq!(Compiler::build("!false").unwrap(), Condition(Not(Box::new(FALSE))));
+            assert_eq!(Compiler::build("!true").unwrap(), Condition(Not(Box::new(TRUE))));
+        }
+
+        #[test]
+        fn test_while_loop() {
+            let opcodes = Compiler::build(r#"
+                while (x < 5) x := x + 1
+            "#).unwrap();
+            assert_eq!(opcodes, While {
+                condition: Box::new(Condition(LessThan(
+                    Box::new(Variable("x".into())),
+                    Box::new(Literal(Number(I64Value(5)))),
+                ))),
+                code: Box::new(SetVariable("x".into(), Box::new(Plus(
+                    Box::new(Variable("x".into())),
+                    Box::new(Literal(Number(I64Value(1))))),
+                ))),
+            });
+        }
+
+        #[test]
+        fn test_while_loop_fix() {
+            let opcodes = Compiler::build(r#"
+                x := 0
+                while x < 7 x := x + 1
+                x
+            "#).unwrap();
+            assert_eq!(opcodes, CodeBlock(vec![
+                SetVariable("x".into(), Box::new(Literal(Number(I64Value(0))))),
+                While {
+                    condition: Box::new(Condition(LessThan(
+                        Box::new(Variable("x".into())),
+                        Box::new(Literal(Number(I64Value(7)))),
+                    ))),
+                    code: Box::new(SetVariable("x".into(), Box::new(Plus(
+                        Box::new(Variable("x".into())),
+                        Box::new(Literal(Number(I64Value(1))))),
+                    ))),
+                },
+                Variable("x".into()),
+            ]));
+        }
     }
 
-    #[test]
-    fn test_append_from_json_literal() {
-        let opcodes = Compiler::build(r#"
+    /// Mathematics tests
+    #[cfg(test)]
+    mod math_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Expression::{Divide, Factorial, Literal, Minus, Modulo, Multiply, Plus, Pow, Variable};
+        use crate::numbers::Numbers::I64Value;
+        use crate::typed_values::TypedValue::Number;
+
+        #[test]
+        fn test_mathematical_addition() {
+            let opcodes = Compiler::build("n + 3").unwrap();
+            assert_eq!(opcodes, Plus(
+                Box::new(Variable("n".into())),
+                Box::new(Literal(Number(I64Value(3)))),
+            ));
+        }
+
+        #[test]
+        fn test_mathematical_division() {
+            let opcodes = Compiler::build("n / 3").unwrap();
+            assert_eq!(opcodes, Divide(
+                Box::new(Variable("n".into())),
+                Box::new(Literal(Number(I64Value(3)))),
+            ));
+        }
+
+        #[test]
+        fn test_mathematical_exponent() {
+            let opcodes = Compiler::build("5 ** 2").unwrap();
+            assert_eq!(opcodes, Pow(
+                Box::new(Literal(Number(I64Value(5)))),
+                Box::new(Literal(Number(I64Value(2)))),
+            ));
+        }
+
+        #[test]
+        fn test_mathematical_exponent_via_symbol() {
+            let symbols = vec!["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
+            let mut num = 0;
+            for symbol in symbols {
+                let opcodes = Compiler::build(format!("5{}", symbol).as_str()).unwrap();
+                assert_eq!(opcodes, Pow(
+                    Box::new(Literal(Number(I64Value(5)))),
+                    Box::new(Literal(Number(I64Value(num)))),
+                ));
+                num += 1
+            }
+        }
+
+        #[test]
+        fn test_mathematical_factorial() {
+            let opcodes = Compiler::build("5¡").unwrap();
+            assert_eq!(opcodes, Factorial(Box::new(Literal(Number(I64Value(5))))));
+        }
+
+        #[test]
+        fn test_mathematical_modulus() {
+            let opcodes = Compiler::build("n % 4").unwrap();
+            assert_eq!(
+                opcodes,
+                Modulo(Box::new(Variable("n".into())), Box::new(Literal(Number(I64Value(4))))));
+        }
+
+        #[test]
+        fn test_mathematical_multiplication() {
+            let opcodes = Compiler::build("n * 10").unwrap();
+            assert_eq!(opcodes, Multiply(
+                Box::new(Variable("n".into())),
+                Box::new(Literal(Number(I64Value(10)))),
+            ));
+        }
+
+        #[test]
+        fn test_mathematical_subtraction() {
+            let opcodes = Compiler::build("_ - 7").unwrap();
+            assert_eq!(opcodes,
+                       Minus(Box::new(Variable("_".into())), Box::new(Literal(Number(I64Value(7))))));
+        }
+    }
+
+    /// SQL tests
+    #[cfg(test)]
+    mod order_of_operations_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Expression::{Divide, Literal, Minus, Multiply, Plus};
+        use crate::numbers::Numbers::{F64Value, I64Value};
+        use crate::typed_values::TypedValue::Number;
+
+        #[test]
+        fn test_order_of_operations_1() {
+            let opcodes = Compiler::build("2 + (4 * 3)").unwrap();
+            assert_eq!(opcodes, Plus(
+                Box::new(Literal(Number(I64Value(2)))),
+                Box::new(Multiply(
+                    Box::new(Literal(Number(I64Value(4)))),
+                    Box::new(Literal(Number(I64Value(3)))),
+                )),
+            ));
+        }
+
+        #[test]
+        fn test_order_of_operations_2() {
+            let opcodes = Compiler::build("(4.0 / 3.0) + (4 * 3)").unwrap();
+            assert_eq!(opcodes, Plus(
+                Box::new(Divide(
+                    Box::new(Literal(Number(F64Value(4.0)))),
+                    Box::new(Literal(Number(F64Value(3.0)))),
+                )),
+                Box::new(Multiply(
+                    Box::new(Literal(Number(I64Value(4)))),
+                    Box::new(Literal(Number(I64Value(3)))),
+                )),
+            ));
+        }
+
+        #[test]
+        fn test_order_of_operations_3() {
+            let opcodes = Compiler::build("2 - 4 * 3").unwrap();
+            assert_eq!(opcodes, Minus(
+                Box::new(Literal(Number(I64Value(2)))),
+                Box::new(Multiply(
+                    Box::new(Literal(Number(I64Value(4)))),
+                    Box::new(Literal(Number(I64Value(3)))),
+                )),
+            ));
+        }
+    }
+
+    /// SQL tests
+    #[cfg(test)]
+    mod sql_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Conditions::{Between, Betwixt, Equal, GreaterOrEqual, LessOrEqual, LessThan, Like};
+        use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+        use crate::expression::Expression::{ArrayExpression, Condition, From, JSONExpression, Literal, Ns, Quarry, Variable, Via};
+        use crate::expression::MutateTarget::TableTarget;
+        use crate::expression::Mutation::IntoNs;
+        use crate::expression::{Excavation, Infrastructure, Mutation, Queryable};
+        use crate::numbers::Numbers::{F64Value, I64Value};
+        use crate::parameter::Parameter;
+        use crate::typed_values::TypedValue::{Number, StringValue};
+
+        #[test]
+        fn test_append_from_json_literal() {
+            let opcodes = Compiler::build(r#"
         append ns("compiler.append2.stocks")
         from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
         "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
-            path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append2.stocks".to_string()))))),
-            source: Box::new(From(Box::new(JSONExpression(vec![
-                ("symbol".into(), Literal(StringValue("ABC".into()))),
-                ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                ("last_sale".into(), Literal(Number(F64Value(0.1008)))),
-            ])))),
-        })))
-    }
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
+                path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append2.stocks".to_string()))))),
+                source: Box::new(From(Box::new(JSONExpression(vec![
+                    ("symbol".into(), Literal(StringValue("ABC".into()))),
+                    ("exchange".into(), Literal(StringValue("NYSE".into()))),
+                    ("last_sale".into(), Literal(Number(F64Value(0.1008)))),
+                ])))),
+            })))
+        }
 
-    #[test]
-    fn test_append_from_json_array() {
-        let opcodes = Compiler::build(r#"
+        #[test]
+        fn test_append_from_json_array() {
+            let opcodes = Compiler::build(r#"
         append ns("compiler.into.stocks")
         from [
             { symbol: "CAT", exchange: "NYSE", last_sale: 11.1234 },
@@ -1905,230 +1876,387 @@ mod tests {
             { symbol: "SHARK", exchange: "AMEX", last_sale: 52.08 }
         ]
         "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
-            path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
-            source: Box::new(From(Box::new(
-                ArrayExpression(vec![
-                    JSONExpression(vec![
-                        ("symbol".into(), Literal(StringValue("CAT".into()))),
-                        ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                        ("last_sale".into(), Literal(Number(F64Value(11.1234)))),
-                    ]),
-                    JSONExpression(vec![
-                        ("symbol".into(), Literal(StringValue("DOG".into()))),
-                        ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
-                        ("last_sale".into(), Literal(Number(F64Value(0.1008)))),
-                    ]),
-                    JSONExpression(vec![
-                        ("symbol".into(), Literal(StringValue("SHARK".into()))),
-                        ("exchange".into(), Literal(StringValue("AMEX".into()))),
-                        ("last_sale".into(), Literal(Number(F64Value(52.08)))),
-                    ]),
-                ]))
-            )),
-        })))
-    }
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
+                path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
+                source: Box::new(From(Box::new(
+                    ArrayExpression(vec![
+                        JSONExpression(vec![
+                            ("symbol".into(), Literal(StringValue("CAT".into()))),
+                            ("exchange".into(), Literal(StringValue("NYSE".into()))),
+                            ("last_sale".into(), Literal(Number(F64Value(11.1234)))),
+                        ]),
+                        JSONExpression(vec![
+                            ("symbol".into(), Literal(StringValue("DOG".into()))),
+                            ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
+                            ("last_sale".into(), Literal(Number(F64Value(0.1008)))),
+                        ]),
+                        JSONExpression(vec![
+                            ("symbol".into(), Literal(StringValue("SHARK".into()))),
+                            ("exchange".into(), Literal(StringValue("AMEX".into()))),
+                            ("last_sale".into(), Literal(Number(F64Value(52.08)))),
+                        ]),
+                    ]))
+                )),
+            })))
+        }
 
-    #[test]
-    fn test_ns() {
-        let code = Compiler::build(r#"
+        #[test]
+        fn test_append_from_variable() {
+            let opcodes = Compiler::build(r#"
+        append ns("compiler.append.stocks") from stocks
+        "#).unwrap();
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
+                path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append.stocks".to_string()))))),
+                source: Box::new(From(Box::new(Variable("stocks".into())))),
+            })))
+        }
+
+        #[test]
+        fn test_between() {
+            assert_eq!(
+                Compiler::build("20 between 1 and 20").unwrap(),
+                Condition(Between(
+                    Box::new(Literal(Number(I64Value(20)))),
+                    Box::new(Literal(Number(I64Value(1)))),
+                    Box::new(Literal(Number(I64Value(20)))),
+                )));
+        }
+
+        #[test]
+        fn test_betwixt() {
+            assert_eq!(
+                Compiler::build("20 betwixt 1 and 21").unwrap(),
+                Condition(Betwixt(
+                    Box::new(Literal(Number(I64Value(20)))),
+                    Box::new(Literal(Number(I64Value(1)))),
+                    Box::new(Literal(Number(I64Value(21)))),
+                )));
+        }
+
+        #[test]
+        fn test_create_index_in_namespace() {
+            let code = Compiler::build(r#"
+            create index ns("compiler.create.stocks") on [symbol, exchange]
+        "#).unwrap();
+            assert_eq!(code, Quarry(Excavation::Construct(Infrastructure::Create {
+                path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
+                entity: IndexEntity {
+                    columns: vec![
+                        Variable("symbol".into()),
+                        Variable("exchange".into()),
+                    ],
+                },
+            })));
+        }
+
+        #[test]
+        fn test_create_table_in_namespace() {
+            let ns_path = "compiler.create.stocks";
+            let code = Compiler::build(r#"
+            create table ns("compiler.create.stocks") (
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.54)
+            "#).unwrap();
+            assert_eq!(code, Quarry(Excavation::Construct(Infrastructure::Create {
+                path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
+                entity: TableEntity {
+                    columns: vec![
+                        Parameter::new("symbol", Some("String(8)".into()), Some("ABC".into())),
+                        Parameter::new("exchange", Some("String(8)".into()), Some("NYSE".into())),
+                        Parameter::new("last_sale", Some("f64".into()), Some("23.54".into())),
+                    ],
+                    from: None,
+                },
+            })));
+        }
+
+        #[test]
+        fn test_declare_table() {
+            let model = Compiler::build(r#"
+            table(
+                symbol: String(8),
+                exchange: String(8),
+                last_sale: f64
+            )"#).unwrap();
+            assert_eq!(model, Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
+                columns: vec![
+                    Parameter::new("symbol", Some("String(8)".into()), None),
+                    Parameter::new("exchange", Some("String(8)".into()), None),
+                    Parameter::new("last_sale", Some("f64".into()), None),
+                ],
+                from: None,
+            }))));
+        }
+
+        #[test]
+        fn test_delete() {
+            let opcodes = Compiler::build(r#"
+        delete from stocks
+        "#).unwrap();
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(
+                Mutation::Delete {
+                    path: Box::new(Variable("stocks".into())),
+                    condition: None,
+                    limit: None,
+                })))
+        }
+
+        #[test]
+        fn test_delete_where_limit() {
+            let opcodes = Compiler::build(r#"
+        delete from stocks
+        where last_sale >= 1.0
+        limit 100
+        "#).unwrap();
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Delete {
+                path: Box::new(Variable("stocks".into())),
+                condition: Some(GreaterOrEqual(
+                    Box::new(Variable("last_sale".into())),
+                    Box::new(Literal(Number(F64Value(1.0)))),
+                )),
+                limit: Some(Box::new(Literal(Number(I64Value(100))))),
+            })))
+        }
+
+        #[test]
+        fn test_drop_table() {
+            let code = Compiler::build(r#"
+            drop table ns('finance.securities.stocks')
+        "#).unwrap();
+            assert_eq!(
+                code,
+                Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget {
+                    path: Box::new(Ns(Box::new(Literal(StringValue("finance.securities.stocks".into()))))),
+                })))
+            );
+        }
+
+        #[test]
+        fn test_from() {
+            let opcodes = Compiler::build("from stocks").unwrap();
+            assert_eq!(opcodes, From(Box::new(Variable("stocks".into()))));
+        }
+
+        #[test]
+        fn test_from_where_limit() {
+            let opcodes = Compiler::build(r#"
+        from stocks where last_sale >= 1.0 limit 20
+        "#).unwrap();
+            assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Limit {
+                from: Box::new(
+                    Quarry(Excavation::Query(Queryable::Where {
+                        from: Box::new(From(Box::new(Variable("stocks".into())))),
+                        condition: GreaterOrEqual(
+                            Box::new(Variable("last_sale".into())),
+                            Box::new(Literal(Number(F64Value(1.0)))),
+                        ),
+                    }))),
+                limit: Box::new(Literal(Number(I64Value(20)))),
+            })
+            ));
+        }
+
+        #[test]
+        fn test_like() {
+            assert_eq!(
+                Compiler::build("'Hello' like 'H.ll.'").unwrap(),
+                Condition(Like(
+                    Box::new(Literal(StringValue("Hello".into()))),
+                    Box::new(Literal(StringValue("H.ll.".into()))),
+                )));
+        }
+
+        #[test]
+        fn test_ns() {
+            let code = Compiler::build(r#"
         ns("securities.etf.stocks")
         "#).unwrap();
-        assert_eq!(code, Ns(Box::new(Literal(StringValue("securities.etf.stocks".to_string())))))
-    }
+            assert_eq!(code, Ns(Box::new(Literal(StringValue("securities.etf.stocks".to_string())))))
+        }
 
-    #[test]
-    fn test_overwrite() {
-        let opcodes = Compiler::build(r#"
+        #[test]
+        fn test_overwrite() {
+            let opcodes = Compiler::build(r#"
         overwrite stocks
         via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
         where symbol == "ABCQ"
         limit 5
         "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Overwrite {
-            path: Box::new(Variable("stocks".into())),
-            source: Box::new(Via(Box::new(JSONExpression(vec![
-                ("symbol".into(), Literal(StringValue("ABC".into()))),
-                ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                ("last_sale".into(), Literal(Number(F64Value(0.2308)))),
-            ])))),
-            condition: Some(Equal(
-                Box::new(Variable("symbol".into())),
-                Box::new(Literal(StringValue("ABCQ".into()))),
-            )),
-            limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        })))
-    }
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Overwrite {
+                path: Box::new(Variable("stocks".into())),
+                source: Box::new(Via(Box::new(JSONExpression(vec![
+                    ("symbol".into(), Literal(StringValue("ABC".into()))),
+                    ("exchange".into(), Literal(StringValue("NYSE".into()))),
+                    ("last_sale".into(), Literal(Number(F64Value(0.2308)))),
+                ])))),
+                condition: Some(Equal(
+                    Box::new(Variable("symbol".into())),
+                    Box::new(Literal(StringValue("ABCQ".into()))),
+                )),
+                limit: Some(Box::new(Literal(Number(I64Value(5))))),
+            })))
+        }
 
-    #[test]
-    fn test_select_from_variable() {
-        let opcodes = Compiler::build(r#"
+        #[test]
+        fn test_select_from_variable() {
+            let opcodes = Compiler::build(r#"
         select symbol, exchange, last_sale from stocks
         "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Select {
-            fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
-            from: Some(Box::new(Variable("stocks".into()))),
-            condition: None,
-            group_by: None,
-            having: None,
-            order_by: None,
-            limit: None,
-        })))
-    }
+            assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Select {
+                fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
+                from: Some(Box::new(Variable("stocks".into()))),
+                condition: None,
+                group_by: None,
+                having: None,
+                order_by: None,
+                limit: None,
+            })))
+        }
 
-    #[test]
-    fn test_select_from_where() {
-        let opcodes = Compiler::build(r#"
+        #[test]
+        fn test_select_from_where() {
+            let opcodes = Compiler::build(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale >= 1.0
         "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Query(
-            Queryable::Select {
+            assert_eq!(opcodes, Quarry(Excavation::Query(
+                Queryable::Select {
+                    fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
+                    from: Some(Box::new(Variable("stocks".into()))),
+                    condition: Some(GreaterOrEqual(
+                        Box::new(Variable("last_sale".into())),
+                        Box::new(Literal(Number(F64Value(1.0)))),
+                    )),
+                    group_by: None,
+                    having: None,
+                    order_by: None,
+                    limit: None,
+                })))
+        }
+
+        #[test]
+        fn test_select_from_where_limit() {
+            let opcodes = Compiler::build(r#"
+        select symbol, exchange, last_sale from stocks
+        where last_sale <= 1.0
+        limit 5
+        "#).unwrap();
+            assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Select {
                 fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                 from: Some(Box::new(Variable("stocks".into()))),
-                condition: Some(GreaterOrEqual(
+                condition: Some(LessOrEqual(
                     Box::new(Variable("last_sale".into())),
                     Box::new(Literal(Number(F64Value(1.0)))),
                 )),
                 group_by: None,
                 having: None,
                 order_by: None,
-                limit: None,
+                limit: Some(Box::new(Literal(Number(I64Value(5))))),
             })))
-    }
+        }
 
-    #[test]
-    fn test_select_from_where_limit() {
-        let opcodes = Compiler::build(r#"
-        select symbol, exchange, last_sale from stocks
-        where last_sale <= 1.0
-        limit 5
-        "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Select {
-            fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
-            from: Some(Box::new(Variable("stocks".into()))),
-            condition: Some(LessOrEqual(
-                Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Number(F64Value(1.0)))),
-            )),
-            group_by: None,
-            having: None,
-            order_by: None,
-            limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        })))
-    }
-
-    #[test]
-    fn test_select_from_where_order_by_limit() {
-        let opcode = Compiler::build(r#"
+        #[test]
+        fn test_select_from_where_order_by_limit() {
+            let opcode = Compiler::build(r#"
         select symbol, exchange, last_sale from stocks
         where last_sale < 1.0
         order by symbol
         limit 5
         "#).unwrap();
-        assert_eq!(opcode, Quarry(Excavation::Query(Queryable::Select {
-            fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
-            from: Some(Box::new(Variable("stocks".into()))),
-            condition: Some(LessThan(
-                Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Number(F64Value(1.0)))),
-            )),
-            group_by: None,
-            having: None,
-            order_by: Some(vec![Variable("symbol".into())]),
-            limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        })))
-    }
+            assert_eq!(opcode, Quarry(Excavation::Query(Queryable::Select {
+                fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
+                from: Some(Box::new(Variable("stocks".into()))),
+                condition: Some(LessThan(
+                    Box::new(Variable("last_sale".into())),
+                    Box::new(Literal(Number(F64Value(1.0)))),
+                )),
+                group_by: None,
+                having: None,
+                order_by: Some(vec![Variable("symbol".into())]),
+                limit: Some(Box::new(Literal(Number(I64Value(5))))),
+            })))
+        }
 
-    #[test]
-    fn test_system_call() {
-        let model = Compiler::build(r#"
-        syscall("cat", "LICENSE")
+        #[test]
+        fn test_undelete() {
+            let opcodes = Compiler::build(r#"
+        undelete from stocks
         "#).unwrap();
-        assert_eq!(
-            model,
-            FunctionCall {
-                fx: Box::new(Variable("syscall".into())),
-                args: vec![
-                    Literal(StringValue("cat".into())),
-                    Literal(StringValue("LICENSE".into())),
-                ],
-            });
-    }
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Undelete {
+                path: Box::new(Variable("stocks".into())),
+                condition: None,
+                limit: None,
+            })))
+        }
 
-    #[test]
-    fn test_type_of() {
-        let model = Compiler::build(r#"
-        type_of("cat")
+        #[test]
+        fn test_undelete_where_limit() {
+            let opcodes = Compiler::build(r#"
+        undelete from stocks
+        where last_sale >= 1.0
+        limit 100
         "#).unwrap();
-        assert_eq!(
-            model,
-            FunctionCall {
-                fx: Box::new(Variable("type_of".to_string())),
-                args: vec![
-                    Literal(StringValue("cat".to_string()))
-                ],
-            });
-    }
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Undelete {
+                path: Box::new(Variable("stocks".into())),
+                condition: Some(GreaterOrEqual(
+                    Box::new(Variable("last_sale".into())),
+                    Box::new(Literal(Number(F64Value(1.0)))),
+                )),
+                limit: Some(Box::new(Literal(Number(I64Value(100))))),
+            })))
+        }
 
-    #[test]
-    fn test_update() {
-        let opcodes = Compiler::build(r#"
+        #[test]
+        fn test_update() {
+            let opcodes = Compiler::build(r#"
         update stocks
         via { last_sale: 0.1111 }
         where symbol == "ABC"
         limit 10
         "#).unwrap();
-        assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Update {
-            path: Box::new(Variable("stocks".into())),
-            source: Box::new(Via(Box::new(JSONExpression(vec![
-                ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
-            ])))),
-            condition: Some(Equal(
-                Box::new(Variable("symbol".into())),
-                Box::new(Literal(StringValue("ABC".into()))),
-            )),
-            limit: Some(Box::new(Literal(Number(I64Value(10))))),
-        })))
-    }
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Update {
+                path: Box::new(Variable("stocks".into())),
+                source: Box::new(Via(Box::new(JSONExpression(vec![
+                    ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
+                ])))),
+                condition: Some(Equal(
+                    Box::new(Variable("symbol".into())),
+                    Box::new(Literal(StringValue("ABC".into()))),
+                )),
+                limit: Some(Box::new(Literal(Number(I64Value(10))))),
+            })))
+        }
 
-    #[test]
-    fn test_while_loop() {
-        let opcodes = Compiler::build(r#"
-            while (x < 5) x := x + 1
+        #[test]
+        fn test_write_json_into_namespace() {
+            let opcodes = Compiler::build(r#"
+        [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+         { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+         { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
+                ~> ns("interpreter.into.stocks")
         "#).unwrap();
-        assert_eq!(opcodes, While {
-            condition: Box::new(Condition(LessThan(
-                Box::new(Variable("x".into())),
-                Box::new(Literal(Number(I64Value(5)))),
-            ))),
-            code: Box::new(SetVariable("x".into(), Box::new(Plus(
-                Box::new(Variable("x".into())),
-                Box::new(Literal(Number(I64Value(1))))),
-            ))),
-        });
-    }
-
-    #[test]
-    fn test_while_loop_fix() {
-        let opcodes = Compiler::build(r#"
-            x := 0
-            while x < 7 x := x + 1
-            x
-        "#).unwrap();
-        assert_eq!(opcodes, CodeBlock(vec![
-            SetVariable("x".into(), Box::new(Literal(Number(I64Value(0))))),
-            While {
-                condition: Box::new(Condition(LessThan(
-                    Box::new(Variable("x".into())),
-                    Box::new(Literal(Number(I64Value(7)))),
-                ))),
-                code: Box::new(SetVariable("x".into(), Box::new(Plus(
-                    Box::new(Variable("x".into())),
-                    Box::new(Literal(Number(I64Value(1))))),
-                ))),
-            },
-            Variable("x".into()),
-        ]));
+            assert_eq!(opcodes, Quarry(Excavation::Mutate(IntoNs(
+                Box::new(ArrayExpression(vec![
+                    JSONExpression(vec![
+                        ("symbol".into(), Literal(StringValue("ABC".into()))),
+                        ("exchange".into(), Literal(StringValue("AMEX".into()))),
+                        ("last_sale".into(), Literal(Number(F64Value(12.49)))),
+                    ]),
+                    JSONExpression(vec![
+                        ("symbol".into(), Literal(StringValue("BOOM".into()))),
+                        ("exchange".into(), Literal(StringValue("NYSE".into()))),
+                        ("last_sale".into(), Literal(Number(F64Value(56.88)))),
+                    ]),
+                    JSONExpression(vec![
+                        ("symbol".into(), Literal(StringValue("JET".into()))),
+                        ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
+                        ("last_sale".into(), Literal(Number(F64Value(32.12)))),
+                    ]),
+                ])),
+                Box::new(Ns(Box::new(Literal(StringValue("interpreter.into.stocks".into()))))),
+            ))
+            ));
+        }
     }
 }

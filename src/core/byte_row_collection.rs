@@ -166,7 +166,7 @@ impl RowCollection for ByteRowCollection {
     }
 }
 
-// Unit tests
+/// Unit tests
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;

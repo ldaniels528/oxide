@@ -2,7 +2,9 @@
 // Inferences class
 ////////////////////////////////////////////////////////////////////
 
+use crate::arrays::Array;
 use crate::data_types::DataType::*;
+use crate::data_types::StorageTypes::BLOBSized;
 use crate::data_types::{DataType, StorageTypes};
 use crate::expression::Expression::*;
 use crate::expression::{BitwiseOps, Excavation, Expression, Mutation};
@@ -28,27 +30,27 @@ impl Inferences {
                 BitwiseOps::ShiftRight(a, b) => Inferences::infer_a_or_b(a, b),
                 BitwiseOps::Xor(a, b) => Inferences::infer_a_or_b(a, b),
             }
-            CodeBlock(ops) => ops.last().map(Inferences::infer).unwrap_or(LazyType),
+            CodeBlock(ops) => ops.last().map(Inferences::infer).unwrap_or(UnionType(vec![])),
             Condition(..) => BooleanType,
             Directive(..) => OutcomeType(OutcomeKind::Acked),
             Divide(a, b) => Inferences::infer_a_or_b(a, b),
-            ElementAt(..) => LazyType,
+            ElementAt(..) => UnionType(vec![]),
             Extraction(a, b) => match (a.deref(), b.deref()) {
                 (Variable(pkg), FunctionCall { fx, .. }) => match fx.deref() {
                     Variable(name) =>
                         PlatformOps::find_function(pkg, name)
                             .map(|pf| pf.return_type.clone())
-                            .unwrap_or(LazyType),
-                    _ => LazyType,
+                            .unwrap_or(UnionType(vec![])),
+                    _ => UnionType(vec![]),
                 }
-                _ => LazyType
+                _ => UnionType(vec![])
             }
-            ExtractPostfix(..) => LazyType,
+            ExtractPostfix(..) => UnionType(vec![]),
             Factorial(a) => Inferences::infer(a),
             Feature { .. } => OutcomeType(OutcomeKind::Acked),
-            From(..) => TableType(vec![], StorageTypes::BLOB),
+            From(..) => TableType(vec![], StorageTypes::BLOBSized),
             FunctionCall { fx, .. } => Inferences::infer(fx),
-            HTTP { .. } => LazyType,
+            HTTP { .. } => UnionType(vec![]),
             If { a: true_v, b: Some(false_v), .. } =>
                 Inferences::infer_alles(vec![true_v, false_v]),
             If { a: true_v, .. } => Inferences::infer(true_v),
@@ -66,6 +68,7 @@ impl Inferences {
             Ns(..) => OutcomeType(OutcomeKind::Acked),
             Parameters(params) => ArrayType(Box::new(StructureType(params.to_owned()))),
             Plus(a, b) => Inferences::infer_a_or_b(a, b),
+            PlusPlus(a, b) => Inferences::infer_a_or_b(a, b),
             Pow(a, b) => Inferences::infer_a_or_b(a, b),
             Quarry(a) => match a {
                 Excavation::Construct(_) => OutcomeType(OutcomeKind::Acked),
@@ -79,9 +82,9 @@ impl Inferences {
             Return(a) => Self::infer_all(a),
             Scenario { .. } => OutcomeType(OutcomeKind::Acked),
             SetVariable(..) => OutcomeType(OutcomeKind::Acked),
-            Variable(..) => LazyType,
-            Via(..) => LazyType,
-            While { .. } => LazyType,
+            Variable(..) => UnionType(vec![]),
+            Via(..) => TableType(vec![], BLOBSized),
+            While { .. } => UnionType(vec![]),
         }
     }
 
@@ -105,23 +108,44 @@ impl Inferences {
             .collect::<Vec<_>>())
     }
 
+    /// provides type inference for the given [TypedValue]
+    pub fn infer_array(array: &Array) -> DataType {
+        Self::infer_best_fit(array.values().iter()
+            .map(|v| v.get_type())
+            .collect::<Vec<_>>())
+    }
+
     /// provides type resolution for the given [Vec<DataType>]
     fn infer_best_fit(types: Vec<DataType>) -> DataType {
         fn larger(a: &StorageTypes, b: &StorageTypes) -> StorageTypes {
             (if a > b { a } else { b }).to_owned()
         }
 
-        match types.len() {
-            0 => LazyType,
+        let result = match types.len() {
+            0 => UnionType(vec![]),
             1 => types[0].to_owned(),
             _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
                 match (agg, t) {
-                    (LazyType, b) => b.to_owned(),
-                    (a, LazyType) => a.to_owned(),
-                    (ByteArrayType(a), ByteArrayType(b)) => StringType(larger(&a, b)),
+                    (UnionType(a), b) => UnionType({
+                        let mut c = a.clone();
+                        c.push(b.clone());
+                        c
+                    }),
+                    (b, UnionType(a)) => UnionType({
+                        let mut c = a.clone();
+                        c.push(b.clone());
+                        c
+                    }),
+                    (BinaryType(a), BinaryType(b)) => StringType(larger(&a, b)),
                     (StringType(a), StringType(b)) => StringType(larger(&a, b)),
                     (_, t) => t.to_owned()
                 })
+        };
+
+        // final massaging
+        match result {
+            UnionType(a) if a.len() == 1 => a[0].clone(),
+            z => z
         }
     }
 
@@ -137,10 +161,10 @@ impl Inferences {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compiler::Compiler;
     use crate::data_types::StorageTypes::FixedSize;
     use crate::number_kind::NumberKind::{F64Kind, I64Kind};
     use crate::numbers::Numbers::{F64Value, I64Value};
+    use crate::testdata::{verify_bit_operator, verify_data_type, verify_math_operator};
     use crate::typed_values::TypedValue::{Number, StringValue};
 
     #[test]
@@ -265,6 +289,11 @@ mod tests {
     }
 
     #[test]
+    fn test_infer_mathematics_plus_plus() {
+        verify_math_operator("++");
+    }
+
+    #[test]
     fn test_infer_mathematics_power() {
         verify_math_operator("**");
     }
@@ -297,21 +326,5 @@ mod tests {
             StringValue("cherry".into()),
         ]);
         assert_eq!(kind, StringType(FixedSize(6)))
-    }
-
-    fn verify_data_type(code: &str, expected: DataType) {
-        let model = Compiler::build(code).unwrap();
-        assert_eq!(Inferences::infer(&model), expected);
-    }
-
-    fn verify_bit_operator(op: &str) {
-        verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
-        verify_data_type(format!("a {} b", op).as_str(), LazyType);
-    }
-
-    fn verify_math_operator(op: &str) {
-        verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
-        verify_data_type(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
-        verify_data_type(format!("a {} b", op).as_str(), LazyType);
     }
 }

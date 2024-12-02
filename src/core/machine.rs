@@ -21,11 +21,13 @@ use std::{env, fs, thread};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use shared_lib::fail;
-
+use crate::arrays::Array;
 use crate::compiler::Compiler;
 use crate::compiler::{fail_expr, fail_unexpected, fail_value};
 use crate::cursor::Cursor;
+use crate::data_types::DataType;
+use crate::data_types::DataType::{ArrayType, StringType, StructureType, TableType, UnionType};
+use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::dataframes::DataFrame;
 use crate::errors::Errors;
@@ -38,6 +40,7 @@ use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::expression::{BitwiseOps, Conditions, Expression, ImportOps, ACK, UNDEFINED};
 use crate::expression::{Directives, Excavation, Infrastructure, Mutation, Queryable};
 use crate::file_row_collection::FileRowCollection;
+use crate::inferences::Inferences;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::numbers::Numbers::*;
@@ -45,15 +48,17 @@ use crate::outcomes::Outcomes;
 use crate::outcomes::Outcomes::Ack;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
+use crate::query_engine;
 use crate::row_collection::RowCollection;
-use crate::table_values::TableValues::Model;
 use crate::rows::Row;
 use crate::structures::*;
 use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
-
+use crate::table_values::TableValues::Model;
+use crate::testdata::verify_exact_table_where;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use shared_lib::fail;
 
 /// Represents the state of the machine.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -122,7 +127,7 @@ impl Machine {
     fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
         match value {
             StructureSoft(structure) => Ok(structure.get_tuples()),
-            z => fail_value(Errors::TypeMismatch("Schemaless".into(), z.to_code()).to_string(), &z),
+            z => fail_value(TypeMismatch(StructureType(vec![]), z.get_type()).to_string(), &z),
         }
     }
 
@@ -137,8 +142,7 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         use TypedValue::*;
         match table {
-            NamespaceValue(d, s, n) => {
-                let ns = Namespace::new(d, s, n);
+            NamespaceValue(ns) => {
                 let mut df = DataFrame::load(&ns)?;
                 f(machine, &mut df, fields, values, condition, limit)
             }
@@ -206,6 +210,8 @@ impl Machine {
             Parameters(params) => Ok(self.evaluate_parameters(params)),
             Plus(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa + bb),
+            PlusPlus(a, b) =>
+                self.do_inline_2(a, b, Self::do_plus_plus),
             Pow(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
             Quarry(payload) => match payload {
@@ -243,9 +249,12 @@ impl Machine {
                           array.push(tv);
                           (machine, array)
                       }
-                      Err(err) => panic!("{}", err.to_string())
+                      Err(err) => {
+                          error!("{}", err.to_string());
+                          (machine, array)
+                      }
                   });
-        Ok((machine, Array(results)))
+        Ok((machine, ArrayValue(Array::from(results))))
     }
 
     /// evaluates the specified [Expression]; returning an array ([String]) result.
@@ -314,7 +323,7 @@ impl Machine {
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
-    fn evaluate_optional(&self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
+    pub fn evaluate_opt(&self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
         match expr {
             Some(item) => self.evaluate(item),
             None => Ok((self.to_owned(), Undefined))
@@ -345,7 +354,7 @@ impl Machine {
                 .map(|c| c.to_owned())
                 .unwrap_or(Undefined))
             .collect::<Vec<TypedValue>>();
-        (machine, Array(values))
+        (machine, ArrayValue(Array::from(values)))
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
@@ -582,14 +591,14 @@ impl Machine {
     ) -> (Self, TypedValue) {
         let ms = self.to_owned();
         match self.evaluate_array(args) {
-            Ok((ms, Array(args))) =>
+            Ok((ms, ArrayValue(args))) =>
                 match ms.evaluate(fx) {
                     Ok((ms, Function { params, code })) =>
-                        match ms.do_function_arguments(params, args).evaluate(&code) {
+                        match ms.do_function_arguments(params, args.values().clone()).evaluate(&code) {
                             Ok((ms, result)) => (ms, result),
                             Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                         }
-                    Ok((ms, PlatformOp(pf))) => pf.evaluate(ms, args),
+                    Ok((ms, PlatformOp(pf))) => pf.evaluate(ms, args.values().clone()),
                     Ok((_, z)) => (ms, ErrorValue(Exact(format!("'{}' is not a function ({})", fx.to_code(), z)))),
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
@@ -648,7 +657,15 @@ impl Machine {
             match multipart {
                 Some(StructureSoft(soft)) => Some(create_form(Box::new(soft))),
                 Some(StructureHard(hard)) => Some(create_form(Box::new(hard))),
-                Some(z) => return Ok((ms, ErrorValue(TypeMismatch("Object".into(), z.to_code())))),
+                Some(z) => return Ok((ms, ErrorValue(TypeMismatch(
+                    UnionType(vec![
+                        ArrayType(Box::new(StructureType(vec![]))),
+                        StringType(BLOBSized),
+                        StructureType(vec![]),
+                        TableType(vec![], BLOBSized),
+                    ]),
+                    z.get_type(),
+                )))),
                 None => None
             },
         )
@@ -784,17 +801,6 @@ impl Machine {
         }
     }
 
-    fn do_imports(&self, ops: &Vec<ImportOps>) -> (Self, TypedValue) {
-        ops.iter()
-            .fold((self.to_owned(), Undefined),
-                  |(ms, tv), iop| match iop {
-                      ImportOps::Everything(pkg) =>
-                          ms.do_import(pkg, &Vec::new()),
-                      ImportOps::Selection(pkg, selection) =>
-                          ms.do_import(pkg, selection),
-                  })
-    }
-
     /// Produces an aggregate [Machine] instance containing
     /// the specified imports
     fn do_import(
@@ -808,7 +814,7 @@ impl Machine {
             Some(component) => match component {
                 StructureHard(structure) =>
                     if selection.is_empty() {
-                        (structure.pollute(ms), StructureHard(structure))
+                        (structure.pollute(ms), Outcome(Ack))
                     } else {
                         let ms = selection.iter().fold(ms, |ms, name| {
                             ms.with_variable(name, structure.get(name))
@@ -826,6 +832,17 @@ impl Machine {
                 other => (ms, ErrorValue(Syntax(other.to_code())))
             }
         }
+    }
+
+    fn do_imports(&self, ops: &Vec<ImportOps>) -> (Self, TypedValue) {
+        ops.iter()
+            .fold((self.to_owned(), Undefined),
+                  |(ms, tv), iop| match iop {
+                      ImportOps::Everything(pkg) =>
+                          ms.do_import(pkg, &Vec::new()),
+                      ImportOps::Selection(pkg, selection) =>
+                          ms.do_import(pkg, selection),
+                  })
     }
 
     fn do_infrastructure(
@@ -858,7 +875,7 @@ impl Machine {
                 machine.do_table_row_query(from, &True, limit)
             }
             Select { fields, from, condition, group_by, having, order_by, limit } =>
-                self.do_table_row_selection(fields, from, condition, group_by, having, order_by, limit),
+                query_engine::do_select(&self, fields, from, condition, group_by, having, order_by, limit),
             Where { from, condition } =>
                 self.do_table_row_query(from, condition, Undefined),
         }
@@ -879,7 +896,10 @@ impl Machine {
             let opcode = Compiler::build(script_code.as_str())?;
             machine.evaluate(&opcode)
         } else {
-            Ok((machine, ErrorValue(TypeMismatch("String".to_string(), path_value.get_type_name()))))
+            Ok((machine, ErrorValue(TypeMismatch(
+                StringType(BLOBSized),
+                path_value.get_type(),
+            ))))
         }
     }
 
@@ -892,15 +912,14 @@ impl Machine {
         let (machine, index) = self.evaluate(index_expr)?;
         let (machine, collection) = machine.evaluate(collection_expr)?;
         let value = match collection {
-            Array(items) => {
+            ArrayValue(items) => {
                 let idx = index.to_usize();
-                if idx < items.len() { items[idx].to_owned() } else {
+                if idx < items.len() { items.get(idx).unwrap_or(Undefined) } else {
                     ErrorValue(IndexOutOfRange("Array".to_string(), idx, items.len()))
                 }
             }
-            NamespaceValue(d, s, n) => {
+            NamespaceValue(ns) => {
                 let id = index.to_usize();
-                let ns = Namespace::new(d, s, n);
                 let frc = FileRowCollection::open(&ns)?;
                 match frc.read_one(id)? {
                     Some(row) => StructureHard(HardStructure::from_row(frc.get_columns(), &row)),
@@ -924,7 +943,13 @@ impl Machine {
                 }
             }
             other =>
-                ErrorValue(TypeMismatch("Table|Array".into(), other.to_code()))
+                ErrorValue(TypeMismatch(
+                    UnionType(vec![
+                        ArrayType(Box::from(StructureType(vec![]))),
+                        TableType(vec![], BLOBSized)
+                    ]),
+                    other.get_type(),
+                ))
         };
         Ok((machine, value))
     }
@@ -1146,8 +1171,7 @@ impl Machine {
             Null | Undefined => Ok((machine, result)),
             TableValue(_rcv) =>
                 Ok((machine, ErrorValue(Exact("Memory collections do not yet support indexes".to_string())))),
-            NamespaceValue(d, s, n) => {
-                let ns = Namespace::new(d, s, n);
+            NamespaceValue(ns) => {
                 let (machine, columns) = self.evaluate_as_atoms(columns)?;
                 let config = DataFrameConfig::load(&ns)?;
                 let mut indices = config.get_indices().to_owned();
@@ -1176,8 +1200,7 @@ impl Machine {
             Null | Undefined => Ok((machine, result)),
             TableValue(_rcv) =>
                 Ok((machine, ErrorValue(Exact("Memory collections do not 'create' keyword".to_string())))),
-            NamespaceValue(d, s, n) => {
-                let ns = Namespace::new(d, s, n);
+            NamespaceValue(ns) => {
                 let config = DataFrameConfig::new(columns.to_owned(), Vec::new(), Vec::new());
                 DataFrame::create(ns, config)?;
                 Ok((machine, Outcome(Ack)))
@@ -1207,12 +1230,32 @@ impl Machine {
     fn do_table_drop(&self, table: &Expression) -> std::io::Result<(Self, TypedValue)> {
         let (machine, table) = self.evaluate(table)?;
         match table {
-            NamespaceValue(d, s, n) => {
-                let ns = Namespace::new(d, s, n);
+            NamespaceValue(ns) => {
                 let result = fs::remove_file(ns.get_table_file_path());
                 Ok((machine, if result.is_ok() { Outcome(Ack) } else { Boolean(false) }))
             }
             _ => Ok((machine, Boolean(false)))
+        }
+    }
+
+    pub fn do_table_f(
+        ms: Machine,
+        table_expr: &Expression,
+        f: fn(Machine, Box<dyn RowCollection>) -> (Machine, TypedValue),
+    ) -> (Machine, TypedValue) {
+        match ms.evaluate(table_expr) {
+            Ok((ms, table_v)) =>
+                match table_v {
+                    ErrorValue(msg) => (ms, ErrorValue(msg)),
+                    NamespaceValue(ns) =>
+                        match FileRowCollection::open(&ns) {
+                            Ok(frc) => f(ms, Box::new(frc)),
+                            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+                        }
+                    TableValue(tv) => f(ms, Box::new(tv)),
+                    z => (ms, ErrorValue(CollectionExpected(z.to_code())))
+                }
+            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
         }
     }
 
@@ -1227,10 +1270,8 @@ impl Machine {
             Expression::From(source) =>
                 self.do_rows_from_query(source, table)?,
             Literal(TableValue(rcv)) => (machine, rcv.get_rows()),
-            Literal(NamespaceValue(d, s, n)) => {
-                let ns = Namespace::new(d, s, n);
-                let frc = FileRowCollection::open(&ns)?;
-                (machine, frc.read_active_rows()?)
+            Literal(NamespaceValue(ns)) => {
+                (machine, FileRowCollection::open(ns)?.read_active_rows()?)
             }
             Quarry(Excavation::Construct(Declare(TableEntity { columns, from }))) =>
                 machine.do_rows_from_table_declaration(table, from, columns)?,
@@ -1254,11 +1295,14 @@ impl Machine {
         match result {
             StringValue(path) =>
                 match path.split('.').collect::<Vec<_>>().as_slice() {
-                    [d, s, n] => Ok((ms, NamespaceValue(d.to_string(), s.to_string(), n.to_string()))),
+                    [d, s, n] => Ok((ms, NamespaceValue(Namespace::new(d, s, n)))),
                     _ => Ok((ms, ErrorValue(InvalidNamespace(path))))
                 }
-            NamespaceValue(d, s, n) => Ok((ms, NamespaceValue(d, s, n))),
-            other => Ok((ms, ErrorValue(TypeMismatch("Table".to_string(), other.to_code())))),
+            NamespaceValue(ns) => Ok((ms, NamespaceValue(ns))),
+            other => Ok((ms, ErrorValue(TypeMismatch(
+                TableType(vec![], BLOBSized),
+                other.get_type(),
+            )))),
         }
     }
 
@@ -1304,7 +1348,7 @@ impl Machine {
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
         use Outcomes::*;
-        let (machine, limit) = self.evaluate_optional(limit)?;
+        let (machine, limit) = self.evaluate_opt(limit)?;
         let (machine, result) = machine.evaluate(from)?;
         Self::orchestrate_io(machine, result, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _fields, _values, condition, limit| {
             let deleted = df.delete_where(&machine, &condition, limit).ok().unwrap_or(0);
@@ -1320,7 +1364,7 @@ impl Machine {
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
         use Outcomes::*;
-        let (machine, limit) = self.evaluate_optional(limit)?;
+        let (machine, limit) = self.evaluate_opt(limit)?;
         let (machine, tv_table) = machine.evaluate(table)?;
         let (fields, values) = self.expect_via(&table, &source)?;
         Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
@@ -1346,8 +1390,7 @@ impl Machine {
                 let table_value = TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &cursor.take(limit)?)));
                 Ok((machine, table_value))
             }
-            NamespaceValue(d, s, n) => {
-                let ns = Namespace::new(d, s, n);
+            NamespaceValue(ns) => {
                 let frc = FileRowCollection::open(&ns)?;
                 let phys_columns = frc.get_columns().to_owned();
                 let mut cursor = Cursor::filter(Box::new(frc), condition.to_owned());
@@ -1358,30 +1401,6 @@ impl Machine {
         }
     }
 
-    fn do_table_row_selection(
-        &self,
-        fields: &Vec<Expression>,
-        from: &Option<Box<Expression>>,
-        condition: &Option<Conditions>,
-        _group_by: &Option<Vec<Expression>>,
-        _having: &Option<Box<Expression>>,
-        _order_by: &Option<Vec<Expression>>,
-        limit: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, limit) = self.evaluate_optional(limit)?;
-        match from {
-            None => machine.evaluate_array(fields),
-            Some(source) => {
-                let (machine, table) = machine.evaluate(source)?;
-                Self::orchestrate_io(machine, table, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _, _, condition, limit| {
-                    let phys_columns = df.get_columns();
-                    let rows = df.read_where(&machine, condition, limit)?;
-                    Ok((machine, TableValue(Model(ModelRowCollection::from_rows(phys_columns, &rows)))))
-                })
-            }
-        }
-    }
-
     fn do_table_row_undelete(
         &self,
         from: &Expression,
@@ -1389,7 +1408,7 @@ impl Machine {
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
         use Outcomes::*;
-        let (machine, limit) = self.evaluate_optional(limit)?;
+        let (machine, limit) = self.evaluate_opt(limit)?;
         let (machine, result) = machine.evaluate(from)?;
         Self::orchestrate_io(machine, result, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _fields, _values, condition, limit| {
             match df.undelete_where(&machine, &condition, limit) {
@@ -1407,7 +1426,7 @@ impl Machine {
         limit: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
         use Outcomes::*;
-        let (machine, limit) = self.evaluate_optional(limit)?;
+        let (machine, limit) = self.evaluate_opt(limit)?;
         let (machine, tv_table) = machine.evaluate(table)?;
         let (fields, values) = self.expect_via(&table, &source)?;
         Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
@@ -1435,6 +1454,21 @@ impl Machine {
             }
         }
         Ok((machine, outcome))
+    }
+
+    fn do_plus_plus(
+        a: TypedValue,
+        b: TypedValue,
+    ) -> TypedValue {
+        match (a, b) {
+            (ArrayValue(a), ArrayValue(b)) => {
+                let mut c = a.clone();
+                c.push_all(b.values().clone());
+                ArrayValue(c)
+            }
+            (a, b) =>
+                ErrorValue(Syntax(format!("{a} ++ {b}")))
+        }
     }
 
     fn do_rows_from_table_declaration(
@@ -1478,11 +1512,8 @@ impl Machine {
         f: fn(Box<dyn RowCollection>) -> std::io::Result<A>,
     ) -> std::io::Result<A> {
         match table {
-            NamespaceValue(d, s, n) => {
-                let ns = Namespace::new(d, s, n);
-                let frc = FileRowCollection::open(&ns)?;
-                f(Box::new(frc))
-            }
+            NamespaceValue(ns) =>
+                f(Box::new(FileRowCollection::open(&ns)?)),
             TableValue(rcv) => f(Box::new(rcv.to_owned())),
             z =>
                 fail_value(format!("{} is not a table", z), z)
@@ -1495,14 +1526,9 @@ impl Machine {
         f: fn(DataFrame) -> std::io::Result<A>,
     ) -> std::io::Result<A> {
         match table {
-            NamespaceValue(d, s, n) => {
-                let ns = Namespace::new(d, s, n);
-                f(DataFrame::load(&ns)?)
-            }
-            TableValue(rcv) =>
-                f(DataFrame::new(Box::new(rcv.to_owned()))),
-            z =>
-                fail_value(format!("{} is not a table", z), z)
+            NamespaceValue(ns) => f(DataFrame::load(&ns)?),
+            TableValue(rcv) => f(DataFrame::new(Box::new(rcv.to_owned()))),
+            z => fail_value(format!("{} is not a table", z), z)
         }
     }
 
@@ -1549,7 +1575,7 @@ impl Machine {
     fn expect_namespace(&self, table: &Expression) -> std::io::Result<Namespace> {
         let (_, v_table) = self.evaluate(table)?;
         match v_table {
-            NamespaceValue(d, s, n) => Ok(Namespace::new(d, s, n)),
+            NamespaceValue(ns) => Ok(ns),
             x => fail_unexpected("Table namespace", &x)
         }
     }
@@ -1569,9 +1595,9 @@ impl Machine {
     ) -> std::io::Result<Vec<Row>> {
         let (_, source) = self.evaluate(source)?;
         match source {
-            Array(items) => {
+            ArrayValue(items) => {
                 let mut rows = Vec::new();
-                for tuples in items {
+                for tuples in items.iter() {
                     if let StructureSoft(structure) = tuples {
                         rows.push(Row::from_tuples(0, columns, &structure.get_tuples()))
                     }
@@ -1580,8 +1606,7 @@ impl Machine {
             }
             StructureHard(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
             StructureSoft(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
-            NamespaceValue(d, s, n) => {
-                let ns = Namespace::new(d, s, n);
+            NamespaceValue(ns) => {
                 let frc = FileRowCollection::open(&ns)?;
                 frc.read_active_rows()
             }
@@ -1721,9 +1746,9 @@ mod tests {
         ]);
 
         let (_, array) = Machine::empty().evaluate_array(&models).unwrap();
-        assert_eq!(array, Array(vec![
+        assert_eq!(array, ArrayValue(Array::from(vec![
             Number(F64Value(3.25)), Boolean(true), Boolean(false), Null, Undefined
-        ]));
+        ])));
     }
 
     #[test]
@@ -1750,11 +1775,11 @@ mod tests {
             .with_variable("exchange", StringValue("NYSE".into()))
             .with_variable("last_sale", Number(F64Value(12.66)));
         let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Array(vec![
+        assert_eq!(result, ArrayValue(Array::from(vec![
             StringValue("ABC".into()),
             StringValue("NYSE".into()),
             Number(F64Value(12.66)),
-        ]));
+        ])));
     }
 
     #[test]
@@ -1780,94 +1805,6 @@ mod tests {
     }
 
     #[test]
-    fn test_function_recursion() {
-        // f := (fn(n: i64) => if(n <= 1) 1 else n * f(n - 1))
-        let model = Function {
-            params: vec![
-                Parameter::new("n", Some("i64".into()), None)
-            ],
-            // iff(n <= 1, 1, n * f(n - 1))
-            code: Box::new(If {
-                // n <= 1
-                condition: Box::new(Condition(LessOrEqual(
-                    Box::new(Variable("n".into())),
-                    Box::new(Literal(Number(I64Value(1)))),
-                ))),
-                // 1
-                a: Box::new(Literal(Number(I64Value(1)))),
-                // n * f(n - 1)
-                b: Some(Box::from(Multiply(
-                    Box::from(Variable("n".into())),
-                    Box::from(FunctionCall {
-                        fx: Box::new(Variable("f".into())),
-                        args: vec![
-                            Minus(
-                                Box::from(Variable("n".into())),
-                                Box::from(Literal(Number(I64Value(1)))),
-                            ),
-                        ],
-                    }),
-                ))),
-            }),
-        };
-        println!("f := {}", model.to_code());
-
-        // f(5.0)
-        let machine = Machine::empty().with_variable("f", model);
-        let (machine, result) = machine.evaluate(&FunctionCall {
-            fx: Box::new(Variable("f".into())),
-            args: vec![
-                Literal(Number(I64Value(5)))
-            ],
-        }).unwrap();
-
-        println!("result: {}", result);
-        assert_eq!(result, Number(I64Value(120)));
-    }
-
-    #[test]
-    fn test_if_else_flow_1() {
-        let model = If {
-            condition: Box::new(Condition(GreaterThan(
-                Box::new(Variable("num".into())),
-                Box::new(Literal(Number(I64Value(25)))),
-            ))),
-            a: Box::new(Literal(StringValue("Yes".into()))),
-            b: Some(Box::new(Literal(StringValue("No".into())))),
-        };
-        assert_eq!(model.to_code(), r#"if num > 25 "Yes" else "No""#);
-
-        let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, StringValue("No".into()));
-
-        let machine = Machine::empty().with_variable("num", Number(I64Value(37)));
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, StringValue("Yes".into()));
-    }
-
-    #[test]
-    fn test_if_else_flow_2() {
-        let model = If {
-            condition: Box::new(Condition(LessThan(
-                Box::new(Variable("num".into())),
-                Box::new(Literal(Number(I64Value(10)))),
-            ))),
-            a: Box::new(Literal(StringValue("Yes".into()))),
-            b: Some(Box::new(Literal(StringValue("No".into())))),
-        };
-        assert_eq!(model.to_code(), r#"if num < 10 "Yes" else "No""#);
-
-        let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, StringValue("Yes".into()));
-
-        let machine = Machine::empty().with_variable("num", Number(I64Value(99)));
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, StringValue("No".into()));
-    }
-
-    #[test]
     fn test_index_of_array() {
         // create the instruction model for "[1, 4, 2, 8, 5, 7][5]"
         let model = ElementAt(
@@ -1883,167 +1820,6 @@ mod tests {
         let machine = Machine::empty();
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Number(I64Value(7)))
-    }
-
-    #[test]
-    fn test_index_of_table_in_namespace() {
-        // create a table with test data
-        let ns = Namespace::new("machine", "element_at", "stocks");
-        let logical_columns = make_quote_parameters();
-        let phys_columns = Column::from_parameters(&logical_columns).unwrap();
-        let value_tuples = vec![
-            ("ABC", "AMEX", 11.77), ("UNO", "OTC", 0.2456),
-            ("BIZ", "NYSE", 23.66), ("GOTO", "OTC", 0.1428),
-            ("BOOM", "NASDAQ", 56.87),
-        ];
-        let rows = value_tuples.iter()
-            .map(|(symbol, exchange, last_sale)| {
-                Row::new(0, vec![
-                    StringValue(symbol.to_string()),
-                    StringValue(exchange.to_string()),
-                    Number(F64Value(*last_sale)),
-                ])
-            }).collect();
-        let mut dfrc = DataFrame::create(ns.to_owned(), DataFrameConfig::build(logical_columns)).unwrap();
-        assert_eq!(Outcome(RowsAffected(5)), dfrc.append_rows(rows));
-
-        // create the instruction model 'ns("machine.element_at.stocks")[2]'
-        let model = ElementAt(
-            Box::new(Ns(Box::new(Literal(StringValue(ns.into()))))),
-            Box::new(Literal(Number(I64Value(2)))),
-        );
-        assert_eq!(model.to_code(), r#"ns("machine.element_at.stocks")[2]"#);
-
-        // evaluate the instruction
-        let (_, result) = Machine::empty().evaluate(&model).unwrap();
-        assert_eq!(result, StructureHard(
-            HardStructure::from_row(
-                &phys_columns,
-                &make_quote(2, "BIZ", "NYSE", 23.66))
-        ))
-    }
-
-    #[test]
-    fn test_index_of_table_in_variable() {
-        let phys_columns = make_quote_columns();
-        let my_table = ModelRowCollection::from_rows(&phys_columns, &vec![
-            make_quote(0, "ABC", "AMEX", 12.33),
-            make_quote(1, "GAS", "NYSE", 0.2456),
-            make_quote(2, "BASH", "NASDAQ", 13.11),
-            make_quote(3, "OIL", "NYSE", 0.1442),
-            make_quote(4, "VAPOR", "NYSE", 0.0289),
-        ]);
-
-        // create the instruction model "stocks[4]"
-        let model = ElementAt(
-            Box::new(Variable("stocks".to_string())),
-            Box::new(Literal(Number(I64Value(4)))),
-        );
-        assert_eq!(model.to_code(), "stocks[4]");
-
-        // evaluate the instruction
-        let machine = Machine::empty()
-            .with_variable("stocks", TableValue(Model(my_table)));
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, StructureHard(
-            HardStructure::from_row(&phys_columns,
-                                    &make_quote(4, "VAPOR", "NYSE", 0.0289))
-        ))
-    }
-
-    #[test]
-    fn test_create_table() {
-        let model = Quarry(Excavation::Construct(Infrastructure::Create {
-            path: Box::new(Ns(Box::new(Literal(StringValue("machine.create.stocks".into()))))),
-            entity: TableEntity {
-                columns: make_quote_parameters(),
-                from: None,
-            },
-        }));
-
-        // create the table
-        let machine = Machine::empty();
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Outcome(Ack));
-
-        // decompile back to source code
-        assert_eq!(
-            model.to_code(),
-            "create table ns(\"machine.create.stocks\") (symbol: String(8), exchange: String(8), last_sale: f64)"
-        );
-    }
-
-    #[test]
-    fn test_create_table_with_index() {
-        let path = "machine.index.stocks";
-        let machine = Machine::empty();
-
-        // drop table if exists ns("machine.index.stocks")
-        let (machine, _) = machine.evaluate(&Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget {
-            path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
-        })))).unwrap();
-
-        // create table ns("machine.index.stocks") (...)
-        let (machine, result) = machine.evaluate(&Quarry(Excavation::Construct(Infrastructure::Create {
-            path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
-            entity: TableEntity {
-                columns: make_quote_parameters(),
-                from: None,
-            },
-        }))).unwrap();
-        assert_eq!(result, Outcome(Ack));
-
-        // create index ns("machine.index.stocks") [symbol, exchange]
-        let model = Quarry(Excavation::Construct(Infrastructure::Create {
-            path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
-            entity: IndexEntity {
-                columns: vec![
-                    Variable("symbol".into()),
-                    Variable("exchange".into()),
-                ],
-            },
-        }));
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Outcome(Ack));
-
-        // decompile back to source code
-        assert_eq!(
-            model.to_code(),
-            "create index ns(\"machine.index.stocks\") [symbol, exchange]"
-        );
-    }
-
-    #[test]
-    fn test_declare_table() {
-        let model = Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
-            columns: vec![
-                Parameter::new("symbol", Some("String(8)".into()), None),
-                Parameter::new("exchange", Some("String(8)".into()), None),
-                Parameter::new("last_sale", Some("f64".into()), None),
-            ],
-            from: None,
-        })));
-
-        let machine = Machine::empty();
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, TypedValue::TableValue(Model(ModelRowCollection::with_rows(
-            make_quote_columns(), Vec::new(),
-        ))))
-    }
-
-    #[test]
-    fn test_drop_table() {
-        // create a table with test data
-        let ns_path = "machine.drop.stocks";
-        let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
-        create_dataframe(ns_path);
-
-        let model = Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget { path: Box::new(ns) })));
-        assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
-
-        let machine = Machine::empty();
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Outcome(Ack))
     }
 
     #[test]
@@ -2094,234 +1870,6 @@ mod tests {
         ]);
     }
 
-    #[test]
-    fn test_anonymous_function() {
-        // define a function call: (n => n + 5)(3)
-        let model = FunctionCall {
-            fx: Box::new(
-                Literal(Function {
-                    params: vec![
-                        Parameter::new("n", Some("i64".into()), None)
-                    ],
-                    code: Box::new(Plus(
-                        Box::new(Variable("n".into())),
-                        Box::new(Literal(Number(I64Value(5)))))),
-                })),
-            args: vec![
-                Literal(Number(I64Value(3)))
-            ],
-        };
-
-        // evaluate the function
-        let (machine, result) = Machine::empty()
-            .with_variable("n", Number(I64Value(3)))
-            .evaluate(&model)
-            .unwrap();
-        assert_eq!(result, Number(I64Value(8)));
-        assert_eq!(model.to_code(), "(fn(n: i64) => n + 5)(3)")
-    }
-
-    #[test]
-    fn test_named_function() {
-        // define a function: (a, b) => a + b
-        let fx = Function {
-            params: vec![
-                Parameter::new("a", Some("i64".into()), None),
-                Parameter::new("b", Some("i64".into()), None),
-            ],
-            code: Box::new(Plus(Box::new(
-                Variable("a".into())
-            ), Box::new(
-                Variable("b".into())
-            ))),
-        };
-
-        // publish the function in scope: fn add(a, b) => a + b
-        let machine = Machine::empty();
-        let (machine, result) = machine.evaluate_scope(&vec![
-            SetVariable("add".to_string(), Box::new(Literal(fx.to_owned())))
-        ]);
-        assert_eq!(machine.get("add").unwrap(), fx);
-        assert_eq!(result, Outcome(Ack));
-
-        // execute the function via function call in scope: add(2, 3)
-        let model = FunctionCall {
-            fx: Box::new(Literal(fx)),
-            args: vec![
-                Literal(Number(I64Value(2))),
-                Literal(Number(I64Value(3))),
-            ],
-        };
-        let (machine, result) = machine
-            .evaluate(&model)
-            .unwrap();
-        assert_eq!(result, Number(I64Value(5)));
-        assert_eq!(model.to_code(), "(fn(a: i64, b: i64) => a + b)(2, 3)")
-    }
-
-    #[test]
-    fn test_from_where_limit_in_memory() {
-        // create a table with test data
-        let columns = make_quote_parameters();
-        let phys_columns = Column::from_parameters(&columns).unwrap();
-        let machine = Machine::empty()
-            .with_variable("stocks", TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
-                make_quote(0, "ABC", "AMEX", 12.33),
-                make_quote(1, "UNO", "OTC", 0.2456),
-                make_quote(2, "BIZ", "NYSE", 9.775),
-                make_quote(3, "GOTO", "OTC", 0.1442),
-                make_quote(4, "XYZ", "NYSE", 0.0289),
-            ]))));
-
-        let model = Quarry(Query(Queryable::Limit {
-            from: Box::new(Quarry(Query(Queryable::Where {
-                from: Box::new(From(Box::new(Variable("stocks".into())))),
-                condition: GreaterOrEqual(
-                    Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Number(F64Value(1.0)))),
-                ),
-            }))),
-            limit: Box::new(Literal(Number(I64Value(2)))),
-        }));
-        assert_eq!(model.to_code(), "from stocks where last_sale >= 1 limit 2");
-
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
-            make_quote(0, "ABC", "AMEX", 12.33),
-            make_quote(2, "BIZ", "NYSE", 9.775),
-        ]))));
-    }
-
-    #[test]
-    fn test_delete_rows_from_namespace() {
-        // create a table with test data
-        let ns_path = "machine.delete.stocks";
-        let (df, _) = create_dataframe(ns_path);
-
-        // delete some rows
-        let machine = Machine::empty();
-        let code = Compiler::build(r#"
-            delete from ns("machine.delete.stocks")
-            where last_sale > 1.0
-            "#).unwrap();
-        let (_, result) = machine.evaluate(&code).unwrap();
-        assert_eq!(result, Outcome(RowsAffected(3)));
-
-        // verify the remaining rows
-        let rows = df.read_active_rows().unwrap();
-        assert_eq!(rows, vec![
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(3, "GOTO", "OTC", 0.1428),
-        ]);
-    }
-
-    #[test]
-    fn test_undelete_rows_from_namespace() {
-        // create a table with test data
-        let ns_path = "machine.undelete.stocks";
-        let (df, _) = create_dataframe(ns_path);
-
-        // delete some rows
-        let machine = Machine::empty();
-        let code = Compiler::build(r#"
-            stocks := ns("machine.undelete.stocks")
-            delete from stocks where last_sale > 1.0
-            "#).unwrap();
-        let (machine, result) = machine.evaluate(&code).unwrap();
-        assert_eq!(result, Outcome(RowsAffected(3)));
-
-        // verify the remaining rows
-        let rows = df.read_active_rows().unwrap();
-        assert_eq!(rows, vec![
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(3, "GOTO", "OTC", 0.1428),
-        ]);
-
-        // undelete the rows
-        let code = Compiler::build(r#"
-            undelete from stocks where last_sale > 1.0
-            "#).unwrap();
-        let (_, result) = machine.evaluate(&code).unwrap();
-        assert_eq!(result, Outcome(RowsAffected(3)));
-
-        // verify the remaining rows
-        let rows = df.read_active_rows().unwrap();
-        assert_eq!(rows, vec![
-            make_quote(0, "ABC", "AMEX", 11.77),
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 23.66),
-            make_quote(3, "GOTO", "OTC", 0.1428),
-            make_quote(4, "BOOM", "NASDAQ", 56.87),
-        ]);
-    }
-
-    #[test]
-    fn test_append_namespace() {
-        // create a table with test data
-        let ns_path = "machine.append.stocks";
-        let (df, _) = create_dataframe(ns_path);
-
-        // insert some rows
-        let machine = Machine::empty();
-        let (_, result) = machine.evaluate(&Quarry(Excavation::Mutate(Mutation::Append {
-            path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
-            source: Box::new(From(Box::new(JSONExpression(vec![
-                ("symbol".into(), Literal(StringValue("REX".into()))),
-                ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
-                ("last_sale".into(), Literal(Number(F64Value(16.99)))),
-            ])))),
-        }))).unwrap();
-        assert_eq!(result, Outcome(RowsAffected(1)));
-
-        // verify the remaining rows
-        let rows = df.read_active_rows().unwrap();
-        assert_eq!(rows, vec![
-            make_quote(0, "ABC", "AMEX", 11.77),
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 23.66),
-            make_quote(3, "GOTO", "OTC", 0.1428),
-            make_quote(4, "BOOM", "NASDAQ", 56.87),
-            make_quote(5, "REX", "NASDAQ", 16.99),
-        ]);
-    }
-
-    #[test]
-    fn test_overwrite_rows_in_namespace() {
-        let ns_path = "machine.overwrite.stocks";
-        let model = Quarry(Excavation::Mutate(Mutation::Overwrite {
-            path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
-            source: Box::new(Via(Box::new(JSONExpression(vec![
-                ("symbol".into(), Literal(StringValue("BOOM".into()))),
-                ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                ("last_sale".into(), Literal(Number(F64Value(56.99)))),
-            ])))),
-            condition: Some(Equal(
-                Box::new(Variable("symbol".into())),
-                Box::new(Literal(StringValue("BOOM".into()))),
-            )),
-            limit: None,
-        }));
-        assert_eq!(model.to_code(), r#"overwrite ns("machine.overwrite.stocks") via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99} where symbol == "BOOM""#);
-
-        // create a table with test data
-        let (df, _) = create_dataframe(ns_path);
-
-        // overwrite some rows
-        let machine = Machine::empty();
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Outcome(RowsAffected(1)));
-
-        // verify the remaining rows
-        let rows = df.read_active_rows().unwrap();
-        assert_eq!(rows, vec![
-            make_quote(0, "ABC", "AMEX", 11.77),
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 23.66),
-            make_quote(3, "GOTO", "OTC", 0.1428),
-            make_quote(4, "BOOM", "NYSE", 56.99),
-        ])
-    }
-
     #[ignore]
     #[test]
     fn test_precedence() {
@@ -2337,148 +1885,6 @@ mod tests {
     }
 
     #[test]
-    fn test_select_from_namespace() {
-        // create a table with test data
-        let (_, phys_columns) =
-            create_dataframe("machine.select.stocks");
-
-        // execute the query
-        let machine = Machine::empty();
-        let (_, result) = machine.evaluate(&Quarry(Excavation::Query(Queryable::Select {
-            fields: vec![
-                Variable("symbol".into()),
-                Variable("exchange".into()),
-                Variable("last_sale".into()),
-            ],
-            from: Some(Box::new(Ns(Box::new(Literal(StringValue("machine.select.stocks".into())))))),
-            condition: Some(GreaterThan(
-                Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Number(F64Value(1.0)))),
-            )),
-            group_by: None,
-            having: None,
-            order_by: Some(vec![Variable("symbol".into())]),
-            limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        }))).unwrap();
-        assert_eq!(result, TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
-            make_quote(0, "ABC", "AMEX", 11.77),
-            make_quote(2, "BIZ", "NYSE", 23.66),
-            make_quote(4, "BOOM", "NASDAQ", 56.87),
-        ]))));
-    }
-
-    #[test]
-    fn test_select_from_variable() {
-        let (mrc, phys_columns) = create_memory_table();
-        let machine = Machine::empty()
-            .with_variable("stocks", TableValue(Model(mrc)));
-
-        // execute the code
-        let (_, result) = machine.evaluate(&Quarry(Excavation::Query(Queryable::Select {
-            fields: vec![
-                Variable("symbol".into()),
-                Variable("exchange".into()),
-                Variable("last_sale".into()),
-            ],
-            from: Some(Box::new(Variable("stocks".into()))),
-            condition: Some(LessThan(
-                Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Number(F64Value(1.0)))),
-            )),
-            group_by: None,
-            having: None,
-            order_by: Some(vec![Variable("symbol".into())]),
-            limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        }))).unwrap();
-        assert_eq!(result, TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(3, "GOTO", "OTC", 0.1428),
-        ]))));
-    }
-
-    #[ignore]
-    #[test]
-    fn test_update_rows_in_memory() {
-        // build the update model
-        let model = Quarry(Excavation::Mutate(Mutation::Update {
-            path: Box::new(Variable("stocks".into())),
-            source: Box::new(Via(Box::new(JSONExpression(vec![
-                ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
-            ])))),
-            condition: Some(Equal(
-                Box::new(Variable("exchange".into())),
-                Box::new(Literal(StringValue("OTC".into()))),
-            )),
-            limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        }));
-        assert_eq!(model.to_code(), r#"update stocks via {exchange: "OTC_BB"} where exchange == "OTC" limit 5"#);
-
-        // perform the update and verify
-        let (mrc, phys_columns) = create_memory_table();
-        let machine = Machine::empty().with_variable("stocks", TableValue(Model(mrc)));
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Outcome(RowsAffected(2)));
-
-        // retrieve and verify all rows
-        let model = From(Box::new(Variable("stocks".into())));
-        let (machine, _) = machine.evaluate(&model).unwrap();
-        assert_eq!(machine.get("stocks").unwrap(), TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
-            make_quote(0, "ABC", "AMEX", 11.77),
-            make_quote(1, "UNO", "OTC_BB", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 23.66),
-            make_quote(3, "GOTO", "OTC_BB", 0.1428),
-            make_quote(4, "BOOM", "NASDAQ", 56.87),
-        ]))))
-    }
-
-    #[test]
-    fn test_update_rows_in_namespace() {
-        // create a table with test data
-        let ns_path = "machine.update.stocks";
-        let (df, _) = create_dataframe(ns_path);
-
-        // create the instruction model
-        let model = Quarry(Excavation::Mutate(Mutation::Update {
-            path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
-            source: Box::new(Via(Box::new(JSONExpression(vec![
-                ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
-            ])))),
-            condition: Some(Equal(
-                Box::new(Variable("exchange".into())),
-                Box::new(Literal(StringValue("OTC".into()))),
-            )),
-            limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        }));
-
-        // update some rows
-        let (_, delta) = Machine::empty().evaluate(&model).unwrap();
-        assert_eq!(delta, Outcome(RowsAffected(2)));
-
-        // verify the rows
-        let rows = df.read_active_rows().unwrap();
-        assert_eq!(rows, vec![
-            make_quote(0, "ABC", "AMEX", 11.77),
-            make_quote(1, "UNO", "OTC_BB", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 23.66),
-            make_quote(3, "GOTO", "OTC_BB", 0.1428),
-            make_quote(4, "BOOM", "NASDAQ", 56.87),
-        ])
-    }
-
-    #[test]
-    fn test_truncate_table() {
-        let model = Quarry(Excavation::Mutate(Mutation::Truncate {
-            path: Box::new(Variable("stocks".into())),
-            limit: Some(Box::new(Literal(Number(I64Value(0))))),
-        }));
-
-        let (mrc, _) = create_memory_table();
-        let machine = Machine::empty().with_variable("stocks", TableValue(Model(mrc)));
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Outcome(RowsAffected(1)))
-    }
-
-    #[test]
     fn test_variables() {
         let machine = Machine::empty()
             .with_variable("abc", Number(I32Value(5)))
@@ -2487,53 +1893,705 @@ mod tests {
         assert_eq!(machine.get("xyz"), Some(Number(I32Value(58))));
     }
 
-    #[test]
-    fn test_while_loop() {
-        let model = While {
-            // num < 5
-            condition: Box::new(Condition(LessThan(
-                Box::new(Variable("num".into())),
-                Box::new(Literal(Number(I64Value(5)))),
-            ))),
-            // num := num + 1
-            code: Box::new(SetVariable("num".into(), Box::new(Plus(
-                Box::new(Variable("num".into())),
-                Box::new(Literal(Number(I64Value(1)))),
-            )))),
-        };
-        assert_eq!(model.to_code(), "while num < 5 num := num + 1");
+    /// Function tests
+    #[cfg(test)]
+    mod function_tests {
+        use super::*;
+        use crate::outcomes::Outcomes;
+        use Outcomes::*;
 
-        let machine = Machine::empty().with_variable("num", Number(I64Value(0)));
-        let (machine, _) = machine.evaluate(&model).unwrap();
-        assert_eq!(machine.get("num"), Some(Number(I64Value(5))))
-    }
+        #[test]
+        fn test_anonymous_function() {
+            // define a function call: (n => n + 5)(3)
+            let model = FunctionCall {
+                fx: Box::new(
+                    Literal(Function {
+                        params: vec![
+                            Parameter::new("n", Some("i64".into()), None)
+                        ],
+                        code: Box::new(Plus(
+                            Box::new(Variable("n".into())),
+                            Box::new(Literal(Number(I64Value(5)))))),
+                    })),
+                args: vec![
+                    Literal(Number(I64Value(3)))
+                ],
+            };
 
-    fn create_memory_table() -> (ModelRowCollection, Vec<Column>) {
-        let phys_columns = make_quote_columns();
-        let mrc = ModelRowCollection::from_rows(&phys_columns, &vec![
-            make_quote(0, "ABC", "AMEX", 11.77),
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 23.66),
-            make_quote(3, "GOTO", "OTC", 0.1428),
-            make_quote(4, "BOOM", "NASDAQ", 56.87)]);
-        (mrc, phys_columns)
-    }
-
-    fn create_dataframe(namespace: &str) -> (DataFrame, Vec<Column>) {
-        let columns = make_quote_parameters();
-        let phys_columns = Column::from_parameters(&columns).unwrap();
-        let ns = Namespace::parse(namespace).unwrap();
-        match fs::remove_file(ns.get_table_file_path()) {
-            Ok(_) => {}
-            Err(err) => error!("create_dataframe: {}", err)
+            // evaluate the function
+            let (machine, result) = Machine::empty()
+                .with_variable("n", Number(I64Value(3)))
+                .evaluate(&model)
+                .unwrap();
+            assert_eq!(result, Number(I64Value(8)));
+            assert_eq!(model.to_code(), "(fn(n: i64) => n + 5)(3)")
         }
 
-        let mut df = make_dataframe_ns(ns, columns.to_owned()).unwrap();
-        assert_eq!(0, df.append(make_quote(0, "ABC", "AMEX", 11.77)).unwrap());
-        assert_eq!(1, df.append(make_quote(1, "UNO", "OTC", 0.2456)).unwrap());
-        assert_eq!(2, df.append(make_quote(2, "BIZ", "NYSE", 23.66)).unwrap());
-        assert_eq!(3, df.append(make_quote(3, "GOTO", "OTC", 0.1428)).unwrap());
-        assert_eq!(4, df.append(make_quote(4, "BOOM", "NASDAQ", 56.87)).unwrap());
-        (df, phys_columns)
+        #[test]
+        fn test_named_function() {
+            // define a function: (a, b) => a + b
+            let fx = Function {
+                params: vec![
+                    Parameter::new("a", Some("i64".into()), None),
+                    Parameter::new("b", Some("i64".into()), None),
+                ],
+                code: Box::new(Plus(Box::new(
+                    Variable("a".into())
+                ), Box::new(
+                    Variable("b".into())
+                ))),
+            };
+
+            // publish the function in scope: fn add(a, b) => a + b
+            let machine = Machine::empty();
+            let (machine, result) = machine.evaluate_scope(&vec![
+                SetVariable("add".to_string(), Box::new(Literal(fx.to_owned())))
+            ]);
+            assert_eq!(machine.get("add").unwrap(), fx);
+            assert_eq!(result, Outcome(Ack));
+
+            // execute the function via function call in scope: add(2, 3)
+            let model = FunctionCall {
+                fx: Box::new(Literal(fx)),
+                args: vec![
+                    Literal(Number(I64Value(2))),
+                    Literal(Number(I64Value(3))),
+                ],
+            };
+            let (machine, result) = machine
+                .evaluate(&model)
+                .unwrap();
+            assert_eq!(result, Number(I64Value(5)));
+            assert_eq!(model.to_code(), "(fn(a: i64, b: i64) => a + b)(2, 3)")
+        }
+
+        #[test]
+        fn test_function_recursion() {
+            // f := (fn(n: i64) => if(n <= 1) 1 else n * f(n - 1))
+            let model = Function {
+                params: vec![
+                    Parameter::new("n", Some("i64".into()), None)
+                ],
+                // iff(n <= 1, 1, n * f(n - 1))
+                code: Box::new(If {
+                    // n <= 1
+                    condition: Box::new(Condition(LessOrEqual(
+                        Box::new(Variable("n".into())),
+                        Box::new(Literal(Number(I64Value(1)))),
+                    ))),
+                    // 1
+                    a: Box::new(Literal(Number(I64Value(1)))),
+                    // n * f(n - 1)
+                    b: Some(Box::from(Multiply(
+                        Box::from(Variable("n".into())),
+                        Box::from(FunctionCall {
+                            fx: Box::new(Variable("f".into())),
+                            args: vec![
+                                Minus(
+                                    Box::from(Variable("n".into())),
+                                    Box::from(Literal(Number(I64Value(1)))),
+                                ),
+                            ],
+                        }),
+                    ))),
+                }),
+            };
+            println!("f := {}", model.to_code());
+
+            // f(5.0)
+            let machine = Machine::empty().with_variable("f", model);
+            let (machine, result) = machine.evaluate(&FunctionCall {
+                fx: Box::new(Variable("f".into())),
+                args: vec![
+                    Literal(Number(I64Value(5)))
+                ],
+            }).unwrap();
+
+            println!("result: {}", result);
+            assert_eq!(result, Number(I64Value(120)));
+        }
+    }
+
+    /// Logical tests
+    #[cfg(test)]
+    mod logical_tests {
+        use super::*;
+        use crate::outcomes::Outcomes;
+        use Outcomes::*;
+
+        #[test]
+        fn test_if_else_flow_1() {
+            let model = If {
+                condition: Box::new(Condition(GreaterThan(
+                    Box::new(Variable("num".into())),
+                    Box::new(Literal(Number(I64Value(25)))),
+                ))),
+                a: Box::new(Literal(StringValue("Yes".into()))),
+                b: Some(Box::new(Literal(StringValue("No".into())))),
+            };
+            assert_eq!(model.to_code(), r#"if num > 25 "Yes" else "No""#);
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, StringValue("No".into()));
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(37)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, StringValue("Yes".into()));
+        }
+
+        #[test]
+        fn test_if_else_flow_2() {
+            let model = If {
+                condition: Box::new(Condition(LessThan(
+                    Box::new(Variable("num".into())),
+                    Box::new(Literal(Number(I64Value(10)))),
+                ))),
+                a: Box::new(Literal(StringValue("Yes".into()))),
+                b: Some(Box::new(Literal(StringValue("No".into())))),
+            };
+            assert_eq!(model.to_code(), r#"if num < 10 "Yes" else "No""#);
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, StringValue("Yes".into()));
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(99)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, StringValue("No".into()));
+        }
+
+        #[test]
+        fn test_while_loop() {
+            let model = While {
+                // num < 5
+                condition: Box::new(Condition(LessThan(
+                    Box::new(Variable("num".into())),
+                    Box::new(Literal(Number(I64Value(5)))),
+                ))),
+                // num := num + 1
+                code: Box::new(SetVariable("num".into(), Box::new(Plus(
+                    Box::new(Variable("num".into())),
+                    Box::new(Literal(Number(I64Value(1)))),
+                )))),
+            };
+            assert_eq!(model.to_code(), "while num < 5 num := num + 1");
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(0)));
+            let (machine, _) = machine.evaluate(&model).unwrap();
+            assert_eq!(machine.get("num"), Some(Number(I64Value(5))))
+        }
+    }
+
+    /// SQL tests
+    #[cfg(test)]
+    mod sql_tests {
+        use super::*;
+        use crate::compiler::Compiler;
+        use crate::expression::Conditions::Equal;
+        use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+        use crate::expression::MutateTarget::TableTarget;
+        use crate::expression::{Excavation, Infrastructure, Mutation};
+        use crate::outcomes::Outcomes;
+        use crate::table_columns::Column;
+        use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
+        use Outcomes::*;
+
+        #[test]
+        fn test_from_where_limit_in_memory() {
+            // create a table with test data
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns).unwrap();
+            let machine = Machine::empty()
+                .with_variable("stocks", TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+                    make_quote(0, "ABC", "AMEX", 12.33),
+                    make_quote(1, "UNO", "OTC", 0.2456),
+                    make_quote(2, "BIZ", "NYSE", 9.775),
+                    make_quote(3, "GOTO", "OTC", 0.1442),
+                    make_quote(4, "XYZ", "NYSE", 0.0289),
+                ]))));
+
+            let model = Quarry(Query(Queryable::Limit {
+                from: Box::new(Quarry(Query(Queryable::Where {
+                    from: Box::new(From(Box::new(Variable("stocks".into())))),
+                    condition: GreaterOrEqual(
+                        Box::new(Variable("last_sale".into())),
+                        Box::new(Literal(Number(F64Value(1.0)))),
+                    ),
+                }))),
+                limit: Box::new(Literal(Number(I64Value(2)))),
+            }));
+            assert_eq!(model.to_code(), "from stocks where last_sale >= 1 limit 2");
+
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+                make_quote(0, "ABC", "AMEX", 12.33),
+                make_quote(2, "BIZ", "NYSE", 9.775),
+            ]))));
+        }
+
+        #[test]
+        fn test_index_of_table_in_namespace() {
+            // create a table with test data
+            let ns = Namespace::new("machine", "element_at", "stocks");
+            let logical_columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&logical_columns).unwrap();
+            let value_tuples = vec![
+                ("ABC", "AMEX", 11.77), ("UNO", "OTC", 0.2456),
+                ("BIZ", "NYSE", 23.66), ("GOTO", "OTC", 0.1428),
+                ("BOOM", "NASDAQ", 56.87),
+            ];
+            let rows = value_tuples.iter()
+                .map(|(symbol, exchange, last_sale)| {
+                    Row::new(0, vec![
+                        StringValue(symbol.to_string()),
+                        StringValue(exchange.to_string()),
+                        Number(F64Value(*last_sale)),
+                    ])
+                }).collect();
+            let mut dfrc = DataFrame::create(ns.to_owned(), DataFrameConfig::build(logical_columns)).unwrap();
+            assert_eq!(Outcome(RowsAffected(5)), dfrc.append_rows(rows));
+
+            // create the instruction model 'ns("machine.element_at.stocks")[2]'
+            let model = ElementAt(
+                Box::new(Ns(Box::new(Literal(StringValue(ns.into()))))),
+                Box::new(Literal(Number(I64Value(2)))),
+            );
+            assert_eq!(model.to_code(), r#"ns("machine.element_at.stocks")[2]"#);
+
+            // evaluate the instruction
+            let (_, result) = Machine::empty().evaluate(&model).unwrap();
+            assert_eq!(result, StructureHard(
+                HardStructure::from_row(
+                    &phys_columns,
+                    &make_quote(2, "BIZ", "NYSE", 23.66))
+            ))
+        }
+
+        #[test]
+        fn test_index_of_table_in_variable() {
+            let phys_columns = make_quote_columns();
+            let my_table = ModelRowCollection::from_rows(&phys_columns, &vec![
+                make_quote(0, "ABC", "AMEX", 12.33),
+                make_quote(1, "GAS", "NYSE", 0.2456),
+                make_quote(2, "BASH", "NASDAQ", 13.11),
+                make_quote(3, "OIL", "NYSE", 0.1442),
+                make_quote(4, "VAPOR", "NYSE", 0.0289),
+            ]);
+
+            // create the instruction model "stocks[4]"
+            let model = ElementAt(
+                Box::new(Variable("stocks".to_string())),
+                Box::new(Literal(Number(I64Value(4)))),
+            );
+            assert_eq!(model.to_code(), "stocks[4]");
+
+            // evaluate the instruction
+            let machine = Machine::empty()
+                .with_variable("stocks", TableValue(Model(my_table)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, StructureHard(
+                HardStructure::from_row(&phys_columns,
+                                        &make_quote(4, "VAPOR", "NYSE", 0.0289))
+            ))
+        }
+
+        #[test]
+        fn test_create_table() {
+            let model = Quarry(Excavation::Construct(Infrastructure::Create {
+                path: Box::new(Ns(Box::new(Literal(StringValue("machine.create.stocks".into()))))),
+                entity: TableEntity {
+                    columns: make_quote_parameters(),
+                    from: None,
+                },
+            }));
+
+            // create the table
+            let machine = Machine::empty();
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, Outcome(Ack));
+
+            // decompile back to source code
+            assert_eq!(
+                model.to_code(),
+                "create table ns(\"machine.create.stocks\") (symbol: String(8), exchange: String(8), last_sale: f64)"
+            );
+        }
+
+        #[test]
+        fn test_create_table_with_index() {
+            let path = "machine.index.stocks";
+            let machine = Machine::empty();
+
+            // drop table if exists ns("machine.index.stocks")
+            let (machine, _) = machine.evaluate(&Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget {
+                path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
+            })))).unwrap();
+
+            // create table ns("machine.index.stocks") (...)
+            let (machine, result) = machine.evaluate(&Quarry(Excavation::Construct(Infrastructure::Create {
+                path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
+                entity: TableEntity {
+                    columns: make_quote_parameters(),
+                    from: None,
+                },
+            }))).unwrap();
+            assert_eq!(result, Outcome(Ack));
+
+            // create index ns("machine.index.stocks") [symbol, exchange]
+            let model = Quarry(Excavation::Construct(Infrastructure::Create {
+                path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
+                entity: IndexEntity {
+                    columns: vec![
+                        Variable("symbol".into()),
+                        Variable("exchange".into()),
+                    ],
+                },
+            }));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, Outcome(Ack));
+
+            // decompile back to source code
+            assert_eq!(
+                model.to_code(),
+                "create index ns(\"machine.index.stocks\") [symbol, exchange]"
+            );
+        }
+
+        #[test]
+        fn test_declare_table() {
+            let model = Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
+                columns: vec![
+                    Parameter::new("symbol", Some("String(8)".into()), None),
+                    Parameter::new("exchange", Some("String(8)".into()), None),
+                    Parameter::new("last_sale", Some("f64".into()), None),
+                ],
+                from: None,
+            })));
+
+            let machine = Machine::empty();
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, TypedValue::TableValue(Model(ModelRowCollection::with_rows(
+                make_quote_columns(), Vec::new(),
+            ))))
+        }
+
+        #[test]
+        fn test_drop_table() {
+            // create a table with test data
+            let ns_path = "machine.drop.stocks";
+            let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
+            create_dataframe(ns_path);
+
+            let model = Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget { path: Box::new(ns) })));
+            assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
+
+            let machine = Machine::empty();
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, Outcome(Ack))
+        }
+
+        #[test]
+        fn test_delete_rows_from_namespace() {
+            // create a table with test data
+            let ns_path = "machine.delete.stocks";
+            let (df, _) = create_dataframe(ns_path);
+
+            // delete some rows
+            let machine = Machine::empty();
+            let code = Compiler::build(r#"
+            delete from ns("machine.delete.stocks")
+            where last_sale > 1.0
+            "#).unwrap();
+            let (_, result) = machine.evaluate(&code).unwrap();
+            assert_eq!(result, Outcome(RowsAffected(3)));
+
+            // verify the remaining rows
+            let rows = df.read_active_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(3, "GOTO", "OTC", 0.1428),
+            ]);
+        }
+
+        #[test]
+        fn test_undelete_rows_from_namespace() {
+            // create a table with test data
+            let ns_path = "machine.undelete.stocks";
+            let (df, _) = create_dataframe(ns_path);
+
+            // delete some rows
+            let machine = Machine::empty();
+            let code = Compiler::build(r#"
+            stocks := ns("machine.undelete.stocks")
+            delete from stocks where last_sale > 1.0
+            "#).unwrap();
+            let (machine, result) = machine.evaluate(&code).unwrap();
+            assert_eq!(result, Outcome(RowsAffected(3)));
+
+            // verify the remaining rows
+            let rows = df.read_active_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(3, "GOTO", "OTC", 0.1428),
+            ]);
+
+            // undelete the rows
+            let code = Compiler::build(r#"
+            undelete from stocks where last_sale > 1.0
+            "#).unwrap();
+            let (_, result) = machine.evaluate(&code).unwrap();
+            assert_eq!(result, Outcome(RowsAffected(3)));
+
+            // verify the remaining rows
+            let rows = df.read_active_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC", 0.1428),
+                make_quote(4, "BOOM", "NASDAQ", 56.87),
+            ]);
+        }
+
+        #[test]
+        fn test_append_namespace() {
+            // create a table with test data
+            let ns_path = "machine.append.stocks";
+            let (df, _) = create_dataframe(ns_path);
+
+            // insert some rows
+            let machine = Machine::empty();
+            let (_, result) = machine.evaluate(&Quarry(Excavation::Mutate(Mutation::Append {
+                path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
+                source: Box::new(From(Box::new(JSONExpression(vec![
+                    ("symbol".into(), Literal(StringValue("REX".into()))),
+                    ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
+                    ("last_sale".into(), Literal(Number(F64Value(16.99)))),
+                ])))),
+            }))).unwrap();
+            assert_eq!(result, Outcome(RowsAffected(1)));
+
+            // verify the remaining rows
+            let rows = df.read_active_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC", 0.1428),
+                make_quote(4, "BOOM", "NASDAQ", 56.87),
+                make_quote(5, "REX", "NASDAQ", 16.99),
+            ]);
+        }
+
+        #[test]
+        fn test_overwrite_rows_in_namespace() {
+            let ns_path = "machine.overwrite.stocks";
+            let model = Quarry(Excavation::Mutate(Mutation::Overwrite {
+                path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
+                source: Box::new(Via(Box::new(JSONExpression(vec![
+                    ("symbol".into(), Literal(StringValue("BOOM".into()))),
+                    ("exchange".into(), Literal(StringValue("NYSE".into()))),
+                    ("last_sale".into(), Literal(Number(F64Value(56.99)))),
+                ])))),
+                condition: Some(Equal(
+                    Box::new(Variable("symbol".into())),
+                    Box::new(Literal(StringValue("BOOM".into()))),
+                )),
+                limit: None,
+            }));
+            assert_eq!(model.to_code(), r#"overwrite ns("machine.overwrite.stocks") via {symbol: "BOOM", exchange: "NYSE", last_sale: 56.99} where symbol == "BOOM""#);
+
+            // create a table with test data
+            let (df, _) = create_dataframe(ns_path);
+
+            // overwrite some rows
+            let machine = Machine::empty();
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, Outcome(RowsAffected(1)));
+
+            // verify the remaining rows
+            let rows = df.read_active_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC", 0.1428),
+                make_quote(4, "BOOM", "NYSE", 56.99),
+            ])
+        }
+
+        #[ignore]
+        #[test]
+        fn test_select_from_namespace() {
+            // create a table with test data
+            let (_, phys_columns) =
+                create_dataframe("machine.select.stocks");
+
+            // execute the query
+            let machine = Machine::empty();
+            let (_, result) = machine.evaluate(&Quarry(Excavation::Query(Queryable::Select {
+                fields: vec![
+                    Variable("symbol".into()),
+                    Variable("exchange".into()),
+                    Variable("last_sale".into()),
+                ],
+                from: Some(Box::new(Ns(Box::new(Literal(StringValue("machine.select.stocks".into())))))),
+                condition: Some(GreaterThan(
+                    Box::new(Variable("last_sale".into())),
+                    Box::new(Literal(Number(F64Value(1.0)))),
+                )),
+                group_by: None,
+                having: None,
+                order_by: Some(vec![Variable("symbol".into())]),
+                limit: Some(Box::new(Literal(Number(I64Value(5))))),
+            }))).unwrap();
+            assert_eq!(result, TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(4, "BOOM", "NASDAQ", 56.87),
+            ]))));
+        }
+
+        #[ignore]
+        #[test]
+        fn test_select_from_variable() {
+            let (mrc, phys_columns) = create_memory_table();
+            let machine = Machine::empty()
+                .with_variable("stocks", TableValue(Model(mrc)));
+
+            // execute the code
+            let (_, result) = machine.evaluate(&Quarry(Excavation::Query(Queryable::Select {
+                fields: vec![
+                    Variable("symbol".into()),
+                    Variable("exchange".into()),
+                    Variable("last_sale".into()),
+                ],
+                from: Some(Box::new(Variable("stocks".into()))),
+                condition: Some(LessThan(
+                    Box::new(Variable("last_sale".into())),
+                    Box::new(Literal(Number(F64Value(1.0)))),
+                )),
+                group_by: None,
+                having: None,
+                order_by: Some(vec![Variable("symbol".into())]),
+                limit: Some(Box::new(Literal(Number(I64Value(5))))),
+            }))).unwrap();
+            assert_eq!(result, TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(3, "GOTO", "OTC", 0.1428),
+            ]))));
+        }
+
+        #[ignore]
+        #[test]
+        fn test_update_rows_in_memory() {
+            // build the update model
+            let model = Quarry(Excavation::Mutate(Mutation::Update {
+                path: Box::new(Variable("stocks".into())),
+                source: Box::new(Via(Box::new(JSONExpression(vec![
+                    ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
+                ])))),
+                condition: Some(Equal(
+                    Box::new(Variable("exchange".into())),
+                    Box::new(Literal(StringValue("OTC".into()))),
+                )),
+                limit: Some(Box::new(Literal(Number(I64Value(5))))),
+            }));
+            assert_eq!(model.to_code(), r#"update stocks via {exchange: "OTC_BB"} where exchange == "OTC" limit 5"#);
+
+            // perform the update and verify
+            let (mrc, phys_columns) = create_memory_table();
+            let machine = Machine::empty().with_variable("stocks", TableValue(Model(mrc)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, Outcome(RowsAffected(2)));
+
+            // retrieve and verify all rows
+            let model = From(Box::new(Variable("stocks".into())));
+            let (machine, _) = machine.evaluate(&model).unwrap();
+            assert_eq!(machine.get("stocks").unwrap(), TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(1, "UNO", "OTC_BB", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC_BB", 0.1428),
+                make_quote(4, "BOOM", "NASDAQ", 56.87),
+            ]))))
+        }
+
+        #[test]
+        fn test_update_rows_in_namespace() {
+            // create a table with test data
+            let ns_path = "machine.update.stocks";
+            let (df, _) = create_dataframe(ns_path);
+
+            // create the instruction model
+            let model = Quarry(Excavation::Mutate(Mutation::Update {
+                path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
+                source: Box::new(Via(Box::new(JSONExpression(vec![
+                    ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
+                ])))),
+                condition: Some(Equal(
+                    Box::new(Variable("exchange".into())),
+                    Box::new(Literal(StringValue("OTC".into()))),
+                )),
+                limit: Some(Box::new(Literal(Number(I64Value(5))))),
+            }));
+
+            // update some rows
+            let (_, delta) = Machine::empty().evaluate(&model).unwrap();
+            assert_eq!(delta, Outcome(RowsAffected(2)));
+
+            // verify the rows
+            let rows = df.read_active_rows().unwrap();
+            assert_eq!(rows, vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(1, "UNO", "OTC_BB", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC_BB", 0.1428),
+                make_quote(4, "BOOM", "NASDAQ", 56.87),
+            ])
+        }
+
+        #[test]
+        fn test_truncate_table() {
+            let model = Quarry(Excavation::Mutate(Mutation::Truncate {
+                path: Box::new(Variable("stocks".into())),
+                limit: Some(Box::new(Literal(Number(I64Value(0))))),
+            }));
+
+            let (mrc, _) = create_memory_table();
+            let machine = Machine::empty().with_variable("stocks", TableValue(Model(mrc)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, Outcome(RowsAffected(1)))
+        }
+
+        fn create_memory_table() -> (ModelRowCollection, Vec<Column>) {
+            let phys_columns = make_quote_columns();
+            let mrc = ModelRowCollection::from_rows(&phys_columns, &vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC", 0.1428),
+                make_quote(4, "BOOM", "NASDAQ", 56.87)]);
+            (mrc, phys_columns)
+        }
+
+        fn create_dataframe(namespace: &str) -> (DataFrame, Vec<Column>) {
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns).unwrap();
+            let ns = Namespace::parse(namespace).unwrap();
+            match fs::remove_file(ns.get_table_file_path()) {
+                Ok(_) => {}
+                Err(err) => error!("create_dataframe: {}", err)
+            }
+
+            let mut df = make_dataframe_ns(ns, columns.to_owned()).unwrap();
+            assert_eq!(0, df.append(make_quote(0, "ABC", "AMEX", 11.77)).unwrap());
+            assert_eq!(1, df.append(make_quote(1, "UNO", "OTC", 0.2456)).unwrap());
+            assert_eq!(2, df.append(make_quote(2, "BIZ", "NYSE", 23.66)).unwrap());
+            assert_eq!(3, df.append(make_quote(3, "GOTO", "OTC", 0.1428)).unwrap());
+            assert_eq!(4, df.append(make_quote(4, "BOOM", "NASDAQ", 56.87)).unwrap());
+            (df, phys_columns)
+        }
     }
 }

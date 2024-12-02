@@ -40,7 +40,7 @@ impl Column {
     pub fn from_parameter(parameter: &Parameter, offset: usize) -> std::io::Result<Column> {
         Ok(Self::new(
             parameter.get_name(),
-            DataType::compile(parameter.get_param_type().unwrap_or("".to_string()).as_str())?,
+            DataType::from_str(parameter.get_param_type().unwrap_or("".to_string()).as_str())?,
             TypedValue::wrap_value_opt(&parameter.get_default_value())?, offset))
     }
 
