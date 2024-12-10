@@ -9,8 +9,10 @@ use std::ops::Range;
 use actix::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::Disk;
 use crate::dataframe_config::DataFrameConfig;
-use crate::dataframes::DataFrame;
+use crate::file_row_collection::FileRowCollection;
 use crate::namespaces::Namespace;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
@@ -20,7 +22,7 @@ use crate::table_columns::Column;
 // define the Dataframe I/O actor
 #[derive(Debug)]
 pub struct DataframeActor {
-    resources: HashMap<String, DataFrame>,
+    resources: HashMap<String, Dataframe>,
 }
 
 impl DataframeActor {
@@ -32,15 +34,15 @@ impl DataframeActor {
     }
 
     fn append_row(&mut self, ns: &Namespace, row: Row) -> std::io::Result<usize> {
-        self.get_or_load_dataframe(ns)?.append(row)
+        Ok(self.get_or_load_dataframe(ns)?.append_row(row).to_usize())
     }
 
-    fn create_table(&mut self, ns: Namespace, cfg: DataFrameConfig) -> std::io::Result<&mut DataFrame> {
+    fn create_table(&mut self, ns: Namespace, cfg: DataFrameConfig) -> std::io::Result<&mut Dataframe> {
         self.get_or_create_dataframe(ns, cfg)
     }
 
     fn delete_row(&mut self, ns: &Namespace, id: usize) -> std::io::Result<usize> {
-        self.get_or_load_dataframe(ns)?.delete(id)
+        Ok(self.get_or_load_dataframe(ns)?.delete_row(id).to_usize())
     }
 
     fn get_columns(&mut self, ns: &Namespace) -> std::io::Result<&Vec<Column>> {
@@ -51,23 +53,27 @@ impl DataframeActor {
         Ok(self.resources.iter().map(|(s, _)| s.to_string()).collect::<Vec<String>>())
     }
 
-    fn get_or_create_dataframe(&mut self, ns: Namespace, cfg: DataFrameConfig) -> std::io::Result<&mut DataFrame> {
+    fn get_or_create_dataframe(&mut self, ns: Namespace, cfg: DataFrameConfig) -> std::io::Result<&mut Dataframe> {
         match self.resources.entry(ns.id()) {
             Entry::Occupied(v) => Ok(v.into_mut()),
             Entry::Vacant(x) =>
-                Ok(x.insert(DataFrame::create(ns, cfg)?))
+                Ok(x.insert({
+                    DataFrameConfig::build(cfg.get_columns().clone())
+                        .save(&ns)?;
+                    Dataframe::create_table(&ns, cfg.get_columns())?
+                }))
         }
     }
 
-    fn get_or_load_dataframe(&mut self, ns: &Namespace) -> std::io::Result<&mut DataFrame> {
+    fn get_or_load_dataframe(&mut self, ns: &Namespace) -> std::io::Result<&mut Dataframe> {
         match self.resources.entry(ns.id()) {
             Entry::Occupied(v) => Ok(v.into_mut()),
-            Entry::Vacant(x) => Ok(x.insert(DataFrame::load(ns)?))
+            Entry::Vacant(x) => Ok(x.insert(Disk(FileRowCollection::open(ns)?)))
         }
     }
 
     fn overwrite_row(&mut self, ns: &Namespace, row: Row) -> std::io::Result<usize> {
-        self.get_or_load_dataframe(ns)?.overwrite(row)
+        Ok(self.get_or_load_dataframe(ns)?.overwrite_row(row.get_id(), row).to_usize())
     }
 
     fn read_fully(
@@ -77,9 +83,15 @@ impl DataframeActor {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = Vec::new();
         for id in 0..df.len()? {
-            df.read_then_push(id, &mut rows)?
+            Self::read_then_push(df, id, &mut rows)?
         }
         Ok((df.get_columns().clone(), rows))
+    }
+
+    /// reads a row and pushes it into the specified vector if active
+    fn read_then_push(df: &Dataframe, id: usize, rows: &mut Vec<Row>) -> std::io::Result<()> {
+        let (row, metadata) = df.read_row(id)?;
+        Ok(if metadata.is_allocated { rows.push(row) } else { () })
     }
 
     fn read_range(
@@ -90,7 +102,7 @@ impl DataframeActor {
         let df = self.get_or_load_dataframe(ns)?;
         let mut rows = Vec::new();
         for id in range {
-            df.read_then_push(id, &mut rows)?
+            Self::read_then_push(df, id, &mut rows)?
         }
         Ok((df.get_columns().clone(), rows))
     }
@@ -110,7 +122,7 @@ impl DataframeActor {
     fn read_row_metadata(
         &mut self,
         ns: &Namespace,
-        id: usize
+        id: usize,
     ) -> std::io::Result<RowMetadata> {
         self.get_or_load_dataframe(ns)?.read_row_metadata(id)
     }
@@ -118,9 +130,9 @@ impl DataframeActor {
     fn update_row(
         &mut self,
         ns: &Namespace,
-        row: Row
+        row: Row,
     ) -> std::io::Result<usize> {
-        self.get_or_load_dataframe(ns)?.update(row)
+        Ok(self.get_or_load_dataframe(ns)?.update_row(row.get_id(), row).to_usize())
     }
 }
 

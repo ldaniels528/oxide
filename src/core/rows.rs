@@ -19,6 +19,7 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, Null, Undefined};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use shared_lib::fail;
 
 /// Represents a row of a table structure.
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -54,7 +55,7 @@ impl Row {
     /// Computes the total record size (in bytes)
     pub fn compute_record_size(columns: &Vec<Column>) -> usize {
         Row::overhead() + columns.iter()
-            .map(|c| c.get_max_physical_size()).sum::<usize>()
+            .map(|c| c.get_fixed_size()).sum::<usize>()
     }
 
     /// Decodes the supplied buffer returning a row and its metadata
@@ -74,7 +75,7 @@ impl Row {
     pub fn decode_value(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> TypedValue {
         let metadata = FieldMetadata::decode(buffer[offset]);
         if metadata.is_active {
-            TypedValue::decode(&data_type, buffer, offset + 1)
+            data_type.decode(buffer, offset + 1)
         } else { Null }
     }
 
@@ -93,7 +94,7 @@ impl Row {
         Self::new(0, columns.iter().map(|_| Null).collect())
     }
 
-    pub fn encode_value(
+    pub fn encode_cell(
         value: &TypedValue,
         metadata: &FieldMetadata,
         capacity: usize,
@@ -121,13 +122,13 @@ impl Row {
             let field = Self::from_buffer_to_value(&col.get_data_type(), buffer, col.get_offset())?;
             values.push(field);
         }
-        Ok((Self::new(id, values), metadata))
+        Ok((Self::new(id as usize, values), metadata))
     }
 
-    pub fn from_buffer_to_value(data_type: &DataType, buffer: &mut ByteCodeCompiler, offset: usize) -> std::io::Result<TypedValue> {
-        let metadata: FieldMetadata = FieldMetadata::decode(buffer[offset]);
+    pub fn from_buffer_to_value(data_type: &DataType, bcc: &mut ByteCodeCompiler, offset: usize) -> std::io::Result<TypedValue> {
+        let metadata: FieldMetadata = FieldMetadata::decode(bcc[offset]);
         let value: TypedValue = if metadata.is_active {
-            TypedValue::from_buffer(&data_type, buffer)?
+            data_type.decode_bcc(bcc)?
         } else { Null };
         Ok(value)
     }
@@ -171,8 +172,8 @@ impl Row {
         buf.extend(ByteCodeCompiler::encode_row_id(self.id));
         // include the fields
         let bb: Vec<u8> = self.values.iter().zip(phys_columns.iter())
-            .flat_map(|(v, c)|
-                Self::encode_value(v, &FieldMetadata::new(true), c.get_max_physical_size()))
+            .flat_map(|(v, c)| Self::encode_cell(
+                v, &FieldMetadata::new(true), c.get_fixed_size()))
             .collect();
         buf.extend(bb);
         buf.resize(capacity, 0u8);
@@ -212,6 +213,16 @@ impl Row {
         columns.iter().zip(self.values.iter())
             .fold(ms.clone(), |ms, (column, value)|
                 ms.with_variable(column.get_name(), value.clone()))
+    }
+
+    pub fn replace_undefined_with_null(&self, columns: &Vec<Column>) -> Row {
+        Row::new(self.get_id(), columns.iter().zip(self.get_values().iter())
+            .map(|(column, value)| {
+                match value {
+                    Null | Undefined => column.get_default_value().to_owned(),
+                    v => v.to_owned()
+                }
+            }).collect())
     }
 
     pub fn rows_to_json(columns: &Vec<Column>, rows: &Vec<Row>) -> Vec<HashMap<String, Value>> {
@@ -255,6 +266,36 @@ impl Row {
 
     pub fn to_struct(&self, columns: &Vec<Column>) -> HardStructure {
         HardStructure::new(columns.to_owned(), self.values.to_owned())
+    }
+
+    /// Creates a new [Row] from the supplied fields and values
+    pub fn transform(
+        &self,
+        columns: &Vec<Column>,
+        field_names: &Vec<String>,
+        field_values: &Vec<TypedValue>,
+    ) -> std::io::Result<Row> {
+        // field and value vectors must have the same length
+        let src_values = self.get_values();
+        if field_names.len() != field_values.len() {
+            return fail(format!("Data mismatch: fields ({}) vs values ({})", field_names.len(), field_values.len()));
+        }
+        // build a cache (mapping) of field names to values
+        let cache = field_names.iter().zip(field_values.iter())
+            .fold(HashMap::new(), |mut m, (k, v)| {
+                m.insert(k.to_string(), v.to_owned());
+                m
+            });
+        // build the new fields vector
+        let new_field_values = columns.iter().zip(src_values.iter())
+            .map(|(column, value)| match cache.get(column.get_name()) {
+                Some(Null | Undefined) => value.to_owned(),
+                Some(tv) => tv.to_owned(),
+                None => value.to_owned()
+            })
+            .collect::<Vec<TypedValue>>();
+        // return the transformed row
+        Ok(Row::new(self.get_id(), new_field_values))
     }
 
     /// Returns a [Vec] containing the values in order of the fields within the row.

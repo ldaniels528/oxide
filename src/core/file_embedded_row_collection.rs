@@ -65,7 +65,7 @@ impl RowCollection for FileEmbeddedRowCollection {
     }
 
     fn get_rows(&self) -> Vec<Row> {
-        self.get_embedded_table().map(|d|d.get_rows())
+        self.get_embedded_table().map(|d| d.get_rows())
             .unwrap_or_else(|err| vec![])
     }
 
@@ -146,10 +146,10 @@ mod tests {
 
     #[test]
     fn test_get_columns() {
-        let columns = make_quote_parameters();
-        let phys_columns = Column::from_parameters(&columns).unwrap();
+        let params = make_quote_parameters();
+        let columns = Column::from_parameters(&params).unwrap();
         let ns = Namespace::new("file_row_collection", "get_columns", "stocks");
-        let frc = FileRowCollection::create_table(&ns, phys_columns.to_owned()).unwrap();
-        assert_eq!(frc.get_columns().to_owned(), phys_columns)
+        let frc = FileRowCollection::create_table(&ns, &params).unwrap();
+        assert_eq!(frc.get_columns().to_owned(), columns)
     }
 }

@@ -24,18 +24,21 @@ use crate::compiler::fail_value;
 use crate::data_types::DataType::*;
 use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
 use crate::data_types::*;
-use crate::errors::Errors;
+use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::{Disk, Model};
 use crate::errors::Errors::{CannotSubtract, Exact, TypeMismatch, Various};
+use crate::errors::{throw, Errors};
 use crate::expression::Expression;
 use crate::field_metadata::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
+use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
+use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::*;
-use crate::outcomes::{OutcomeKind, Outcomes};
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::row_collection::RowCollection;
@@ -43,8 +46,6 @@ use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::structures::*;
 use crate::table_columns::Column;
-use crate::table_values::TableValues;
-use crate::table_values::TableValues::Model;
 use crate::typed_values::TypedValue::*;
 use shared_lib::fail;
 
@@ -62,18 +63,16 @@ pub enum TypedValue {
     Binary(Vec<u8>),
     BLOB(Box<TypedValue>),
     Boolean(bool),
-    DateValue(i64),
     ErrorValue(Errors),
     Function { params: Vec<Parameter>, code: Box<Expression> },
     NamespaceValue(Namespace),
     Null,
     Number(Numbers),
-    Outcome(Outcomes),
     PlatformOp(PlatformOps),
     StructureHard(HardStructure),
     StructureSoft(SoftStructure),
     StringValue(String),
-    TableValue(TableValues),
+    TableValue(Dataframe),
     Undefined,
 }
 
@@ -82,80 +81,6 @@ impl TypedValue {
     ////////////////////////////////////////////////////////////////////
     //  Static Methods
     ////////////////////////////////////////////////////////////////////
-
-    /// decodes the typed value based on the supplied data type and buffer
-    pub fn decode(data_type: &DataType, buffer: &Vec<u8>, offset: usize) -> Self {
-        match data_type {
-            ArrayType(_kind) => ArrayValue(Array::new()),
-            BinaryType(_size) => Binary(Vec::new()),
-            BooleanType => ByteCodeCompiler::decode_u8(buffer, offset, |b| Boolean(b == 1)),
-            DateType => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
-            ErrorType => ErrorValue(Exact(ByteCodeCompiler::decode_string(buffer, offset, 255).to_string())),
-            UnionType(..) => Null,
-            NumberType(kind) => Number(Numbers::decode(buffer, offset, *kind)),
-            PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
-            StringType(size) => StringValue(ByteCodeCompiler::decode_string(buffer, offset, size.to_size()).to_string()),
-            StructureType(params) =>
-                match HardStructure::from_parameters(params) {
-                    Ok(structure) => StructureHard(structure),
-                    Err(err) => ErrorValue(Errors::Exact(err.to_string()))
-                }
-            TableType(columns, ..) => TableValue(Model(ModelRowCollection::construct(columns))),
-            UnionType(..) => Undefined,
-            _ => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec())
-        }
-    }
-
-    /// decodes the typed value based on the supplied data type and buffer
-    pub fn from_buffer(
-        data_type: &DataType,
-        buffer: &mut ByteCodeCompiler,
-    ) -> std::io::Result<TypedValue> {
-        let tv = match data_type {
-            ArrayType(..) => ArrayValue(Array::from(buffer.next_array()?)),
-            BinaryType(..) => Binary(buffer.next_blob()),
-            BLOBType(dt) => BLOB(Box::from(Self::from_buffer(dt, buffer)?)),
-            BooleanType => Boolean(buffer.next_bool()),
-            DateType => DateValue(buffer.next_i64()),
-            EnumType(labels) => {
-                let index = buffer.next_u32() as usize;
-                StringValue(labels[index].get_name().to_string())
-            }
-            ErrorType => ErrorValue(Exact(buffer.next_string())),
-            FunctionType(columns) => Function {
-                params: columns.to_owned(),
-                code: Box::new(ByteCodeCompiler::disassemble(buffer)?),
-            },
-            UnionType(..) => Null,
-            NumberType(kind) =>
-                Number(match *kind {
-                    F32Kind => F32Value(buffer.next_f32()),
-                    F64Kind => F64Value(buffer.next_f64()),
-                    I8Kind => I8Value(buffer.next_i8()),
-                    I16Kind => I16Value(buffer.next_i16()),
-                    I32Kind => I32Value(buffer.next_i32()),
-                    I64Kind => I64Value(buffer.next_i64()),
-                    I128Kind => I128Value(buffer.next_i128()),
-                    U8Kind => U8Value(buffer.next_u8()),
-                    U16Kind => U16Value(buffer.next_u16()),
-                    U32Kind => U32Value(buffer.next_u32()),
-                    U64Kind => U64Value(buffer.next_u64()),
-                    U128Kind => U128Value(buffer.next_u128()),
-                    NaNKind => NaNValue
-                }),
-            OutcomeType(kind) => match kind {
-                OutcomeKind::Acked => Outcome(Outcomes::Ack),
-                OutcomeKind::RowInserted => Outcome(Outcomes::RowId(buffer.next_row_id())),
-                OutcomeKind::RowsUpdated => Outcome(Outcomes::RowsAffected(buffer.next_row_id())),
-            },
-            PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
-            StringType(..) => StringValue(buffer.next_string()),
-            StructureType(params) => StructureHard(buffer.next_struct_with_parameters(params)?),
-            TableType(columns, ..) => TableValue(Model(buffer.next_table_with_columns(columns)?)),
-            UnionType(..) => Undefined,
-        };
-        Ok(tv)
-    }
 
     pub fn from_json(j_value: &serde_json::Value) -> Self {
         match j_value {
@@ -190,13 +115,21 @@ impl TypedValue {
         }
     }
 
+    pub fn from_result(result: std::io::Result<TypedValue>) -> TypedValue {
+        result.unwrap_or_else(|err| ErrorValue(Exact(err.to_string())))
+    }
+
+    pub fn from_results(result: std::io::Result<(Machine, TypedValue)>) -> (Machine, TypedValue) {
+        result.unwrap_or_else(|err| (Machine::empty(), ErrorValue(Exact(err.to_string()))))
+    }
+
     pub fn is_numeric_value(value: &str) -> std::io::Result<bool> {
         let decimal_regex = Regex::new(DECIMAL_FORMAT)
             .map_err(|e| cnv_error!(e))?;
         Ok(decimal_regex.is_match(value))
     }
 
-    fn millis_to_iso_date(millis: i64) -> Option<String> {
+    pub fn millis_to_iso_date(millis: i64) -> Option<String> {
         let seconds = millis / 1000;
         let nanoseconds = (millis % 1000) * 1_000_000;
         let datetime = DateTime::from_timestamp(seconds, nanoseconds as u32)?;
@@ -208,7 +141,7 @@ impl TypedValue {
         let iso_date_regex = Regex::new(ISO_DATE_FORMAT).map_err(|e| cnv_error!(e))?;
         let uuid_regex = Regex::new(UUID_FORMAT).map_err(|e| cnv_error!(e))?;
         let result = match raw_value {
-            "ack" => Outcome(Outcomes::Ack),
+            "Ack" => Number(Ack),
             s if s == "false" => Boolean(false),
             s if s == "null" => Null,
             s if s == "true" => Boolean(true),
@@ -216,8 +149,8 @@ impl TypedValue {
             s if s.is_empty() => Null,
             s if Self::is_numeric_value(s)? => Self::from_numeric(s)?,
             s if iso_date_regex.is_match(s) =>
-                DateValue(DateTime::parse_from_rfc3339(s)
-                    .map_err(|e| cnv_error!(e))?.timestamp_millis()),
+                Number(DateValue(DateTime::parse_from_rfc3339(s)
+                    .map_err(|e| cnv_error!(e))?.timestamp_millis())),
             s if uuid_regex.is_match(s) => Number(U128Value(ByteCodeCompiler::decode_uuid(s)?)),
             s => StringValue(s.to_string()),
         };
@@ -270,7 +203,6 @@ impl TypedValue {
             PlatformOp(pf) => pf.encode().unwrap_or(vec![]),
             Binary(bytes) => ByteCodeCompiler::encode_u8x_n(bytes.to_vec()),
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
-            DateValue(number) => number.to_be_bytes().to_vec(),
             ErrorValue(err) => ByteCodeCompiler::encode_string(err.to_string().as_str()),
             NamespaceValue(ns) =>
                 ByteCodeCompiler::encode_string(ns.get_full_name().as_str()),
@@ -290,17 +222,11 @@ impl TypedValue {
             Binary(v) => BinaryType(FixedSize(v.len())),
             BLOB(tv) => BLOBType(Box::from(tv.get_type())),
             Boolean(..) => BooleanType,
-            DateValue(..) => DateType,
             ErrorValue(..) => ErrorType,
             Function { params, .. } => FunctionType(params.clone()),
             NamespaceValue(..) => TableType(Vec::new(), BLOBSized),
             Null | Undefined => UnionType(Vec::new()),
             Number(n) => NumberType(n.kind()),
-            Outcome(oc) => match oc {
-                Outcomes::Ack => OutcomeType(OutcomeKind::Acked),
-                Outcomes::RowId(..) => OutcomeType(OutcomeKind::RowInserted),
-                Outcomes::RowsAffected(..) => OutcomeType(OutcomeKind::RowsUpdated),
-            },
             PlatformOp(op) => op.get_type(),
             StructureHard(hard) => StructureType(hard.get_parameters()),
             StructureSoft(soft) => StructureType(soft.get_parameters()),
@@ -320,11 +246,11 @@ impl TypedValue {
     }
 
     pub fn is_ok(&self) -> bool {
-        matches!(self, Outcome(Outcomes::Ack) | Boolean(true) | Outcome(..) | NamespaceValue(..) | TableValue(..))
+        matches!(self, Number(Numbers::Ack) | Boolean(true) | Number(..) | NamespaceValue(..) | TableValue(..))
     }
 
     pub fn is_true(&self) -> bool {
-        matches!(self, Outcome(Outcomes::Ack) | Boolean(true))
+        matches!(self, Number(Numbers::Ack) | Boolean(true))
     }
 
     pub fn matches(&self, other: &Self) -> TypedValue {
@@ -338,11 +264,23 @@ impl TypedValue {
         }
     }
 
+    pub fn to_array(&self) -> TypedValue {
+        match self {
+            ArrayValue(items) => ArrayValue(items.to_owned()),
+            ErrorValue(err) => ErrorValue(err.to_owned()),
+            StringValue(s) => ArrayValue(Array::from(s.chars()
+                .map(|c| StringValue(c.to_string())).collect())),
+            StructureHard(hs) => ArrayValue(hs.to_table().to_array()),
+            StructureSoft(ss) => ArrayValue(ss.to_table().to_array()),
+            TableValue(rc) => ArrayValue(rc.to_array()),
+            z => ErrorValue(TypeMismatch(TableType(vec![], BLOBSized), z.get_type()))
+        }
+    }
+
     pub fn to_bool(&self) -> bool {
         match self {
-            Outcome(Outcomes::Ack) => true,
+            Number(Numbers::Ack) => true,
             Boolean(b) => *b,
-            Outcome(oc) => oc.to_bool(),
             _ => false
         }
     }
@@ -371,78 +309,64 @@ impl TypedValue {
 
     pub fn to_f32(&self) -> f32 {
         match self {
-            Outcome(Outcomes::Ack) => 1.,
             Boolean(true) => 1.,
-            DateValue(dt) => *dt as f32,
             Number(nv) => nv.to_f32(),
-            Outcome(oc) => oc.to_f32(),
             _ => 0.
         }
     }
 
     pub fn to_f64(&self) -> f64 {
         match self {
-            Outcome(Outcomes::Ack) => 1.,
             Boolean(true) => 1.,
-            DateValue(dt) => *dt as f64,
             Number(nv) => nv.to_f64(),
-            Outcome(oc) => oc.to_f64(),
             _ => 0.
         }
     }
 
     pub fn to_i8(&self) -> i8 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
-            DateValue(dt) => *dt as i8,
             Number(nv) => nv.to_i8(),
-            Outcome(oc) => oc.to_i8(),
             _ => 0
         }
     }
 
     pub fn to_i16(&self) -> i16 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
-            DateValue(dt) => *dt as i16,
             Number(nv) => nv.to_i16(),
-            Outcome(oc) => oc.to_i16(),
             _ => 0
         }
     }
 
     pub fn to_i32(&self) -> i32 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
-            DateValue(dt) => *dt as i32,
             Number(nv) => nv.to_i32(),
-            Outcome(oc) => oc.to_i32(),
             _ => 0
         }
     }
 
     pub fn to_i64(&self) -> i64 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
-            DateValue(dt) => *dt,
             Number(nv) => nv.to_i64(),
-            Outcome(oc) => oc.to_i64(),
             _ => 0
         }
     }
 
     pub fn to_i128(&self) -> i128 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
             Boolean(true) => 1,
-            DateValue(dt) => *dt as i128,
             Number(nv) => nv.to_i128(),
-            Outcome(oc) => oc.to_i128(),
             _ => 0
+        }
+    }
+
+    pub fn to_result<A>(&self, f: fn(&TypedValue) -> A) -> std::io::Result<A> {
+        match self {
+            ErrorValue(err) => fail(err.to_string()),
+            other => Ok(f(other))
         }
     }
 
@@ -454,7 +378,6 @@ impl TypedValue {
             Binary(bytes) => serde_json::json!(bytes),
             BLOB(tv) => tv.to_json(),
             Boolean(b) => serde_json::json!(b),
-            DateValue(millis) => serde_json::json!(Self::millis_to_iso_date(*millis)),
             ErrorValue(message) => serde_json::json!(message),
             Function { params, code } => {
                 let my_params = serde_json::Value::Array(params.iter()
@@ -464,8 +387,6 @@ impl TypedValue {
             NamespaceValue(ns) => serde_json::json!(ns.get_full_name()),
             Null => serde_json::Value::Null,
             Number(nv) => nv.to_json(),
-            Outcome(Outcomes::Ack) => serde_json::Value::Bool(true),
-            Outcome(oc) => serde_json::json!(oc.to_u64()),
             PlatformOp(nf) => serde_json::json!(nf),
             StringValue(s) => serde_json::json!(s),
             StructureHard(s) => s.to_json(),
@@ -482,21 +403,26 @@ impl TypedValue {
     }
 
     pub fn to_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
-        fn to_device(value: TypedValue) -> std::io::Result<Box<dyn RowCollection>> {
-            match value {
-                ErrorValue(message) => fail(message.to_string()),
-                TableValue(rcv) => Ok(Box::new(rcv)),
-                z => fail_value("Table", &z)
-            }
+        match self.to_table_value() {
+            ErrorValue(error) => throw(error),
+            TableValue(rcv) => Ok(Box::new(rcv)),
+            z => throw(TypeMismatch(TableType(vec![], BLOBSized), z.get_type()))
         }
+    }
+
+    pub fn to_table_value(&self) -> TypedValue {
         match self {
-            ArrayValue(items) => to_device(self.convert_array_to_table(items.values())),
-            ErrorValue(message) => fail(message.to_string()),
-            NamespaceValue(ns) => Ok(Box::new(FileRowCollection::open(ns)?)),
-            StructureHard(s) => Ok(Box::new(s.to_table())),
-            StructureSoft(s) => Ok(Box::new(s.to_table())),
-            TableValue(rcv) => Ok(Box::new(rcv.to_owned())),
-            z => fail_value("Table", z)
+            ArrayValue(items) => self.convert_array_to_table(items.values()),
+            ErrorValue(err) => ErrorValue(err.to_owned()),
+            NamespaceValue(ns) =>
+                match FileRowCollection::open(ns) {
+                    Ok(frc) => TableValue(Disk(frc)),
+                    Err(err) => ErrorValue(Exact(err.to_string())),
+                }
+            StructureHard(s) => TableValue(Model(s.to_table())),
+            StructureSoft(s) => TableValue(Model(s.to_table())),
+            TableValue(rcv) => TableValue(rcv.to_owned()),
+            z => ErrorValue(TypeMismatch(TableType(vec![], BLOBSized), z.get_type()))
         }
     }
 
@@ -548,93 +474,84 @@ impl TypedValue {
 
     pub fn to_u8(&self) -> u8 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
+            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u8(),
-            Outcome(oc) => oc.to_u8(),
             _ => 0
         }
     }
 
     pub fn to_u16(&self) -> u16 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
+            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u16(),
-            Outcome(oc) => oc.to_u16(),
             _ => 0
         }
     }
 
     pub fn to_u32(&self) -> u32 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
+            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u32(),
-            Outcome(oc) => oc.to_u32(),
             _ => 0
         }
     }
 
     pub fn to_u64(&self) -> u64 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
+            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u64(),
-            Outcome(oc) => oc.to_u64(),
             _ => 0
         }
     }
 
     pub fn to_u128(&self) -> u128 {
         match self {
-            Outcome(Outcomes::Ack) => 1,
+            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u128(),
-            Outcome(oc) => oc.to_u64() as u128,
             _ => 0
         }
     }
 
     pub fn to_usize(&self) -> usize {
         match self {
-            Outcome(Outcomes::Ack) => 1,
+            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_usize(),
-            Outcome(oc) => oc.to_usize(),
             _ => 0
         }
     }
 
     pub fn unwrap_value(&self) -> String {
         match self {
-            ArrayValue(items) => {
-                let values: Vec<String> = items.iter().map(|v| v.unwrap_value()).collect();
+            ArrayValue(av) => {
+                let values = av.iter().map(|v| v.unwrap_value()).collect::<Vec<_>>();
                 format!("[{}]", values.join(", "))
             }
             Binary(bytes) => hex::encode(bytes),
             BLOB(tv) => tv.unwrap_value(),
             Boolean(b) => (if *b { "true" } else { "false" }).into(),
-            DateValue(millis) => Self::millis_to_iso_date(*millis).unwrap_or("".into()),
             ErrorValue(message) => message.to_string(),
             Function { params, code } =>
                 format!("(fn({}) => {})",
-                        params.iter().map(|c| c.to_code()).collect::<Vec<String>>().join(", "),
+                        params.iter().map(|c| c.to_code()).collect::<Vec<_>>().join(", "),
                         code.to_code()),
+            NamespaceValue(ns) => ns.get_full_name(),
+            Null => "null".into(),
+            Number(number) => number.unwrap_value(),
+            PlatformOp(nf) => nf.to_code(),
+            StringValue(string) => string.into(),
+            StructureHard(structure) => structure.to_json().to_string(),
+            StructureSoft(structure) => structure.to_json().to_string(),
             TableValue(rcv) => {
                 let columns = rcv.get_columns();
                 serde_json::json!(rcv.iter().map(|r|r.to_json(columns))
                     .collect::<Vec<_>>()).to_string()
             }
-            NamespaceValue(ns) => ns.get_full_name(),
-            Null => "null".into(),
-            Number(number) => number.unwrap_value(),
-            Outcome(Outcomes::Ack) => "ack".to_string(),
-            Outcome(outcome) => outcome.to_string(),
-            PlatformOp(nf) => format!("{:?}", nf),
-            StringValue(string) => string.into(),
-            StructureHard(structure) => structure.to_code(),
-            StructureSoft(structure) => structure.to_code(),
             Undefined => "undefined".into(),
         }
     }
@@ -690,7 +607,7 @@ impl Add for TypedValue {
             (b, ArrayValue(a)) => ArrayValue(Array::from(a.values().iter()
                 .map(|i| i.clone() + b.clone())
                 .collect::<Vec<_>>())),
-            (Boolean(..), Outcome(Outcomes::Ack)) => Boolean(true),
+            (Boolean(..), Number(Numbers::Ack)) => Boolean(true),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
             (ErrorValue(Various(mut errors0)), ErrorValue(Various(errors1))) => {
                 errors0.extend(errors1);
@@ -708,8 +625,8 @@ impl Add for TypedValue {
             (ErrorValue(a), _) => ErrorValue(a),
             (_, ErrorValue(b)) => ErrorValue(b),
             (Number(a), Number(b)) => Number(a + b),
-            (Outcome(Outcomes::Ack), Boolean(..)) => Boolean(true),
-            (Outcome(a), Outcome(b)) => Outcome(Outcomes::RowsAffected(a.to_update_count() + b.to_update_count())),
+            (Number(Numbers::Ack), Boolean(..)) => Boolean(true),
+            (Number(a), Number(b)) => Number(Numbers::RowsAffected(a.to_i64() + b.to_i64())),
             (StringValue(a), StringValue(b)) => StringValue(a + b.as_str()),
             (TableValue(a), StructureHard(b)) => {
                 let mut mrc = match ModelRowCollection::from_table(Box::new(&a)) {
@@ -845,13 +762,12 @@ impl Neg for TypedValue {
             Binary(..) => error("Binary".into()),
             BLOB(tv) => BLOB(Box::from(tv.neg())),
             Boolean(n) => Boolean(!n),
-            DateValue(v) => Number(I64Value(-v)),
             ErrorValue(msg) => ErrorValue(msg),
             Function { .. } => error("Function".into()),
             NamespaceValue(ns) => error(format!("ns({})", ns.get_full_name())),
             Null => Null,
             Number(nv) => Number(nv.neg()),
-            Outcome(oc) => Number(I64Value(-oc.to_i64())),
+            Number(oc) => Number(I64Value(-oc.to_i64())),
             PlatformOp(..) => error("PlatformFunction".into()),
             StringValue(..) => error("String".into()),
             StructureHard(..) => error("Structure".into()),
@@ -902,9 +818,7 @@ impl PartialOrd for TypedValue {
             (ArrayValue(a), ArrayValue(b)) => a.partial_cmp(b),
             (Binary(a), Binary(b)) => a.partial_cmp(b),
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
-            (DateValue(a), DateValue(b)) => a.partial_cmp(b),
             (Number(a), Number(b)) => a.partial_cmp(b),
-            (Outcome(a), Outcome(b)) => a.partial_cmp(b),
             (StringValue(a), StringValue(b)) => a.partial_cmp(b),
             (Null, Null) => Some(Ordering::Equal),
             (Null, Undefined) => Some(Ordering::Greater),
@@ -944,12 +858,6 @@ impl Sub for TypedValue {
         match (self, rhs) {
             (Boolean(a), Boolean(b)) => Boolean(a & b),
             (Number(a), Number(b)) => Number(a - b),
-            (Outcome(a), Outcome(b)) =>
-                Outcome(Outcomes::RowsAffected({
-                    let a = a.to_update_count() as i64;
-                    let b = b.to_update_count() as i64;
-                    abs(a - b)
-                } as usize)),
             (a, b) => ErrorValue(CannotSubtract(a.to_code(), b.to_code()))
         }
     }
@@ -966,7 +874,7 @@ mod tests {
     #[test]
     fn test_decode() {
         let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
-        assert_eq!(TypedValue::decode(&StringType(FixedSize(5)), &buf, 0), StringValue("Hello".into()))
+        assert_eq!(StringType(FixedSize(5)).decode(&buf, 0), StringValue("Hello".into()))
     }
 
     #[test]
@@ -1040,8 +948,8 @@ mod tests {
     #[test]
     fn test_soft_structure_contains_key() {
         let structure = StructureSoft(SoftStructure::new(&vec![
-            ("name", StringValue("symbol".to_string())),
-            ("param_type", StringValue("String(8)".to_string())),
+            ("name", StringValue("symbol".into())),
+            ("param_type", StringValue("String(8)".into())),
             ("default_value", Null),
         ]));
         assert_eq!(structure.contains(&StringValue("name".into())), Boolean(true))
@@ -1169,18 +1077,18 @@ mod tests {
 
     #[test]
     fn test_outcomes() {
-        verify_encode_decode(&Outcome(Outcomes::Ack));
-        verify_encode_decode(&Outcome(Outcomes::RowId(1013)));
-        verify_encode_decode(&Outcome(Outcomes::RowsAffected(19)));
+        verify_encode_decode(&Number(Numbers::Ack));
+        verify_encode_decode(&Number(Numbers::RowId(1013)));
+        verify_encode_decode(&Number(Numbers::RowsAffected(19)));
     }
 
     #[test]
     fn test_to_json() {
         use Numbers::*;
-        verify_to_json(Outcome(Outcomes::Ack), serde_json::Value::Bool(true));
+        verify_to_json(Number(Numbers::Ack), json!(0));
         verify_to_json(Boolean(false), serde_json::Value::Bool(false));
         verify_to_json(Boolean(true), serde_json::Value::Bool(true));
-        verify_to_json(DateValue(1709163679081), serde_json::Value::String("2024-02-28T23:41:19.081Z".into()));
+        verify_to_json(Number(DateValue(1709163679081)), serde_json::Value::String("2024-02-28T23:41:19.081Z".into()));
         verify_to_json(Number(F32Value(38.15999984741211)), serde_json::json!(38.15999984741211));
         verify_to_json(Number(F64Value(100.1)), serde_json::json!(100.1));
         verify_to_json(Number(I8Value(-100)), serde_json::json!(-100));
@@ -1206,10 +1114,10 @@ mod tests {
 
     #[test]
     fn test_wrap_and_unwrap_value() {
-        verify_wrap_unwrap("ack", Outcome(Outcomes::Ack));
+        verify_wrap_unwrap("Ack", Number(Ack));
         verify_wrap_unwrap("false", Boolean(false));
         verify_wrap_unwrap("true", Boolean(true));
-        verify_wrap_unwrap("2024-02-28T23:41:19.081Z", DateValue(1709163679081));
+        verify_wrap_unwrap("2024-02-28T23:41:19.081Z", Number(DateValue(1709163679081)));
         verify_wrap_unwrap("100.1", Number(F64Value(100.1)));
         verify_wrap_unwrap("100", Number(I64Value(100)));
         verify_wrap_unwrap("null", Null);
@@ -1228,7 +1136,7 @@ mod tests {
     fn verify_encode_decode(expected: &TypedValue) {
         let data_type = expected.get_type();
         let bytes = expected.encode();
-        let actual = TypedValue::decode(&data_type, &bytes, 0);
+        let actual = data_type.decode(&bytes, 0);
         assert_eq!(actual, *expected)
     }
 

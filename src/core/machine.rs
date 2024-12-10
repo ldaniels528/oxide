@@ -28,33 +28,31 @@ use crate::cursor::Cursor;
 use crate::data_types::DataType;
 use crate::data_types::DataType::{ArrayType, StringType, StructureType, TableType, UnionType};
 use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
+use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::{Disk, Model};
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
-use crate::dataframes::DataFrame;
-use crate::errors::Errors;
 use crate::errors::Errors::*;
+use crate::errors::{throw, Errors};
 use crate::expression::Conditions::{False, True};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
-use crate::expression::Infrastructure::Declare;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::expression::{BitwiseOps, Conditions, Expression, ImportOps, ACK, UNDEFINED};
-use crate::expression::{Directives, Excavation, Infrastructure, Mutation, Queryable};
+use crate::expression::{DatabaseOps, Directives, Mutation, Queryable};
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::numbers::Numbers::*;
-use crate::outcomes::Outcomes;
-use crate::outcomes::Outcomes::Ack;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::query_engine;
+use crate::query_engine::*;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
 use crate::structures::*;
 use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
-use crate::table_values::TableValues::Model;
 use crate::testdata::verify_exact_table_where;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
@@ -88,7 +86,7 @@ impl Machine {
 
     /// creates a new state machine prepopulated with platform packages
     pub fn new() -> Self {
-        PlatformOps::create_packages().iter()
+        PlatformOps::build_packages().iter()
             .fold(Self::empty(), |ms, (name, list)| {
                 ms.with_module(name, list.to_owned())
             })
@@ -115,44 +113,6 @@ impl Machine {
             None => builder
         };
         builder
-    }
-
-    fn extract_string_tuples(value: TypedValue) -> std::io::Result<Vec<(String, String)>> {
-        Self::extract_value_tuples(value)
-            .map(|values| values.iter()
-                .map(|(k, v)| (k.to_string(), v.unwrap_value()))
-                .collect())
-    }
-
-    fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
-        match value {
-            StructureSoft(structure) => Ok(structure.get_tuples()),
-            z => fail_value(TypeMismatch(StructureType(vec![]), z.get_type()).to_string(), &z),
-        }
-    }
-
-    fn orchestrate_io(
-        machine: Self,
-        table: TypedValue,
-        fields: &Vec<Expression>,
-        values: &Vec<Expression>,
-        condition: &Option<Conditions>,
-        limit: TypedValue,
-        f: fn(Self, &mut DataFrame, &Vec<Expression>, &Vec<Expression>, &Option<Conditions>, TypedValue) -> std::io::Result<(Self, TypedValue)>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use TypedValue::*;
-        match table {
-            NamespaceValue(ns) => {
-                let mut df = DataFrame::load(&ns)?;
-                f(machine, &mut df, fields, values, condition, limit)
-            }
-            TableValue(rcv) => {
-                let mut df = DataFrame::from_row_collection(Box::new(rcv));
-                f(machine, &mut df, fields, values, condition, limit)
-            }
-            z =>
-                Ok((machine, ErrorValue(CollectionExpected(z.to_code()))))
-        }
     }
 
     pub fn oxide_home() -> String {
@@ -186,7 +146,8 @@ impl Machine {
             ExtractPostfix(a, b) => self.do_function_call_postfix(a, b),
             Factorial(a) => self.do_inline_1(a, |aa| aa.factorial()),
             Feature { title, scenarios } => self.do_feature(title, scenarios),
-            From(src) => self.do_table_row_query(src, &True, Undefined),
+            ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
+            From(src) => do_table_row_query(self, src, &True, Undefined),
             FunctionCall { fx, args } =>
                 Ok(self.do_function_call(fx, args)),
             HTTP { method, url, body, headers, multipart } => {
@@ -206,7 +167,7 @@ impl Machine {
             Multiply(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa * bb),
             Neg(a) => Ok(self.do_negate(a)),
-            Ns(a) => self.do_table_ns(a),
+            Ns(a) => do_table_ns(self, a),
             Parameters(params) => Ok(self.evaluate_parameters(params)),
             Plus(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa + bb),
@@ -214,11 +175,7 @@ impl Machine {
                 self.do_inline_2(a, b, Self::do_plus_plus),
             Pow(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
-            Quarry(payload) => match payload {
-                Excavation::Construct(i) => self.do_infrastructure(i),
-                Excavation::Query(q) => self.do_inquiry(q),
-                Excavation::Mutate(m) => self.do_mutation(m),
-            },
+            DatabaseOp(payload) => evaluate(self, payload),
             Range(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
             Return(a) => {
@@ -228,10 +185,10 @@ impl Machine {
             Scenario { .. } => Ok((self.to_owned(), ErrorValue(Exact("Scenario should not be called directly".to_string())))),
             SetVariable(name, expr) => {
                 let (machine, value) = self.evaluate(expr)?;
-                Ok((machine.set(name, value), Outcome(Ack)))
+                Ok((machine.set(name, value), Number(Ack)))
             }
             Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
-            Via(src) => self.do_table_row_query(src, &True, Undefined),
+            Via(src) => do_table_row_query(self, src, &True, Undefined),
             While { condition, code } =>
                 self.do_while(condition, code),
         }
@@ -417,8 +374,7 @@ impl Machine {
         let (machine, value) = self.evaluate(expr)?;
         match value {
             v if v.is_ok() => Ok((machine, v.to_owned())),
-            v =>
-                Ok((machine, ErrorValue(OutcomeExpected(v.to_code()))))
+            v => throw(OutcomeExpected(v.to_code()))
         }
     }
 
@@ -427,8 +383,8 @@ impl Machine {
         expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         info!("{}", expr.to_code());
-        let (machine, value) = self.evaluate(expr)?;
-        Ok((machine, ErrorValue(Exact(value.unwrap_value()))))
+        let (_, value) = self.evaluate(expr)?;
+        throw(Exact(value.unwrap_value()))
     }
 
     fn do_directive_ignore_ack(
@@ -437,7 +393,7 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         info!("{}", expr.to_code());
         let (machine, _) = self.evaluate(expr)?;
-        Ok((machine, Outcome(Ack)))
+        Ok((machine, Number(Ack)))
     }
 
     fn do_directive_not_ack(
@@ -447,8 +403,7 @@ impl Machine {
         info!("{}", expr.to_code());
         let (machine, value) = self.evaluate(expr)?;
         match value {
-            v if v.is_ok() =>
-                Ok((machine, ErrorValue(Exact(format!("Expected a non-success value, but got {}", &v))))),
+            v if v.is_ok() => throw(Exact(format!("Expected a non-success value, but got {}", &v))),
             v => Ok((machine, v))
         }
     }
@@ -493,7 +448,7 @@ impl Machine {
             // stock::last_sale := 24.11
             SetVariable(name, expr) => {
                 let (ms, value) = ms.evaluate(expr)?;
-                Ok((ms.with_variable(var_name, structure.update(name, value)), Outcome(Ack)))
+                Ok((ms.with_variable(var_name, structure.update(name, value)), Number(Ack)))
             }
             // stock::symbol
             Variable(name) => Ok((ms, structure.get(name))),
@@ -502,18 +457,12 @@ impl Machine {
         }
     }
 
-    fn do_feature(
-        &self,
-        title: &Box<Expression>,
-        scenarios: &Vec<Expression>,
+    pub fn do_feature(&self,
+                      title: &Box<Expression>,
+                      scenarios: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         // create a table and capture function to store the verification report
-        let verification_columns = Column::from_parameters(&vec![
-            Parameter::new("level", Some("u16".into()), None),
-            Parameter::new("item", Some("String(256)".into()), None),
-            Parameter::new("passed", Some("Boolean".into()), None),
-            Parameter::new("result", Some("String(256)".into()), None),
-        ])?;
+        let verification_columns = Column::from_parameters(&PlatformOps::get_kung_fu_feature_parameters())?;
         let mut report = ModelRowCollection::new(verification_columns.to_owned());
         let mut capture = |level: u16, text: String, passed: bool, result: TypedValue| {
             let outcome = report.push_row(Row::new(0, vec![
@@ -521,7 +470,6 @@ impl Machine {
             ]));
             let count = match outcome {
                 Number(n) => n.to_usize(),
-                Outcome(oc) => oc.to_usize(),
                 ErrorValue(err) => return fail(err.to_string()),
                 _ => 0
             };
@@ -530,19 +478,19 @@ impl Machine {
 
         // feature processing
         let (mut ms, title) = self.evaluate(title)?;
-        capture(0, title.unwrap_value(), true, Outcome(Ack))?;
+        capture(0, title.unwrap_value(), true, Number(Ack))?;
 
         // scenario processing
         for scenario in scenarios {
             match &scenario {
                 // scenarios require specialized processing
-                Scenario { title, verifications, inherits } => {
+                Scenario { title, verifications } => {
                     // scenario::title
                     let (msb, subtitle) = ms.evaluate(title)?;
                     ms = msb;
 
                     // update the report
-                    capture(1, subtitle.unwrap_value(), true, Outcome(Ack))?;
+                    capture(1, subtitle.unwrap_value(), true, Number(Ack))?;
 
                     // verification processing
                     let level: u16 = 2;
@@ -571,10 +519,39 @@ impl Machine {
         Ok((ms, TableValue(Model(report))))
     }
 
-    fn do_function_arguments(
-        &self,
-        params: Vec<Parameter>,
-        args: Vec<TypedValue>,
+    /// foreach `name` in `items` { `block` }
+    fn do_foreach(&self,
+                  name: &str,
+                  items: &Box<Expression>,
+                  block: &Box<Expression>,
+    ) -> (Self, TypedValue) {
+        let ms0 = self.clone();
+        match ms0.evaluate(items).map(|(ms, tv)| (ms, tv.to_array())) {
+            Ok((_, ArrayValue(array))) => {
+                let mut index = 0;
+                while index < array.len() {
+                    match ms0
+                        .with_variable(name, array.get(index).unwrap_or(Null))
+                        .evaluate(block) {
+                        Ok(..) => {}
+                        Err(err) => return (ms0, ErrorValue(Exact(err.to_string())))
+                    }
+                    index += 1
+                }
+                (ms0, Number(Ack))
+            }
+            Ok((ms, other)) =>
+                (ms, ErrorValue(TypeMismatch(
+                    ArrayType(Box::from(UnionType(vec![]))),
+                    other.get_type(),
+                ))),
+            Err(err) => (ms0, ErrorValue(Exact(err.to_string())))
+        }
+    }
+
+    fn do_function_arguments(&self,
+                             params: Vec<Parameter>,
+                             args: Vec<TypedValue>,
     ) -> Self {
         assert_eq!(params.len(), args.len());
         params.iter().zip(args.iter())
@@ -584,10 +561,9 @@ impl Machine {
 
     /// Executes a function call
     /// e.g. factorial(5)
-    fn do_function_call(
-        &self,
-        fx: &Expression,
-        args: &Vec<Expression>,
+    fn do_function_call(&self,
+                        fx: &Expression,
+                        args: &Vec<Expression>,
     ) -> (Self, TypedValue) {
         let ms = self.to_owned();
         match self.evaluate_array(args) {
@@ -646,12 +622,26 @@ impl Machine {
             })
         }
 
+        fn extract_string_tuples(value: TypedValue) -> std::io::Result<Vec<(String, String)>> {
+            extract_value_tuples(value)
+                .map(|values| values.iter()
+                    .map(|(k, v)| (k.to_string(), v.unwrap_value()))
+                    .collect())
+        }
+
+        fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
+            match value {
+                StructureSoft(structure) => Ok(structure.get_tuples()),
+                z => fail_value(TypeMismatch(StructureType(vec![]), z.get_type()).to_string(), &z),
+            }
+        }
+
         ms.do_http_method_call(
             method.unwrap_value(),
             url.unwrap_value(),
             body.map(|tv| tv.to_json().to_string()),
             match headers {
-                Some(v) => Self::extract_string_tuples(v)?,
+                Some(v) => extract_string_tuples(v)?,
                 None => Vec::new()
             },
             match multipart {
@@ -814,12 +804,12 @@ impl Machine {
             Some(component) => match component {
                 StructureHard(structure) =>
                     if selection.is_empty() {
-                        (structure.pollute(ms), Outcome(Ack))
+                        (structure.pollute(ms), Number(Ack))
                     } else {
                         let ms = selection.iter().fold(ms, |ms, name| {
                             ms.with_variable(name, structure.get(name))
                         });
-                        (ms, Outcome(Ack))
+                        (ms, Number(Ack))
                     }
                 StructureSoft(structure) => {
                     let ms = structure.get_tuples().iter().fold(ms, |ms, (name, value)| {
@@ -827,7 +817,7 @@ impl Machine {
                             ms.with_variable(name, value.to_owned())
                         } else { ms }
                     });
-                    (ms, Outcome(Ack))
+                    (ms, Number(Ack))
                 }
                 other => (ms, ErrorValue(Syntax(other.to_code())))
             }
@@ -845,42 +835,6 @@ impl Machine {
                   })
     }
 
-    fn do_infrastructure(
-        &self,
-        expression: &Infrastructure,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use crate::expression::Infrastructure::*;
-        match expression {
-            Create { path, entity: IndexEntity { columns } } =>
-                self.do_table_create_index(path, columns),
-            Create { path, entity: TableEntity { columns, from } } =>
-                self.do_table_create_table(path, columns, from),
-            Declare(IndexEntity { columns }) =>
-                self.do_table_declare_index(columns),
-            Declare(TableEntity { columns, from }) =>
-                self.do_table_declare_table(columns, from),
-            Drop(IndexTarget { path }) => self.do_table_drop(path),
-            Drop(TableTarget { path }) => self.do_table_drop(path),
-        }
-    }
-
-    fn do_inquiry(
-        &self,
-        expression: &Queryable,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use crate::expression::Queryable::*;
-        match expression {
-            Limit { from, limit } => {
-                let (machine, limit) = self.evaluate(limit)?;
-                machine.do_table_row_query(from, &True, limit)
-            }
-            Select { fields, from, condition, group_by, having, order_by, limit } =>
-                query_engine::do_select(&self, fields, from, condition, group_by, having, order_by, limit),
-            Where { from, condition } =>
-                self.do_table_row_query(from, condition, Undefined),
-        }
-    }
-
     fn do_include(
         &self,
         path: &Expression,
@@ -896,10 +850,7 @@ impl Machine {
             let opcode = Compiler::build(script_code.as_str())?;
             machine.evaluate(&opcode)
         } else {
-            Ok((machine, ErrorValue(TypeMismatch(
-                StringType(BLOBSized),
-                path_value.get_type(),
-            ))))
+            throw(TypeMismatch(StringType(BLOBSized), path_value.get_type()))
         }
     }
 
@@ -1050,36 +1001,7 @@ impl Machine {
                     },
                 z => ErrorValue(StructExpected(name.to_string(), z.to_code()))
             });
-        Ok((self.with_variable(name, result), Outcome(Ack)))
-    }
-
-    fn do_mutation(
-        &self,
-        expression: &Mutation,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use crate::expression::Mutation::*;
-        match expression {
-            Append { path, source } =>
-                self.do_table_row_append(path, source),
-            Delete { path, condition, limit } =>
-                self.do_table_row_delete(path, condition, limit),
-            IntoNs(source, target) =>
-                self.do_table_into(target, source),
-            Overwrite { path, source, condition, limit } =>
-                self.do_table_row_overwrite(path, source, condition, limit),
-            Truncate { path, limit } =>
-                match limit {
-                    None => self.do_table_row_resize(path, Boolean(false)),
-                    Some(limit) => {
-                        let (machine, limit) = self.evaluate(limit)?;
-                        machine.do_table_row_resize(path, limit)
-                    }
-                }
-            Undelete { path, condition, limit } =>
-                self.do_table_row_undelete(path, condition, limit),
-            Update { path, source, condition, limit } =>
-                self.do_table_row_update(path, source, condition, limit),
-        }
+        Ok((self.with_variable(name, result), Number(Ack)))
     }
 
     /// evaluates the specified [Expression]; returning a negative [TypedValue] result.
@@ -1130,7 +1052,7 @@ impl Machine {
             });
         match result {
             ErrorValue(err) => (self.to_owned(), ErrorValue(err)),
-            result => (self.with_variable(name, result), Outcome(Ack))
+            result => (self.with_variable(name, result), Number(Ack))
         }
     }
 
@@ -1156,283 +1078,8 @@ impl Machine {
             });
         match result {
             ErrorValue(err) => (self.to_owned(), ErrorValue(err)),
-            result => (self.with_variable(name, result), Outcome(Ack))
+            result => (self.with_variable(name, result), Number(Ack))
         }
-    }
-
-    fn do_table_create_index(
-        &self,
-        index: &Expression,
-        columns: &Vec<Expression>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, result) = self.evaluate(index)?;
-        match result {
-            ErrorValue(msg) => Ok((machine, ErrorValue(msg))),
-            Null | Undefined => Ok((machine, result)),
-            TableValue(_rcv) =>
-                Ok((machine, ErrorValue(Exact("Memory collections do not yet support indexes".to_string())))),
-            NamespaceValue(ns) => {
-                let (machine, columns) = self.evaluate_as_atoms(columns)?;
-                let config = DataFrameConfig::load(&ns)?;
-                let mut indices = config.get_indices().to_owned();
-                indices.push(HashIndexConfig::new(columns, false));
-                let config = DataFrameConfig::new(
-                    config.get_columns().to_owned(),
-                    indices.to_owned(),
-                    config.get_partitions().to_owned(),
-                );
-                config.save(&ns)?;
-                Ok((machine, Outcome(Ack)))
-            }
-            z =>
-                Ok((machine, ErrorValue(CollectionExpected(z.to_code()))))
-        }
-    }
-
-    fn do_table_create_table(
-        &self,
-        table: &Expression,
-        columns: &Vec<Parameter>,
-        from: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, result) = self.evaluate(table)?;
-        match result.to_owned() {
-            Null | Undefined => Ok((machine, result)),
-            TableValue(_rcv) =>
-                Ok((machine, ErrorValue(Exact("Memory collections do not 'create' keyword".to_string())))),
-            NamespaceValue(ns) => {
-                let config = DataFrameConfig::new(columns.to_owned(), Vec::new(), Vec::new());
-                DataFrame::create(ns, config)?;
-                Ok((machine, Outcome(Ack)))
-            }
-            x =>
-                Ok((machine, ErrorValue(CollectionExpected(x.to_code()))))
-        }
-    }
-
-    fn do_table_declare_index(
-        &self,
-        columns: &Vec<Expression>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        // TODO determine how to implement
-        Ok((self.to_owned(), ErrorValue(NotImplemented)))
-    }
-
-    fn do_table_declare_table(
-        &self,
-        columns: &Vec<Parameter>,
-        from: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let columns = Column::from_parameters(columns)?;
-        Ok((self.to_owned(), TableValue(Model(ModelRowCollection::with_rows(columns, Vec::new())))))
-    }
-
-    fn do_table_drop(&self, table: &Expression) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, table) = self.evaluate(table)?;
-        match table {
-            NamespaceValue(ns) => {
-                let result = fs::remove_file(ns.get_table_file_path());
-                Ok((machine, if result.is_ok() { Outcome(Ack) } else { Boolean(false) }))
-            }
-            _ => Ok((machine, Boolean(false)))
-        }
-    }
-
-    pub fn do_table_f(
-        ms: Machine,
-        table_expr: &Expression,
-        f: fn(Machine, Box<dyn RowCollection>) -> (Machine, TypedValue),
-    ) -> (Machine, TypedValue) {
-        match ms.evaluate(table_expr) {
-            Ok((ms, table_v)) =>
-                match table_v {
-                    ErrorValue(msg) => (ms, ErrorValue(msg)),
-                    NamespaceValue(ns) =>
-                        match FileRowCollection::open(&ns) {
-                            Ok(frc) => f(ms, Box::new(frc)),
-                            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                        }
-                    TableValue(tv) => f(ms, Box::new(tv)),
-                    z => (ms, ErrorValue(CollectionExpected(z.to_code())))
-                }
-            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-        }
-    }
-
-    fn do_table_into(
-        &self,
-        table: &Expression,
-        source: &Expression,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        use Outcomes::*;
-        let machine = self.to_owned();
-        let (machine, rows) = match source {
-            Expression::From(source) =>
-                self.do_rows_from_query(source, table)?,
-            Literal(TableValue(rcv)) => (machine, rcv.get_rows()),
-            Literal(NamespaceValue(ns)) => {
-                (machine, FileRowCollection::open(ns)?.read_active_rows()?)
-            }
-            Quarry(Excavation::Construct(Declare(TableEntity { columns, from }))) =>
-                machine.do_rows_from_table_declaration(table, from, columns)?,
-            source =>
-                self.do_rows_from_query(source, table)?,
-        };
-
-        // write the rows to the target
-        let mut inserted = 0;
-        let mut rc = machine.expect_row_collection(table)?;
-        match rc.append_rows(rows) {
-            ErrorValue(message) => return Ok((machine, ErrorValue(message))),
-            Outcome(oc) => inserted += oc.to_update_count(),
-            _ => {}
-        }
-        Ok((machine, Outcome(RowsAffected(inserted))))
-    }
-
-    fn do_table_ns(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, result) = self.evaluate(expr)?;
-        match result {
-            StringValue(path) =>
-                match path.split('.').collect::<Vec<_>>().as_slice() {
-                    [d, s, n] => Ok((ms, NamespaceValue(Namespace::new(d, s, n)))),
-                    _ => Ok((ms, ErrorValue(InvalidNamespace(path))))
-                }
-            NamespaceValue(ns) => Ok((ms, NamespaceValue(ns))),
-            other => Ok((ms, ErrorValue(TypeMismatch(
-                TableType(vec![], BLOBSized),
-                other.get_type(),
-            )))),
-        }
-    }
-
-    fn do_table_row_resize(
-        &self,
-        table: &Expression,
-        limit: TypedValue,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use Outcomes::*;
-        let (machine, table) = self.evaluate(table)?;
-        Self::orchestrate_io(machine, table, &Vec::new(), &Vec::new(), &None, limit, |machine, df, _fields, _values, condition, limit| {
-            let limit = limit.to_usize();
-            let new_size = df.resize(limit)?;
-            Ok((machine, Outcome(RowsAffected(new_size))))
-        })
-    }
-
-    fn do_table_row_append(
-        &self,
-        table: &Expression,
-        source: &Expression,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        let machine = self.to_owned();
-        if let Expression::From(source) = source {
-            // determine the writable target
-            let mut writable = self.expect_row_collection(table)?;
-
-            // retrieve rows from the source
-            let columns = writable.get_columns();
-            let rows = self.expect_rows(source, columns)?;
-
-            // write the rows to the target
-            Ok((machine, writable.append_rows(rows)))
-        } else {
-            Ok((machine, ErrorValue(QueryableExpected(source.to_string()))))
-        }
-    }
-
-    fn do_table_row_delete(
-        &self,
-        from: &Expression,
-        condition: &Option<Conditions>,
-        limit: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use Outcomes::*;
-        let (machine, limit) = self.evaluate_opt(limit)?;
-        let (machine, result) = machine.evaluate(from)?;
-        Self::orchestrate_io(machine, result, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _fields, _values, condition, limit| {
-            let deleted = df.delete_where(&machine, &condition, limit).ok().unwrap_or(0);
-            Ok((machine, Outcome(RowsAffected(deleted))))
-        })
-    }
-
-    fn do_table_row_overwrite(
-        &self,
-        table: &Expression,
-        source: &Expression,
-        condition: &Option<Conditions>,
-        limit: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use Outcomes::*;
-        let (machine, limit) = self.evaluate_opt(limit)?;
-        let (machine, tv_table) = machine.evaluate(table)?;
-        let (fields, values) = self.expect_via(&table, &source)?;
-        Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
-            let overwritten = df.overwrite_where(&machine, fields, values, condition, limit).ok().unwrap_or(0);
-            Ok((machine, Outcome(RowsAffected(overwritten))))
-        })
-    }
-
-    /// Evaluates the queryable [Expression] (e.g. from, limit and where)
-    /// e.g.: from ns("interpreter.select.stocks") where last_sale > 1.0 limit 1
-    fn do_table_row_query(
-        &self,
-        src: &Expression,
-        condition: &Conditions,
-        limit: TypedValue,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, result) = self.evaluate(src)?;
-        let limit = limit.to_usize();
-        match result {
-            TableValue(rcv) => {
-                let phys_columns = rcv.get_columns().clone();
-                let mut cursor = Cursor::filter(Box::new(rcv), condition.to_owned());
-                let table_value = TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &cursor.take(limit)?)));
-                Ok((machine, table_value))
-            }
-            NamespaceValue(ns) => {
-                let frc = FileRowCollection::open(&ns)?;
-                let phys_columns = frc.get_columns().to_owned();
-                let mut cursor = Cursor::filter(Box::new(frc), condition.to_owned());
-                let table_value = TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &cursor.take(limit)?)));
-                Ok((machine, table_value))
-            }
-            value => fail_value("Queryable expected", &value)
-        }
-    }
-
-    fn do_table_row_undelete(
-        &self,
-        from: &Expression,
-        condition: &Option<Conditions>,
-        limit: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use Outcomes::*;
-        let (machine, limit) = self.evaluate_opt(limit)?;
-        let (machine, result) = machine.evaluate(from)?;
-        Self::orchestrate_io(machine, result, &Vec::new(), &Vec::new(), condition, limit, |machine, df, _fields, _values, condition, limit| {
-            match df.undelete_where(&machine, &condition, limit) {
-                Ok(restored) => Ok((machine, Outcome(RowsAffected(restored)))),
-                Err(err) => Ok((machine, ErrorValue(Exact(err.to_string())))),
-            }
-        })
-    }
-
-    fn do_table_row_update(
-        &self,
-        table: &Expression,
-        source: &Expression,
-        condition: &Option<Conditions>,
-        limit: &Option<Box<Expression>>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use Outcomes::*;
-        let (machine, limit) = self.evaluate_opt(limit)?;
-        let (machine, tv_table) = machine.evaluate(table)?;
-        let (fields, values) = self.expect_via(&table, &source)?;
-        Self::orchestrate_io(machine, tv_table, &fields, &values, condition, limit, |machine, df, fields, values, condition, limit| {
-            let modified = df.update_where(&machine, fields, values, condition, limit).ok().unwrap_or(0);
-            Ok((machine, Outcome(RowsAffected(modified))))
-        })
     }
 
     fn do_while(
@@ -1471,41 +1118,6 @@ impl Machine {
         }
     }
 
-    fn do_rows_from_table_declaration(
-        &self,
-        table: &Expression,
-        from: &Option<Box<Expression>>,
-        columns: &Vec<Parameter>,
-    ) -> std::io::Result<(Machine, Vec<Row>)> {
-        let machine = self.to_owned();
-        // create the config and an empty data file
-        let ns = self.expect_namespace(table)?;
-        let cfg = DataFrameConfig::new(columns.to_owned(), Vec::new(), Vec::new());
-        cfg.save(&ns)?;
-        FileRowCollection::table_file_create(&ns)?;
-        // decipher the "from" expression
-        let columns = Column::from_parameters(columns)?;
-        let results = match from {
-            Some(expr) => machine.expect_rows(expr.deref(), &columns)?,
-            None => Vec::new()
-        };
-        Ok((machine, results))
-    }
-
-    fn do_rows_from_query(
-        &self,
-        source: &Expression,
-        table: &Expression,
-    ) -> std::io::Result<(Machine, Vec<Row>)> {
-        // determine the row collection
-        let machine = self.to_owned();
-        let rc = machine.expect_row_collection(table)?;
-
-        // retrieve rows from the source
-        let rows = machine.expect_rows(source, rc.get_columns())?;
-        Ok((machine, rows))
-    }
-
     fn assume_table_value<A>(
         &self,
         table: &TypedValue,
@@ -1523,12 +1135,12 @@ impl Machine {
     fn assume_dataframe<A>(
         &self,
         table: &TypedValue,
-        f: fn(DataFrame) -> std::io::Result<A>,
+        f: fn(Dataframe) -> std::io::Result<A>,
     ) -> std::io::Result<A> {
         match table {
-            NamespaceValue(ns) => f(DataFrame::load(&ns)?),
-            TableValue(rcv) => f(DataFrame::new(Box::new(rcv.to_owned()))),
-            z => fail_value(format!("{} is not a table", z), z)
+            NamespaceValue(ns) => f(Disk(FileRowCollection::open(&ns)?)),
+            TableValue(rc) => f(rc.to_owned()),
+            z => throw(TypeMismatch(TableType(vec![], BLOBSized), z.get_type()))
         }
     }
 
@@ -1570,82 +1182,6 @@ impl Machine {
         } else {
             ErrorValue(Exact(format!("Request failed with status: {}", response.status())))
         }
-    }
-
-    fn expect_namespace(&self, table: &Expression) -> std::io::Result<Namespace> {
-        let (_, v_table) = self.evaluate(table)?;
-        match v_table {
-            NamespaceValue(ns) => Ok(ns),
-            x => fail_unexpected("Table namespace", &x)
-        }
-    }
-
-    fn expect_row_collection(
-        &self,
-        table: &Expression,
-    ) -> std::io::Result<Box<dyn RowCollection>> {
-        let (_, v_table) = self.evaluate(table)?;
-        v_table.to_table()
-    }
-
-    fn expect_rows(
-        &self,
-        source: &Expression,
-        columns: &Vec<Column>,
-    ) -> std::io::Result<Vec<Row>> {
-        let (_, source) = self.evaluate(source)?;
-        match source {
-            ArrayValue(items) => {
-                let mut rows = Vec::new();
-                for tuples in items.iter() {
-                    if let StructureSoft(structure) = tuples {
-                        rows.push(Row::from_tuples(0, columns, &structure.get_tuples()))
-                    }
-                }
-                Ok(rows)
-            }
-            StructureHard(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
-            StructureSoft(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
-            NamespaceValue(ns) => {
-                let frc = FileRowCollection::open(&ns)?;
-                frc.read_active_rows()
-            }
-            TableValue(rcv) => Ok(rcv.get_rows()),
-            tv => fail_value("A queryable was expected".to_string(), &tv)
-        }
-    }
-
-    fn expect_via(
-        &self,
-        table: &Expression,
-        source: &Expression,
-    ) -> std::io::Result<(Vec<Expression>, Vec<Expression>)> {
-        // split utility
-        fn split(columns: &Vec<Column>, row: &Row) -> (Vec<Expression>, Vec<Expression>) {
-            let my_fields = columns.iter()
-                .map(|tc| Variable(tc.get_name().to_string()))
-                .collect::<Vec<_>>();
-            let my_values = row.get_values().iter()
-                .map(|v| Literal(v.to_owned()))
-                .collect::<Vec<_>>();
-            (my_fields, my_values)
-        }
-
-        let writable = self.expect_row_collection(table)?;
-        let (fields, values) = {
-            if let Via(my_source) = source {
-                if let (_, StructureSoft(structure)) = self.evaluate(&my_source)? {
-                    let columns = writable.get_columns();
-                    let row = Row::from_tuples(0, columns, &structure.get_tuples());
-                    split(columns, &row)
-                } else {
-                    return fail_expr("Expected a data object".to_string(), &my_source);
-                }
-            } else {
-                return fail_expr("Expected keyword 'via'".to_string(), &source);
-            }
-        };
-        Ok((fields, values))
     }
 
     /// returns a variable by name
@@ -1727,16 +1263,14 @@ mod tests {
     use crate::data_types::DataType::NumberType;
     use crate::expression::Conditions::{Equal, GreaterOrEqual, GreaterThan, LessOrEqual, LessThan};
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-    use crate::expression::Excavation::Query;
+    use crate::expression::DatabaseOps::Query;
     use crate::expression::MutateTarget::TableTarget;
-    use crate::expression::{Excavation, Infrastructure, Mutation, Queryable};
+    use crate::expression::Queryable;
     use crate::expression::{FALSE, NULL, TRUE};
     use crate::number_kind::NumberKind::I64Kind;
-    use crate::outcomes::Outcomes;
     use crate::table_columns::Column;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_dataframe_ns, make_quote, make_quote_columns, make_quote_parameters};
-    use Outcomes::*;
+    use crate::testdata::*;
 
     #[test]
     fn test_array_declaration() {
@@ -1834,14 +1368,13 @@ mod tests {
                             fx: Box::new(Variable("assert".to_string())),
                             args: vec![Literal(Boolean(true))],
                         }
-                    ],
-                    inherits: None,
+                    ]
                 }
             ],
         };
 
         let machine = Machine::new_platform()
-            .import_module_by_name("oxide");
+            .import_module_by_name("kungfu");
         let (_, result) = machine.evaluate(&model).unwrap();
         let table = result.to_table().unwrap();
         let columns = table.get_columns();
@@ -1853,13 +1386,13 @@ mod tests {
                 Number(U16Value(0)),
                 StringValue("Karate translator".into()),
                 Boolean(true),
-                Outcome(Ack),
+                Number(Ack),
             ],
             vec![
                 Number(U16Value(1)),
                 StringValue("Translate Karate Scenario to Oxide Scenario".into()),
                 Boolean(true),
-                Outcome(Ack),
+                Number(Ack),
             ],
             vec![
                 Number(U16Value(2)),
@@ -1897,8 +1430,6 @@ mod tests {
     #[cfg(test)]
     mod function_tests {
         use super::*;
-        use crate::outcomes::Outcomes;
-        use Outcomes::*;
 
         #[test]
         fn test_anonymous_function() {
@@ -1948,7 +1479,7 @@ mod tests {
                 SetVariable("add".to_string(), Box::new(Literal(fx.to_owned())))
             ]);
             assert_eq!(machine.get("add").unwrap(), fx);
-            assert_eq!(result, Outcome(Ack));
+            assert_eq!(result, Number(Ack));
 
             // execute the function via function call in scope: add(2, 3)
             let model = FunctionCall {
@@ -2016,8 +1547,6 @@ mod tests {
     #[cfg(test)]
     mod logical_tests {
         use super::*;
-        use crate::outcomes::Outcomes;
-        use Outcomes::*;
 
         #[test]
         fn test_if_else_flow_1() {
@@ -2090,12 +1619,12 @@ mod tests {
         use crate::compiler::Compiler;
         use crate::expression::Conditions::Equal;
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+        use crate::expression::DatabaseOps::Mutate;
         use crate::expression::MutateTarget::TableTarget;
-        use crate::expression::{Excavation, Infrastructure, Mutation};
-        use crate::outcomes::Outcomes;
+        use crate::expression::Mutation::{Append, Create, Declare, Drop, Overwrite, Truncate, Update};
+        use crate::expression::{DatabaseOps, Mutation};
         use crate::table_columns::Column;
         use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
-        use Outcomes::*;
 
         #[test]
         fn test_from_where_limit_in_memory() {
@@ -2111,8 +1640,8 @@ mod tests {
                     make_quote(4, "XYZ", "NYSE", 0.0289),
                 ]))));
 
-            let model = Quarry(Query(Queryable::Limit {
-                from: Box::new(Quarry(Query(Queryable::Where {
+            let model = DatabaseOp(Query(Queryable::Limit {
+                from: Box::new(DatabaseOp(Query(Queryable::Where {
                     from: Box::new(From(Box::new(Variable("stocks".into())))),
                     condition: GreaterOrEqual(
                         Box::new(Variable("last_sale".into())),
@@ -2134,8 +1663,8 @@ mod tests {
         fn test_index_of_table_in_namespace() {
             // create a table with test data
             let ns = Namespace::new("machine", "element_at", "stocks");
-            let logical_columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&logical_columns).unwrap();
+            let params = make_quote_parameters();
+            let columns = Column::from_parameters(&params).unwrap();
             let value_tuples = vec![
                 ("ABC", "AMEX", 11.77), ("UNO", "OTC", 0.2456),
                 ("BIZ", "NYSE", 23.66), ("GOTO", "OTC", 0.1428),
@@ -2149,8 +1678,8 @@ mod tests {
                         Number(F64Value(*last_sale)),
                     ])
                 }).collect();
-            let mut dfrc = DataFrame::create(ns.to_owned(), DataFrameConfig::build(logical_columns)).unwrap();
-            assert_eq!(Outcome(RowsAffected(5)), dfrc.append_rows(rows));
+            let mut dfrc = FileRowCollection::create_table(&ns, &params).unwrap();
+            assert_eq!(Number(RowsAffected(5)), dfrc.append_rows(rows));
 
             // create the instruction model 'ns("machine.element_at.stocks")[2]'
             let model = ElementAt(
@@ -2163,7 +1692,7 @@ mod tests {
             let (_, result) = Machine::empty().evaluate(&model).unwrap();
             assert_eq!(result, StructureHard(
                 HardStructure::from_row(
-                    &phys_columns,
+                    &columns,
                     &make_quote(2, "BIZ", "NYSE", 23.66))
             ))
         }
@@ -2198,7 +1727,7 @@ mod tests {
 
         #[test]
         fn test_create_table() {
-            let model = Quarry(Excavation::Construct(Infrastructure::Create {
+            let model = DatabaseOp(Mutate(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue("machine.create.stocks".into()))))),
                 entity: TableEntity {
                     columns: make_quote_parameters(),
@@ -2209,7 +1738,7 @@ mod tests {
             // create the table
             let machine = Machine::empty();
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, Outcome(Ack));
+            assert_eq!(result, Number(Ack));
 
             // decompile back to source code
             assert_eq!(
@@ -2224,22 +1753,22 @@ mod tests {
             let machine = Machine::empty();
 
             // drop table if exists ns("machine.index.stocks")
-            let (machine, _) = machine.evaluate(&Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget {
+            let (machine, _) = machine.evaluate(&DatabaseOp(Mutate(Drop(TableTarget {
                 path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
             })))).unwrap();
 
             // create table ns("machine.index.stocks") (...)
-            let (machine, result) = machine.evaluate(&Quarry(Excavation::Construct(Infrastructure::Create {
+            let (machine, result) = machine.evaluate(&DatabaseOp(Mutate(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
                 entity: TableEntity {
                     columns: make_quote_parameters(),
                     from: None,
                 },
             }))).unwrap();
-            assert_eq!(result, Outcome(Ack));
+            assert_eq!(result, Number(Ack));
 
             // create index ns("machine.index.stocks") [symbol, exchange]
-            let model = Quarry(Excavation::Construct(Infrastructure::Create {
+            let model = DatabaseOp(Mutate(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
                 entity: IndexEntity {
                     columns: vec![
@@ -2249,7 +1778,7 @@ mod tests {
                 },
             }));
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, Outcome(Ack));
+            assert_eq!(result, Number(Ack));
 
             // decompile back to source code
             assert_eq!(
@@ -2260,7 +1789,7 @@ mod tests {
 
         #[test]
         fn test_declare_table() {
-            let model = Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
+            let model = DatabaseOp(Mutate(Declare(TableEntity {
                 columns: vec![
                     Parameter::new("symbol", Some("String(8)".into()), None),
                     Parameter::new("exchange", Some("String(8)".into()), None),
@@ -2283,12 +1812,12 @@ mod tests {
             let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
             create_dataframe(ns_path);
 
-            let model = Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget { path: Box::new(ns) })));
+            let model = DatabaseOp(Mutate(Drop(TableTarget { path: Box::new(ns) })));
             assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
 
             let machine = Machine::empty();
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, Outcome(Ack))
+            assert_eq!(result, Number(Ack))
         }
 
         #[test]
@@ -2304,7 +1833,7 @@ mod tests {
             where last_sale > 1.0
             "#).unwrap();
             let (_, result) = machine.evaluate(&code).unwrap();
-            assert_eq!(result, Outcome(RowsAffected(3)));
+            assert_eq!(result, Number(RowsAffected(3)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -2327,7 +1856,7 @@ mod tests {
             delete from stocks where last_sale > 1.0
             "#).unwrap();
             let (machine, result) = machine.evaluate(&code).unwrap();
-            assert_eq!(result, Outcome(RowsAffected(3)));
+            assert_eq!(result, Number(RowsAffected(3)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -2341,7 +1870,7 @@ mod tests {
             undelete from stocks where last_sale > 1.0
             "#).unwrap();
             let (_, result) = machine.evaluate(&code).unwrap();
-            assert_eq!(result, Outcome(RowsAffected(3)));
+            assert_eq!(result, Number(RowsAffected(3)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -2362,7 +1891,7 @@ mod tests {
 
             // insert some rows
             let machine = Machine::empty();
-            let (_, result) = machine.evaluate(&Quarry(Excavation::Mutate(Mutation::Append {
+            let (_, result) = machine.evaluate(&DatabaseOp(Mutate(Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
                 source: Box::new(From(Box::new(JSONExpression(vec![
                     ("symbol".into(), Literal(StringValue("REX".into()))),
@@ -2370,7 +1899,7 @@ mod tests {
                     ("last_sale".into(), Literal(Number(F64Value(16.99)))),
                 ])))),
             }))).unwrap();
-            assert_eq!(result, Outcome(RowsAffected(1)));
+            assert_eq!(result, Number(RowsAffected(1)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -2387,7 +1916,7 @@ mod tests {
         #[test]
         fn test_overwrite_rows_in_namespace() {
             let ns_path = "machine.overwrite.stocks";
-            let model = Quarry(Excavation::Mutate(Mutation::Overwrite {
+            let model = DatabaseOp(Mutate(Overwrite {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("symbol".into(), Literal(StringValue("BOOM".into()))),
@@ -2408,7 +1937,7 @@ mod tests {
             // overwrite some rows
             let machine = Machine::empty();
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, Outcome(RowsAffected(1)));
+            assert_eq!(result, Number(RowsAffected(1)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -2430,7 +1959,7 @@ mod tests {
 
             // execute the query
             let machine = Machine::empty();
-            let (_, result) = machine.evaluate(&Quarry(Excavation::Query(Queryable::Select {
+            let (_, result) = machine.evaluate(&DatabaseOp(Query(Queryable::Select {
                 fields: vec![
                     Variable("symbol".into()),
                     Variable("exchange".into()),
@@ -2461,7 +1990,7 @@ mod tests {
                 .with_variable("stocks", TableValue(Model(mrc)));
 
             // execute the code
-            let (_, result) = machine.evaluate(&Quarry(Excavation::Query(Queryable::Select {
+            let (_, result) = machine.evaluate(&DatabaseOp(Query(Queryable::Select {
                 fields: vec![
                     Variable("symbol".into()),
                     Variable("exchange".into()),
@@ -2487,7 +2016,7 @@ mod tests {
         #[test]
         fn test_update_rows_in_memory() {
             // build the update model
-            let model = Quarry(Excavation::Mutate(Mutation::Update {
+            let model = DatabaseOp(Mutate(Update {
                 path: Box::new(Variable("stocks".into())),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
@@ -2504,7 +2033,7 @@ mod tests {
             let (mrc, phys_columns) = create_memory_table();
             let machine = Machine::empty().with_variable("stocks", TableValue(Model(mrc)));
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, Outcome(RowsAffected(2)));
+            assert_eq!(result, Number(RowsAffected(2)));
 
             // retrieve and verify all rows
             let model = From(Box::new(Variable("stocks".into())));
@@ -2525,7 +2054,7 @@ mod tests {
             let (df, _) = create_dataframe(ns_path);
 
             // create the instruction model
-            let model = Quarry(Excavation::Mutate(Mutation::Update {
+            let model = DatabaseOp(Mutate(Update {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
@@ -2539,7 +2068,7 @@ mod tests {
 
             // update some rows
             let (_, delta) = Machine::empty().evaluate(&model).unwrap();
-            assert_eq!(delta, Outcome(RowsAffected(2)));
+            assert_eq!(delta, Number(RowsAffected(2)));
 
             // verify the rows
             let rows = df.read_active_rows().unwrap();
@@ -2554,7 +2083,7 @@ mod tests {
 
         #[test]
         fn test_truncate_table() {
-            let model = Quarry(Excavation::Mutate(Mutation::Truncate {
+            let model = DatabaseOp(Mutate(Truncate {
                 path: Box::new(Variable("stocks".into())),
                 limit: Some(Box::new(Literal(Number(I64Value(0))))),
             }));
@@ -2562,7 +2091,7 @@ mod tests {
             let (mrc, _) = create_memory_table();
             let machine = Machine::empty().with_variable("stocks", TableValue(Model(mrc)));
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, Outcome(RowsAffected(1)))
+            assert_eq!(result, Number(Ack))
         }
 
         fn create_memory_table() -> (ModelRowCollection, Vec<Column>) {
@@ -2576,22 +2105,22 @@ mod tests {
             (mrc, phys_columns)
         }
 
-        fn create_dataframe(namespace: &str) -> (DataFrame, Vec<Column>) {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns).unwrap();
+        fn create_dataframe(namespace: &str) -> (Dataframe, Vec<Column>) {
+            let params = make_quote_parameters();
+            let columns = Column::from_parameters(&params).unwrap();
             let ns = Namespace::parse(namespace).unwrap();
             match fs::remove_file(ns.get_table_file_path()) {
-                Ok(_) => {}
+                Ok(..) => {}
                 Err(err) => error!("create_dataframe: {}", err)
             }
 
-            let mut df = make_dataframe_ns(ns, columns.to_owned()).unwrap();
-            assert_eq!(0, df.append(make_quote(0, "ABC", "AMEX", 11.77)).unwrap());
-            assert_eq!(1, df.append(make_quote(1, "UNO", "OTC", 0.2456)).unwrap());
-            assert_eq!(2, df.append(make_quote(2, "BIZ", "NYSE", 23.66)).unwrap());
-            assert_eq!(3, df.append(make_quote(3, "GOTO", "OTC", 0.1428)).unwrap());
-            assert_eq!(4, df.append(make_quote(4, "BOOM", "NASDAQ", 56.87)).unwrap());
-            (df, phys_columns)
+            let mut df = make_dataframe_ns(ns, params.to_owned()).unwrap();
+            assert_eq!(0, df.append_row(make_quote(0, "ABC", "AMEX", 11.77)).to_usize());
+            assert_eq!(1, df.append_row(make_quote(1, "UNO", "OTC", 0.2456)).to_usize());
+            assert_eq!(2, df.append_row(make_quote(2, "BIZ", "NYSE", 23.66)).to_usize());
+            assert_eq!(3, df.append_row(make_quote(3, "GOTO", "OTC", 0.1428)).to_usize());
+            assert_eq!(4, df.append_row(make_quote(4, "BOOM", "NASDAQ", 56.87)).to_usize());
+            (df, columns)
         }
     }
 }

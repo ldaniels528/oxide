@@ -3,15 +3,17 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
+use std::convert::From;
 
 use crate::errors::Errors;
 use crate::expression::Conditions::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+use crate::expression::DatabaseOps::{Mutate, Query};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::TableTarget;
-use crate::expression::Mutation::IntoNs;
-use crate::expression::{BitwiseOps, Conditions, Expression, ImportOps, ACK, FALSE, NULL, TRUE, UNDEFINED};
-use crate::expression::{Directives, Excavation, Infrastructure, MutateTarget, Mutation, Queryable};
+use crate::expression::Mutation::{Create, Declare, Drop, IntoNs, Undelete};
+use crate::expression::Queryable::Select;
+use crate::expression::*;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::structures::HardStructure;
@@ -240,7 +242,7 @@ impl Compiler {
         }
     }
 
-    /// Parses keywords
+    /// Parses reserved words (i.e. keyword)
     fn parse_keyword(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(Atom { text, .. }), nts) = ts.next() {
             match text.as_str() {
@@ -248,15 +250,16 @@ impl Compiler {
                 "[+]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustAck(e))),
                 "[-]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustNotAck(e))),
                 "[~]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustIgnoreAck(e))),
-                "ack" => Ok((ACK, nts)),
+                "Ack" => Ok((ACK, nts)),
                 "append" => self.parse_keyword_append(nts),
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
                 "DELETE" => self.parse_keyword_http(ts),
-                "drop" => self.parse_mutate_target(nts, |m| Quarry(Excavation::Construct(Infrastructure::Drop(m)))),
+                "drop" => self.parse_mutate_target(nts, |m| DatabaseOp(Mutate(Drop(m)))),
                 "false" => Ok((FALSE, nts)),
-                "feature" => self.parse_keyword_feature(nts),
+                "Feature" => self.parse_keyword_feature(nts),
                 "fn" => self.parse_keyword_fn(nts),
+                "foreach" => self.parse_keyword_foreach(nts),
                 "from" => {
                     let (from, ts) = self.parse_expression_1a(nts, From)?;
                     self.parse_queryable(from, ts)
@@ -275,7 +278,7 @@ impl Compiler {
                 "PATCH" => self.parse_keyword_http(ts),
                 "POST" => self.parse_keyword_http(ts),
                 "PUT" => self.parse_keyword_http(ts),
-                "scenario" => self.parse_keyword_scenario(nts),
+                "Scenario" => self.parse_keyword_scenario(nts),
                 "select" => self.parse_keyword_select(nts),
                 "struct" => self.parse_keyword_struct(nts),
                 "table" => self.parse_keyword_table(nts),
@@ -299,7 +302,7 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.compile_next(ts)?;
         let (source, ts) = self.compile_next(ts)?;
-        Ok((Quarry(Excavation::Mutate(Mutation::Append { path: Box::new(table), source: Box::new(source) })), ts))
+        Ok((DatabaseOp(Mutate(Mutation::Append { path: Box::new(table), source: Box::new(source) })), ts))
     }
 
     /// Creates a database object (e.g., table or index)
@@ -323,7 +326,7 @@ impl Compiler {
         let (index, ts) = self.compile_next(ts)?;
         let ts = ts.expect("on")?;
         if let (ArrayExpression(columns), ts) = self.compile_next(ts.to_owned())? {
-            Ok((Quarry(Excavation::Construct(Infrastructure::Create {
+            Ok((DatabaseOp(Mutate(Create {
                 path: Box::new(index),
                 entity: IndexEntity { columns },
             })), ts))
@@ -348,7 +351,7 @@ impl Compiler {
                 } else {
                     (None, ts)
                 };
-            Ok((Quarry(Excavation::Construct(Infrastructure::Create {
+            Ok((DatabaseOp(Mutate(Create {
                 path: Box::new(table),
                 entity: TableEntity { columns, from },
             })), ts))
@@ -366,7 +369,7 @@ impl Compiler {
         let from = from.expect("Expected keyword 'from'");
         let (condition, ts) = self.next_keyword_cond("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Quarry(Excavation::Mutate(Mutation::Delete { path: Box::new(from), condition, limit: limit.map(Box::new) })), ts))
+        Ok((DatabaseOp(Mutate(Mutation::Delete { path: Box::new(from), condition, limit: limit.map(Box::new) })), ts))
     }
 
     fn parse_keyword_feature(
@@ -385,7 +388,6 @@ impl Compiler {
                         CodeBlock(ops) => ops,
                         z => vec![z]
                     },
-                    inherits: None,
                 })
                 .collect::<Vec<_>>(),
             other => {
@@ -408,11 +410,7 @@ impl Compiler {
         let (code, ts) = self.expect_curly_brackets(ts)?;
         match code {
             CodeBlock(verifications) =>
-                Ok((Scenario {
-                    title: Box::new(title),
-                    verifications,
-                    inherits: None,
-                }, ts)),
+                Ok((Scenario { title: Box::new(title), verifications }, ts)),
             other => {
                 println!("parse_keyword_scenario: other {:?}", other);
                 fail_expr("Code block expected", &other)
@@ -436,6 +434,25 @@ impl Compiler {
                 self.expect_function_parameters_and_body(Some(name), ts),
             // unrecognized
             _ => fail_near("Function name expected", &ts)
+        }
+    }
+
+    /// "foreach" expression
+    /// ex: foreach item in items { ... }
+    fn parse_keyword_foreach(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        // foreach [item] in [items] [block]
+        match self.compile_next(ts)? {
+            (Variable(name), ts) => {
+                let ts = ts.expect("in")?;
+                let (items, ts) = self.compile_next(ts)?;
+                let (block, ts) = self.compile_next(ts)?;
+                Ok((ForEach(name, Box::from(items), Box::from(block)), ts))
+            }
+            (_, ts) =>
+                fail_near("Variable expected", &ts)
         }
     }
 
@@ -598,7 +615,7 @@ impl Compiler {
             (.., ts) => return fail_near("Expected a boolean expression", &ts)
         };
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Quarry(Excavation::Mutate(Mutation::Overwrite {
+        Ok((DatabaseOp(Mutate(Mutation::Overwrite {
             path: Box::new(table),
             source: Box::new(source),
             condition: Some(condition),
@@ -617,7 +634,7 @@ impl Compiler {
         let (having, ts) = self.next_keyword_expr("having", ts)?;
         let (order_by, ts) = self.next_keyword_expression_list("order", "by", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Quarry(Excavation::Query(Queryable::Select {
+        Ok((DatabaseOp(Query(Select {
             fields,
             from: from.map(Box::new),
             condition,
@@ -654,7 +671,7 @@ impl Compiler {
             } else {
                 (None, ts)
             };
-            Ok((Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity { columns: params, from }))), ts))
+            Ok((DatabaseOp(Mutate(Declare(TableEntity { columns: params, from }))), ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }
@@ -670,7 +687,7 @@ impl Compiler {
         let from = from.expect("Expected keyword 'from'");
         let (condition, ts) = self.next_keyword_cond("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Quarry(Excavation::Mutate(Mutation::Undelete { path: Box::new(from), condition, limit: limit.map(Box::new) })), ts))
+        Ok((DatabaseOp(Mutate(Undelete { path: Box::new(from), condition, limit: limit.map(Box::new) })), ts))
     }
 
     /// Builds a language model from an UPDATE statement:
@@ -680,7 +697,7 @@ impl Compiler {
         let (source, ts) = self.compile_next(ts)?;
         let (condition, ts) = self.next_keyword_cond("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((Quarry(Excavation::Mutate(Mutation::Update {
+        Ok((DatabaseOp(Mutate(Mutation::Update {
             path: Box::new(table),
             source: Box::new(source),
             condition,
@@ -775,7 +792,7 @@ impl Compiler {
                         "-" => self.parse_expression_2a(ts, op0, Minus),
                         "%" => self.parse_expression_2a(ts, op0, Modulo),
                         "×" | "*" => self.parse_expression_2a(ts, op0, Multiply),
-                        "~>" => self.parse_expression_2a(ts, op0, |a, b| Quarry(Excavation::Mutate(IntoNs(a, b)))),
+                        "~>" => self.parse_expression_2a(ts, op0, |a, b| DatabaseOp(Mutate(IntoNs(a, b)))),
                         "!=" => self.parse_conditional_2a(ts, op0, NotEqual),
                         "||" => self.parse_conditional_2a(ts, op0, Or),
                         "+" => self.parse_expression_2a(ts, op0, Plus),
@@ -799,12 +816,12 @@ impl Compiler {
         match ts.to_owned() {
             t if t.is("limit") => {
                 let (expr, ts) = self.compile_next(ts.skip())?;
-                self.parse_queryable(Quarry(Excavation::Query(Queryable::Limit { from: Box::new(host), limit: Box::new(expr) })), ts)
+                self.parse_queryable(DatabaseOp(Query(Queryable::Limit { from: Box::new(host), limit: Box::new(expr) })), ts)
             }
             t if t.is("where") => {
                 match self.compile_next(ts.skip())? {
                     (Condition(condition), ts) =>
-                        self.parse_queryable(Quarry(Excavation::Query(Queryable::Where { from: Box::new(host), condition })), ts),
+                        self.parse_queryable(DatabaseOp(Query(Queryable::Where { from: Box::new(host), condition })), ts),
                     (_, ts) =>
                         fail_near("Boolean expression expected", &ts)
                 }
@@ -927,7 +944,7 @@ impl Compiler {
         if let (Parameters(params), ts) = self.expect_parameters(ts.to_owned())? {
             // extract the function body
             match ts.next() {
-                (Some(Operator { text: symbol , .. }), ts) if symbol == "=>" => {
+                (Some(Operator { text: symbol, .. }), ts) if symbol == "=>" => {
                     let (body, ts) = self.compile_next(ts)?;
                     // build the model
                     let func = Literal(Function { params, code: Box::new(body) });
@@ -1137,8 +1154,8 @@ mod tests {
         #[test]
         fn test_feature_with_a_scenario() {
             let code = Compiler::build(r#"
-            feature "Karate translator" {
-                scenario "Translate Karate Scenario to Oxide Scenario" {
+            Feature "Karate translator" {
+                Scenario "Translate Karate Scenario to Oxide Scenario" {
                     assert(true)
                 }
             } "#).unwrap();
@@ -1152,8 +1169,7 @@ mod tests {
                                 fx: Box::new(Variable("assert".to_string())),
                                 args: vec![Condition(True)],
                             }
-                        ],
-                        inherits: None,
+                        ]
                     }
                 ],
             })
@@ -1493,15 +1509,17 @@ mod tests {
             "#).unwrap();
             assert_eq!(
                 code,
-                Extraction(Box::from(Variable("oxide".to_string())),
-                           Box::from(Extraction(Box::from(Variable("tools".to_string())),
-                                                Box::from(Variable("compact".to_string()))
-                           ))
-                ))
+                Extraction(
+                    Box::from(Variable("oxide".to_string())),
+                    Box::from(Extraction(Box::from(Variable("tools".to_string())),
+                                         Box::from(Variable("compact".to_string()))
+                    ))
+                ));
+            assert_eq!(code.to_code(), "oxide::tools::compact");
         }
 
         #[test]
-        fn test_imports() {
+        fn test_import_one() {
             // single import
             let code = Compiler::build(r#"
                 import "os"
@@ -1509,7 +1527,11 @@ mod tests {
             assert_eq!(code, Import(vec![
                 ImportOps::Everything("os".into())
             ]));
+            assert_eq!(code.to_code(), "import os");
+        }
 
+        #[test]
+        fn test_import_multiple() {
             // multiple imports
             let code = Compiler::build(r#"
                 import os, util
@@ -1518,6 +1540,7 @@ mod tests {
                 ImportOps::Everything("os".into()),
                 ImportOps::Everything("util".into()),
             ]));
+            assert_eq!(code.to_code(), "import os, util");
         }
     }
 
@@ -1597,12 +1620,15 @@ mod tests {
         }
 
         #[test]
-        fn test_numeric_literal_value() {
-            assert_eq!(Compiler::build("1_234_567_890").unwrap(),
-                       Literal(Number(I64Value(1_234_567_890))));
-
+        fn test_numeric_literal_value_float() {
             assert_eq!(Compiler::build("1_234_567.890").unwrap(),
                        Literal(Number(F64Value(1_234_567.890))));
+        }
+
+        #[test]
+        fn test_numeric_literal_value_integer() {
+            assert_eq!(Compiler::build("1_234_567_890").unwrap(),
+                       Literal(Number(I64Value(1_234_567_890))));
         }
     }
 
@@ -1842,10 +1868,11 @@ mod tests {
         use crate::compiler::Compiler;
         use crate::expression::Conditions::{Between, Betwixt, Equal, GreaterOrEqual, LessOrEqual, LessThan, Like};
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-        use crate::expression::Expression::{ArrayExpression, Condition, From, JSONExpression, Literal, Ns, Quarry, Variable, Via};
+        use crate::expression::DatabaseOps::{Mutate, Query};
+        use crate::expression::Expression::{ArrayExpression, Condition, DatabaseOp, From, JSONExpression, Literal, Ns, Variable, Via};
         use crate::expression::MutateTarget::TableTarget;
-        use crate::expression::Mutation::IntoNs;
-        use crate::expression::{Excavation, Infrastructure, Mutation, Queryable};
+        use crate::expression::Mutation::{Create, Declare, Drop, IntoNs};
+        use crate::expression::{Mutation, Queryable};
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::parameter::Parameter;
         use crate::typed_values::TypedValue::{Number, StringValue};
@@ -1853,10 +1880,10 @@ mod tests {
         #[test]
         fn test_append_from_json_literal() {
             let opcodes = Compiler::build(r#"
-        append ns("compiler.append2.stocks")
-        from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
+                append ns("compiler.append2.stocks")
+                from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
+            "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append2.stocks".to_string()))))),
                 source: Box::new(From(Box::new(JSONExpression(vec![
                     ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -1869,14 +1896,14 @@ mod tests {
         #[test]
         fn test_append_from_json_array() {
             let opcodes = Compiler::build(r#"
-        append ns("compiler.into.stocks")
-        from [
-            { symbol: "CAT", exchange: "NYSE", last_sale: 11.1234 },
-            { symbol: "DOG", exchange: "NASDAQ", last_sale: 0.1008 },
-            { symbol: "SHARK", exchange: "AMEX", last_sale: 52.08 }
-        ]
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
+                append ns("compiler.into.stocks")
+                from [
+                    { symbol: "CAT", exchange: "NYSE", last_sale: 11.1234 },
+                    { symbol: "DOG", exchange: "NASDAQ", last_sale: 0.1008 },
+                    { symbol: "SHARK", exchange: "AMEX", last_sale: 52.08 }
+                ]
+            "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
                 source: Box::new(From(Box::new(
                     ArrayExpression(vec![
@@ -1903,9 +1930,9 @@ mod tests {
         #[test]
         fn test_append_from_variable() {
             let opcodes = Compiler::build(r#"
-        append ns("compiler.append.stocks") from stocks
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Append {
+                append ns("compiler.append.stocks") from stocks
+            "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append.stocks".to_string()))))),
                 source: Box::new(From(Box::new(Variable("stocks".into())))),
             })))
@@ -1936,9 +1963,9 @@ mod tests {
         #[test]
         fn test_create_index_in_namespace() {
             let code = Compiler::build(r#"
-            create index ns("compiler.create.stocks") on [symbol, exchange]
-        "#).unwrap();
-            assert_eq!(code, Quarry(Excavation::Construct(Infrastructure::Create {
+                create index ns("compiler.create.stocks") on [symbol, exchange]
+            "#).unwrap();
+            assert_eq!(code, DatabaseOp(Mutate(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
                 entity: IndexEntity {
                     columns: vec![
@@ -1953,12 +1980,12 @@ mod tests {
         fn test_create_table_in_namespace() {
             let ns_path = "compiler.create.stocks";
             let code = Compiler::build(r#"
-            create table ns("compiler.create.stocks") (
-                symbol: String(8) = "ABC",
-                exchange: String(8) = "NYSE",
-                last_sale: f64 = 23.54)
-            "#).unwrap();
-            assert_eq!(code, Quarry(Excavation::Construct(Infrastructure::Create {
+                create table ns("compiler.create.stocks") (
+                    symbol: String(8) = "ABC",
+                    exchange: String(8) = "NYSE",
+                    last_sale: f64 = 23.54)
+                "#).unwrap();
+            assert_eq!(code, DatabaseOp(Mutate(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
                 entity: TableEntity {
                     columns: vec![
@@ -1974,12 +2001,12 @@ mod tests {
         #[test]
         fn test_declare_table() {
             let model = Compiler::build(r#"
-            table(
-                symbol: String(8),
-                exchange: String(8),
-                last_sale: f64
-            )"#).unwrap();
-            assert_eq!(model, Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
+                table(
+                    symbol: String(8),
+                    exchange: String(8),
+                    last_sale: f64)
+            "#).unwrap();
+            assert_eq!(model, DatabaseOp(Mutate(Declare(TableEntity {
                 columns: vec![
                     Parameter::new("symbol", Some("String(8)".into()), None),
                     Parameter::new("exchange", Some("String(8)".into()), None),
@@ -1992,9 +2019,9 @@ mod tests {
         #[test]
         fn test_delete() {
             let opcodes = Compiler::build(r#"
-        delete from stocks
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(
+                delete from stocks
+            "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(
                 Mutation::Delete {
                     path: Box::new(Variable("stocks".into())),
                     condition: None,
@@ -2005,11 +2032,11 @@ mod tests {
         #[test]
         fn test_delete_where_limit() {
             let opcodes = Compiler::build(r#"
-        delete from stocks
-        where last_sale >= 1.0
-        limit 100
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Delete {
+                delete from stocks
+                where last_sale >= 1.0
+                limit 100
+            "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Delete {
                 path: Box::new(Variable("stocks".into())),
                 condition: Some(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
@@ -2022,11 +2049,11 @@ mod tests {
         #[test]
         fn test_drop_table() {
             let code = Compiler::build(r#"
-            drop table ns('finance.securities.stocks')
-        "#).unwrap();
+                drop table ns('finance.securities.stocks')
+            "#).unwrap();
             assert_eq!(
                 code,
-                Quarry(Excavation::Construct(Infrastructure::Drop(TableTarget {
+                DatabaseOp(Mutate(Drop(TableTarget {
                     path: Box::new(Ns(Box::new(Literal(StringValue("finance.securities.stocks".into()))))),
                 })))
             );
@@ -2041,11 +2068,11 @@ mod tests {
         #[test]
         fn test_from_where_limit() {
             let opcodes = Compiler::build(r#"
-        from stocks where last_sale >= 1.0 limit 20
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Limit {
+                from stocks where last_sale >= 1.0 limit 20
+            "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Query(Queryable::Limit {
                 from: Box::new(
-                    Quarry(Excavation::Query(Queryable::Where {
+                    DatabaseOp(Query(Queryable::Where {
                         from: Box::new(From(Box::new(Variable("stocks".into())))),
                         condition: GreaterOrEqual(
                             Box::new(Variable("last_sale".into())),
@@ -2070,20 +2097,20 @@ mod tests {
         #[test]
         fn test_ns() {
             let code = Compiler::build(r#"
-        ns("securities.etf.stocks")
-        "#).unwrap();
+                ns("securities.etf.stocks")
+            "#).unwrap();
             assert_eq!(code, Ns(Box::new(Literal(StringValue("securities.etf.stocks".to_string())))))
         }
 
         #[test]
         fn test_overwrite() {
             let opcodes = Compiler::build(r#"
-        overwrite stocks
-        via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
-        where symbol == "ABCQ"
-        limit 5
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Overwrite {
+                overwrite stocks
+                via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
+                where symbol == "ABCQ"
+                limit 5
+            "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Overwrite {
                 path: Box::new(Variable("stocks".into())),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -2101,9 +2128,9 @@ mod tests {
         #[test]
         fn test_select_from_variable() {
             let opcodes = Compiler::build(r#"
-        select symbol, exchange, last_sale from stocks
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Select {
+                select symbol, exchange, last_sale from stocks
+                "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Query(Queryable::Select {
                 fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                 from: Some(Box::new(Variable("stocks".into()))),
                 condition: None,
@@ -2117,10 +2144,10 @@ mod tests {
         #[test]
         fn test_select_from_where() {
             let opcodes = Compiler::build(r#"
-        select symbol, exchange, last_sale from stocks
-        where last_sale >= 1.0
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Query(
+                select symbol, exchange, last_sale from stocks
+                where last_sale >= 1.0
+                "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Query(
                 Queryable::Select {
                     fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                     from: Some(Box::new(Variable("stocks".into()))),
@@ -2138,11 +2165,11 @@ mod tests {
         #[test]
         fn test_select_from_where_limit() {
             let opcodes = Compiler::build(r#"
-        select symbol, exchange, last_sale from stocks
-        where last_sale <= 1.0
-        limit 5
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Query(Queryable::Select {
+                select symbol, exchange, last_sale from stocks
+                where last_sale <= 1.0
+                limit 5
+                "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Query(Queryable::Select {
                 fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                 from: Some(Box::new(Variable("stocks".into()))),
                 condition: Some(LessOrEqual(
@@ -2159,12 +2186,12 @@ mod tests {
         #[test]
         fn test_select_from_where_order_by_limit() {
             let opcode = Compiler::build(r#"
-        select symbol, exchange, last_sale from stocks
-        where last_sale < 1.0
-        order by symbol
-        limit 5
-        "#).unwrap();
-            assert_eq!(opcode, Quarry(Excavation::Query(Queryable::Select {
+                select symbol, exchange, last_sale from stocks
+                where last_sale < 1.0
+                order by symbol
+                limit 5
+                "#).unwrap();
+            assert_eq!(opcode, DatabaseOp(Query(Queryable::Select {
                 fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                 from: Some(Box::new(Variable("stocks".into()))),
                 condition: Some(LessThan(
@@ -2181,9 +2208,9 @@ mod tests {
         #[test]
         fn test_undelete() {
             let opcodes = Compiler::build(r#"
-        undelete from stocks
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Undelete {
+                undelete from stocks
+                "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Undelete {
                 path: Box::new(Variable("stocks".into())),
                 condition: None,
                 limit: None,
@@ -2193,11 +2220,11 @@ mod tests {
         #[test]
         fn test_undelete_where_limit() {
             let opcodes = Compiler::build(r#"
-        undelete from stocks
-        where last_sale >= 1.0
-        limit 100
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Undelete {
+                undelete from stocks
+                where last_sale >= 1.0
+                limit 100
+                "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Undelete {
                 path: Box::new(Variable("stocks".into())),
                 condition: Some(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
@@ -2210,12 +2237,12 @@ mod tests {
         #[test]
         fn test_update() {
             let opcodes = Compiler::build(r#"
-        update stocks
-        via { last_sale: 0.1111 }
-        where symbol == "ABC"
-        limit 10
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(Mutation::Update {
+                update stocks
+                via { last_sale: 0.1111 }
+                where symbol == "ABC"
+                limit 10
+                "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Update {
                 path: Box::new(Variable("stocks".into())),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
@@ -2231,12 +2258,12 @@ mod tests {
         #[test]
         fn test_write_json_into_namespace() {
             let opcodes = Compiler::build(r#"
-        [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-         { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-         { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
-                ~> ns("interpreter.into.stocks")
-        "#).unwrap();
-            assert_eq!(opcodes, Quarry(Excavation::Mutate(IntoNs(
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
+                        ~> ns("interpreter.into.stocks")
+                "#).unwrap();
+            assert_eq!(opcodes, DatabaseOp(Mutate(IntoNs(
                 Box::new(ArrayExpression(vec![
                     JSONExpression(vec![
                         ("symbol".into(), Literal(StringValue("ABC".into()))),

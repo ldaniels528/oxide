@@ -10,8 +10,8 @@ use crate::errors::Errors;
 use crate::errors::Errors::*;
 use crate::field_metadata::FieldMetadata;
 use crate::number_kind::NumberKind::*;
+use crate::numbers::Numbers;
 use crate::numbers::Numbers::U64Value;
-use crate::outcomes::Outcomes;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
@@ -223,7 +223,7 @@ impl HashTableRowCollection {
             Ok(table) => table,
             Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
         };
-        if keys_table.resize(0) != Outcome(Outcomes::Ack) {
+        if keys_table.resize(0) != Number(Numbers::Ack) {
             warn!("Failed to truncate index for column {}", self.get_key_column().get_name());
         }
         let mut inserted_rows = 0;
@@ -242,13 +242,13 @@ impl HashTableRowCollection {
                 // attempt to overwrite the row
                 match keys_table.overwrite_row(keys_row_id, keys_row) {
                     ErrorValue(message) => return ErrorValue(message),
-                    Outcome(oc) => inserted_rows += oc.to_update_count(),
+                    Number(oc) => inserted_rows += oc.to_usize(),
                     _ => {}
                 }
             }
         }
         self.keys_table = keys_table;
-        Outcome(Outcomes::RowsAffected(inserted_rows))
+        Number(Numbers::RowsAffected(inserted_rows as i64))
     }
 }
 
@@ -263,7 +263,7 @@ impl RowCollection for HashTableRowCollection {
             // delete the hash key value
             _ =>
                 match self.keys_table.delete_row(keys_row_id) {
-                    Outcome(..) => self.data_table.delete_row(id),
+                    Number(..) => self.data_table.delete_row(id),
                     ErrorValue(msg) => ErrorValue(msg),
                     other => ErrorValue(OutcomeExpected(other.to_code()))
                 }
@@ -293,7 +293,7 @@ impl RowCollection for HashTableRowCollection {
         new_value: TypedValue,
     ) -> TypedValue {
         match self.link_key_value(id, &new_value) {
-            Outcome(..) => self.data_table.overwrite_field(id, column_id, new_value),
+            Number(..) => self.data_table.overwrite_field(id, column_id, new_value),
             ErrorValue(msg) => ErrorValue(msg),
             other => ErrorValue(OutcomeExpected(other.to_code()))
         }
@@ -311,8 +311,8 @@ impl RowCollection for HashTableRowCollection {
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
         let new_value = &row[self.key_column_index];
         match self.link_key_value(id, new_value) {
-            Outcome(oc) if oc.to_update_count() > 0 => self.data_table.overwrite_row(id, row),
-            Outcome(oc) => Outcome(oc),
+            Number(oc) if oc.to_usize() > 0 => self.data_table.overwrite_row(id, row),
+            Number(oc) => Number(oc),
             ErrorValue(err) => ErrorValue(err),
             other => ErrorValue(OutcomeExpected(other.to_code()))
         }
@@ -370,7 +370,7 @@ impl RowCollection for HashTableRowCollection {
             Undefined => self.data_table.update_row(id, row),
             _ =>
                 match self.move_key_value(id, &old_value, new_value) {
-                    Outcome(..) => self.data_table.update_row(id, row),
+                    Number(..) => self.data_table.update_row(id, row),
                     ErrorValue(err) => ErrorValue(err),
                     other => ErrorValue(RowsAffectedExpected(other.to_code()))
                 }
@@ -387,7 +387,7 @@ mod tests {
     use crate::row_collection::RowCollection;
     use crate::rows::Row;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_quote_columns, StockQuote};
+    use crate::testdata::{make_quote_columns, make_quote_parameters, StockQuote};
     use std::time::Instant;
 
     use super::*;
@@ -432,7 +432,7 @@ mod tests {
 
         // overwrite 'CRT' with 'CRT.Q' in the hash index
         assert_eq!(
-            Outcome(Outcomes::RowsAffected(1)),
+            Number(Numbers::RowsAffected(1)),
             hkrc.overwrite_row(2, Row::new(2, vec![
                 StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Number(F64Value(1.2598)),
             ])));
@@ -474,7 +474,7 @@ mod tests {
         let bucket_count = max_count / 10;
         let bucket_depth = bucket_count / 10;
         let mut stocks = build_hash_key_table(&ns, 0, bucket_count, bucket_depth);
-        assert_eq!(Outcome(Outcomes::Ack), stocks.resize(0));
+        assert_eq!(Number(Numbers::Ack), stocks.resize(0));
 
         let mut timings = Vec::new();
         for n in 0..max_count {
@@ -487,7 +487,7 @@ mod tests {
                     Number(F64Value(q.last_sale)),
                 ])));
             timings.push(msec);
-            assert_eq!(Outcome(Outcomes::RowsAffected(1)), outcome);
+            assert_eq!(Number(Numbers::RowsAffected(1)), outcome);
         }
 
         let (msec_min, msec_max, msec_total) = timings.iter()
@@ -573,8 +573,8 @@ mod tests {
         bucket_depth: u64,
     ) -> HashTableRowCollection {
         // create a table and write some rows to it
-        let columns = make_quote_columns();
-        let frc = FileRowCollection::create_table(&ns, columns.to_owned()).unwrap();
+        let params = make_quote_parameters();
+        let frc = FileRowCollection::create_table(&ns, &params).unwrap();
         let mut hkrc = HashTableRowCollection::create_with_options(column_index, bucket_count, bucket_depth, Box::new(frc)).unwrap();
         //assert_eq!(RowsAffected(9), hkrc.rebuild());
         hkrc
@@ -587,8 +587,8 @@ mod tests {
         bucket_depth: u64,
     ) -> HashTableRowCollection {
         // create a table and write some rows to it
-        let columns = make_quote_columns();
-        let mut frc = FileRowCollection::create_table(&ns, columns.to_owned()).unwrap();
+        let params = make_quote_parameters();
+        let mut frc = FileRowCollection::create_table(&ns, &params).unwrap();
         let quote_data = vec![
             ("ACT", "AMEX", 0.0021), ("ATT", "NYSE", 98.44), ("CRT", "OTC_BB", 1.2582),
             ("GE", "NYSE", 21.22), ("H", "OTC_BB", 0.0076), ("T", "NYSE", 43.167),
@@ -602,7 +602,7 @@ mod tests {
                     Number(F64Value(*last_sale)),
                 ])
             }).collect();
-        assert_eq!(Outcome(Outcomes::RowsAffected(9)), frc.append_rows(rows));
+        assert_eq!(Number(Numbers::RowsAffected(9)), frc.append_rows(rows));
         // show the contents of the table
         // |-------------------------------|
         // | symbol | exchange | last_sale |
@@ -621,7 +621,7 @@ mod tests {
 
         // create and query the hash index
         let mut hkrc = HashTableRowCollection::new(column_index, Box::new(frc)).unwrap();
-        assert_eq!(Outcome(Outcomes::RowsAffected(9)), hkrc.rebuild());
+        assert_eq!(Number(Numbers::RowsAffected(9)), hkrc.rebuild());
 
         // show the contents of the hash table
         // |---------------------|

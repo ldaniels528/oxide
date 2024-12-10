@@ -55,10 +55,10 @@ impl TableRenderer {
 
         // define rows by prepending ID values to each row's data
         let rows: Vec<Row> = rc.read_active_rows()?.into_iter().map(|row| {
-                let mut values = vec![Number(U64Value(row.get_id() as u64))];
-                values.extend(row.get_values());
-                Row::new(row.get_id(), values)
-            })
+            let mut values = vec![Number(U64Value(row.get_id() as u64))];
+            values.extend(row.get_values());
+            Row::new(row.get_id(), values)
+        })
             .collect();
 
         Ok(Self::from_rows(&columns, &rows))

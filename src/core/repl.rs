@@ -3,6 +3,8 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::arrays::Array;
+use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::Model;
 use crate::expression::ACK;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
@@ -14,10 +16,9 @@ use crate::repl;
 use crate::rest_server::SharedState;
 use crate::row_collection::RowCollection;
 use crate::rows::Row;
+use crate::structures::{HardStructure, SoftStructure, Structure};
 use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
-use crate::table_values::TableValues;
-use crate::table_values::TableValues::Model;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use chrono::{DateTime, Local, TimeDelta};
@@ -38,6 +39,7 @@ pub struct REPLState {
     interpreter: Interpreter,
     session_id: i64,
     user_id: i64,
+    user_name: String,
     counter: usize,
     is_alive: bool,
 }
@@ -51,6 +53,9 @@ impl REPLState {
             interpreter: Interpreter::new(),
             session_id: Local::now().timestamp_millis(),
             user_id: users::get_current_uid().to_i64().unwrap_or(-1),
+            user_name: users::get_current_username().iter()
+                .flat_map(|oss| oss.as_os_str().to_str())
+                .collect(),
             counter: 0,
             is_alive: true,
         }
@@ -63,7 +68,7 @@ impl REPLState {
 
     /// return the REPL prompt string (e.g. "oxide.public[4]>")
     pub fn get_prompt(&self) -> String {
-        format!("{}.{}[{}]> ", self.database, self.schema, self.counter)
+        format!("{}@{}[{}]> ", self.user_name, self.database, self.counter)
     }
 
     pub fn is_alive(&self) -> bool {
@@ -76,11 +81,9 @@ pub fn do_terminal(
     args: Vec<String>,
     reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>,
 ) -> std::io::Result<()> {
-    use crate::platform::{MAJOR_VERSION, MINOR_VERSION};
-    let mut stdout = stdout();
-
     // show title
-    println!("Welcome to Oxide v{MAJOR_VERSION}.{MINOR_VERSION}\n");
+    let mut stdout = stdout();
+    show_title();
     stdout.flush()?;
 
     // setup system variables
@@ -145,7 +148,7 @@ fn build_output(
             let lines = TableRenderer::from_table_with_ids(&rc)?;
             out.extend(lines)
         }
-        z => out.push(z.to_code())
+        z => out.push(z.unwrap_value())
     }
     Ok(out)
 }
@@ -160,19 +163,45 @@ fn build_output_header(
     let label = match &result {
         TableValue(tv) =>
             format!("{} row(s) in {execution_time:.1} ms ~ {}", tv.len()?, get_table_type(tv)),
-        _ => format!("returned type `{}` in {execution_time:.1} ms", result.get_type_name())
+        other => {
+            let kind = match other {
+                StructureHard(hs) => get_hard_type(hs),
+                StructureSoft(ss) => get_soft_type(ss),
+                v => v.get_type_name()
+            };
+            format!("returned type `{}` in {execution_time:.1} ms", kind)
+        }
     };
     Ok(format!("{pid}: {label}"))
 }
 
+/// Generates a less verbose hard structure signature
+/// ex: Table(String(128), String(128), String(128), Boolean)
+fn get_hard_type(hs: &HardStructure) -> String {
+    format!("Struct({})", get_parameter_string(&hs.get_parameters()))
+}
+
+/// Generates a less verbose hard structure signature
+/// ex: Table(String(128), String(128), String(128), Boolean)
+fn get_soft_type(ss: &SoftStructure) -> String {
+    format!("Struct({})", get_parameter_string(&ss.get_parameters()))
+}
+
+fn get_parameter_string(params: &Vec<Parameter>) -> String {
+    params.iter()
+        .map(|p| p.get_param_type().unwrap_or("Any".into()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Generates a less verbose table signature
-// ex: Table(String(128), String(128), String(128), Boolean)
-fn get_table_type(tv: &TableValues) -> String {
-    let columns = tv.get_columns().iter()
+/// ex: Table(String(128), String(128), String(128), Boolean)
+fn get_table_type(rc: &Dataframe) -> String {
+    let param_types = rc.get_columns().iter()
         .map(|c| c.get_data_type().to_type_declaration().unwrap_or("Any".into()))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("Table({})", columns)
+    format!("Table({})", param_types)
 }
 
 fn limit_width(lines: Vec<String>, limit: usize) -> Vec<String> {
@@ -263,6 +292,11 @@ fn setup_system_variables(mut state: REPLState, args: Vec<String>) -> REPLState 
     state
 }
 
+fn show_title() {
+    use crate::platform::{MAJOR_VERSION, MINOR_VERSION};
+    println!("Welcome to Oxide v{MAJOR_VERSION}.{MINOR_VERSION}\n");
+}
+
 /// Starts the listener server
 async fn start_server(args: Vec<String>) -> std::io::Result<()> {
     use crate::rest_server::*;
@@ -333,7 +367,8 @@ mod tests {
     fn test_get_prompt() {
         let mut state: REPLState = REPLState::new();
         let prompt = state.get_prompt();
-        assert_eq!(prompt, "oxide.public[0]> ".to_string());
+        // prompt: "teddy.bear@oxide[0]> "
+        assert!(prompt.contains("@oxide") && prompt.contains("[0]> "));
     }
 
     #[test]
@@ -458,6 +493,11 @@ mod tests {
         assert!(matches!(state.interpreter.get("__ARGS__"), Some(ArrayValue(..))));
         assert!(matches!(state.interpreter.get("__COLUMNS__"), Some(Number(..))));
         assert!(matches!(state.interpreter.get("__HEIGHT__"), Some(Number(..))));
+    }
+
+    #[test]
+    fn test_show_title() {
+        show_title()
     }
 
     #[test]

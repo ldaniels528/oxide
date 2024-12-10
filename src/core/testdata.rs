@@ -7,8 +7,9 @@ use std::fs::File;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::{NumberType, UnionType};
+use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::Disk;
 use crate::dataframe_config::DataFrameConfig;
-use crate::dataframes::DataFrame;
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
 use crate::interpreter::Interpreter;
@@ -28,12 +29,12 @@ use rand::{thread_rng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<DataFrame> {
+pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
     make_dataframe_ns(Namespace::new(database, schema, name), columns)
 }
 
-pub fn make_dataframe_ns(ns: Namespace, columns: Vec<Parameter>) -> std::io::Result<DataFrame> {
-    DataFrame::create(ns, make_dataframe_config(columns))
+pub fn make_dataframe_ns(ns: Namespace, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
+    Ok(Disk(FileRowCollection::create_table(&ns, &columns)?))
 }
 
 pub fn make_dataframe_config(columns: Vec<Parameter>) -> DataFrameConfig {
@@ -126,13 +127,6 @@ pub fn verify_exact_json(code: &str, expected: Value) {
     assert_eq!(actual.to_json(), expected);
 }
 
-pub fn verify_exact_table(code: &str, expected: Vec<&str>) {
-    let mut interpreter = Interpreter::new();
-    let actual = interpreter.evaluate(code)
-        .unwrap().to_table().unwrap();
-    assert_eq!(TableRenderer::from_table(&actual), expected);
-}
-
 pub fn verify_exact_table_with_ids(code: &str, expected: Vec<&str>) {
     let mut interpreter = Interpreter::new();
     let result = interpreter.evaluate(code)
@@ -145,13 +139,22 @@ pub fn verify_exact_table_with_ids(code: &str, expected: Vec<&str>) {
 pub fn verify_exact_table_where(
     mut interpreter: Interpreter,
     code: &str,
-    expected: Vec<&str>
+    expected: Vec<&str>,
 ) -> Interpreter {
     let result = interpreter.evaluate(code)
         .unwrap().to_table().unwrap();
     let actual = TableRenderer::from_table_with_ids(&result).unwrap();
     for s in &actual { println!("{}", s) }
     assert_eq!(actual, expected);
+    interpreter
+}
+
+pub fn verify_outcome(
+    mut interpreter: Interpreter,
+    code: &str,
+    f: fn(std::io::Result<TypedValue>) -> bool,
+) -> Interpreter {
+    assert!(f(interpreter.evaluate(code)));
     interpreter
 }
 
@@ -195,15 +198,6 @@ impl StockQuote {
         Self::generate_quote_from_symbol_and_exchange(
             Self::generate_random_symbol(),
             Self::generate_random_exchange())
-    }
-
-    fn generate_quote_from_symbol(symbol: String) -> StockQuote {
-        StockQuote {
-            symbol,
-            exchange: Self::generate_random_exchange(),
-            last_sale: Self::generate_random_last_sale(),
-            transaction_time: Self::generate_random_transaction_time(),
-        }
     }
 
     fn generate_quote_from_symbol_and_exchange(symbol: String, exchange: String) -> StockQuote {

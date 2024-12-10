@@ -5,13 +5,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::field_metadata::FieldMetadata;
-use crate::outcomes::Outcomes;
+use crate::numbers::Numbers;
+use crate::numbers::Numbers::RowsAffected;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Outcome, Undefined};
+use crate::typed_values::TypedValue::{Number, Undefined};
 
 /// Byte-vector-based RowCollection implementation
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -84,17 +85,17 @@ impl RowCollection for ByteRowCollection {
     ) -> TypedValue {
         let column = &self.columns[column_id];
         let offset = self.convert_rowid_to_offset(id) + column.get_offset() as u64;
-        let buffer = Row::encode_value(
+        let buffer = Row::encode_cell(
             &new_value,
             &FieldMetadata::new(true),
-            column.get_max_physical_size(),
+            column.get_fixed_size(),
         );
         let mut encoded_row = self.row_data[id].to_owned();
         let start = offset as usize;
         let end = start + buffer.len();
         encoded_row[start..end].copy_from_slice(buffer.as_slice());
         self.row_data[id] = encoded_row;
-        TypedValue::Outcome(Outcomes::RowsAffected(1))
+        Number(RowsAffected(1))
     }
 
     fn overwrite_field_metadata(
@@ -105,7 +106,7 @@ impl RowCollection for ByteRowCollection {
     ) -> TypedValue {
         let column = &self.columns[column_id];
         self.row_data[id][column.get_offset()] = metadata.encode();
-        TypedValue::Outcome(Outcomes::RowsAffected(1))
+        Number(RowsAffected(1))
     }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
@@ -119,17 +120,17 @@ impl RowCollection for ByteRowCollection {
         if self.watermark <= id {
             self.watermark = id + 1;
         }
-        TypedValue::Outcome(Outcomes::RowsAffected(1))
+        Number(RowsAffected(1))
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
         self.row_data[id][0] = metadata.encode();
-        TypedValue::Outcome(Outcomes::RowsAffected(1))
+        Number(RowsAffected(1))
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
         let column = &self.columns[column_id];
-        let buffer = self.row_data[id][column.get_offset()..(column.get_offset() + column.get_max_physical_size())].to_vec();
+        let buffer = self.row_data[id][column.get_offset()..(column.get_offset() + column.get_fixed_size())].to_vec();
         Row::decode_value(&column.get_data_type(), &buffer, 0)
     }
 
@@ -162,7 +163,7 @@ impl RowCollection for ByteRowCollection {
     fn resize(&mut self, new_size: usize) -> TypedValue {
         self.row_data.resize(new_size, Vec::new());
         self.watermark = new_size;
-        Outcome(Outcomes::Ack)
+        Number(Numbers::Ack)
     }
 }
 

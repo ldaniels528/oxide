@@ -4,9 +4,10 @@
 
 use std::fmt::{Display, Formatter};
 
+use crate::data_types::DataType;
+use crate::platform::PlatformOps;
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
-use crate::data_types::DataType;
 
 /// Represents an Error Message
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -16,16 +17,16 @@ pub enum Errors {
     CannotSubtract(String, String),
     CollectionExpected(String),
     ColumnExpected(String),
-    ConversionError(String),
+    ConversionError(PlatformOps),
     DateExpected(String),
     Exact(String),
-    ExactNear(String, String),
+    ExactNear(String, Token),
     FunctionArgsExpected(String),
     HashTableOverflow(usize, String),
     IllegalExpression(String),
     IllegalOperator(Token),
     InvalidNamespace(String),
-    NotImplemented,
+    NotImplemented(String),
     OutcomeExpected(String),
     PackageNotFound(String),
     ParameterExpected(String),
@@ -37,6 +38,7 @@ pub enum Errors {
     Syntax(String),
     TableExpected(String, String),
     TypeMismatch(DataType, DataType),
+    UnsupportedPlatformOps(PlatformOps),
     Various(Vec<Errors>),
     ViewsCannotBeResized,
     WriteProtected,
@@ -56,14 +58,15 @@ impl Display for Errors {
                 write!(f, "Iterable expected near {a}"),
             ColumnExpected(expr) =>
                 write!(f, "Expected a column, got \"{expr}\" instead"),
-            ConversionError(expr) =>
-                write!(f, "Conversion error: {:?}", expr),
+            ConversionError(plfOp) =>
+                write!(f, "Conversion error: \"{}\"", plfOp.to_code()),
             DateExpected(expr) =>
                 write!(f, "Expected a timestamp, got \"{expr}\" instead"),
             Exact(message) =>
                 write!(f, "{message}"),
-            ExactNear(message, here) =>
-                write!(f, "{message} near {here}"),
+            ExactNear(message, token) =>
+                write!(f, "{message} on line {} column {}",
+                       token.get_line_number(), token.get_column_number()),
             FunctionArgsExpected(other) =>
                 write!(f, "Function arguments expected, but got {}", other),
             HashTableOverflow(rid, value) =>
@@ -74,8 +77,8 @@ impl Display for Errors {
                 write!(f, "Illegal use of operator '{token}'"),
             InvalidNamespace(expr) =>
                 write!(f, "Invalid namespace reference {expr}"),
-            NotImplemented =>
-                write!(f, "Not yet implemented"),
+            NotImplemented(expr) =>
+                write!(f, "Not yet implemented - {expr}"),
             OutcomeExpected(expr) =>
                 write!(f, "Expected an outcome (Ack, RowId or RowsAffected) near {expr}"),
             PackageNotFound(name) =>
@@ -98,6 +101,8 @@ impl Display for Errors {
                 write!(f, "{a} is not a table ({b})"),
             TypeMismatch(a, b) =>
                 write!(f, "TypeMismatch: {a} is not convertible to {b}"),
+            UnsupportedPlatformOps(pops) =>
+                write!(f, "Unsupported operation {}", pops.to_code()),
             Various(errors) =>
                 write!(f, "Multiple errors detected:\n{}", errors.iter()
                     .map(|e| e.to_string())
@@ -111,13 +116,17 @@ impl Display for Errors {
     }
 }
 
+pub fn throw<A>(error: Errors) -> std::io::Result<A> {
+    Err(std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))
+}
+
 /// Unit tests
 #[cfg(test)]
 mod tests {
     use super::*;
-    use Errors::*;
     use crate::data_types::DataType::{NumberType, StructureType};
     use crate::number_kind::NumberKind::I128Kind;
+    use Errors::*;
 
     #[test]
     fn test_errors() {
@@ -126,10 +135,13 @@ mod tests {
         verify(CannotSubtract("a".into(), "b".into()), "Cannot subtract b from a");
         verify(CollectionExpected("1".into()), "Iterable expected near 1");
         verify(ColumnExpected("^".into()), "Expected a column, got \"^\" instead");
-        verify(ConversionError("i32".into()), "Conversion error: \"i32\"");
+        verify(ConversionError(PlatformOps::UtilHex), "Conversion error: \"util::hex(x)\"");
         verify(DateExpected("Tom".into()), "Expected a timestamp, got \"Tom\" instead");
         verify(Exact("Something bad happened".into()), "Something bad happened");
-        verify(ExactNear("Something bad happened".into(), "here".into()), "Something bad happened near here");
+        verify(ExactNear(
+            "Something bad happened".into(),
+            Token::operator(".".into(), 145, 146, 13, 5)),
+               "Something bad happened on line 13 column 5");
         verify(FunctionArgsExpected("Tom".into()), "Function arguments expected, but got Tom");
         verify(HashTableOverflow(100, "AAA".into()), "Hash table overflow detected (rid: 100, key: AAA)");
         verify(IllegalExpression("2 ~ 3".into()), "Illegal expression: 2 ~ 3");
@@ -141,7 +153,7 @@ mod tests {
             column_number: 18,
         }), "Illegal use of operator '+'");
         verify(InvalidNamespace("a.b.c".into()), "Invalid namespace reference a.b.c");
-        verify(NotImplemented, "Not yet implemented");
+        verify(NotImplemented("magic()".into()), "Not yet implemented - magic()");
         verify(OutcomeExpected("wth".into()), "Expected an outcome (Ack, RowId or RowsAffected) near wth");
         verify(PackageNotFound("wth".into()), "Package 'wth' not found");
         verify(ParameterExpected("@".into()), "Expected a parameter, got \"@\" instead");

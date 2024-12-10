@@ -5,14 +5,14 @@
 use serde::{Deserialize, Serialize};
 
 use crate::field_metadata::FieldMetadata;
-use crate::outcomes::Outcomes;
+use crate::numbers::Numbers;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::rows::Row;
 use crate::table_columns::Column;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Null, Outcome};
+use crate::typed_values::TypedValue::{Null, Number};
 
 /// Row-model-vector-based [RowCollection] implementation
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -138,7 +138,7 @@ impl RowCollection for ModelRowCollection {
             self.row_data[id] = (new_row, meta.to_owned());
             1
         } else { 0 };
-        Outcome(Outcomes::RowsAffected(rows_affected))
+        Number(Numbers::RowsAffected(rows_affected))
     }
 
     fn overwrite_field_metadata(
@@ -159,7 +159,7 @@ impl RowCollection for ModelRowCollection {
 
         // update the row to reflect enabling/disabling a field
         self.row_data[id] = (new_row, rmd.to_owned());
-        Outcome(Outcomes::RowsAffected(1))
+        Number(Numbers::RowsAffected(1))
     }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
@@ -171,13 +171,13 @@ impl RowCollection for ModelRowCollection {
         // set the block, update the watermark
         self.row_data[id] = (row.with_row_id(id), RowMetadata::new(true));
         if self.watermark <= id { self.watermark = id + 1; }
-        Outcome(Outcomes::RowsAffected(1))
+        Number(Numbers::RowsAffected(1))
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
         let (row, _) = self.row_data[id].to_owned();
         self.row_data[id] = (row, metadata.to_owned());
-        Outcome(Outcomes::RowsAffected(1))
+        Number(Numbers::RowsAffected(1))
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
@@ -216,7 +216,7 @@ impl RowCollection for ModelRowCollection {
     fn resize(&mut self, new_size: usize) -> TypedValue {
         self.row_data.resize(new_size, (Row::empty(&self.columns), RowMetadata::new(true)));
         self.watermark = new_size;
-        Outcome(Outcomes::Ack)
+        Number(Numbers::Ack)
     }
 }
 

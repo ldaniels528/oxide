@@ -10,15 +10,14 @@ use crate::errors::Errors::IllegalOperator;
 use crate::expression::Expression::*;
 use crate::inferences::Inferences;
 use crate::numbers::Numbers;
-use crate::outcomes::Outcomes;
 use crate::parameter::Parameter;
 use crate::tokens::Token;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Number, Outcome, StringValue};
+use crate::typed_values::TypedValue::{ErrorValue, Number, StringValue};
 use serde::{Deserialize, Serialize};
 
 // constants
-pub const ACK: Expression = Literal(Outcome(Outcomes::Ack));
+pub const ACK: Expression = Literal(Number(Numbers::Ack));
 pub const FALSE: Expression = Condition(Conditions::False);
 pub const TRUE: Expression = Condition(Conditions::True);
 pub const NULL: Expression = Literal(TypedValue::Null);
@@ -77,10 +76,9 @@ pub enum Directives {
     MustNotAck(Box<Expression>),
 }
 
-/// Represents the set of all Quarry Activities
+/// Represents the set of all Database Operations
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Excavation {
-    Construct(Infrastructure),
+pub enum DatabaseOps {
     Query(Queryable),
     Mutate(Mutation),
 }
@@ -120,14 +118,6 @@ impl Display for ImportOps {
     }
 }
 
-/// Represents an infrastructure construction/deconstruction event
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum Infrastructure {
-    Create { path: Box<Expression>, entity: CreationEntity },
-    Declare(CreationEntity),
-    Drop(MutateTarget),
-}
-
 /// Represents a data modification event
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Mutation {
@@ -135,11 +125,14 @@ pub enum Mutation {
         path: Box<Expression>,
         source: Box<Expression>,
     },
+    Create { path: Box<Expression>, entity: CreationEntity },
+    Declare(CreationEntity),
     Delete {
         path: Box<Expression>,
         condition: Option<Conditions>,
         limit: Option<Box<Expression>>,
     },
+    Drop(MutateTarget),
     IntoNs(Box<Expression>, Box<Expression>),
     Overwrite {
         path: Box<Expression>,
@@ -206,6 +199,7 @@ pub enum Expression {
     ExtractPostfix(Box<Expression>, Box<Expression>),
     Factorial(Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
+    ForEach(String, Box<Expression>, Box<Expression>),
     From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     HTTP {
@@ -234,13 +228,12 @@ pub enum Expression {
     Plus(Box<Expression>, Box<Expression>),
     PlusPlus(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
-    Quarry(Excavation),
+    DatabaseOp(DatabaseOps),
     Range(Box<Expression>, Box<Expression>),
     Return(Vec<Expression>),
     Scenario {
         title: Box<Expression>,
         verifications: Vec<Expression>,
-        inherits: Option<Box<Expression>>,
     },
     SetVariable(String, Box<Expression>),
     Variable(String),
@@ -282,6 +275,8 @@ impl Expression {
                     .map(|s| s.to_code())
                     .collect::<Vec<_>>()
                     .join("\n")),
+            ForEach(a, b, c) =>
+                format!("foreach {} in {} {}", a, Self::decompile(b), Self::decompile(c)),
             From(a) => format!("from {}", Self::decompile(a)),
             FunctionCall { fx, args } =>
                 format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
@@ -317,19 +312,17 @@ impl Expression {
                 format!("{} ++ {}", Self::decompile(a), Self::decompile(b)),
             Pow(a, b) =>
                 format!("{} ** {}", Self::decompile(a), Self::decompile(b)),
-            Quarry(job) =>
+            DatabaseOp(job) =>
                 match job {
-                    Excavation::Construct(i) => Self::decompile_infrastructures(i),
-                    Excavation::Query(q) => Self::decompile_queryables(q),
-                    Excavation::Mutate(m) => Self::decompile_modifications(m),
+                    DatabaseOps::Query(q) => Self::decompile_queryables(q),
+                    DatabaseOps::Mutate(m) => Self::decompile_modifications(m),
                 },
             Range(a, b) =>
                 format!("{}..{}", Self::decompile(a), Self::decompile(b)),
             Return(items) =>
                 format!("return {}", Self::decompile_list(items)),
-            Scenario { title, verifications, inherits } => {
+            Scenario { title, verifications } => {
                 let title = title.to_code();
-                let inherits = inherits.to_owned().map(|e| e.to_code()).unwrap_or(String::new());
                 let verifications = verifications.iter()
                     .map(|s| s.to_code())
                     .collect::<Vec<_>>()
@@ -447,37 +440,10 @@ impl Expression {
             format!("{} = {}", Self::decompile(f), Self::decompile(v))).collect::<Vec<String>>().join(", ")
     }
 
-    pub fn decompile_excavations(excavation: &Excavation) -> String {
+    pub fn decompile_excavations(excavation: &DatabaseOps) -> String {
         match excavation {
-            Excavation::Construct(i) => Self::decompile_infrastructures(i),
-            Excavation::Query(q) => Self::decompile_queryables(q),
-            Excavation::Mutate(m) => Self::decompile_modifications(m),
-        }
-    }
-
-    pub fn decompile_infrastructures(infra: &Infrastructure) -> String {
-        match infra {
-            Infrastructure::Create { path, entity } =>
-                match entity {
-                    CreationEntity::IndexEntity { columns } =>
-                        format!("create index {} [{}]", Self::decompile(path), Self::decompile_list(columns)),
-                    CreationEntity::TableEntity { columns, from } =>
-                        format!("create table {} ({})", Self::decompile(path), Self::decompile_parameters(columns)),
-                }
-            Infrastructure::Declare(entity) =>
-                match entity {
-                    CreationEntity::IndexEntity { columns } =>
-                        format!("index [{}]", Self::decompile_list(columns)),
-                    CreationEntity::TableEntity { columns, from } =>
-                        format!("table({})", Self::decompile_parameters(columns)),
-                }
-            Infrastructure::Drop(target) => {
-                let (kind, path) = match target {
-                    MutateTarget::IndexTarget { path } => ("index", path),
-                    MutateTarget::TableTarget { path } => ("table", path),
-                };
-                format!("drop {} {}", kind, Self::decompile(path))
-            }
+            DatabaseOps::Query(q) => Self::decompile_queryables(q),
+            DatabaseOps::Mutate(m) => Self::decompile_modifications(m),
         }
     }
 
@@ -485,6 +451,27 @@ impl Expression {
         match expr {
             Mutation::Append { path, source } =>
                 format!("append {} {}", Self::decompile(path), Self::decompile(source)),
+            Mutation::Create { path, entity } =>
+                match entity {
+                    CreationEntity::IndexEntity { columns } =>
+                        format!("create index {} [{}]", Self::decompile(path), Self::decompile_list(columns)),
+                    CreationEntity::TableEntity { columns, from } =>
+                        format!("create table {} ({})", Self::decompile(path), Self::decompile_parameters(columns)),
+                }
+            Mutation::Declare(entity) =>
+                match entity {
+                    CreationEntity::IndexEntity { columns } =>
+                        format!("index [{}]", Self::decompile_list(columns)),
+                    CreationEntity::TableEntity { columns, from } =>
+                        format!("table({})", Self::decompile_parameters(columns)),
+                }
+            Mutation::Drop(target) => {
+                let (kind, path) = match target {
+                    MutateTarget::IndexTarget { path } => ("index", path),
+                    MutateTarget::TableTarget { path } => ("table", path),
+                };
+                format!("drop {} {}", kind, Self::decompile(path))
+            }
             Mutation::Delete { path, condition, limit } =>
                 format!("delete from {} where {}{}", Self::decompile(path), Self::decompile_cond_opt(condition), Self::decompile_opt(limit)),
             Mutation::IntoNs(a, b) =>
@@ -583,7 +570,7 @@ fn to_ns(path: Expression) -> Expression {
 mod tests {
     use crate::expression::Conditions::*;
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-    use crate::expression::Excavation::{Mutate, Query};
+    use crate::expression::DatabaseOps::{Mutate, Query};
     use crate::expression::Expression::{AsValue, Literal};
     use crate::expression::*;
     use crate::machine::Machine;
@@ -831,14 +818,14 @@ mod tests {
         let from = From(Box::new(
             Ns(Box::new(Literal(StringValue("machine.overwrite.stocks".into()))))
         ));
-        let from = Quarry(Query(Queryable::Where {
+        let from = DatabaseOp(Query(Queryable::Where {
             from: Box::new(from),
             condition: GreaterOrEqual(
                 Box::new(Variable("last_sale".into())),
                 Box::new(Literal(Number(F64Value(1.25)))),
             ),
         }));
-        let from = Quarry(Query(Queryable::Limit {
+        let from = DatabaseOp(Query(Queryable::Limit {
             from: Box::new(from),
             limit: Box::new(Literal(Number(I64Value(5)))),
         }));
@@ -850,7 +837,7 @@ mod tests {
 
     #[test]
     fn test_overwrite() {
-        let model = Quarry(Mutate(Mutation::Overwrite {
+        let model = DatabaseOp(Mutate(Mutation::Overwrite {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONExpression(vec![
                 ("symbol".into(), Literal(StringValue("BOX".into()))),
@@ -1005,7 +992,7 @@ mod tests {
 
     #[test]
     fn test_create_index_in_namespace() {
-        let model = Quarry(Excavation::Construct(Infrastructure::Create {
+        let model = DatabaseOp(DatabaseOps::Mutate(Mutation::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
             entity: IndexEntity {
                 columns: vec![
@@ -1022,7 +1009,7 @@ mod tests {
     #[test]
     fn test_create_table_in_namespace() {
         let ns_path = "compiler.create.stocks";
-        let model = Quarry(Excavation::Construct(Infrastructure::Create {
+        let model = DatabaseOp(DatabaseOps::Mutate(Mutation::Create {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
             entity: TableEntity {
                 columns: vec![
@@ -1040,7 +1027,7 @@ mod tests {
 
     #[test]
     fn test_declare_table() {
-        let model = Quarry(Excavation::Construct(Infrastructure::Declare(TableEntity {
+        let model = DatabaseOp(DatabaseOps::Mutate(Mutation::Declare(TableEntity {
             columns: vec![
                 Parameter::new("symbol", Some("String(8)".into()), None),
                 Parameter::new("exchange", Some("String(8)".into()), None),

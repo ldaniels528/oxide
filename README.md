@@ -1,4 +1,3 @@
-
 Oxide
 =====
 
@@ -6,6 +5,7 @@ Oxide
 
 The purpose of this project is to create a development platform for small to medium software projects
 and proof of concept software projects. The system will offer:
+
 * Rust-inspired language syntax
 * integrated dataframes with SQL-like grammar for queries
 * integrated REST webservices
@@ -19,12 +19,12 @@ developed in the Scala programming language.
 
 - The <a href='#REPL'>REPL</a> is now available, and allows you to issue commands directly to the server.
 - The database server is also now available and supports basic CRUD operations via REST for:
-  - <a href='#create_table'>creating tables</a>
-  - <a href='#drop_table'>dropping tables</a>
-  - <a href='#overwrite_row'>insert/overwrite a row by offset</a>
-  - <a href='#read_row'>retrieve a row by offset</a>
-  - <a href='#delete_row'>delete a row by offset</a>
-  - <a href='#rpc'>remote procedure calls</a>
+    - <a href='#create_table'>creating tables</a>
+    - <a href='#drop_table'>dropping tables</a>
+    - <a href='#overwrite_row'>insert/overwrite a row by offset</a>
+    - <a href='#read_row'>retrieve a row by offset</a>
+    - <a href='#delete_row'>delete a row by offset</a>
+    - <a href='#rpc'>remote procedure calls</a>
 
 ## Development
 
@@ -35,6 +35,7 @@ cargo build --release
 ```
 
 You'll find the executables in `./target/release/`:
+
 * `oxide_repl` is the Oxide REST client / REPL
 * `oxide_server` is the Oxide REST Server
 
@@ -45,10 +46,11 @@ To run the tests (~ 330 tests at the time of writing):
 ```bash
 cargo test
 ```
-    
+
 ## Getting Started
 
 <a name="REPL"></a>
+
 ### REPL
 
 The Oxide REPL is now available, and with it, you can issue commands directly to the server.
@@ -141,6 +143,7 @@ oxide.public[4]> reverse from ns("interpreter.reverse.stocks")
 ### API/REST
 
 <a name="create_table"></a>
+
 #### Create a table
 
 The following command will create a new table in the `a.b.stocks` namespace:
@@ -169,6 +172,7 @@ curl -X POST \
 ```
 
 <a name="drop_table"></a>
+
 #### Drop a table
 
 The following command will delete the existing table in the `a.b.stocks` namespace:
@@ -184,6 +188,7 @@ server response:
 ```
 
 <a name="overwrite_row"></a>
+
 #### Insert/overwrite a row by offset
 
 In this example we insert/overwrite a row into a new or existing table in the `a.b.stocks` namespace:
@@ -215,6 +220,7 @@ server response:
 ```
 
 <a name="read_row"></a>
+
 #### Retrieve a row by offset
 
 The following command will retrieve the content at offset `100` from the `a.b.stocks` table:
@@ -242,6 +248,7 @@ server response:
 ```
 
 <a name="delete_row"></a>
+
 #### Delete a row by offset
 
 The following command will delete the existing table in the `a.b.stocks` namespace:
@@ -255,8 +262,9 @@ server response:
 ```json
 1
 ```
-    
+
 <a name="rpc"></a>
+
 #### Remote Procedure Calls
 
 Remote Procedure Call (RPC) is a feature that allows Oxide to evaluate expressions across

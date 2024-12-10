@@ -7,8 +7,8 @@ use crate::data_types::DataType::*;
 use crate::data_types::StorageTypes::BLOBSized;
 use crate::data_types::{DataType, StorageTypes};
 use crate::expression::Expression::*;
-use crate::expression::{BitwiseOps, Excavation, Expression, Mutation};
-use crate::outcomes::OutcomeKind;
+use crate::expression::{BitwiseOps, DatabaseOps, Expression, Mutation};
+use crate::number_kind::NumberKind;
 use crate::platform::PlatformOps;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Function, PlatformOp};
@@ -32,7 +32,7 @@ impl Inferences {
             }
             CodeBlock(ops) => ops.last().map(Inferences::infer).unwrap_or(UnionType(vec![])),
             Condition(..) => BooleanType,
-            Directive(..) => OutcomeType(OutcomeKind::Acked),
+            Directive(..) => NumberType(NumberKind::AckKind),
             Divide(a, b) => Inferences::infer_a_or_b(a, b),
             ElementAt(..) => UnionType(vec![]),
             Extraction(a, b) => match (a.deref(), b.deref()) {
@@ -47,41 +47,42 @@ impl Inferences {
             }
             ExtractPostfix(..) => UnionType(vec![]),
             Factorial(a) => Inferences::infer(a),
-            Feature { .. } => OutcomeType(OutcomeKind::Acked),
+            Feature { .. } => NumberType(NumberKind::AckKind),
+            ForEach(..) => NumberType(NumberKind::AckKind),
             From(..) => TableType(vec![], StorageTypes::BLOBSized),
             FunctionCall { fx, .. } => Inferences::infer(fx),
             HTTP { .. } => UnionType(vec![]),
             If { a: true_v, b: Some(false_v), .. } =>
                 Inferences::infer_alles(vec![true_v, false_v]),
             If { a: true_v, .. } => Inferences::infer(true_v),
-            Import(..) => OutcomeType(OutcomeKind::Acked),
-            Include(..) => OutcomeType(OutcomeKind::Acked),
+            Import(..) => NumberType(NumberKind::AckKind),
+            Include(..) => NumberType(NumberKind::AckKind),
             JSONExpression(..) => StructureType(Vec::new()), // TODO can we infer?
             Literal(Function { code, .. }) => Inferences::infer(code),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
             Minus(a, b) => Inferences::infer_a_or_b(a, b),
-            Module(..) => OutcomeType(OutcomeKind::Acked),
+            Module(..) => NumberType(NumberKind::AckKind),
             Modulo(a, b) => Inferences::infer_a_or_b(a, b),
             Multiply(a, b) => Inferences::infer_a_or_b(a, b),
             Neg(a) => Inferences::infer(a),
-            Ns(..) => OutcomeType(OutcomeKind::Acked),
+            Ns(..) => NumberType(NumberKind::AckKind),
             Parameters(params) => ArrayType(Box::new(StructureType(params.to_owned()))),
             Plus(a, b) => Inferences::infer_a_or_b(a, b),
             PlusPlus(a, b) => Inferences::infer_a_or_b(a, b),
             Pow(a, b) => Inferences::infer_a_or_b(a, b),
-            Quarry(a) => match a {
-                Excavation::Construct(_) => OutcomeType(OutcomeKind::Acked),
-                Excavation::Query(_) => OutcomeType(OutcomeKind::Acked),
-                Excavation::Mutate(m) => match m {
-                    Mutation::Append { .. } => OutcomeType(OutcomeKind::RowInserted),
-                    _ => OutcomeType(OutcomeKind::RowsUpdated),
+            DatabaseOp(a) => match a {
+                DatabaseOps::Mutate(_) => NumberType(NumberKind::AckKind),
+                DatabaseOps::Query(_) => NumberType(NumberKind::AckKind),
+                DatabaseOps::Mutate(m) => match m {
+                    Mutation::Append { .. } => NumberType(NumberKind::RowIdKind),
+                    _ => NumberType(NumberKind::RowsAffectedKind),
                 }
             }
             Range(a, b) => Inferences::infer_a_or_b(a, b),
             Return(a) => Self::infer_all(a),
-            Scenario { .. } => OutcomeType(OutcomeKind::Acked),
-            SetVariable(..) => OutcomeType(OutcomeKind::Acked),
+            Scenario { .. } => NumberType(NumberKind::AckKind),
+            SetVariable(..) => NumberType(NumberKind::AckKind),
             Variable(..) => UnionType(vec![]),
             Via(..) => TableType(vec![], BLOBSized),
             While { .. } => UnionType(vec![]),

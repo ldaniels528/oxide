@@ -187,5 +187,4 @@ mod tests {
         assert_eq!(get_host_and_port(vec!["my_app".into(), "127.0.0.1".into(), "3333".into(), "zzz".into()]).unwrap(),
                    ("127.0.0.1".to_string(), "3333".to_string()));
     }
-
 }

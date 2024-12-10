@@ -53,24 +53,23 @@ impl Interpreter {
 mod tests {
     use crate::interpreter::Interpreter;
     use crate::numbers::Numbers::*;
-    use crate::outcomes::Outcomes::Ack;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
 
     #[test]
     fn test_basic_state_manipulation() {
         let mut interpreter = Interpreter::new();
-        assert_eq!(interpreter.evaluate("x := 5").unwrap(), Outcome(Ack));
+        assert_eq!(interpreter.evaluate("x := 5").unwrap(), Number(Ack));
         assert_eq!(interpreter.evaluate("$x").unwrap(), Number(I64Value(5)));
         assert_eq!(interpreter.evaluate("-x").unwrap(), Number(I64Value(-5)));
         assert_eq!(interpreter.evaluate("x¡").unwrap(), Number(U128Value(120)));
-        assert_eq!(interpreter.evaluate("x := x + 1").unwrap(), Outcome(Ack));
+        assert_eq!(interpreter.evaluate("x := x + 1").unwrap(), Number(Ack));
         assert_eq!(interpreter.evaluate("x").unwrap(), Number(I64Value(6)));
         assert_eq!(interpreter.evaluate("x < 7").unwrap(), Boolean(true));
-        assert_eq!(interpreter.evaluate("x := x ** 2").unwrap(), Outcome(Ack));
+        assert_eq!(interpreter.evaluate("x := x ** 2").unwrap(), Number(Ack));
         assert_eq!(interpreter.evaluate("x").unwrap(), Number(F64Value(36.)));
         assert_eq!(interpreter.evaluate("x / 0").unwrap(), Number(NaNValue));
-        assert_eq!(interpreter.evaluate("x := x - 1").unwrap(), Outcome(Ack));
+        assert_eq!(interpreter.evaluate("x := x - 1").unwrap(), Number(Ack));
         assert_eq!(interpreter.evaluate("x % 5").unwrap(), Number(F64Value(0.)));
         assert_eq!(interpreter.evaluate("x < 35").unwrap(), Boolean(false));
         assert_eq!(interpreter.evaluate("x >= 35").unwrap(), Boolean(true));
@@ -79,26 +78,26 @@ mod tests {
     #[test]
     fn test_feature_with_scenarios() {
         verify_exact_table_with_ids(r#"
-            import oxide
-            feature "Matches function" {
-                scenario "Compare Array contents: Equal" {
+            import kungfu
+            Feature "Matches function" {
+                Scenario "Compare Array contents: Equal" {
                     assert(matches(
                         [ 1 "a" "b" "c" ],
                         [ 1 "a" "b" "c" ]
                     ))
                 }
-                scenario "Compare Array contents: Not Equal" {
+                Scenario "Compare Array contents: Not Equal" {
                     assert(!matches(
                         [ 1 "a" "b" "c" ],
                         [ 0 "x" "y" "z" ]
                     ))
                 }
-                scenario "Compare JSON contents (in sequence)" {
+                Scenario "Compare JSON contents (in sequence)" {
                     assert(matches(
                             { first: "Tom" last: "Lane" },
                             { first: "Tom" last: "Lane" }))
                 }
-                scenario "Compare JSON contents (out of sequence)" {
+                Scenario "Compare JSON contents (out of sequence)" {
                     assert(matches(
                             { scores: [82 78 99], id: "A1537" },
                             { id: "A1537", scores: [82 78 99] }))
@@ -107,14 +106,14 @@ mod tests {
             "|--------------------------------------------------------------------------------------------------------------------------|",
             "| id | level | item                                                                                      | passed | result |",
             "|--------------------------------------------------------------------------------------------------------------------------|",
-            "| 0  | 0     | Matches function                                                                          | true   | ack    |",
-            "| 1  | 1     | Compare Array contents: Equal                                                             | true   | ack    |",
+            "| 0  | 0     | Matches function                                                                          | true   | Ack    |",
+            "| 1  | 1     | Compare Array contents: Equal                                                             | true   | Ack    |",
             r#"| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |"#,
-            "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | ack    |",
+            "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | Ack    |",
             r#"| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |"#,
-            "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | ack    |",
+            "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | Ack    |",
             r#"| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |"#,
-            "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | ack    |",
+            "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | Ack    |",
             r#"| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |"#,
             "|--------------------------------------------------------------------------------------------------------------------------|"
         ]);
@@ -185,14 +184,31 @@ mod tests {
         }
     }
 
-    /// Conditionals tests
+    /// Control-Flow tests
     #[cfg(test)]
-    mod conditionals_tests {
+    mod control_flow_tests {
         use crate::interpreter::Interpreter;
-        use crate::numbers::Numbers::I64Value;
-        use crate::outcomes::Outcomes::Ack;
+        use crate::numbers::Numbers::{Ack, I64Value};
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
+
+        #[test]
+        fn test_foreach_item_in_an_array() {
+            verify_exact(r#"
+                foreach item in [1, 5, 6, 11, 17] {
+                    oxide::println(item)
+               }
+            "#, Number(Ack));
+        }
+
+        #[test]
+        fn test_foreach_row_in_a_table() {
+            verify_exact(r#"
+                foreach row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
+                    oxide::println(row)
+               }
+            "#, Number(Ack));
+        }
 
         #[test]
         fn test_if_when_result_is_defined() {
@@ -231,8 +247,8 @@ mod tests {
         #[test]
         fn test_while_loop() {
             let mut interpreter = Interpreter::new();
-            assert_eq!(Outcome(Ack), interpreter.evaluate("x := 0").unwrap());
-            assert_eq!(Outcome(Ack), interpreter.evaluate(r#"
+            assert_eq!(Number(Ack), interpreter.evaluate("x := 0").unwrap());
+            assert_eq!(Number(Ack), interpreter.evaluate(r#"
                 while (x < 5)
                     x := x + 1
             "#).unwrap());
@@ -243,18 +259,22 @@ mod tests {
     /// Structure tests
     #[cfg(test)]
     mod directive_tests {
-        use crate::errors::Errors::Exact;
+        use crate::interpreter::Interpreter;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
         #[test]
         fn test_directive_die() {
-            verify_exact(r#"[!] "Kaboom!!!""#, ErrorValue(Exact("Kaboom!!!".into())));
+            verify_outcome(
+                Interpreter::new(),
+                r#"[!] "Kaboom!!!""#,
+                |r| r.is_err_and(|err| err.to_string() == "Kaboom!!!".to_string()),
+            );
         }
 
         #[test]
         fn test_directive_ignore_failure() {
-            verify_exact_text(r#"[~] 7 / 0"#, "ack");
+            verify_exact_text(r#"[~] 7 / 0"#, "Ack");
         }
 
         #[test]
@@ -267,26 +287,26 @@ mod tests {
 
         #[test]
         fn test_directive_must_be_true() {
-            verify_exact_text("[+] x := 67", "ack");
+            verify_exact_text("[+] x := 67", "Ack");
         }
 
         #[test]
         fn test_directives_pipeline() {
-            verify_exact_table(r#"
+            verify_exact_table_with_ids(r#"
                 [+] stocks := ns("interpreter.pipeline.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                [+] [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                      { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                 [+] delete from stocks where last_sale < 30.0
                 [+] from stocks
         "#, vec![
-                "|-------------------------------|",
-                "| symbol | exchange | last_sale |",
-                "|-------------------------------|",
-                "| BOOM   | NYSE     | 56.88     |",
-                "| JET    | NASDAQ   | 32.12     |",
-                "|-------------------------------|"
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | BOOM   | NYSE     | 56.88     |",
+                "| 2  | JET    | NASDAQ   | 32.12     |",
+                "|------------------------------------|"
             ]);
         }
     }
@@ -295,15 +315,14 @@ mod tests {
     #[cfg(test)]
     mod function_tests {
         use crate::interpreter::Interpreter;
-        use crate::numbers::Numbers::I64Value;
-        use crate::outcomes::Outcomes::Ack;
+        use crate::numbers::Numbers::{Ack, I64Value};
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
         #[test]
         fn test_function_lambda() {
             let mut interpreter = Interpreter::new();
-            assert_eq!(Outcome(Ack), interpreter.evaluate(r#"
+            assert_eq!(Number(Ack), interpreter.evaluate(r#"
                 product := fn (a, b) => a * b
             "#).unwrap());
 
@@ -315,7 +334,7 @@ mod tests {
         #[test]
         fn test_function_named() {
             let mut interpreter = Interpreter::new();
-            assert_eq!(Outcome(Ack), interpreter.evaluate(r#"
+            assert_eq!(Number(Ack), interpreter.evaluate(r#"
                 fn product(a, b) => a * b
             "#).unwrap());
 
@@ -344,11 +363,11 @@ mod tests {
     /// SQL tests
     #[cfg(test)]
     mod sql_tests {
+        use crate::dataframe::Dataframe::Model;
         use crate::interpreter::Interpreter;
         use crate::model_row_collection::ModelRowCollection;
-        use crate::outcomes::Outcomes::{Ack, RowsAffected};
+        use crate::numbers::Numbers::{Ack, RowsAffected};
         use crate::table_columns::Column;
-        use crate::table_values::TableValues::Model;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
@@ -390,7 +409,7 @@ mod tests {
                     symbol: String(8),
                     exchange: String(8),
                     last_sale: f64
-                )"#, Outcome(Ack))
+                )"#, Number(Ack))
         }
 
         #[test]
@@ -400,33 +419,33 @@ mod tests {
             let phys_columns = Column::from_parameters(&columns).unwrap();
 
             // set up the interpreter
-            assert_eq!(Outcome(Ack), interpreter.evaluate(r#"
+            assert_eq!(Number(Ack), interpreter.evaluate(r#"
                 stocks := ns("interpreter.crud.stocks")
             "#).unwrap());
 
             // create the table
-            assert_eq!(Outcome(RowsAffected(0)), interpreter.evaluate(r#"
+            assert_eq!(Number(RowsAffected(0)), interpreter.evaluate(r#"
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             "#).unwrap());
 
             // append a row
-            assert_eq!(Outcome(RowsAffected(1)), interpreter.evaluate(r#"
+            assert_eq!(Number(RowsAffected(1)), interpreter.evaluate(r#"
                 append stocks from { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
             "#).unwrap());
 
             // write another row
-            assert_eq!(Outcome(RowsAffected(1)), interpreter.evaluate(r#"
+            assert_eq!(Number(RowsAffected(1)), interpreter.evaluate(r#"
                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 } ~> stocks
             "#).unwrap());
 
             // write some more rows
-            assert_eq!(Outcome(RowsAffected(2)), interpreter.evaluate(r#"
+            assert_eq!(Number(RowsAffected(2)), interpreter.evaluate(r#"
                 [{ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                  { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 }] ~> stocks
             "#).unwrap());
 
             // write even more rows
-            assert_eq!(Outcome(RowsAffected(2)), interpreter.evaluate(r#"
+            assert_eq!(Number(RowsAffected(2)), interpreter.evaluate(r#"
                 append stocks from [
                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 56.87 },
                     { symbol: "TRX", exchange: "NASDAQ", last_sale: 7.9311 }
@@ -434,12 +453,12 @@ mod tests {
             "#).unwrap());
 
             // remove some rows
-            assert_eq!(Outcome(RowsAffected(4)), interpreter.evaluate(r#"
+            assert_eq!(Number(RowsAffected(4)), interpreter.evaluate(r#"
                 delete from stocks where last_sale > 1.0
             "#).unwrap());
 
             // overwrite a row
-            assert_eq!(Outcome(RowsAffected(1)), interpreter.evaluate(r#"
+            assert_eq!(Number(RowsAffected(1)), interpreter.evaluate(r#"
                 overwrite stocks
                 via {symbol: "GOTO", exchange: "OTC", last_sale: 0.1421}
                 where symbol is "GOTO"
@@ -455,7 +474,7 @@ mod tests {
             );
 
             // restore the previously deleted rows
-            assert_eq!(Outcome(RowsAffected(4)), interpreter.evaluate(r#"
+            assert_eq!(Number(RowsAffected(4)), interpreter.evaluate(r#"
                 undelete from stocks where last_sale > 1.0
             "#).unwrap());
 
@@ -481,7 +500,7 @@ mod tests {
 
             // append some rows
             let mut interpreter = Interpreter::new();
-            assert_eq!(Outcome(RowsAffected(5)), interpreter.evaluate(r#"
+            assert_eq!(Number(RowsAffected(5)), interpreter.evaluate(r#"
                 stocks := ns("interpreter.select1.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 append stocks from [
@@ -494,7 +513,7 @@ mod tests {
             "#).unwrap());
 
             // compile and execute the code
-            verify_exact_table_where(interpreter, r#"
+            interpreter = verify_exact_table_where(interpreter, r#"
                 select symbol, last_sale from stocks
                 where last_sale < 1.0
                 order by symbol
@@ -543,14 +562,13 @@ mod tests {
     #[cfg(test)]
     mod structure_tests {
         use crate::arrays::Array;
+        use crate::dataframe::Dataframe::Model;
         use crate::errors::Errors::Exact;
         use crate::interpreter::Interpreter;
         use crate::model_row_collection::ModelRowCollection;
         use crate::numbers::Numbers::{F64Value, I64Value, NaNValue, U128Value};
-        use crate::outcomes::Outcomes::{Ack, RowsAffected};
         use crate::structures::*;
         use crate::table_columns::Column;
-        use crate::table_values::TableValues::Model;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
         use serde_json::json;

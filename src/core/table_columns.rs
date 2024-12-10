@@ -6,11 +6,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::data_types::DataType;
 use crate::errors::Errors::ArgumentsMismatched;
-use crate::outcomes::Outcomes;
+use crate::numbers::Numbers;
 use crate::parameter::Parameter;
 use crate::rows::Row;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Outcome};
+use crate::typed_values::TypedValue::{ErrorValue, Number};
 
 /// Represents a column in a table
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -18,7 +18,7 @@ pub struct Column {
     name: String,
     data_type: DataType,
     default_value: TypedValue,
-    max_physical_size: usize,
+    fixed_size: usize,
     offset: usize,
 }
 
@@ -32,7 +32,7 @@ impl Column {
             name: name.into(),
             data_type,
             default_value,
-            max_physical_size,
+            fixed_size: max_physical_size,
             offset,
         }
     }
@@ -49,7 +49,7 @@ impl Column {
         let mut physical_columns: Vec<Column> = Vec::with_capacity(parameters.len());
         for parameter in parameters {
             let column = Self::from_parameter(&parameter, offset)?;
-            offset += column.max_physical_size;
+            offset += column.fixed_size;
             physical_columns.push(column);
         }
         Ok(physical_columns)
@@ -60,7 +60,7 @@ impl Column {
             (a, b) if a.len() != b.len() =>
                 ErrorValue(ArgumentsMismatched(cs0.len(), cs1.len())),
             _ =>
-                Outcome(Outcomes::Ack)
+                Number(Numbers::Ack)
         }
     }
 
@@ -76,8 +76,8 @@ impl Column {
         self.default_value.to_owned()
     }
 
-    pub fn get_max_physical_size(&self) -> usize {
-        self.max_physical_size
+    pub fn get_fixed_size(&self) -> usize {
+        self.fixed_size
     }
 
     pub fn get_offset(&self) -> usize {
@@ -113,7 +113,7 @@ mod tests {
         assert_eq!(column.name, "last_sale");
         assert_eq!(column.data_type, NumberType(F64Kind));
         assert_eq!(column.default_value, Number(F64Value(0.142857)));
-        assert_eq!(column.max_physical_size, 9);
+        assert_eq!(column.fixed_size, 9);
     }
 
     #[test]
@@ -125,7 +125,7 @@ mod tests {
         assert_eq!(column.data_type, StringType(StorageTypes::FixedSize(10)));
         assert_eq!(column.default_value, StringValue("N/A".into()));
         assert_eq!(column.data_type.to_type_declaration(), column_desc.get_param_type());
-        assert_eq!(column.max_physical_size, 19);
+        assert_eq!(column.fixed_size, 19);
     }
 
     #[test]
