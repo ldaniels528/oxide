@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // RowMetadata class
 ////////////////////////////////////////////////////////////////////
@@ -5,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Represents the metadata of a [Row]
-#[derive(Debug, Clone, Copy, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct RowMetadata {
     pub(crate) is_allocated: bool,
     pub(crate) is_blob: bool,

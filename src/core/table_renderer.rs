@@ -1,16 +1,17 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // table renderer module
 ////////////////////////////////////////////////////////////////////
 
 use shared_lib::tabulate_cells;
 
+use crate::columns::Column;
 use crate::cursor::Cursor;
+use crate::descriptor::Descriptor;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::U64Value;
-use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::typed_values::TypedValue::Number;
 
 /// Table renderer
@@ -34,7 +35,7 @@ impl TableRenderer {
 
     /// Transforms the [Vec<Row>] into a textual table
     pub fn from_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> Vec<String> {
-        Self::from_collection(Box::new(ModelRowCollection::from_rows(columns, rows)))
+        Self::from_collection(Box::new(ModelRowCollection::from_columns_and_rows(columns, rows)))
     }
 
     /// Transforms the [RowCollection] into a textual table
@@ -48,9 +49,9 @@ impl TableRenderer {
     pub fn from_table_with_ids(rc: &Box<dyn RowCollection>) -> std::io::Result<Vec<String>> {
         // define columns by combining "id" column with those from the RowCollection
         let columns: Vec<Column> = {
-            let mut params = vec![Parameter::new("id", Some("u64".into()), None)];
-            params.extend(rc.get_columns().iter().map(|c| c.to_parameter()));
-            Column::from_parameters(&params)?
+            let mut params = vec![Descriptor::new("id", Some("u64".into()), None)];
+            params.extend(rc.get_columns().iter().map(|c| c.to_descriptor()));
+            Column::from_descriptors(&params)?
         };
 
         // define rows by prepending ID values to each row's data
@@ -94,8 +95,8 @@ impl TableRenderer {
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
+    use crate::columns::Column;
     use crate::cursor::Cursor;
-    use crate::table_columns::Column;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote, make_quote_columns};
 

@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // cursor module
 ////////////////////////////////////////////////////////////////////
@@ -7,7 +8,7 @@ use std::fmt::Debug;
 use crate::expression::Conditions;
 use crate::machine::Machine;
 use crate::row_collection::RowCollection;
-use crate::rows::Row;
+use crate::structures::Row;
 
 /// Represents a cursor that matches rows based on a condition
 #[derive(Debug)]
@@ -164,11 +165,11 @@ impl Cursor {
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
+    use crate::columns::Column;
     use crate::cursor::Cursor;
     use crate::expression::Conditions::Equal;
     use crate::expression::Expression::{Literal, Variable};
-    use crate::table_columns::Column;
-    use crate::testdata::{make_quote, make_quote_parameters};
+    use crate::testdata::{make_quote, make_quote_descriptors};
     use crate::typed_values::TypedValue::StringValue;
 
     #[test]
@@ -290,7 +291,7 @@ mod tests {
     }
 
     fn create_sample_data_1() -> (ByteRowCollection, Vec<Column>) {
-        let phys_columns = Column::from_parameters(&make_quote_parameters()).unwrap();
+        let phys_columns = Column::from_descriptors(&make_quote_descriptors()).unwrap();
         let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "NASDAQ", 0.2456),
@@ -302,7 +303,7 @@ mod tests {
     }
 
     fn create_sample_data_2() -> (ByteRowCollection, Vec<Column>) {
-        let phys_columns = Column::from_parameters(&make_quote_parameters()).unwrap();
+        let phys_columns = Column::from_descriptors(&make_quote_descriptors()).unwrap();
         let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "NYSE", 11.77),
             make_quote(1, "UNO", "NASDAQ", 0.2456),

@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // DataType class
 ////////////////////////////////////////////////////////////////////
@@ -8,19 +9,23 @@ use crate::compiler::Compiler;
 use crate::data_types::DataType::*;
 use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
 use crate::dataframe::Dataframe::Model;
-use crate::errors::Errors::{ArgumentsMismatched, Exact, Syntax};
-use crate::errors::{throw, Errors};
+use crate::errors::throw;
+use crate::errors::Errors::{ArgumentsMismatched, Exact, Syntax, TypeMismatch};
 use crate::expression::Expression;
 use crate::expression::Expression::{AsValue, FunctionCall, Literal, SetVariable, Variable};
+use crate::field_metadata::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
+use crate::row_collection::RowCollection;
+use crate::structures::Structures::Hard;
 use crate::structures::{HardStructure, Structure};
+use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, Binary, Boolean, ErrorValue, Function, Null, Number, PlatformOp, StringValue, StructureHard, TableValue, Undefined, BLOB};
+use crate::typed_values::TypedValue::{ArrayValue, Binary, Boolean, ErrorValue, Function, Null, Number, PlatformOp, StringValue, Structured, TableValue, Undefined, BLOB};
 use serde::{Deserialize, Serialize};
 use shared_lib::fail;
 use std::fmt::{Debug, Display};
@@ -97,9 +102,9 @@ impl DataType {
             let mut params: Vec<Parameter> = vec![];
             for arg in args {
                 let param = match arg {
-                    AsValue(name, model) => Parameter::new(name, decipher(model)?.to_type_declaration(), None),
-                    SetVariable(name, value) => Parameter::new(name, None, Some(value.to_code())),
-                    Variable(name) => Parameter::new(name, None, None),
+                    AsValue(name, model) => Parameter::new(name, decipher(model)?),
+                    SetVariable(name, expr) => Parameter::from_tuple(name, expr.to_pure()?),
+                    Variable(name) => Parameter::build(name),
                     other => return throw(Syntax(other.to_code()))
                 };
                 params.push(param);
@@ -111,12 +116,12 @@ impl DataType {
                 Literal(Number(Numbers::Ack)) => Ok(NumberType(AckKind)),
                 Literal(Function { params, .. }) =>
                     Ok(FunctionType(params.clone())),
-                Literal(StructureHard(hs)) =>
-                    Ok(StructureType(hs.get_parameters())),
+                Literal(Structured(s)) => Ok(StructureType(s.get_parameters())),
                 Variable(name) => match name.as_str() {
                     "Ack" => Ok(NumberType(AckKind)),
                     "Boolean" => Ok(BooleanType),
                     "Date" => Ok(NumberType(DateKind)),
+                    "Enum" => Ok(EnumType(vec![])),
                     "Error" => Ok(ErrorType),
                     "f32" => Ok(NumberType(F32Kind)),
                     "f64" => Ok(NumberType(F64Kind)),
@@ -146,10 +151,10 @@ impl DataType {
                                 }),
                                 "Binary" => expect_size(args, |size| BinaryType(size)),
                                 "BLOB" => expect_type(args, |kind| BLOBType(Box::new(kind))),
-                                "enum" => expect_params(args, |params| EnumType(params)),
+                                "Enum" => expect_params(args, |params| EnumType(params)),
                                 "fn" => expect_params(args, |params| FunctionType(params)),
                                 "String" => expect_size(args, |size| StringType(size)),
-                                "struct" => expect_params(args, |params| StructureType(params)),
+                                "Struct" => expect_params(args, |params| StructureType(params)),
                                 "Table" => expect_params(args, |params| TableType(params, BLOBSized)),
                                 type_name => throw(Syntax(type_name.into()))
                             }
@@ -171,12 +176,8 @@ impl DataType {
             NumberType(kind) => Number(kind.decode(buffer, offset)),
             PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
             StringType(size) => StringValue(ByteCodeCompiler::decode_string(buffer, offset, size.to_size()).to_string()),
-            StructureType(params) =>
-                match HardStructure::from_parameters(params) {
-                    Ok(structure) => StructureHard(structure),
-                    Err(err) => ErrorValue(Errors::Exact(err.to_string()))
-                }
-            TableType(columns, ..) => TableValue(Model(ModelRowCollection::construct(columns))),
+            StructureType(params) => Structured(Hard(HardStructure::from_parameters(params))),
+            TableType(columns, ..) => TableValue(Model(ModelRowCollection::from_parameters(columns))),
             _ => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec())
         }
     }
@@ -201,11 +202,69 @@ impl DataType {
             NumberType(kind) => Number(kind.decode_buffer(bcc)?),
             PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
             StringType(..) => StringValue(bcc.next_string()),
-            StructureType(params) => StructureHard(bcc.next_struct_with_parameters(params)?),
+            StructureType(params) => Structured(Hard(bcc.next_struct_with_parameters(params)?)),
             TableType(columns, ..) => TableValue(Model(bcc.next_table_with_columns(columns)?)),
             UnionType(..) => Undefined,
         };
         Ok(tv)
+    }
+
+    pub fn decode_field_value(&self, buffer: &Vec<u8>, offset: usize) -> TypedValue {
+        let metadata = FieldMetadata::decode(buffer[offset]);
+        if metadata.is_active {
+            self.decode(buffer, offset + 1)
+        } else { Null }
+    }
+
+    pub fn decode_field_value_bcc(&self, bcc: &mut ByteCodeCompiler, offset: usize) -> std::io::Result<TypedValue> {
+        let metadata: FieldMetadata = FieldMetadata::decode(bcc[offset]);
+        let value: TypedValue = if metadata.is_active {
+            self.decode_bcc(bcc)?
+        } else { Null };
+        Ok(value)
+    }
+
+    pub fn encode(&self, value: &TypedValue) -> std::io::Result<Vec<u8>> {
+        match self {
+            ArrayType(_kind) => match value {
+                ArrayValue(_) => Ok(value.encode()),
+                z => throw(TypeMismatch(self.clone(), z.get_type()))
+            }
+            BinaryType(_) => Ok(value.encode()),
+            BLOBType(_) => Ok(value.encode()),
+            BooleanType => Ok(value.encode()),
+            EnumType(_) => Ok(value.encode()),
+            ErrorType => Ok(value.encode()),
+            FunctionType(_) => Ok(value.encode()),
+            NumberType(_) => Ok(value.encode()),
+            PlatformOpsType(_) => Ok(value.encode()),
+            StringType(_) => Ok(value.encode()),
+            StructureType(_) => Ok(value.encode()),
+            TableType(params, size) => match value.to_table_value() {
+                TableValue(df) => {
+                    let rc: Box<dyn RowCollection> = Box::new(df.clone());
+                    for s in TableRenderer::from_table_with_ids(&rc).unwrap() {
+                        println!("{}", s);
+                    }
+                    Ok(df.encode())
+                }
+                z => throw(TypeMismatch(self.clone(), z.get_type()))
+            },
+            UnionType(_) => Ok(value.encode()),
+        }
+    }
+
+    pub fn encode_field(
+        &self,
+        value: &TypedValue,
+        metadata: &FieldMetadata,
+        capacity: usize,
+    ) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::with_capacity(capacity);
+        buf.push(metadata.encode());
+        buf.extend(self.encode(value).unwrap_or_else(|_| vec![]));
+        buf.resize(capacity, 0u8);
+        buf
     }
 
     /// parses a datatype expression (e.g. "String(20)")
@@ -219,10 +278,10 @@ impl DataType {
     ////////////////////////////////////////////////////////////////////
 
     /// computes and returns the maximum physical size of the value of this datatype
-    pub fn compute_max_physical_size(&self) -> usize {
+    pub fn compute_fixed_size(&self) -> usize {
         use crate::data_types::DataType::*;
         let width: usize = match self {
-            ArrayType(kind) => 10 * kind.compute_max_physical_size(),
+            ArrayType(kind) => 10 * kind.compute_fixed_size(),
             BinaryType(size) => size.to_size(),
             BLOBType(..) => 8,
             BooleanType => 1,
@@ -239,7 +298,7 @@ impl DataType {
             StructureType(columns) => columns.len() * 8,
             TableType(columns, ..) => columns.len() * 8,
             UnionType(dts) => dts.iter()
-                .map(|t| t.compute_max_physical_size())
+                .map(|t| t.compute_fixed_size())
                 .max().unwrap_or(0),
         };
         width + 1 // +1 for field metadata
@@ -253,7 +312,7 @@ impl DataType {
             BinaryType(st) => format!("Binary({})", st),
             BLOBType(dt) => format!("BLOB({})", dt.to_type_declaration().unwrap_or("".to_string())),
             BooleanType => "Boolean".into(),
-            EnumType(labels) => format!("enum({})", Parameter::render(labels)),
+            EnumType(labels) => format!("Enum({})", Parameter::render_f(labels, |p| p.to_code_enum())),
             ErrorType => "Error".into(),
             FunctionType(params) => format!("fn({})", Parameter::render(params)),
             UnionType(kinds) => kinds.iter()
@@ -263,7 +322,7 @@ impl DataType {
             NumberType(ok) => ok.get_type_name(),
             PlatformOpsType(pf) => pf.to_code(),
             StringType(st) => format!("String({})", st),
-            StructureType(params) => format!("struct({})", Parameter::render(params)),
+            StructureType(params) => format!("Struct({})", Parameter::render(params)),
             TableType(params, ..) => format!("Table({})", Parameter::render(params)),
         };
         if type_name.is_empty() { None } else { Some(type_name) }
@@ -291,8 +350,10 @@ mod tests {
         use crate::data_types::DataType::*;
         use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
         use crate::number_kind::NumberKind::*;
+        use crate::numbers::Numbers::I64Value;
         use crate::parameter::Parameter;
         use crate::testdata::make_quote_parameters;
+        use crate::typed_values::TypedValue::Number;
 
         #[test]
         fn test_array() {
@@ -326,23 +387,23 @@ mod tests {
         #[test]
         fn test_enums_0() {
             verify_type_construction(
-                "enum(A, B, C)",
+                "Enum(A, B, C)",
                 EnumType(vec![
-                    Parameter::new("A", None, None),
-                    Parameter::new("B", None, None),
-                    Parameter::new("C", None, None),
+                    Parameter::build("A"),
+                    Parameter::build("B"),
+                    Parameter::build("C"),
                 ]));
         }
 
         #[test]
         fn test_enums_1() {
             verify_type_construction(
-                "enum(AMEX := 1, NASDAQ := 2, NYSE := 3, OTCBB := 4)",
+                "Enum(AMEX := 1, NASDAQ := 2, NYSE := 3, OTCBB := 4)",
                 EnumType(vec![
-                    Parameter::new("AMEX", None, Some("1".to_string())),
-                    Parameter::new("NASDAQ", None, Some("2".to_string())),
-                    Parameter::new("NYSE", None, Some("3".to_string())),
-                    Parameter::new("OTCBB", None, Some("4".to_string())),
+                    Parameter::with_default("AMEX", NumberType(I64Kind), Number(I64Value(1))),
+                    Parameter::with_default("NASDAQ", NumberType(I64Kind), Number(I64Value(2))),
+                    Parameter::with_default("NYSE", NumberType(I64Kind), Number(I64Value(3))),
+                    Parameter::with_default("OTCBB", NumberType(I64Kind), Number(I64Value(4))),
                 ]));
         }
 
@@ -404,7 +465,7 @@ mod tests {
         #[test]
         fn test_struct() {
             verify_type_construction(
-                "struct(symbol: String(8), exchange: String(8), last_sale: f64)",
+                "Struct(symbol: String(8), exchange: String(8), last_sale: f64)",
                 StructureType(make_quote_parameters()));
         }
 

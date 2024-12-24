@@ -1,15 +1,19 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // test data module
 ////////////////////////////////////////////////////////////////////
 
 use std::fs::File;
 
+use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::{NumberType, UnionType};
+use crate::data_types::DataType::{NumberType, StringType, UnionType};
+use crate::data_types::StorageTypes::FixedSize;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Disk;
 use crate::dataframe_config::DataFrameConfig;
+use crate::descriptor::Descriptor;
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
 use crate::interpreter::Interpreter;
@@ -17,8 +21,7 @@ use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::{F64Kind, I64Kind};
 use crate::numbers::Numbers::{F64Value, U64Value};
 use crate::parameter::Parameter;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
@@ -38,7 +41,7 @@ pub fn make_dataframe_ns(ns: Namespace, columns: Vec<Parameter>) -> std::io::Res
 }
 
 pub fn make_dataframe_config(columns: Vec<Parameter>) -> DataFrameConfig {
-    DataFrameConfig::new(columns, Vec::new(), Vec::new())
+    DataFrameConfig::build(&columns)
 }
 
 pub fn make_quote(id: usize,
@@ -53,14 +56,22 @@ pub fn make_quote(id: usize,
 }
 
 pub fn make_quote_columns() -> Vec<Column> {
-    Column::from_parameters(&make_quote_parameters()).unwrap()
+    Column::from_parameters(&make_quote_parameters())
+}
+
+pub fn make_quote_descriptors() -> Vec<Descriptor> {
+    vec![
+        Descriptor::new("symbol", Some("String(8)".into()), None),
+        Descriptor::new("exchange", Some("String(8)".into()), None),
+        Descriptor::new("last_sale", Some("f64".into()), None),
+    ]
 }
 
 pub fn make_quote_parameters() -> Vec<Parameter> {
     vec![
-        Parameter::new("symbol", Some("String(8)".into()), None),
-        Parameter::new("exchange", Some("String(8)".into()), None),
-        Parameter::new("last_sale", Some("f64".into()), None),
+        Parameter::new("symbol", StringType(FixedSize(8))),
+        Parameter::new("exchange", StringType(FixedSize(8))),
+        Parameter::new("last_sale", NumberType(F64Kind)),
     ]
 }
 
@@ -84,9 +95,9 @@ pub fn make_table_file(
     database: &str,
     schema: &str,
     name: &str,
-    columns: Vec<Parameter>,
+    columns: Vec<Descriptor>,
 ) -> (String, File, Vec<Column>, usize) {
-    let table_columns = Column::from_parameters(&columns).unwrap();
+    let table_columns = Column::from_descriptors(&columns).unwrap();
     let record_size = Row::compute_record_size(&table_columns);
     let ns = Namespace::new(database, schema, name);
     let file = FileRowCollection::table_file_create(&ns).unwrap();
@@ -240,4 +251,28 @@ impl StockQuote {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_columns() {
+        let columns = make_quote_columns();
+        assert_eq!(columns, Column::from_parameters(&make_quote_parameters()));
+        assert_eq!(columns, Column::from_descriptors(&make_quote_descriptors()).unwrap());
+    }
+
+    #[test]
+    fn test_descriptors() {
+        let descriptors = make_quote_descriptors();
+        assert_eq!(descriptors, Descriptor::from_columns(&make_quote_columns()));
+        assert_eq!(descriptors, Descriptor::from_parameters(&make_quote_parameters()));
+    }
+
+    #[test]
+    fn test_parameters() {
+        let parameters = make_quote_parameters();
+        assert_eq!(parameters, Parameter::from_columns(&make_quote_columns()));
+        assert_eq!(parameters, Parameter::from_descriptors(&make_quote_descriptors()).unwrap());
+    }
+
+}

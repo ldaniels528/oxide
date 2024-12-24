@@ -1,15 +1,16 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // view row-collection module
 ////////////////////////////////////////////////////////////////////
 
+use crate::columns::Column;
 use crate::errors::Errors::{ViewsCannotBeResized, WriteProtected};
 use crate::expression::Conditions;
 use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::ErrorValue;
 
@@ -29,6 +30,10 @@ impl ViewRowCollection {
 }
 
 impl RowCollection for ViewRowCollection {
+    fn encode(&self) -> Vec<u8> {
+        vec![]
+    }
+
     fn get_columns(&self) -> &Vec<Column> { self.host.get_columns() }
 
     fn get_record_size(&self) -> usize { self.host.get_record_size() }
@@ -123,14 +128,14 @@ impl RowCollection for ViewRowCollection {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::columns::Column;
     use crate::expression::Conditions::{Equal, LessThan};
     use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::F64Value;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::Column;
-    use crate::testdata::{make_quote, make_quote_parameters};
+    use crate::testdata::{make_quote, make_quote_descriptors};
     use crate::typed_values::TypedValue::{Number, StringValue};
     use crate::view_row_collection::ViewRowCollection;
 
@@ -197,9 +202,9 @@ mod tests {
     }
 
     fn create_data_set() -> ModelRowCollection {
-        let parameters = make_quote_parameters();
-        let phys_columns = Column::from_parameters(&parameters).unwrap();
-        ModelRowCollection::from_rows(&phys_columns, &vec![
+        let parameters = make_quote_descriptors();
+        let phys_columns = Column::from_descriptors(&parameters).unwrap();
+        ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
             make_quote(0, "IBM", "NYSE", 21.22),
             make_quote(1, "ATT", "NYSE", 98.44),
             make_quote(2, "HOCK", "AMEX", 0.0076),

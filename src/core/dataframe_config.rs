@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // dataframe configuration module
 ////////////////////////////////////////////////////////////////////
@@ -7,31 +8,43 @@ use std::fs;
 use serde::{Deserialize, Serialize};
 
 use crate::cnv_error;
+use crate::descriptor::Descriptor;
 use crate::namespaces::Namespace;
 use crate::parameter::Parameter;
 
 #[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct DataFrameConfig {
-    columns: Vec<Parameter>,
+    columns: Vec<Descriptor>,
     indices: Vec<HashIndexConfig>,
     partitions: Vec<String>,
 }
 
 impl DataFrameConfig {
     /// instantiates a new dataframe configuration.
-    pub fn build(parameters: Vec<Parameter>) -> Self {
+    pub fn build(parameters: &Vec<Parameter>) -> Self {
+        DataFrameConfig::new(parameters, Vec::new(), Vec::new())
+    }
+
+    /// instantiates a new dataframe configuration.
+    pub fn from_descriptors(descriptors: Vec<Descriptor>,
+                            indices: Vec<HashIndexConfig>,
+                            partitions: Vec<String>) -> Self {
         DataFrameConfig {
-            columns: parameters,
-            indices: Vec::new(),
-            partitions: Vec::new(),
+            columns: descriptors,
+            indices,
+            partitions,
         }
     }
 
     /// instantiates a new dataframe configuration.
-    pub fn new(columns: Vec<Parameter>,
+    pub fn new(parameters: &Vec<Parameter>,
                indices: Vec<HashIndexConfig>,
                partitions: Vec<String>) -> Self {
-        DataFrameConfig { columns, indices, partitions }
+        Self::from_descriptors(
+            Descriptor::from_parameters(&parameters),
+            indices,
+            partitions,
+        )
     }
 
     /// deletes a dataframe configuration from disk.
@@ -39,9 +52,13 @@ impl DataFrameConfig {
         fs::remove_file(ns.get_config_file_path())
     }
 
-    pub fn get_columns(&self) -> &Vec<Parameter> { &self.columns }
+    pub fn get_columns(&self) -> &Vec<Descriptor> { &self.columns }
 
     pub fn get_indices(&self) -> &Vec<HashIndexConfig> { &self.indices }
+
+    pub fn get_parameters(&self) -> std::io::Result<Vec<Parameter>> {
+        Parameter::from_descriptors(&self.columns)
+    }
 
     pub fn get_partitions(&self) -> &Vec<String> { &self.partitions }
 
@@ -75,22 +92,25 @@ impl HashIndexConfig {
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use tokio::io;
-
+    use crate::data_types::DataType::{NumberType, StringType};
+    use crate::data_types::StorageTypes::FixedSize;
     use crate::dataframe_config::DataFrameConfig;
+    use crate::descriptor::Descriptor;
     use crate::namespaces::Namespace;
+    use crate::number_kind::NumberKind::F64Kind;
+    use crate::numbers::Numbers::F64Value;
     use crate::parameter::Parameter;
+    use crate::typed_values::TypedValue::Number;
+    use tokio::io;
 
     #[test]
     fn test_load_and_save_config() -> io::Result<()> {
-        let columns: Vec<Parameter> = vec![
-            Parameter::new("symbol", Some("String(8)".into()), None),
-            Parameter::new("exchange", Some("String(8)".into()), None),
-            Parameter::new("last_sale", Some("f64".into()), Some("0.0".into())),
+        let parameters = vec![
+            Parameter::new("symbol", StringType(FixedSize(8))),
+            Parameter::new("exchange", StringType(FixedSize(8))),
+            Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
         ];
-        let indices = Vec::with_capacity(0);
-        let partitions = Vec::with_capacity(0);
-        let cfg = DataFrameConfig::new(columns, indices, partitions);
+        let cfg = DataFrameConfig::build(&parameters);
         let ns = Namespace::parse("securities.other_otc.stocks")?;
         cfg.save(&ns)?;
 
@@ -98,9 +118,9 @@ mod tests {
         let cfg = DataFrameConfig::load(&ns)?;
         assert_eq!(cfg, DataFrameConfig {
             columns: vec![
-                Parameter::new("symbol", Some("String(8)".into()), None),
-                Parameter::new("exchange", Some("String(8)".into()), None),
-                Parameter::new("last_sale", Some("f64".into()), Some("0.0".into())),
+                Descriptor::new("symbol", Some("String(8)".into()), None),
+                Descriptor::new("exchange", Some("String(8)".into()), None),
+                Descriptor::new("last_sale", Some("f64".into()), Some("0.0".into())),
             ],
             indices: Vec::new(),
             partitions: Vec::new(),

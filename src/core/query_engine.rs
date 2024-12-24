@@ -1,7 +1,9 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // QueryEngine classes
 ////////////////////////////////////////////////////////////////////
 
+use crate::columns::Column;
 use crate::compiler::{fail_expr, fail_unexpected};
 use crate::cursor::Cursor;
 use crate::data_types::DataType;
@@ -28,9 +30,9 @@ use crate::numbers::Numbers::Ack;
 use crate::numbers::Numbers::RowsAffected;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
-use crate::rows::Row;
+use crate::structures::Row;
 use crate::structures::Structure;
-use crate::table_columns::Column;
+use crate::structures::Structures::Soft;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
@@ -92,7 +94,7 @@ pub fn do_mutation(
         Overwrite { path, source, condition, limit } =>
             do_table_row_overwrite(&ms, path, source, condition, limit),
         Truncate { path, limit } =>
-            match limit.deref() {
+            match limit {
                 None => do_table_row_resize(&ms, path, Boolean(false)),
                 Some(limit) => {
                     let (ms, limit) = ms.evaluate(limit)?;
@@ -168,22 +170,25 @@ fn do_table_row_resize(
 
 fn do_table_row_append(
     ms: &Machine,
-    table: &Expression,
-    source: &Expression,
+    table_expr: &Expression,
+    from_expr: &Expression,
 ) -> std::io::Result<(Machine, TypedValue)> {
-    let machine = ms.to_owned();
-    if let From(source) = source {
-        // determine the writable target
-        let mut writable = expect_row_collection(&ms, table)?;
+    // evaluate the table (table_expr)
+    let (ms, table) = ms.evaluate(table_expr)?;
+    match table.to_table_value() {
+        TableValue(mut df) =>
+            match from_expr {
+                From(source) => {
+                    // retrieve rows from the source (from_expr)
+                    let columns = df.get_columns();
+                    let rows = expect_rows(&ms, source, columns)?;
 
-        // retrieve rows from the source
-        let columns = writable.get_columns();
-        let rows = expect_rows(&ms, source, columns)?;
-
-        // write the rows to the target
-        Ok((machine, writable.append_rows(rows)))
-    } else {
-        throw(QueryableExpected(source.to_string()))
+                    // write the rows to the target
+                    Ok((ms, df.append_rows(rows)))
+                }
+                _ => throw(QueryableExpected(from_expr.to_code()))
+            }
+        _ => throw(QueryableExpected(table_expr.to_code()))
     }
 }
 
@@ -236,7 +241,7 @@ pub fn do_table_row_query(
         TableValue(rcv) => {
             let phys_columns = rcv.get_columns().clone();
             let mut cursor = Cursor::filter(Box::new(rcv), condition.to_owned());
-            let table_value = TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &cursor.take(limit)?)));
+            let table_value = TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &cursor.take(limit)?)));
             Ok((machine, table_value))
         }
         other => throw(TypeMismatch(TableType(vec![], BLOBSized), other.get_type()))
@@ -299,7 +304,7 @@ fn do_table_create_index(
             let config = DataFrameConfig::load(&ns)?;
             let mut indices = config.get_indices().to_owned();
             indices.push(HashIndexConfig::new(columns, false));
-            let config = DataFrameConfig::new(
+            let config = DataFrameConfig::from_descriptors(
                 config.get_columns().to_owned(),
                 indices.to_owned(),
                 config.get_partitions().to_owned(),
@@ -343,7 +348,7 @@ fn do_table_declare_table(
     columns: &Vec<Parameter>,
     from: &Option<Box<Expression>>,
 ) -> std::io::Result<(Machine, TypedValue)> {
-    let columns = Column::from_parameters(columns)?;
+    let columns = Column::from_parameters(columns);
     Ok((ms.to_owned(), TableValue(Model(ModelRowCollection::with_rows(columns, Vec::new())))))
 }
 
@@ -513,11 +518,11 @@ fn do_rows_from_table_declaration(
     let machine = ms.to_owned();
     // create the config and an empty data file
     let ns = expect_namespace(&ms, table)?;
-    let cfg = DataFrameConfig::new(columns.to_owned(), Vec::new(), Vec::new());
+    let cfg = DataFrameConfig::build(&columns);
     cfg.save(&ns)?;
     FileRowCollection::table_file_create(&ns)?;
     // decipher the "from" expression
-    let columns = Column::from_parameters(columns)?;
+    let columns = Column::from_parameters(columns);
     let results = match from {
         Some(expr) => expect_rows(&machine, expr.deref(), &columns)?,
         None => Vec::new()
@@ -569,15 +574,14 @@ fn expect_rows(
         ArrayValue(items) => {
             let mut rows = Vec::new();
             for tuples in items.iter() {
-                if let StructureSoft(structure) = tuples {
+                if let Structured(structure) = tuples {
                     rows.push(Row::from_tuples(0, columns, &structure.get_tuples()))
                 }
             }
             Ok(rows)
         }
         NamespaceValue(ns) => FileRowCollection::open(&ns)?.read_active_rows(),
-        StructureHard(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
-        StructureSoft(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
+        Structured(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
         TableValue(rcv) => Ok(rcv.get_rows()),
         tv => throw(TypeMismatch(TableType(Parameter::from_columns(columns), BLOBSized), tv.get_type()))
     }
@@ -602,7 +606,7 @@ fn expect_via(
     let writable = expect_row_collection(&ms, table)?;
     let (fields, values) = {
         if let Via(my_source) = source {
-            if let (_, StructureSoft(structure)) = ms.evaluate(&my_source)? {
+            if let (_, Structured(Soft(structure))) = ms.evaluate(&my_source)? {
                 let columns = writable.get_columns();
                 let row = Row::from_tuples(0, columns, &structure.get_tuples());
                 split(columns, &row)
@@ -655,7 +659,7 @@ fn resolve_fields_as_columns(
     let mut new_columns = Vec::new();
     for field in fields {
         let column = resolve_field_as_column(field, columns, &column_dict, offset)?;
-        let fixed_size = column.get_data_type().compute_max_physical_size();
+        let fixed_size = column.get_data_type().compute_fixed_size();
         new_columns.push(column);
         offset += fixed_size;
     }
@@ -704,14 +708,14 @@ fn column_not_found(name: &str, columns: &Vec<Column>) -> String {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::table_columns::Column;
+    use crate::columns::Column;
     use crate::testdata::*;
 
     #[test]
     fn test_select_from_where_order_by_limit() {
         // create a table with test data
-        let params = make_quote_parameters();
-        let columns = Column::from_parameters(&params).unwrap();
+        let params = make_quote_descriptors();
+        let columns = Column::from_descriptors(&params).unwrap();
 
         // set up the interpreter
         verify_exact_table_with_ids(r#"

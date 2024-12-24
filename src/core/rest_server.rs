@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // REST server module
 ////////////////////////////////////////////////////////////////////
@@ -13,14 +14,14 @@ use log::{error, info};
 use serde_json::{json, Value};
 use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse};
 
+use crate::columns::Column;
 use crate::dataframe_actor::DataframeActor;
 use crate::dataframe_config::DataFrameConfig;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
 use crate::server::SystemInfoJs;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::websockets::OxideWebSocket;
 use crate::*;
 
@@ -58,11 +59,11 @@ macro_rules! web_routes {
             .route("/", web::get().to(handle_index))
             .route("/info", web::get().to(handle_sys_info_get))
             .route("/rpc", web::post().to(handle_rpc_post))
-            .wrap(actix_session::SessionMiddleware::builder(
-                actix_session::storage::CookieSessionStore::default(),
-                actix_web::cookie::Key::from(&[0; 64])
-             ).session_lifecycle(actix_session::config::PersistentSession::default()
-                .session_ttl(actix_web::cookie::time::Duration::seconds(SECS_IN_WEEK))).build())
+            // .wrap(actix_session::SessionMiddleware::builder(
+            //     actix_session::storage::CookieSessionStore::default(),
+            //     actix_web::cookie::Key::from(&[0; 64])
+            //  ).session_lifecycle(actix_session::config::PersistentSession::default()
+            //     .session_ttl(actix_web::cookie::time::Duration::seconds(SECS_IN_WEEK))).build())
             .service(web::resource("/ws").to(handle_websockets))
     }
 }
@@ -178,7 +179,7 @@ pub async fn handle_row_get(
     path: web::Path<(String, String, String, usize)>,
 ) -> impl Responder {
     match get_row_by_id(req, path).await {
-        Ok((columns, Some(row))) => HttpResponse::Ok().json(row.to_json(&columns)),
+        Ok((columns, Some(row))) => HttpResponse::Ok().json(row.to_json_hash(&columns)),
         Ok((_, None)) => HttpResponse::Ok().json(serde_json::json!({})),
         Err(err) => {
             error!("error {}", err.to_string());

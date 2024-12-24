@@ -1,9 +1,11 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // RowCollection module
 ////////////////////////////////////////////////////////////////////
 
 use crate::arrays::Array;
 use crate::byte_row_collection::ByteRowCollection;
+use crate::columns::Column;
 use crate::compiler::fail_value;
 use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe::Model;
@@ -16,11 +18,11 @@ use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::U64Kind;
 use crate::numbers::Numbers;
-use crate::numbers::Numbers::{RowsAffected, U64Value};
+use crate::numbers::Numbers::{RowId, RowsAffected, U64Value};
 use crate::platform::PlatformOps;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
+use crate::structures::Structures::Hard;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use shared_lib::fail;
@@ -36,7 +38,7 @@ pub trait RowCollection: Debug {
         match self.len() {
             Ok(id) => {
                 let _ = self.overwrite_row(id, row.with_row_id(id));
-                Number(Numbers::RowId(id as u64))
+                Number(RowId(id as u64))
             }
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
@@ -52,7 +54,7 @@ pub trait RowCollection: Debug {
             };
             match self.overwrite_row(row_id, row.with_row_id(row_id)) {
                 ErrorValue(message) => return ErrorValue(message),
-                Number(oc) => affected_count += oc.to_i64(),
+                Number(n) => affected_count += n.to_i64(),
                 _ => {}
             }
         }
@@ -68,15 +70,15 @@ pub trait RowCollection: Debug {
             Ok(len) => len,
             Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
         };
-        let mut affected = 0;
+        let mut affected: Numbers = RowsAffected(0);
         for row in table.iter() {
             let row_id = row.get_id();
             let new_row_id = len + row_id;
-            if let Number(oc) = self.overwrite_row(new_row_id, row.with_row_id(new_row_id)) {
-                affected += oc.to_i64()
+            if let Number(n) = self.overwrite_row(new_row_id, row.with_row_id(new_row_id)) {
+                affected = affected + n
             }
         }
-        Number(Numbers::RowsAffected(affected))
+        Number(RowsAffected(affected.to_i64()))
     }
 
     /// Eliminates all deleted rows; re-ordering the table in the process.
@@ -86,7 +88,7 @@ pub trait RowCollection: Debug {
             Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
         };
         let (mut affected, mut row_id, mut eof) = (
-            Number(Numbers::RowsAffected(0)), 0, len
+            Number(RowsAffected(0)), 0, len
         );
         while row_id < eof {
             // read the row metadata
@@ -159,13 +161,13 @@ pub trait RowCollection: Debug {
                 Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
             };
         }
-        Number(Numbers::RowsAffected(removals))
+        Number(RowsAffected(removals))
     }
 
     /// Returns a table that describes the structure of the host table
     fn describe(&self) -> TypedValue {
         let params = PlatformOps::get_tools_describe_parameters();
-        let mut mrc = ModelRowCollection::construct(&params);
+        let mut mrc = ModelRowCollection::from_parameters(&params);
         for column in self.get_columns() {
             mrc.append_row(Row::new(0, vec![
                 StringValue(column.get_name().to_string()),
@@ -176,6 +178,9 @@ pub trait RowCollection: Debug {
         }
         TableValue(Model(mrc))
     }
+
+    /// Encodes the [RowCollection] into a byte vector
+    fn encode(&self) -> Vec<u8>;
 
     fn examine_range(&self, range: std::ops::Range<usize>) -> TypedValue {
         // create the augmented columns
@@ -207,7 +212,7 @@ pub trait RowCollection: Debug {
     /// Reads active and inactive (deleted) rows
     fn examine_rows(&self) -> std::io::Result<Vec<Row>> {
         match self.examine_range(self.get_indices()?) {
-            ErrorValue(err) => return fail(err.to_string()),
+            ErrorValue(err) => fail(err.to_string()),
             TableValue(rcv) => Ok(rcv.get_rows()),
             z => fail_value("Table", &z)
         }
@@ -533,7 +538,7 @@ pub trait RowCollection: Debug {
         match self.find_last_active_row() {
             Ok(Some(row)) => {
                 let _ = self.delete_row(row.get_id());
-                StructureHard(row.to_struct(self.get_columns()))
+                Structured(Hard(row.as_hard(self.get_columns())))
             }
             Ok(None) => Undefined,
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
@@ -684,21 +689,7 @@ pub trait RowCollection: Debug {
 
     fn to_array(&self) -> Array {
         let columns = self.get_columns();
-        Array::from(self.iter().map(|row| StructureHard(row.to_struct(columns))).collect())
-    }
-
-    fn to_string(&self) -> String {
-        match self.read_active_rows() {
-            Ok(rows) => {
-                let mut buf = String::new();
-                for row in rows {
-                    if !buf.is_empty() { buf += ", " }
-                    buf += row.to_string().as_str();
-                }
-                format!("[{}]", buf)
-            }
-            Err(err) => err.to_string()
-        }
+        Array::from(self.iter().map(|row| Structured(Hard(row.as_hard(columns)))).collect())
     }
 
     /// Restores a deleted row by ID to an active state within the table
@@ -813,13 +804,13 @@ mod tests {
 
     use super::*;
     use crate::dataframe::Dataframe;
+    use crate::descriptor::Descriptor;
     use crate::expression::Conditions::Equal;
     use crate::expression::Expression::{Literal, Variable};
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
-    use crate::numbers::Numbers;
-    use crate::numbers::Numbers::{F64Value, RowId, RowsAffected};
+    use crate::numbers::Numbers::{Ack, F64Value, RowId, RowsAffected};
     use crate::parameter::Parameter;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::*;
@@ -832,7 +823,7 @@ mod tests {
         let mut rc = <dyn RowCollection>::from_bytes(columns.to_owned(), Vec::new());
 
         // create a new row
-        assert_eq!(rc.overwrite_row(row.get_id(), row), Number(Numbers::RowsAffected(1)));
+        assert_eq!(rc.overwrite_row(row.get_id(), row), Number(RowsAffected(1)));
 
         // read and verify the row
         let (row, rmd) = rc.read_row(0).unwrap();
@@ -845,7 +836,7 @@ mod tests {
     #[test]
     fn test_from_file() {
         let (path, file, columns, _) =
-            make_table_file("rows", "append_row", "stocks", make_quote_parameters());
+            make_table_file("rows", "append_row", "stocks", make_quote_descriptors());
         let mut rc = <dyn RowCollection>::from_file(columns.to_owned(), file, path.as_str());
         rc.overwrite_row(0, make_quote(0, "BEAM", "NYSE", 78.35));
 
@@ -861,7 +852,7 @@ mod tests {
     fn test_condition_exists_in_table() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // append some rows to the host table (rc)
-            assert_eq!(Number(Numbers::RowsAffected(4)), rc.append_rows(vec![
+            assert_eq!(Number(RowsAffected(4)), rc.append_rows(vec![
                 make_quote(0, "HOCK", "AMEX", 0.0076),
                 make_quote(1, "XIE", "NASDAQ", 33.33),
                 make_quote(2, "AAA", "NYSE", 22.44),
@@ -885,6 +876,41 @@ mod tests {
 
         // test the variants
         verify_variants("condition_exists", make_quote_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_table_encode_decode() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+            // append some rows to the host table (rc)
+            assert_eq!(Number(RowsAffected(4)), rc.append_rows(vec![
+                make_quote(0, "IBM", "NYSE", 21.22),
+                make_quote(1, "ATT", "NYSE", 98.44),
+                make_quote(2, "HOCK", "AMEX", 0.0076),
+                make_quote(3, "XIE", "NASDAQ", 33.33),
+            ]));
+
+            // encode the table
+            let encoded_table = rc.encode();
+            assert_eq!(encoded_table.len(), 208);
+
+            // reconstitute the table
+            let new_rc = ModelRowCollection::decode(columns, encoded_table);
+            let boxed_rc: Box<dyn RowCollection> = Box::from(new_rc);
+            assert_eq!(TableRenderer::from_table_with_ids(&boxed_rc).unwrap(), vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | IBM    | NYSE     | 21.22     |",
+                "| 1  | ATT    | NYSE     | 98.44     |",
+                "| 2  | HOCK   | AMEX     | 0.0076    |",
+                "| 3  | XIE    | NASDAQ   | 33.33     |",
+                "|------------------------------------|"]);
+
+            rc.len().unwrap() as u64
+        }
+
+        // test the variants
+        verify_variants("table_encode_decode", make_quote_columns(), test_variant);
     }
 
     #[test]
@@ -949,7 +975,7 @@ mod tests {
         let columns = make_quote_columns();
 
         // create a second table for which to append
-        let mrc_a = ModelRowCollection::from_rows(&columns, &vec![
+        let mrc_a = ModelRowCollection::from_columns_and_rows(&columns, &vec![
             make_quote(0, "AAB", "NYSE", 22.44),
             make_quote(1, "WXYZ", "NASDAQ", 66.67),
             make_quote(2, "SSO", "NYSE", 123.44),
@@ -957,7 +983,7 @@ mod tests {
         ]);
 
         // create a second table for which to append
-        let mrc_b = ModelRowCollection::from_rows(&columns, &vec![
+        let mrc_b = ModelRowCollection::from_columns_and_rows(&columns, &vec![
             make_quote(0, "IBM", "NYSE", 21.22),
             make_quote(1, "ATT", "NYSE", 98.44),
             make_quote(2, "HOCK", "AMEX", 0.0076),
@@ -996,7 +1022,7 @@ mod tests {
             ]));
 
             // create a second table for which to append
-            let mrc = ModelRowCollection::from_rows(&columns, &vec![
+            let mrc = ModelRowCollection::from_columns_and_rows(&columns, &vec![
                 make_quote(0, "AAA", "NYSE", 22.44),
                 make_quote(1, "XYZ", "NASDAQ", 66.67),
                 make_quote(2, "SSO", "NYSE", 123.44),
@@ -1423,10 +1449,10 @@ mod tests {
             assert_eq!(Number(RowId(1)), rc.push_row(make_quote(1, "TED", "NYSE", 56.2456)));
             assert_eq!(
                 rc.pop_row(),
-                StructureHard(make_quote(1, "TED", "NYSE", 56.2456).to_struct(&phys_columns)));
+                Structured(Hard(make_quote(1, "TED", "NYSE", 56.2456).as_hard(&phys_columns))));
             assert_eq!(
                 rc.pop_row(),
-                StructureHard(make_quote(0, "BILL", "AMEX", 12.33).to_struct(&phys_columns)));
+                Structured(Hard(make_quote(0, "BILL", "AMEX", 12.33).as_hard(&phys_columns))));
             assert_eq!(rc.pop_row(), Undefined);
 
             rc.len().unwrap() as u64
@@ -1439,8 +1465,8 @@ mod tests {
     #[test]
     fn test_read_range() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns).unwrap();
+            let columns = make_quote_descriptors();
+            let phys_columns = Column::from_descriptors(&columns).unwrap();
             rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
             rc.append_row(make_quote(1, "TED", "OTC", 0.2456));
             rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
@@ -1470,7 +1496,7 @@ mod tests {
             assert_eq!(6, rc.len().unwrap());
 
             // resize and verify
-            assert_eq!(Number(Numbers::Ack), rc.resize(0));
+            assert_eq!(Number(Ack), rc.resize(0));
             assert_eq!(rc.len().unwrap(), 0);
 
             rc.len().unwrap() as u64
@@ -1483,7 +1509,7 @@ mod tests {
     #[test]
     fn test_resize_grow() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            assert_eq!(Number(Numbers::Ack), rc.resize(0));
+            assert_eq!(Number(Ack), rc.resize(0));
 
             // insert some rows and verify the size
             assert_eq!(Number(RowsAffected(1)), rc.overwrite_row(5, make_quote(0, "DUMMY", "OTC_BB", 0.0001)));
@@ -1550,8 +1576,8 @@ mod tests {
     #[test]
     fn test_reverse() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns).unwrap();
+            let columns = make_quote_descriptors();
+            let phys_columns = Column::from_descriptors(&columns).unwrap();
             rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
             rc.append_row(make_quote(1, "UNO", "OTC", 0.2456));
             rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
@@ -1579,8 +1605,8 @@ mod tests {
     #[test]
     fn test_scan_all_rows() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns).unwrap();
+            let columns = make_quote_descriptors();
+            let phys_columns = Column::from_descriptors(&columns).unwrap();
             assert_eq!(Number(RowsAffected(5)), rc.append_rows(vec![
                 make_quote(0, "ABC", "AMEX", 12.33),
                 make_quote(1, "TED", "OTC", 0.2456),
@@ -1618,8 +1644,8 @@ mod tests {
     #[test]
     fn test_scan_forward() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns).unwrap();
+            let columns = make_quote_descriptors();
+            let phys_columns = Column::from_descriptors(&columns).unwrap();
             assert_eq!(Number(RowsAffected(5)), rc.append_rows(vec![
                 make_quote(0, "TED", "OTC", 0.2456),
                 make_quote(1, "ABC", "AMEX", 12.33),
@@ -1801,12 +1827,12 @@ mod tests {
             mrc
         }
 
-        let mut mrc = ModelRowCollection::construct(&vec![
-            Parameter::new("name", Some("String(64)".into()), None),
-            Parameter::new("kind", Some("String(20)".into()), None),
-            Parameter::new("processed", Some("u64".into()), None),
-            Parameter::new("process_time_millis", Some("f64".into()), None),
-            Parameter::new("rows_per_millis", Some("f64".into()), None),
+        let mut mrc = ModelRowCollection::from_descriptors(&vec![
+            Descriptor::new("name", Some("String(64)".into()), None),
+            Descriptor::new("kind", Some("String(20)".into()), None),
+            Descriptor::new("processed", Some("u64".into()), None),
+            Descriptor::new("process_time_millis", Some("f64".into()), None),
+            Descriptor::new("rows_per_millis", Some("f64".into()), None),
         ]);
         mrc = work(mrc, name, "Binary", &columns, verify_byte_array_variant, test);
         mrc = work(mrc, name, "File", &columns, verify_file_variant, test);

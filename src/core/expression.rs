@@ -1,20 +1,25 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // Expression class
 ////////////////////////////////////////////////////////////////////
 
-use std::fmt::{Display, Formatter};
-
+use crate::arrays::Array;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
-use crate::errors::Errors::IllegalOperator;
+use crate::descriptor::Descriptor;
+use crate::errors::throw;
+use crate::errors::Errors::{Exact, IllegalOperator};
 use crate::expression::Expression::*;
 use crate::inferences::Inferences;
 use crate::numbers::Numbers;
 use crate::parameter::Parameter;
+use crate::structures::SoftStructure;
+use crate::structures::Structures::Soft;
 use crate::tokens::Token;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Number, StringValue};
+use crate::typed_values::TypedValue::{ArrayValue, Boolean, ErrorValue, Number, StringValue, Structured, Undefined};
 use serde::{Deserialize, Serialize};
+use std::fmt::{Display, Formatter};
 
 // constants
 pub const ACK: Expression = Literal(Number(Numbers::Ack));
@@ -24,7 +29,7 @@ pub const NULL: Expression = Literal(TypedValue::Null);
 pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
 
 /// Represents Bitwise Operations
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum BitwiseOps {
     And(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
@@ -41,7 +46,7 @@ impl BitwiseOps {
 }
 
 /// Represents Logical Conditions
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Conditions {
     And(Box<Expression>, Box<Expression>),
     Between(Box<Expression>, Box<Expression>, Box<Expression>),
@@ -68,7 +73,7 @@ impl Conditions {
 }
 
 /// Represents the set of all Directives
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Directives {
     MustAck(Box<Expression>),
     MustDie(Box<Expression>),
@@ -77,14 +82,14 @@ pub enum Directives {
 }
 
 /// Represents the set of all Database Operations
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DatabaseOps {
     Query(Queryable),
     Mutate(Mutation),
 }
 
 /// Represents a Creation Entity
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum CreationEntity {
     IndexEntity {
         columns: Vec<Expression>,
@@ -119,7 +124,7 @@ impl Display for ImportOps {
 }
 
 /// Represents a data modification event
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Mutation {
     Append {
         path: Box<Expression>,
@@ -158,7 +163,7 @@ pub enum Mutation {
 }
 
 /// Represents a Mutation Target
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum MutateTarget {
     IndexTarget {
         path: Box<Expression>,
@@ -169,7 +174,7 @@ pub enum MutateTarget {
 }
 
 /// Represents a queryable
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Queryable {
     Limit { from: Box<Expression>, limit: Box<Expression> },
     Select {
@@ -185,7 +190,7 @@ pub enum Queryable {
 }
 
 /// Represents an Expression
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Expression {
     ArrayExpression(Vec<Expression>),
     AsValue(String, Box<Expression>),
@@ -394,6 +399,12 @@ impl Expression {
         }
     }
 
+    pub fn decompile_descriptors(params: &Vec<Descriptor>) -> String {
+        params.iter().map(|d| d.to_code())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     pub fn decompile_parameters(params: &Vec<Parameter>) -> String {
         params.iter().map(|p| p.to_code())
             .collect::<Vec<_>>()
@@ -547,6 +558,48 @@ impl Expression {
     pub fn to_code(&self) -> String {
         Self::decompile(self)
     }
+
+    pub fn to_pure(&self) -> std::io::Result<TypedValue> {
+        match self {
+            AsValue(_, expr) => expr.to_pure(),
+            ArrayExpression(items) => {
+                let mut new_items = Vec::new();
+                for item in items {
+                    new_items.push(item.to_pure()?);
+                }
+                Ok(ArrayValue(Array::from(new_items)))
+            }
+            BitwiseOp(op) => todo!(),
+            Condition(kind) => match kind {
+                Conditions::False => Ok(Boolean(false)),
+                Conditions::True => Ok(Boolean(true)),
+                z => throw(Exact(format!("Constant value required near {}", z.to_code())))
+            }
+            Divide(a, b) => Ok(a.to_pure()? / b.to_pure()?),
+            ElementAt(_, _) => todo!(),
+            Factorial(expr) => expr.to_pure().map(|v| v.factorial()),
+            FunctionCall { .. } => todo!(),
+            JSONExpression(items) => {
+                let mut new_items = Vec::new();
+                for (name, expr) in items {
+                    new_items.push((name.to_string(), expr.to_pure()?))
+                }
+                Ok(Structured(Soft(SoftStructure::from_tuples(new_items))))
+            }
+            Literal(value) => Ok(value.clone()),
+            Minus(a, b) => Ok(a.to_pure()? - b.to_pure()?),
+            Modulo(a, b) => Ok(a.to_pure()? % b.to_pure()?),
+            Multiply(a, b) => Ok(a.to_pure()? * b.to_pure()?),
+            Neg(expr) => expr.to_pure().map(|v| -v),
+            Ns(_) => todo!(),
+            Plus(a, b) => Ok(a.to_pure()? + b.to_pure()?),
+            PlusPlus(a, b) => todo!(),
+            Pow(a, b) => Ok(a.to_pure()?.pow(&b.to_pure()?)
+                .unwrap_or(Undefined)),
+            Range(_, _) => todo!(),
+            z => throw(Exact(format!("Constant value required near {}", z.to_code())))
+        }
+    }
 }
 
 impl Display for Expression {
@@ -568,12 +621,15 @@ fn to_ns(path: Expression) -> Expression {
 /// Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::data_types::DataType::{NumberType, StringType};
+    use crate::data_types::StorageTypes::FixedSize;
     use crate::expression::Conditions::*;
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
     use crate::expression::DatabaseOps::{Mutate, Query};
     use crate::expression::Expression::{AsValue, Literal};
     use crate::expression::*;
     use crate::machine::Machine;
+    use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::I64Value;
     use crate::numbers::Numbers::*;
     use crate::tokenizer;
@@ -948,8 +1004,8 @@ mod tests {
     fn test_define_anonymous_function() {
         let model = Literal(Function {
             params: vec![
-                Parameter::new("a", None, None),
-                Parameter::new("b", None, None),
+                Parameter::build("a"),
+                Parameter::build("b"),
             ],
             code: Box::new(Multiply(Box::new(
                 Variable("a".into())
@@ -965,8 +1021,8 @@ mod tests {
         let model = SetVariable("add".into(), Box::new(
             Literal(Function {
                 params: vec![
-                    Parameter::new("a", None, None),
-                    Parameter::new("b", None, None),
+                    Parameter::build("a"),
+                    Parameter::build("b"),
                 ],
                 code: Box::new(Plus(Box::new(
                     Variable("a".into())
@@ -1013,25 +1069,25 @@ mod tests {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
             entity: TableEntity {
                 columns: vec![
-                    Parameter::new("symbol", Some("String(8)".into()), Some("\"ABC\"".into())),
-                    Parameter::new("exchange", Some("String(8)".into()), Some("\"NYSE\"".into())),
-                    Parameter::new("last_sale", Some("f64".into()), Some("0.00".into())),
+                    Parameter::with_default("symbol", StringType(FixedSize(8)), StringValue("ABC".into())),
+                    Parameter::with_default("exchange", StringType(FixedSize(8)), StringValue("NYSE".into())),
+                    Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.))),
                 ],
                 from: None,
             },
         }));
         assert_eq!(
             Expression::decompile(&model),
-            r#"create table ns("compiler.create.stocks") (symbol: String(8) := "ABC", exchange: String(8) := "NYSE", last_sale: f64 := 0.00)"#)
+            r#"create table ns("compiler.create.stocks") (symbol: String(8) := "ABC", exchange: String(8) := "NYSE", last_sale: f64 := 0.0)"#)
     }
 
     #[test]
     fn test_declare_table() {
         let model = DatabaseOp(DatabaseOps::Mutate(Mutation::Declare(TableEntity {
             columns: vec![
-                Parameter::new("symbol", Some("String(8)".into()), None),
-                Parameter::new("exchange", Some("String(8)".into()), None),
-                Parameter::new("last_sale", Some("f64".into()), None),
+                Parameter::new("symbol", StringType(FixedSize(8))),
+                Parameter::new("exchange", StringType(FixedSize(8))),
+                Parameter::new("last_sale", NumberType(F64Kind)),
             ],
             from: None,
         })));

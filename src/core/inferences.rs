@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // Inferences class
 ////////////////////////////////////////////////////////////////////
@@ -72,7 +73,6 @@ impl Inferences {
             PlusPlus(a, b) => Inferences::infer_a_or_b(a, b),
             Pow(a, b) => Inferences::infer_a_or_b(a, b),
             DatabaseOp(a) => match a {
-                DatabaseOps::Mutate(_) => NumberType(NumberKind::AckKind),
                 DatabaseOps::Query(_) => NumberType(NumberKind::AckKind),
                 DatabaseOps::Mutate(m) => match m {
                     Mutation::Append { .. } => NumberType(NumberKind::RowIdKind),

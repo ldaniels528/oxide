@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // Numbers class
 ////////////////////////////////////////////////////////////////////
@@ -35,6 +36,14 @@ pub enum Numbers {
     U128Value(u128),
     UUIDValue(u128),
     NaNValue,
+}
+
+impl Eq for Numbers {}
+
+impl Ord for Numbers {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.partial_cmp(other).unwrap_or(Ordering::Equal)
+    }
 }
 
 impl Hash for Numbers {
@@ -528,8 +537,8 @@ impl Numbers {
             RowId(id) => id.to_string(),
             RowsAffected(n) => n.to_string(),
             DateValue(ms) => TypedValue::millis_to_iso_date(*ms).unwrap_or("".into()),
-            F32Value(number) => number.to_string(),
-            F64Value(number) => number.to_string(),
+            F32Value(number) => if *number == 0. { "0.0".into() } else { number.to_string() },
+            F64Value(number) => if *number == 0. { "0.0".into() } else { number.to_string() },
             I8Value(number) => number.to_string(),
             I16Value(number) => number.to_string(),
             I32Value(number) => number.to_string(),

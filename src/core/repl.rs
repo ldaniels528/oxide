@@ -1,23 +1,25 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // REPL module
 ////////////////////////////////////////////////////////////////////
 
 use crate::arrays::Array;
+use crate::columns::Column;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Model;
+use crate::descriptor::Descriptor;
 use crate::expression::ACK;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
-use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::repl;
 use crate::rest_server::SharedState;
 use crate::row_collection::RowCollection;
-use crate::rows::Row;
+use crate::structures::Row;
+use crate::structures::Structures::{Hard, Soft};
 use crate::structures::{HardStructure, SoftStructure, Structure};
-use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
@@ -165,8 +167,8 @@ fn build_output_header(
             format!("{} row(s) in {execution_time:.1} ms ~ {}", tv.len()?, get_table_type(tv)),
         other => {
             let kind = match other {
-                StructureHard(hs) => get_hard_type(hs),
-                StructureSoft(ss) => get_soft_type(ss),
+                Structured(Hard(hs)) => get_hard_type(hs),
+                Structured(Soft(ss)) => get_soft_type(ss),
                 v => v.get_type_name()
             };
             format!("returned type `{}` in {execution_time:.1} ms", kind)
@@ -178,16 +180,16 @@ fn build_output_header(
 /// Generates a less verbose hard structure signature
 /// ex: Table(String(128), String(128), String(128), Boolean)
 fn get_hard_type(hs: &HardStructure) -> String {
-    format!("Struct({})", get_parameter_string(&hs.get_parameters()))
+    format!("Struct({})", get_parameter_string(&hs.get_descriptors()))
 }
 
 /// Generates a less verbose hard structure signature
 /// ex: Table(String(128), String(128), String(128), Boolean)
 fn get_soft_type(ss: &SoftStructure) -> String {
-    format!("Struct({})", get_parameter_string(&ss.get_parameters()))
+    format!("Struct({})", get_parameter_string(&ss.get_descriptors()))
 }
 
-fn get_parameter_string(params: &Vec<Parameter>) -> String {
+fn get_parameter_string(params: &Vec<Descriptor>) -> String {
     params.iter()
         .map(|p| p.get_param_type().unwrap_or("Any".into()))
         .collect::<Vec<_>>()

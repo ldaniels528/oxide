@@ -1,21 +1,23 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // model row-collection module
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
 
+use crate::columns::Column;
+use crate::descriptor::Descriptor;
 use crate::field_metadata::FieldMetadata;
 use crate::numbers::Numbers;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Null, Number};
 
 /// Row-model-vector-based [RowCollection] implementation
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize, PartialOrd)]
 pub struct ModelRowCollection {
     columns: Vec<Column>,
     row_data: Vec<(Row, RowMetadata)>,
@@ -34,37 +36,41 @@ impl ModelRowCollection {
     }
 
     /// Creates a new [ModelRowCollection] from abstract columns
-    pub fn construct(columns: &Vec<Parameter>) -> ModelRowCollection {
-        match Column::from_parameters(columns) {
+    pub fn from_descriptors(columns: &Vec<Descriptor>) -> ModelRowCollection {
+        match Column::from_descriptors(columns) {
             Ok(columns) => ModelRowCollection::with_rows(columns, Vec::new()),
             Err(err) => panic!("{}", err.to_string())
         }
+    }
+
+    /// Creates a new [ModelRowCollection] from abstract columns
+    pub fn from_parameters(parameters: &Vec<Parameter>) -> ModelRowCollection {
+        ModelRowCollection::with_rows(Column::from_parameters(parameters), Vec::new())
     }
 
     /// Decodes a byte vector into a [ModelRowCollection]
     pub fn decode(columns: Vec<Column>, bytes: Vec<u8>) -> Self {
         let record_size = Row::compute_record_size(&columns);
         let row_data = bytes.chunks(record_size)
-            .map(|chunk| Row::decode(&chunk.to_vec(), &columns))
+            .map(|chunk| Row::decode(&columns, &chunk.to_vec()))
             .collect::<Vec<(Row, RowMetadata)>>();
         Self::with_rows(columns, row_data)
     }
 
-    /// Encodes the [ModelRowCollection] into a byte vector
-    pub fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        for (row, rmd) in &self.row_data {
-            if rmd.is_allocated { bytes.extend(row.encode(&self.columns)) }
-        }
-        bytes
-    }
-
     /// Creates a new [ModelRowCollection] prefilled with the given rows.
-    pub fn from_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> ModelRowCollection {
+    pub fn from_columns_and_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> ModelRowCollection {
         let row_data = rows.iter()
             .map(|r| (r.to_owned(), RowMetadata::new(true)))
             .collect();
         Self::with_rows(columns.to_owned(), row_data)
+    }
+
+    /// Creates a new [ModelRowCollection] prefilled with the given rows.
+    pub fn from_parameters_and_rows(parameters: &Vec<Parameter>, rows: &Vec<Row>) -> ModelRowCollection {
+        let row_data = rows.iter()
+            .map(|r| (r.to_owned(), RowMetadata::new(true)))
+            .collect();
+        Self::with_rows(Column::from_parameters(parameters), row_data)
     }
 
     /// Creates a new [ModelRowCollection] prefilled with all rows from the given table.
@@ -100,6 +106,14 @@ impl ModelRowCollection {
 }
 
 impl RowCollection for ModelRowCollection {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for (row, rmd) in &self.row_data {
+            if rmd.is_allocated { bytes.extend(row.encode(&self.columns)) }
+        }
+        bytes
+    }
+
     fn get_columns(&self) -> &Vec<Column> { &self.columns }
 
     fn get_record_size(&self) -> usize { self.record_size }
@@ -223,11 +237,11 @@ impl RowCollection for ModelRowCollection {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::columns::Column;
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::U64Value;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::Column;
-    use crate::testdata::{make_quote, make_quote_parameters};
+    use crate::testdata::{make_quote, make_quote_descriptors};
     use crate::typed_values::TypedValue::*;
     use std::ops::Deref;
 
@@ -272,9 +286,9 @@ mod tests {
     }
 
     fn create_data_set() -> (ModelRowCollection, Vec<Column>) {
-        let columns = make_quote_parameters();
-        let phys_columns = Column::from_parameters(&columns).unwrap();
-        let mrc = ModelRowCollection::from_rows(&phys_columns, &vec![
+        let columns = make_quote_descriptors();
+        let phys_columns = Column::from_descriptors(&columns).unwrap();
+        let mrc = ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "BIZ", "NYSE", 9.775),

@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // file column row-collection module
 ////////////////////////////////////////////////////////////////////
@@ -5,12 +6,12 @@
 use crate::errors::Errors::Exact;
 use std::fmt::{Debug, Formatter};
 
+use crate::columns::Column;
 use crate::field_metadata::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::ErrorValue;
 
@@ -56,6 +57,11 @@ impl Debug for FileEmbeddedRowCollection {
 }
 
 impl RowCollection for FileEmbeddedRowCollection {
+    fn encode(&self) -> Vec<u8> {
+        self.get_embedded_table().map(|erc| erc.encode())
+            .unwrap_or_else(|err| vec![])
+    }
+
     fn get_columns(&self) -> &Vec<Column> {
         &self.columns
     }
@@ -138,16 +144,16 @@ impl RowCollection for FileEmbeddedRowCollection {
 
 #[cfg(test)]
 mod tests {
+    use crate::columns::Column;
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::Column;
     use crate::testdata::make_quote_parameters;
 
     #[test]
     fn test_get_columns() {
         let params = make_quote_parameters();
-        let columns = Column::from_parameters(&params).unwrap();
+        let columns = Column::from_parameters(&params);
         let ns = Namespace::new("file_row_collection", "get_columns", "stocks");
         let frc = FileRowCollection::create_table(&ns, &params).unwrap();
         assert_eq!(frc.get_columns().to_owned(), columns)

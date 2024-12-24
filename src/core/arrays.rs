@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // Array class
 ////////////////////////////////////////////////////////////////////
@@ -13,7 +14,7 @@ use std::ops::Index;
 use std::slice::Iter;
 
 /// Represents an array of type T
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize)]
 pub struct Array {
     items: Vec<TypedValue>,
 }

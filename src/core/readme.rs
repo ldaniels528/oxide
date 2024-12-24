@@ -1,7 +1,13 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // Oxide README.md Generation
 ////////////////////////////////////////////////////////////////////
 
+use crate::interpreter::Interpreter;
+use crate::platform::{PlatformOps, PLATFORM_OPCODES};
+use crate::row_collection::RowCollection;
+use crate::table_renderer::TableRenderer;
+use crate::typed_values::TypedValue::TableValue;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 
@@ -14,6 +20,7 @@ fn generate_readme() -> std::io::Result<File> {
     let file = generate_development(file)?;
     let file = generate_run_tests(file)?;
     let file = generate_getting_started(file)?;
+    let file = generate_examples(file)?;
     let file = generate_rpc(file)?;
     Ok(file)
 }
@@ -70,6 +77,46 @@ You'll find the executables in `./target/release/`:
 * `oxide_server` is the Oxide REST Server
 "#.as_bytes())?;
     Ok(file)
+}
+
+fn generate_examples(mut file: File) -> std::io::Result<File> {
+    writeln!(file, r#"
+<a name="examples"></a>
+#### Platform Examples
+"#)?;
+
+    for op in PLATFORM_OPCODES {
+        // header section
+        // ex: "oxide::version - ..."
+        writeln!(file, "<hr>")?;
+        writeln!(file, "<h4>{}::{} &#8212; {}</h4>",
+                 op.get_package_name(), op.get_name(), op.get_description())?;
+
+        // write the example body
+        let src_lines = op.get_example().split(|c| c == '\n')
+            .map(|s| s.trim().to_string()).collect::<Vec<_>>();
+        file = print_text_block(file, src_lines)?;
+
+        // write the results body
+        match generate_example_results(op) {
+            Ok(out_lines) => file = print_text_block(file, out_lines)?,
+            Err(err) => {
+                writeln!(file, "ERROR: {}", err.to_string())?;
+            }
+        }
+    }
+    Ok(file)
+}
+
+fn generate_example_results(op: PlatformOps) -> std::io::Result<Vec<String>> {
+    let value = Interpreter::new().evaluate(op.get_example().as_str())?;
+    match value.to_table_value() {
+        TableValue(df) => {
+            let rc: Box<dyn RowCollection> = Box::new(df);
+            TableRenderer::from_table_with_ids(&rc)
+        }
+        other => Ok(vec![other.unwrap_value()]),
+    }
 }
 
 fn generate_getting_started(mut file: File) -> std::io::Result<File> {
@@ -323,6 +370,15 @@ server response:
 10.0
 ```
     "#.as_bytes())?;
+    Ok(file)
+}
+
+fn print_text_block(mut file: File, lines: Vec<String>) -> std::io::Result<File> {
+    writeln!(file, "<pre>")?;
+    for line in lines {
+        writeln!(file, "{}", line)?;
+    }
+    writeln!(file, "</pre>")?;
     Ok(file)
 }
 

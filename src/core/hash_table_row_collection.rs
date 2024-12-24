@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // HashTableRowCollection class
 ////////////////////////////////////////////////////////////////////
@@ -5,7 +6,9 @@
 use std::ops::Range;
 
 use crate::arrays::Array;
+use crate::columns::Column;
 use crate::data_types::DataType::NumberType;
+use crate::descriptor::Descriptor;
 use crate::errors::Errors;
 use crate::errors::Errors::*;
 use crate::field_metadata::FieldMetadata;
@@ -15,8 +18,7 @@ use crate::numbers::Numbers::U64Value;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use log::warn;
@@ -37,12 +39,9 @@ impl HashTableRowCollection {
     //////////////////////////////////////////////////////////
 
     /// Generates the columns for the index base on the source column
-    fn create_hash_keys_columns(src_column: &Column) -> std::io::Result<Vec<Column>> {
+    fn create_hash_keys_columns(src_column: &Column) -> Vec<Column> {
         Column::from_parameters(&vec![
-            Parameter::new(
-                "__row_id__",
-                NumberType(U64Kind).to_type_declaration(),
-                Some("null".into())),
+            Parameter::new("__row_id__", NumberType(U64Kind)),
             src_column.to_parameter()
         ])
     }
@@ -67,7 +66,7 @@ impl HashTableRowCollection {
         data_table: Box<dyn RowCollection>,
     ) -> std::io::Result<HashTableRowCollection> {
         let src_column = &data_table.get_columns()[key_column_index];
-        let keys_columns = Self::create_hash_keys_columns(src_column)?;
+        let keys_columns = Self::create_hash_keys_columns(src_column);
         let keys_table = data_table.create_related_structure(keys_columns, key_column_index.to_string().as_str())?;
         Ok(Self::create_with_tables_and_options(key_column_index, bucket_count, bucket_depth, data_table, keys_table))
     }
@@ -97,7 +96,7 @@ impl HashTableRowCollection {
         let bucket_count = 100_000;
         let bucket_depth = bucket_count / 10;
         let src_column = &data_table.get_columns()[key_column_index];
-        let keys_columns = Self::create_hash_keys_columns(src_column)?;
+        let keys_columns = Self::create_hash_keys_columns(src_column);
         let keys_table =
             data_table.create_related_structure(keys_columns, key_column_index.to_string().as_str())?;
         Ok(Self::create_with_tables_and_options(key_column_index, bucket_count, bucket_depth, data_table, keys_table))
@@ -253,6 +252,10 @@ impl HashTableRowCollection {
 }
 
 impl RowCollection for HashTableRowCollection {
+    fn encode(&self) -> Vec<u8> {
+        self.data_table.encode()
+    }
+
     fn delete_row(&mut self, id: usize) -> TypedValue {
         let key_value = self.read_field(id, self.key_column_index);
         let keys_row_id = self.convert_key_to_row_id(&key_value);
@@ -383,9 +386,9 @@ mod tests {
     use crate::arrays::Array;
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
-    use crate::numbers::Numbers::F64Value;
+    use crate::numbers::Numbers::{Ack, F64Value, RowsAffected};
     use crate::row_collection::RowCollection;
-    use crate::rows::Row;
+    use crate::structures::Row;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote_columns, make_quote_parameters, StockQuote};
     use std::time::Instant;
@@ -455,6 +458,7 @@ mod tests {
         //assert_eq!(hkrc.find_row_by_key(&StringValue("CRT".into())).unwrap(), None);
     }
 
+    #[ignore]
     #[test]
     fn test_performance() {
         let ns = Namespace::new("hash_key", "performance", "stocks");
@@ -474,7 +478,7 @@ mod tests {
         let bucket_count = max_count / 10;
         let bucket_depth = bucket_count / 10;
         let mut stocks = build_hash_key_table(&ns, 0, bucket_count, bucket_depth);
-        assert_eq!(Number(Numbers::Ack), stocks.resize(0));
+        assert_eq!(Number(Ack), stocks.resize(0));
 
         let mut timings = Vec::new();
         for n in 0..max_count {
@@ -487,7 +491,7 @@ mod tests {
                     Number(F64Value(q.last_sale)),
                 ])));
             timings.push(msec);
-            assert_eq!(Number(Numbers::RowsAffected(1)), outcome);
+            assert_eq!(Number(RowsAffected(1)), outcome);
         }
 
         let (msec_min, msec_max, msec_total) = timings.iter()

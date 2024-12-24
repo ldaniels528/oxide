@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // Interpreter class
 ////////////////////////////////////////////////////////////////////
@@ -30,7 +31,7 @@ impl Interpreter {
     ////////////////////////////////////////////////////////////////
 
     /// Executes the supplied source code returning the result of the evaluation
-    pub(crate) fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
+    pub fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
         let opcode = Compiler::build(source_code)?;
         let (machine, result) = self.machine.evaluate(&opcode)?;
         self.machine = machine;
@@ -150,8 +151,9 @@ mod tests {
 
         #[test]
         fn test_array_times_array_with_numbers() {
-            verify_exact_text("[13, 2, 56, 12] * [0, 1, 3, 5]",
-                              "[[0, 13, 39, 65], [0, 2, 6, 10], [0, 56, 168, 280], [0, 12, 36, 60]]");
+            verify_exact_text(
+                "[13, 2, 56, 12] * [0, 1, 3, 5]",
+                "[[0, 13, 39, 65], [0, 2, 6, 10], [0, 56, 168, 280], [0, 12, 36, 60]]");
         }
 
         #[test]
@@ -363,11 +365,11 @@ mod tests {
     /// SQL tests
     #[cfg(test)]
     mod sql_tests {
+        use crate::columns::Column;
         use crate::dataframe::Dataframe::Model;
         use crate::interpreter::Interpreter;
         use crate::model_row_collection::ModelRowCollection;
         use crate::numbers::Numbers::{Ack, RowsAffected};
-        use crate::table_columns::Column;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
@@ -415,8 +417,8 @@ mod tests {
         #[test]
         fn test_table_crud_in_namespace() {
             let mut interpreter = Interpreter::new();
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns).unwrap();
+            let columns = make_quote_descriptors();
+            let phys_columns = Column::from_descriptors(&columns).unwrap();
 
             // set up the interpreter
             assert_eq!(Number(Ack), interpreter.evaluate(r#"
@@ -467,7 +469,7 @@ mod tests {
             // verify the remaining rows
             assert_eq!(
                 interpreter.evaluate("from stocks").unwrap(),
-                TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+                TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                     make_quote(1, "UNO", "OTC", 0.2456),
                     make_quote(3, "GOTO", "OTC", 0.1421),
                 ])))
@@ -481,7 +483,7 @@ mod tests {
             // verify the existing rows
             assert_eq!(
                 interpreter.evaluate("from stocks").unwrap(),
-                TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+                TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                     make_quote(0, "ABC", "AMEX", 11.77),
                     make_quote(1, "UNO", "OTC", 0.2456),
                     make_quote(2, "BIZ", "NYSE", 23.66),
@@ -495,8 +497,8 @@ mod tests {
         #[test]
         fn test_table_select_from_namespace() {
             // create a table with test data
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns).unwrap();
+            let columns = make_quote_descriptors();
+            let phys_columns = Column::from_descriptors(&columns).unwrap();
 
             // append some rows
             let mut interpreter = Interpreter::new();
@@ -530,8 +532,8 @@ mod tests {
         #[test]
         fn test_table_select_from_variable() {
             // create a table with test data
-            let params = make_quote_parameters();
-            let columns = Column::from_parameters(&params).unwrap();
+            let params = make_quote_descriptors();
+            let columns = Column::from_descriptors(&params).unwrap();
 
             // set up the interpreter
             verify_exact_table_with_ids(r#"
@@ -556,19 +558,72 @@ mod tests {
                 "|------------------------------------|"
             ]);
         }
+
+        #[test]
+        fn test_table_embedded_describe() {
+            verify_exact_table_with_ids(r#"
+                stocks := ns("interpreter.embedded_a.stocks")
+                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+                tools::describe(stocks)
+            "#, vec![
+                "|-------------------------------------------------------------------------------------------|",
+                "| id | name     | type                                        | default_value | is_nullable |",
+                "|-------------------------------------------------------------------------------------------|",
+                "| 0  | symbol   | String(8)                                   | null          | true        |",
+                "| 1  | exchange | String(8)                                   | null          | true        |",
+                "| 2  | history  | Table(last_sale: f64, processed_time: Date) | null          | true        |",
+                "|-------------------------------------------------------------------------------------------|"])
+        }
+
+        #[test]
+        fn test_table_embedded_empty() {
+            verify_exact_table_with_ids(r#"
+                stocks := ns("interpreter.embedded_b.stocks")
+                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+                rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+                rows ~> stocks
+                from stocks
+            "#, vec![
+                "|----------------------------------|",
+                "| id | symbol | exchange | history |",
+                "|----------------------------------|",
+                "| 0  | BIZ    | NYSE     | []      |",
+                "| 1  | GOTO   | OTC      | []      |",
+                "|----------------------------------|"])
+        }
+
+        #[test]
+        fn test_table_embedded_append_rows() {
+            verify_exact_table_with_ids(r#"
+                stocks := ns("interpreter.embedded_c.stocks")
+                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+                append stocks from [
+                    { symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66, processed_time: cal::now() } },
+                    { symbol: "GOTO", exchange: "OTC", history: { last_sale: 0.051, processed_time: cal::now() } }
+                ]
+                from stocks
+            "#, vec![
+                "|----------------------------------|",
+                "| id | symbol | exchange | history |",
+                "|----------------------------------|",
+                "| 0  | BIZ    | NYSE     | []      |",
+                "| 1  | GOTO   | OTC      | []      |",
+                "|----------------------------------|"])
+        }
     }
 
     /// Structure tests
     #[cfg(test)]
     mod structure_tests {
         use crate::arrays::Array;
+        use crate::columns::Column;
         use crate::dataframe::Dataframe::Model;
         use crate::errors::Errors::Exact;
         use crate::interpreter::Interpreter;
         use crate::model_row_collection::ModelRowCollection;
         use crate::numbers::Numbers::{F64Value, I64Value, NaNValue, U128Value};
+        use crate::structures::Structures::{Firm, Hard, Soft};
         use crate::structures::*;
-        use crate::table_columns::Column;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
         use serde_json::json;
@@ -577,24 +632,24 @@ mod tests {
         fn test_hard_structure() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-            struct(symbol: String(8), exchange: String(8), last_sale: f64)
+            Struct(symbol: String(8), exchange: String(8), last_sale: f64)
         "#).unwrap();
             let phys_columns = make_quote_columns();
-            assert_eq!(result, StructureHard(HardStructure::new(phys_columns.clone(), Vec::new())));
+            assert_eq!(result, Structured(Hard(HardStructure::new(phys_columns.clone(), Vec::new()))));
         }
 
         #[test]
         fn test_hard_structure_with_default_values() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-            struct(
+            Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
             )
         "#).unwrap();
             match result {
-                StructureHard(s) =>
+                Structured(s) =>
                     assert_eq!(s.get_values(), vec![
                         StringValue("ABC".into()),
                         StringValue("NYSE".into()),
@@ -607,7 +662,7 @@ mod tests {
         #[test]
         fn test_hard_structure_field() {
             verify_exact(r#"
-            stock := struct(
+            stock := Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -619,7 +674,7 @@ mod tests {
         #[test]
         fn test_hard_structure_field_assignment() {
             verify_exact(r#"
-            stock := struct(
+            stock := Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -632,7 +687,7 @@ mod tests {
         #[test]
         fn test_hard_structure_module_method() {
             verify_exact(r#"
-            stock := struct(
+            stock := Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -648,7 +703,7 @@ mod tests {
         fn test_hard_structure_import() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-            stock := struct(
+            stock := Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -671,13 +726,12 @@ mod tests {
                  { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
                  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
             stocks[0]
-        "#, StructureHard(HardStructure::from_parameters_and_values(
-                &make_quote_parameters(), vec![
-                    StringValue("ABC".into()),
-                    StringValue("AMEX".into()),
-                    Number(F64Value(11.11)),
-                ],
-            ).unwrap()));
+        "#, Structured(Firm(Row::new(0, vec![
+                StringValue("ABC".into()),
+                StringValue("AMEX".into()),
+                Number(F64Value(11.11)),
+            ],
+            ), make_quote_columns())));
         }
 
         #[test]
@@ -690,22 +744,22 @@ mod tests {
                     { name: "last_sale", value: 11.77 }
                 ]
             }"#;
-            let model = StructureSoft(SoftStructure::new(&vec![
+            let model = Structured(Soft(SoftStructure::new(&vec![
                 ("fields", ArrayValue(Array::from(vec![
-                    StructureSoft(SoftStructure::new(&vec![
+                    Structured(Soft(SoftStructure::new(&vec![
                         ("name", StringValue("symbol".into())),
                         ("value", StringValue("ABC".into()))
-                    ])),
-                    StructureSoft(SoftStructure::new(&vec![
+                    ]))),
+                    Structured(Soft(SoftStructure::new(&vec![
                         ("name", StringValue("exchange".into())),
                         ("value", StringValue("AMEX".into()))
-                    ])),
-                    StructureSoft(SoftStructure::new(&vec![
+                    ]))),
+                    Structured(Soft(SoftStructure::new(&vec![
                         ("name", StringValue("last_sale".into())),
                         ("value", Number(F64Value(11.77)))
-                    ])),
+                    ]))),
                 ])))
-            ]));
+            ])));
             verify_exact(code, model.clone());
             assert_eq!(
                 model.to_code().chars().filter(|c| !c.is_whitespace())
@@ -828,25 +882,25 @@ mod tests {
                   default_value: null
                 }]
             }
-        "#, StructureSoft(SoftStructure::new(&vec![
+        "#, Structured(Soft(SoftStructure::new(&vec![
                 ("columns", ArrayValue(Array::from(vec![
-                    StructureSoft(SoftStructure::new(&vec![
+                    Structured(Soft(SoftStructure::new(&vec![
                         ("name", StringValue("symbol".into())),
                         ("param_type", StringValue("String(8)".into())),
                         ("default_value", Null),
-                    ])),
-                    StructureSoft(SoftStructure::new(&vec![
+                    ]))),
+                    Structured(Soft(SoftStructure::new(&vec![
                         ("name", StringValue("exchange".into())),
                         ("param_type", StringValue("String(8)".into())),
                         ("default_value", Null)
-                    ])),
-                    StructureSoft(SoftStructure::new(&vec![
+                    ]))),
+                    Structured(Soft(SoftStructure::new(&vec![
                         ("name", StringValue("last_sale".into())),
                         ("param_type", StringValue("f64".into())),
                         ("default_value", Null),
-                    ])),
+                    ]))),
                 ])))
-            ])));
+            ]))));
         }
 
         #[test]

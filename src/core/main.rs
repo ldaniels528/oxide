@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 //      Oxide Server v0.1.0
 ////////////////////////////////////////////////////////////////////
@@ -29,7 +30,7 @@ mod model_row_collection;
 mod namespaces;
 mod number_kind;
 mod numbers;
-mod parameter;
+mod descriptor;
 mod platform;
 mod readme;
 mod repl;
@@ -37,10 +38,9 @@ mod rest_server;
 mod row_collection;
 mod dataframe;
 mod row_metadata;
-mod rows;
 mod server;
 mod structures;
-mod table_columns;
+mod columns;
 mod table_renderer;
 mod template;
 mod testdata;
@@ -51,6 +51,7 @@ mod typed_values;
 mod view_row_collection;
 mod websockets;
 mod query_engine;
+mod parameter;
 
 /// Starts the Oxide server
 fn main() -> std::io::Result<()> {

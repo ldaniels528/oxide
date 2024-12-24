@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 //  Machine - state machine module
 ////////////////////////////////////////////////////////////////////
@@ -22,6 +23,7 @@ use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 use crate::arrays::Array;
+use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::compiler::{fail_expr, fail_unexpected, fail_value};
 use crate::cursor::Cursor;
@@ -31,6 +33,7 @@ use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, Model};
 use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
+use crate::descriptor::Descriptor;
 use crate::errors::Errors::*;
 use crate::errors::{throw, Errors};
 use crate::expression::Conditions::{False, True};
@@ -49,9 +52,9 @@ use crate::platform::PlatformOps;
 use crate::query_engine;
 use crate::query_engine::*;
 use crate::row_collection::RowCollection;
-use crate::rows::Row;
+use crate::structures::Row;
+use crate::structures::Structures::{Firm, Hard, Soft};
 use crate::structures::*;
-use crate::table_columns::Column;
 use crate::table_renderer::TableRenderer;
 use crate::testdata::verify_exact_table_where;
 use crate::typed_values::TypedValue;
@@ -175,7 +178,7 @@ impl Machine {
                 self.do_inline_2(a, b, Self::do_plus_plus),
             Pow(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
-            DatabaseOp(payload) => evaluate(self, payload),
+            DatabaseOp(op) => query_engine::evaluate(self, op),
             Range(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
             Return(a) => {
@@ -422,9 +425,7 @@ impl Machine {
                         match object_v {
                             ErrorValue(err) => Ok((ms, ErrorValue(err))),
                             Null => fail(format!("Cannot evaluate {}::{}", Null, field.to_code())),
-                            StructureHard(structure) =>
-                                self.do_extraction_structure(var_name, Box::from(structure), field),
-                            StructureSoft(structure) =>
+                            Structured(structure) =>
                                 self.do_extraction_structure(var_name, Box::from(structure), field),
                             Undefined => fail(format!("Cannot evaluate {}::{}", Undefined, field.to_code())),
                             z => fail(format!("Illegal structure {}", z.to_code()))
@@ -462,7 +463,7 @@ impl Machine {
                       scenarios: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         // create a table and capture function to store the verification report
-        let verification_columns = Column::from_parameters(&PlatformOps::get_kung_fu_feature_parameters())?;
+        let verification_columns = Column::from_parameters(&PlatformOps::get_kung_fu_feature_parameters());
         let mut report = ModelRowCollection::new(verification_columns.to_owned());
         let mut capture = |level: u16, text: String, passed: bool, result: TypedValue| {
             let outcome = report.push_row(Row::new(0, vec![
@@ -631,7 +632,7 @@ impl Machine {
 
         fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
             match value {
-                StructureSoft(structure) => Ok(structure.get_tuples()),
+                Structured(structure) => Ok(structure.get_tuples()),
                 z => fail_value(TypeMismatch(StructureType(vec![]), z.get_type()).to_string(), &z),
             }
         }
@@ -645,8 +646,7 @@ impl Machine {
                 None => Vec::new()
             },
             match multipart {
-                Some(StructureSoft(soft)) => Some(create_form(Box::new(soft))),
-                Some(StructureHard(hard)) => Some(create_form(Box::new(hard))),
+                Some(Structured(structure)) => Some(create_form(Box::new(structure))),
                 Some(z) => return Ok((ms, ErrorValue(TypeMismatch(
                     UnionType(vec![
                         ArrayType(Box::new(StructureType(vec![]))),
@@ -802,7 +802,7 @@ impl Machine {
         match ms.get(package_name) {
             None => (ms, ErrorValue(PackageNotFound(package_name.into()))),
             Some(component) => match component {
-                StructureHard(structure) =>
+                Structured(structure) =>
                     if selection.is_empty() {
                         (structure.pollute(ms), Number(Ack))
                     } else {
@@ -811,14 +811,6 @@ impl Machine {
                         });
                         (ms, Number(Ack))
                     }
-                StructureSoft(structure) => {
-                    let ms = structure.get_tuples().iter().fold(ms, |ms, (name, value)| {
-                        if selection.is_empty() || selection.contains(name) {
-                            ms.with_variable(name, value.to_owned())
-                        } else { ms }
-                    });
-                    (ms, Number(Ack))
-                }
                 other => (ms, ErrorValue(Syntax(other.to_code())))
             }
         }
@@ -873,15 +865,15 @@ impl Machine {
                 let id = index.to_usize();
                 let frc = FileRowCollection::open(&ns)?;
                 match frc.read_one(id)? {
-                    Some(row) => StructureHard(HardStructure::from_row(frc.get_columns(), &row)),
-                    None => StructureHard(HardStructure::new(frc.get_columns().to_owned(), Vec::new()))
+                    Some(row) => Structured(Firm(row, frc.get_columns().clone())),
+                    None => Structured(Firm(Row::empty(frc.get_columns()), frc.get_columns().to_owned()))
                 }
             }
             StringValue(string) => {
                 let idx = index.to_usize();
                 if idx < string.len() { StringValue(string[idx..idx].to_string()) } else { ErrorValue(IndexOutOfRange("String".to_string(), idx, string.len())) }
             }
-            StructureHard(structure) => {
+            Structured(structure) => {
                 let idx = index.to_usize();
                 let values = structure.get_values();
                 if idx < values.len() { values[idx].to_owned() } else { ErrorValue(IndexOutOfRange("Structure element".to_string(), idx, values.len())) }
@@ -889,8 +881,8 @@ impl Machine {
             TableValue(rcv) => {
                 let id = index.to_usize();
                 match rcv.read_one(id)? {
-                    Some(row) => StructureHard(HardStructure::from_row(rcv.get_columns(), &row)),
-                    None => StructureHard(HardStructure::new(rcv.get_columns().to_owned(), Vec::new()))
+                    Some(row) => Structured(Firm(row, rcv.get_columns().clone())),
+                    None => Structured(Firm(Row::empty(rcv.get_columns()), rcv.get_columns().to_owned()))
                 }
             }
             other =>
@@ -969,7 +961,7 @@ impl Machine {
             let (_, value) = self.evaluate(expr)?;
             elems.push((name.to_string(), value))
         }
-        Ok((self.to_owned(), StructureSoft(SoftStructure::from_tuples(elems))))
+        Ok((self.to_owned(), Structured(Soft(SoftStructure::from_tuples(elems)))))
     }
 
     fn do_module_alone(
@@ -979,22 +971,22 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let structure = HardStructure::empty();
         let result =
-            ops.iter().fold(StructureHard(structure), |tv, op| match tv {
+            ops.iter().fold(Structured(Hard(structure)), |tv, op| match tv {
                 ErrorValue(msg) => ErrorValue(msg),
-                StructureHard(structure) =>
+                Structured(Hard(structure)) =>
                     match op {
                         SetVariable(name, expr) =>
                             match self.evaluate(expr) {
-                                Ok((_, value)) => StructureHard(structure.with_variable(name, value)),
+                                Ok((_, value)) => Structured(Hard(structure.with_variable(name, value))),
                                 Err(err) => ErrorValue(Exact(err.to_string()))
                             },
                         z => ErrorValue(IllegalExpression(z.to_code()))
                     },
-                StructureSoft(structure) =>
+                Structured(Soft(structure)) =>
                     match op {
                         SetVariable(name, expr) =>
                             match self.evaluate(expr) {
-                                Ok((_, value)) => StructureSoft(structure.with_variable(name, value)),
+                                Ok((_, value)) => Structured(Soft(structure.with_variable(name, value))),
                                 Err(err) => ErrorValue(Exact(err.to_string()))
                             },
                         z => ErrorValue(IllegalExpression(z.to_code()))
@@ -1018,9 +1010,9 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> (Self, TypedValue) {
         match self.get(name) {
-            Some(StructureHard(structure)) =>
+            Some(Structured(Hard(structure))) =>
                 self.do_structure_hard_impl(name, structure, ops),
-            Some(StructureSoft(structure)) =>
+            Some(Structured(Soft(structure))) =>
                 self.do_structure_soft_impl(name, structure, ops),
             Some(v) => (self.clone(), ErrorValue(StructExpected(name.into(), v.to_code()))),
             None => match self.do_module_alone(name, ops) {
@@ -1037,13 +1029,13 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> (Self, TypedValue) {
         let result = ops.iter()
-            .fold(StructureHard(structure), |tv, op| match tv {
+            .fold(Structured(Hard(structure)), |tv, op| match tv {
                 ErrorValue(msg) => ErrorValue(msg),
-                StructureHard(structure) =>
+                Structured(Hard(structure)) =>
                     match op {
                         SetVariable(name, expr) =>
                             match self.evaluate(expr) {
-                                Ok((_, value)) => StructureHard(structure.with_variable(name, value)),
+                                Ok((_, value)) => Structured(Hard(structure.with_variable(name, value))),
                                 Err(err) => ErrorValue(Exact(err.to_string()))
                             },
                         z => ErrorValue(IllegalExpression(z.to_code()))
@@ -1063,13 +1055,13 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> (Self, TypedValue) {
         let result = ops.iter()
-            .fold(StructureSoft(structure), |tv, op| match tv {
+            .fold(Structured(Soft(structure)), |tv, op| match tv {
                 ErrorValue(msg) => ErrorValue(msg),
-                StructureSoft(structure) =>
+                Structured(Soft(structure)) =>
                     match op {
                         SetVariable(name, expr) =>
                             match self.evaluate(expr) {
-                                Ok((_, value)) => StructureSoft(structure.with_variable(name, value)),
+                                Ok((_, value)) => Structured(Soft(structure.with_variable(name, value))),
                                 Err(err) => ErrorValue(Exact(err.to_string()))
                             },
                         z => ErrorValue(IllegalExpression(z.to_code()))
@@ -1160,16 +1152,16 @@ impl Machine {
                         Ok(s) => TypedValue::wrap_value(s).unwrap_or(Undefined),
                         Err(e) => ErrorValue(Exact(e.to_string()))
                     }).collect::<Vec<_>>();
-                StructureSoft(SoftStructure::from_tuples(header_keys.iter().zip(header_values.iter())
+                Structured(Soft(SoftStructure::from_tuples(header_keys.iter().zip(header_values.iter())
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect::<Vec<_>>()))
+                    .collect::<Vec<_>>())))
             } else {
                 match response.text().await {
                     Ok(body) =>
                         match Compiler::build(body.as_str()) {
                             Ok(expr) => {
                                 match self.evaluate(&expr) {
-                                    Ok((_, Undefined)) => StructureSoft(SoftStructure::empty()),
+                                    Ok((_, Undefined)) => Structured(Soft(SoftStructure::empty())),
                                     Ok((_, value)) => value,
                                     Err(_) => StringValue(body)
                                 }
@@ -1232,7 +1224,7 @@ impl Machine {
             HardStructure::empty(),
             |structure, key|
                 structure.with_variable(key.get_name().as_str(), PlatformOp(key.clone())));
-        self.with_variable(name, StructureHard(structure))
+        self.with_variable(name, Structured(Hard(structure)))
     }
 
     pub fn with_row(&self, columns: &Vec<Column>, row: &Row) -> Self {
@@ -1259,6 +1251,7 @@ impl Machine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::columns::Column;
     use crate::compiler::Compiler;
     use crate::data_types::DataType::NumberType;
     use crate::expression::Conditions::{Equal, GreaterOrEqual, GreaterThan, LessOrEqual, LessThan};
@@ -1268,7 +1261,6 @@ mod tests {
     use crate::expression::Queryable;
     use crate::expression::{FALSE, NULL, TRUE};
     use crate::number_kind::NumberKind::I64Kind;
-    use crate::table_columns::Column;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::*;
 
@@ -1438,7 +1430,7 @@ mod tests {
                 fx: Box::new(
                     Literal(Function {
                         params: vec![
-                            Parameter::new("n", Some("i64".into()), None)
+                            Parameter::new("n", NumberType(I64Kind))
                         ],
                         code: Box::new(Plus(
                             Box::new(Variable("n".into())),
@@ -1463,8 +1455,8 @@ mod tests {
             // define a function: (a, b) => a + b
             let fx = Function {
                 params: vec![
-                    Parameter::new("a", Some("i64".into()), None),
-                    Parameter::new("b", Some("i64".into()), None),
+                    Parameter::new("a", NumberType(I64Kind)),
+                    Parameter::new("b", NumberType(I64Kind)),
                 ],
                 code: Box::new(Plus(Box::new(
                     Variable("a".into())
@@ -1501,7 +1493,7 @@ mod tests {
             // f := (fn(n: i64) => if(n <= 1) 1 else n * f(n - 1))
             let model = Function {
                 params: vec![
-                    Parameter::new("n", Some("i64".into()), None)
+                    Parameter::new("n", NumberType(I64Kind))
                 ],
                 // iff(n <= 1, 1, n * f(n - 1))
                 code: Box::new(If {
@@ -1616,6 +1608,7 @@ mod tests {
     #[cfg(test)]
     mod sql_tests {
         use super::*;
+        use crate::columns::Column;
         use crate::compiler::Compiler;
         use crate::expression::Conditions::Equal;
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
@@ -1623,16 +1616,16 @@ mod tests {
         use crate::expression::MutateTarget::TableTarget;
         use crate::expression::Mutation::{Append, Create, Declare, Drop, Overwrite, Truncate, Update};
         use crate::expression::{DatabaseOps, Mutation};
-        use crate::table_columns::Column;
-        use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
+        use crate::number_kind::NumberKind::F64Kind;
+        use crate::testdata::{make_quote, make_quote_columns, make_quote_descriptors};
 
         #[test]
         fn test_from_where_limit_in_memory() {
             // create a table with test data
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns).unwrap();
+            let columns = make_quote_descriptors();
+            let phys_columns = Column::from_descriptors(&columns).unwrap();
             let machine = Machine::empty()
-                .with_variable("stocks", TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+                .with_variable("stocks", TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                     make_quote(0, "ABC", "AMEX", 12.33),
                     make_quote(1, "UNO", "OTC", 0.2456),
                     make_quote(2, "BIZ", "NYSE", 9.775),
@@ -1653,7 +1646,7 @@ mod tests {
             assert_eq!(model.to_code(), "from stocks where last_sale >= 1 limit 2");
 
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+            assert_eq!(result, TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                 make_quote(0, "ABC", "AMEX", 12.33),
                 make_quote(2, "BIZ", "NYSE", 9.775),
             ]))));
@@ -1664,7 +1657,7 @@ mod tests {
             // create a table with test data
             let ns = Namespace::new("machine", "element_at", "stocks");
             let params = make_quote_parameters();
-            let columns = Column::from_parameters(&params).unwrap();
+            let columns = Column::from_parameters(&params);
             let value_tuples = vec![
                 ("ABC", "AMEX", 11.77), ("UNO", "OTC", 0.2456),
                 ("BIZ", "NYSE", 23.66), ("GOTO", "OTC", 0.1428),
@@ -1690,17 +1683,16 @@ mod tests {
 
             // evaluate the instruction
             let (_, result) = Machine::empty().evaluate(&model).unwrap();
-            assert_eq!(result, StructureHard(
-                HardStructure::from_row(
-                    &columns,
-                    &make_quote(2, "BIZ", "NYSE", 23.66))
-            ))
+            assert_eq!(result, Structured(Firm(
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                columns
+            )))
         }
 
         #[test]
         fn test_index_of_table_in_variable() {
             let phys_columns = make_quote_columns();
-            let my_table = ModelRowCollection::from_rows(&phys_columns, &vec![
+            let my_table = ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                 make_quote(0, "ABC", "AMEX", 12.33),
                 make_quote(1, "GAS", "NYSE", 0.2456),
                 make_quote(2, "BASH", "NASDAQ", 13.11),
@@ -1719,10 +1711,10 @@ mod tests {
             let machine = Machine::empty()
                 .with_variable("stocks", TableValue(Model(my_table)));
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, StructureHard(
-                HardStructure::from_row(&phys_columns,
-                                        &make_quote(4, "VAPOR", "NYSE", 0.0289))
-            ))
+            assert_eq!(result, Structured(Firm(
+                make_quote(4, "VAPOR", "NYSE", 0.0289),
+                phys_columns
+            )))
         }
 
         #[test]
@@ -1791,9 +1783,9 @@ mod tests {
         fn test_declare_table() {
             let model = DatabaseOp(Mutate(Declare(TableEntity {
                 columns: vec![
-                    Parameter::new("symbol", Some("String(8)".into()), None),
-                    Parameter::new("exchange", Some("String(8)".into()), None),
-                    Parameter::new("last_sale", Some("f64".into()), None),
+                    Parameter::new("symbol", StringType(FixedSize(8))),
+                    Parameter::new("exchange", StringType(FixedSize(8))),
+                    Parameter::new("last_sale", NumberType(F64Kind)),
                 ],
                 from: None,
             })));
@@ -1975,7 +1967,7 @@ mod tests {
                 order_by: Some(vec![Variable("symbol".into())]),
                 limit: Some(Box::new(Literal(Number(I64Value(5))))),
             }))).unwrap();
-            assert_eq!(result, TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+            assert_eq!(result, TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                 make_quote(0, "ABC", "AMEX", 11.77),
                 make_quote(2, "BIZ", "NYSE", 23.66),
                 make_quote(4, "BOOM", "NASDAQ", 56.87),
@@ -2006,7 +1998,7 @@ mod tests {
                 order_by: Some(vec![Variable("symbol".into())]),
                 limit: Some(Box::new(Literal(Number(I64Value(5))))),
             }))).unwrap();
-            assert_eq!(result, TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+            assert_eq!(result, TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                 make_quote(1, "UNO", "OTC", 0.2456),
                 make_quote(3, "GOTO", "OTC", 0.1428),
             ]))));
@@ -2038,7 +2030,7 @@ mod tests {
             // retrieve and verify all rows
             let model = From(Box::new(Variable("stocks".into())));
             let (machine, _) = machine.evaluate(&model).unwrap();
-            assert_eq!(machine.get("stocks").unwrap(), TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+            assert_eq!(machine.get("stocks").unwrap(), TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                 make_quote(0, "ABC", "AMEX", 11.77),
                 make_quote(1, "UNO", "OTC_BB", 0.2456),
                 make_quote(2, "BIZ", "NYSE", 23.66),
@@ -2096,7 +2088,7 @@ mod tests {
 
         fn create_memory_table() -> (ModelRowCollection, Vec<Column>) {
             let phys_columns = make_quote_columns();
-            let mrc = ModelRowCollection::from_rows(&phys_columns, &vec![
+            let mrc = ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                 make_quote(0, "ABC", "AMEX", 11.77),
                 make_quote(1, "UNO", "OTC", 0.2456),
                 make_quote(2, "BIZ", "NYSE", 23.66),
@@ -2107,7 +2099,7 @@ mod tests {
 
         fn create_dataframe(namespace: &str) -> (Dataframe, Vec<Column>) {
             let params = make_quote_parameters();
-            let columns = Column::from_parameters(&params).unwrap();
+            let columns = Column::from_parameters(&params);
             let ns = Namespace::parse(namespace).unwrap();
             match fs::remove_file(ns.get_table_file_path()) {
                 Ok(..) => {}

@@ -1,7 +1,9 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // file row-collection module
 ////////////////////////////////////////////////////////////////////
 
+use crate::columns::Column;
 use crate::dataframe_config::DataFrameConfig;
 use crate::errors::Errors;
 use crate::field_metadata::FieldMetadata;
@@ -13,14 +15,14 @@ use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{ErrorValue, Number};
 use serde::de::Error;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use shared_lib::fail;
+use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::fs::{File, OpenOptions};
@@ -37,22 +39,34 @@ pub struct FileRowCollection {
     record_size: usize,
 }
 
+impl Eq for FileRowCollection {}
+
+impl Ord for FileRowCollection {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.record_size.cmp(&other.record_size)
+    }
+}
+
+impl PartialEq for FileRowCollection {
+    fn eq(&self, other: &Self) -> bool {
+        self.record_size == other.record_size
+    }
+}
+
+impl PartialOrd for FileRowCollection {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.record_size.partial_cmp(&other.record_size)
+    }
+}
+
 impl FileRowCollection {
     /// Creates a new table within the specified namespace and having the specified columns
     pub fn create_table(ns: &Namespace, params: &Vec<Parameter>) -> std::io::Result<Self> {
         let path = ns.get_table_file_path();
-        let columns = Column::from_parameters(params)?;
+        let columns = Column::from_parameters(params);
+        DataFrameConfig::build(params).save(ns)?;
         let file = Arc::new(Self::table_file_create(ns)?);
         Ok(Self::new(columns, file, path.as_str()))
-    }
-
-    /// Encodes the [FileRowCollection] into a byte vector
-    pub fn encode(&self) -> Vec<u8> {
-        let mut mrc = ModelRowCollection::new(self.columns.clone());
-        for row in self.iter() {
-            mrc.push_row(row);
-        }
-        mrc.encode()
     }
 
     pub fn get_related_filename(path: &str, extension: &str) -> (String, String) {
@@ -94,7 +108,7 @@ impl FileRowCollection {
     fn open_file(ns: &Namespace, file: File) -> std::io::Result<Self> {
         let cfg = DataFrameConfig::load(&ns)?;
         let path = ns.get_table_file_path();
-        let columns = Column::from_parameters(cfg.get_columns())?;
+        let columns = Column::from_descriptors(cfg.get_columns())?;
         Ok(Self::new(columns, Arc::new(file), path.as_str()))
     }
 
@@ -104,8 +118,8 @@ impl FileRowCollection {
             Err(err) if err.to_string().starts_with("No such file") => {
                 match Self::table_file_create(&ns) {
                     Ok(file) => {
-                        let cfg = DataFrameConfig::new(
-                            PlatformOps::get_oxide_history_parameters(), vec![], vec![],
+                        let cfg = DataFrameConfig::build(
+                            &PlatformOps::get_oxide_history_parameters()
                         );
                         cfg.save(&ns)?;
                         Self::open_file(ns, file)
@@ -157,6 +171,14 @@ impl RowCollection for FileRowCollection {
         Ok(Box::new(frc))
     }
 
+    fn encode(&self) -> Vec<u8> {
+        let mut mrc = ModelRowCollection::new(self.columns.clone());
+        for row in self.iter() {
+            mrc.push_row(row);
+        }
+        mrc.encode()
+    }
+
     fn get_columns(&self) -> &Vec<Column> { &self.columns }
 
     fn get_rows(&self) -> Vec<Row> {
@@ -177,7 +199,7 @@ impl RowCollection for FileRowCollection {
     ) -> TypedValue {
         let column = &self.columns[column_id];
         let offset = self.convert_rowid_to_offset(id) + column.get_offset() as u64;
-        let buffer = Row::encode_cell(
+        let buffer = column.get_data_type().encode_field(
             &new_value,
             &FieldMetadata::new(true),
             column.get_fixed_size(),
@@ -199,7 +221,7 @@ impl RowCollection for FileRowCollection {
         let column_offset = column.get_offset() as u64;
         let offset = row_offset + column_offset;
         match &self.file.write_at(&[metadata.encode()], offset) {
-            Ok(_) => TypedValue::Number(Numbers::RowsAffected(1)),
+            Ok(_) => Number(Numbers::RowsAffected(1)),
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
@@ -207,7 +229,7 @@ impl RowCollection for FileRowCollection {
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
         let offset = self.convert_rowid_to_offset(id);
         match &self.file.write_at(&row.encode(&self.columns), offset) {
-            Ok(_) => TypedValue::Number(Numbers::RowsAffected(1)),
+            Ok(_) => Number(Numbers::RowsAffected(1)),
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
@@ -215,7 +237,7 @@ impl RowCollection for FileRowCollection {
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
         let offset = self.convert_rowid_to_offset(id);
         match &self.file.write_at(&[metadata.encode()], offset) {
-            Ok(_) => TypedValue::Number(Numbers::RowsAffected(1)),
+            Ok(_) => Number(Numbers::RowsAffected(1)),
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
@@ -228,7 +250,7 @@ impl RowCollection for FileRowCollection {
             Ok(_) => {}
             Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
         }
-        Row::decode_value(&column.get_data_type(), &buffer, 0)
+        column.get_data_type().decode_field_value(&buffer, 0)
     }
 
     fn read_field_metadata(
@@ -249,7 +271,7 @@ impl RowCollection for FileRowCollection {
         let offset = self.convert_rowid_to_offset(id);
         let mut buffer: Vec<u8> = vec![0; self.record_size];
         let _ = self.file.read_at(&mut buffer, offset)?;
-        Ok(Row::decode(&buffer, &self.columns))
+        Ok(Row::decode(&self.columns, &buffer))
     }
 
     fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
@@ -265,14 +287,6 @@ impl RowCollection for FileRowCollection {
             Ok(..) => Number(Numbers::Ack),
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
-    }
-}
-
-impl PartialEq for FileRowCollection {
-    fn eq(&self, other: &Self) -> bool {
-        self.columns == other.columns
-            && self.path == other.path
-            && self.record_size == other.record_size
     }
 }
 
@@ -308,16 +322,16 @@ impl<'de> Deserialize<'de> for FileRowCollection {
 
 #[cfg(test)]
 mod tests {
+    use crate::columns::Column;
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::Column;
     use crate::testdata::make_quote_parameters;
 
     #[test]
     fn test_get_columns() {
         let params = make_quote_parameters();
-        let columns = Column::from_parameters(&params).unwrap();
+        let columns = Column::from_parameters(&params);
         let ns = Namespace::new("file_row_collection", "get_columns", "stocks");
         let frc = FileRowCollection::create_table(&ns, &params).unwrap();
         assert_eq!(frc.get_columns().to_owned(), columns)

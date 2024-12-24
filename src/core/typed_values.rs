@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // TypedValue class
 ////////////////////////////////////////////////////////////////////
@@ -20,13 +21,15 @@ use crate::arrays::Array;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::cnv_error;
+use crate::columns::Column;
 use crate::compiler::fail_value;
 use crate::data_types::DataType::*;
 use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, Model};
-use crate::errors::Errors::{CannotSubtract, Exact, TypeMismatch, Various};
+use crate::descriptor::Descriptor;
+use crate::errors::Errors::{CannotSubtract, Exact, Syntax, TypeMismatch, Various};
 use crate::errors::{throw, Errors};
 use crate::expression::Expression;
 use crate::field_metadata::FieldMetadata;
@@ -43,9 +46,10 @@ use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
+use crate::structures::Row;
+use crate::structures::Structures::{Firm, Hard, Soft};
 use crate::structures::*;
-use crate::table_columns::Column;
+use crate::tokens::Token;
 use crate::typed_values::TypedValue::*;
 use shared_lib::fail;
 
@@ -57,7 +61,7 @@ const UUID_FORMAT: &str =
     "^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$";
 
 /// Basic value unit
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     ArrayValue(Array),
     Binary(Vec<u8>),
@@ -69,8 +73,7 @@ pub enum TypedValue {
     Null,
     Number(Numbers),
     PlatformOp(PlatformOps),
-    StructureHard(HardStructure),
-    StructureSoft(SoftStructure),
+    Structured(Structures),
     StringValue(String),
     TableValue(Dataframe),
     Undefined,
@@ -90,13 +93,13 @@ impl TypedValue {
             serde_json::Value::String(s) => StringValue(s.to_owned()),
             serde_json::Value::Array(a) => ArrayValue(Array::from(a.iter().map(Self::from_json).collect())),
             serde_json::Value::Object(args) =>
-                match HardStructure::from_parameters(&args.iter()
+                match HardStructure::from_descriptors(&args.iter()
                     .map(|(name, value)| {
                         let value = TypedValue::from_json(value);
                         let data_type = value.get_type().to_type_declaration();
-                        Parameter::new(name, data_type, Some(value.to_code()))
+                        Descriptor::new(name, data_type, Some(value.to_code()))
                     }).collect::<Vec<_>>()) {
-                    Ok(structure) => StructureHard(structure),
+                    Ok(structure) => Structured(Hard(structure)),
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 }
         }
@@ -123,6 +126,17 @@ impl TypedValue {
         result.unwrap_or_else(|err| (Machine::empty(), ErrorValue(Exact(err.to_string()))))
     }
 
+    pub fn from_token(token: &Token) -> std::io::Result<TypedValue> {
+        match token {
+            Token::Atom { .. } => throw(Syntax("literal expected".to_string())),
+            Token::Backticks { .. } => throw(Syntax("literal expected".to_string())),
+            Token::DoubleQuoted { text, .. } => Ok(StringValue(text.to_string())),
+            Token::Numeric { text, .. } => Self::from_numeric(text),
+            Token::Operator { .. } => throw(Syntax("literal expected".to_string())),
+            Token::SingleQuoted { text, .. } => Ok(StringValue(text.to_string())),
+        }
+    }
+
     pub fn is_numeric_value(value: &str) -> std::io::Result<bool> {
         let decimal_regex = Regex::new(DECIMAL_FORMAT)
             .map_err(|e| cnv_error!(e))?;
@@ -140,19 +154,24 @@ impl TypedValue {
     pub fn wrap_value(raw_value: &str) -> std::io::Result<Self> {
         let iso_date_regex = Regex::new(ISO_DATE_FORMAT).map_err(|e| cnv_error!(e))?;
         let uuid_regex = Regex::new(UUID_FORMAT).map_err(|e| cnv_error!(e))?;
-        let result = match raw_value {
+        fn is_quoted(s: &str) -> bool {
+            (s.starts_with("\"") && s.ends_with("\"")) ||
+                (s.starts_with("'") && s.ends_with("'"))
+        }
+        let result = match raw_value.trim() {
+            "" => Null,
             "Ack" => Number(Ack),
-            s if s == "false" => Boolean(false),
-            s if s == "null" => Null,
-            s if s == "true" => Boolean(true),
-            s if s == "undefined" => Undefined,
-            s if s.is_empty() => Null,
+            "false" => Boolean(false),
+            "null" => Null,
+            "true" => Boolean(true),
+            "undefined" => Undefined,
             s if Self::is_numeric_value(s)? => Self::from_numeric(s)?,
             s if iso_date_regex.is_match(s) =>
                 Number(DateValue(DateTime::parse_from_rfc3339(s)
                     .map_err(|e| cnv_error!(e))?.timestamp_millis())),
             s if uuid_regex.is_match(s) => Number(U128Value(ByteCodeCompiler::decode_uuid(s)?)),
-            s => StringValue(s.to_string()),
+            s if is_quoted(s) => StringValue(s[1..s.len() - 1].to_string()),
+            s => return throw(Syntax(format!("Literal value expected near {}", s)))
         };
         Ok(result)
     }
@@ -175,17 +194,17 @@ impl TypedValue {
     pub fn contains(&self, value: &TypedValue) -> TypedValue {
         match &self {
             ArrayValue(items) => Boolean(items.contains(value)),
-            StructureHard(hard) => match value {
+            Structured(Hard(hard)) => match value {
                 StringValue(name) => Boolean(hard.contains(name)),
                 _ => Boolean(false)
             },
-            StructureSoft(soft) => match value {
+            Structured(Soft(soft)) => match value {
                 StringValue(name) => Boolean(soft.contains(name)),
                 _ => Boolean(false)
             },
             TableValue(Model(mrc)) => match value {
-                StructureSoft(soft) => mrc.contains(&soft.to_row()),
-                StructureHard(hard) => mrc.contains(&hard.to_row()),
+                Structured(Soft(soft)) => mrc.contains(&soft.to_row()),
+                Structured(Hard(hard)) => mrc.contains(&hard.to_row()),
                 _ => Boolean(false)
             }
             _ => Boolean(false)
@@ -200,13 +219,13 @@ impl TypedValue {
                 for item in items.iter() { bytes.extend(item.encode()); }
                 bytes
             }
-            PlatformOp(pf) => pf.encode().unwrap_or(vec![]),
             Binary(bytes) => ByteCodeCompiler::encode_u8x_n(bytes.to_vec()),
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
             ErrorValue(err) => ByteCodeCompiler::encode_string(err.to_string().as_str()),
             NamespaceValue(ns) =>
                 ByteCodeCompiler::encode_string(ns.get_full_name().as_str()),
             Number(number) => number.encode(),
+            PlatformOp(pf) => pf.encode().unwrap_or(vec![]),
             StringValue(string) => ByteCodeCompiler::encode_string(string),
             TableValue(rc) => rc.encode(),
             other => ByteCodeCompiler::encode_value(other).unwrap_or_else(|err| {
@@ -228,8 +247,7 @@ impl TypedValue {
             Null | Undefined => UnionType(Vec::new()),
             Number(n) => NumberType(n.kind()),
             PlatformOp(op) => op.get_type(),
-            StructureHard(hard) => StructureType(hard.get_parameters()),
-            StructureSoft(soft) => StructureType(soft.get_parameters()),
+            Structured(s) => StructureType(s.get_parameters()),
             StringValue(s) => StringType(FixedSize(s.len())),
             TableValue(tv) => TableType(Parameter::from_columns(tv.get_columns()), BLOBSized),
         }
@@ -256,10 +274,10 @@ impl TypedValue {
     pub fn matches(&self, other: &Self) -> TypedValue {
         match (self, other) {
             (a, b) if *a == *b => Boolean(true),
-            (StructureSoft(a), StructureSoft(b)) => {
+            (Structured(Soft(a)), Structured(Soft(b))) => {
                 Boolean(a.to_hash_map() == b.to_hash_map())
             }
-            (StructureHard(a), StructureHard(b)) => Boolean(a == b),
+            (Structured(Hard(a)), Structured(Hard(b))) => Boolean(a == b),
             _ => Boolean(false)
         }
     }
@@ -270,8 +288,8 @@ impl TypedValue {
             ErrorValue(err) => ErrorValue(err.to_owned()),
             StringValue(s) => ArrayValue(Array::from(s.chars()
                 .map(|c| StringValue(c.to_string())).collect())),
-            StructureHard(hs) => ArrayValue(hs.to_table().to_array()),
-            StructureSoft(ss) => ArrayValue(ss.to_table().to_array()),
+            Structured(Hard(hs)) => ArrayValue(hs.to_table().to_array()),
+            Structured(Soft(ss)) => ArrayValue(ss.to_table().to_array()),
             TableValue(rc) => ArrayValue(rc.to_array()),
             z => ErrorValue(TypeMismatch(TableType(vec![], BLOBSized), z.get_type()))
         }
@@ -300,8 +318,8 @@ impl TypedValue {
                     .map(|v| v.to_code())
                     .collect::<Vec<_>>().join(", ")),
             PlatformOp(pf) => pf.to_code(),
-            StructureHard(hs) => hs.to_code(),
-            StructureSoft(ss) => ss.to_code(),
+            Structured(Hard(hs)) => hs.to_code(),
+            Structured(Soft(ss)) => ss.to_code(),
             StringValue(s) => format!("\"{s}\""),
             other => other.unwrap_value()
         }
@@ -389,12 +407,11 @@ impl TypedValue {
             Number(nv) => nv.to_json(),
             PlatformOp(nf) => serde_json::json!(nf),
             StringValue(s) => serde_json::json!(s),
-            StructureHard(s) => s.to_json(),
-            StructureSoft(s) => s.to_json(),
+            Structured(s) => s.to_json(),
             TableValue(rcv) => {
                 let columns = rcv.get_columns();
                 let rows = rcv.iter()
-                    .map(|r| r.to_json(columns))
+                    .map(|r| r.to_json_hash(columns))
                     .collect::<Vec<_>>();
                 serde_json::json!(rows)
             }
@@ -419,25 +436,20 @@ impl TypedValue {
                     Ok(frc) => TableValue(Disk(frc)),
                     Err(err) => ErrorValue(Exact(err.to_string())),
                 }
-            StructureHard(s) => TableValue(Model(s.to_table())),
-            StructureSoft(s) => TableValue(Model(s.to_table())),
+            Structured(s) => TableValue(Model(s.to_table())),
             TableValue(rcv) => TableValue(rcv.to_owned()),
-            z => ErrorValue(TypeMismatch(TableType(vec![], BLOBSized), z.get_type()))
+            z => z.to_owned()
         }
     }
 
     fn convert_array_to_table(&self, items: &Vec<TypedValue>) -> TypedValue {
         // gather each struct in the array as a table
-        fn value_parameters(value: &TypedValue) -> Vec<Parameter> {
-            vec![Parameter::new("value".to_string(), value.get_type().to_type_declaration(), None)]
+        fn value_parameters(value: &TypedValue) -> Vec<Descriptor> {
+            vec![Descriptor::new("value".to_string(), value.get_type().to_type_declaration(), None)]
         }
         let tables = items.iter()
             .fold(Vec::new(), |mut tables, tv| match tv {
-                StructureHard(hs) => {
-                    tables.push(hs.to_table());
-                    tables
-                }
-                StructureSoft(ss) => {
+                Structured(ss) => {
                     tables.push(ss.to_table());
                     tables
                 }
@@ -446,7 +458,7 @@ impl TypedValue {
                     tables
                 }
                 z => {
-                    let mut mrc = ModelRowCollection::construct(&value_parameters(z));
+                    let mut mrc = ModelRowCollection::from_descriptors(&value_parameters(z));
                     mrc.append_row(Row::new(0, vec![z.clone()]));
                     tables.push(mrc);
                     tables
@@ -528,31 +540,30 @@ impl TypedValue {
 
     pub fn unwrap_value(&self) -> String {
         match self {
-            ArrayValue(av) => {
+            TypedValue::ArrayValue(av) => {
                 let values = av.iter().map(|v| v.unwrap_value()).collect::<Vec<_>>();
                 format!("[{}]", values.join(", "))
             }
-            Binary(bytes) => hex::encode(bytes),
-            BLOB(tv) => tv.unwrap_value(),
-            Boolean(b) => (if *b { "true" } else { "false" }).into(),
-            ErrorValue(message) => message.to_string(),
-            Function { params, code } =>
+            TypedValue::Binary(bytes) => hex::encode(bytes),
+            TypedValue::BLOB(tv) => tv.unwrap_value(),
+            TypedValue::Boolean(b) => (if *b { "true" } else { "false" }).into(),
+            TypedValue::ErrorValue(message) => message.to_string(),
+            TypedValue::Function { params, code } =>
                 format!("(fn({}) => {})",
                         params.iter().map(|c| c.to_code()).collect::<Vec<_>>().join(", "),
                         code.to_code()),
-            NamespaceValue(ns) => ns.get_full_name(),
-            Null => "null".into(),
-            Number(number) => number.unwrap_value(),
-            PlatformOp(nf) => nf.to_code(),
-            StringValue(string) => string.into(),
-            StructureHard(structure) => structure.to_json().to_string(),
-            StructureSoft(structure) => structure.to_json().to_string(),
-            TableValue(rcv) => {
+            TypedValue::NamespaceValue(ns) => ns.get_full_name(),
+            TypedValue::Null => "null".into(),
+            TypedValue::Number(number) => number.unwrap_value(),
+            TypedValue::PlatformOp(nf) => nf.to_code(),
+            TypedValue::StringValue(string) => string.into(),
+            TypedValue::Structured(structure) => structure.to_json().to_string(),
+            TypedValue::TableValue(rcv) => {
                 let columns = rcv.get_columns();
-                serde_json::json!(rcv.iter().map(|r|r.to_json(columns))
+                serde_json::json!(rcv.iter().map(|r|r.to_json_hash(columns))
                     .collect::<Vec<_>>()).to_string()
             }
-            Undefined => "undefined".into(),
+            TypedValue::Undefined => "undefined".into(),
         }
     }
 
@@ -628,7 +639,7 @@ impl Add for TypedValue {
             (Number(Numbers::Ack), Boolean(..)) => Boolean(true),
             (Number(a), Number(b)) => Number(Numbers::RowsAffected(a.to_i64() + b.to_i64())),
             (StringValue(a), StringValue(b)) => StringValue(a + b.as_str()),
-            (TableValue(a), StructureHard(b)) => {
+            (TableValue(a), Structured(Hard(b))) => {
                 let mut mrc = match ModelRowCollection::from_table(Box::new(&a)) {
                     Ok(mrc) => mrc,
                     Err(err) => return ErrorValue(Exact(err.to_string()))
@@ -721,9 +732,9 @@ fn fetch(mrc: &Box<dyn RowCollection>, index: usize) -> TypedValue {
     let columns = mrc.get_columns();
     match mrc.read_row(index) {
         Ok((row, meta)) => {
-            StructureHard(match meta.is_allocated {
-                true => row.to_struct(columns),
-                false => Row::empty(columns).to_struct(columns),
+            Structured(match meta.is_allocated {
+                true => Firm(row, columns.to_owned()),
+                false => Firm(Row::empty(columns), columns.to_owned()),
             })
         }
         Err(err) => ErrorValue(Exact(err.to_string())),
@@ -770,8 +781,7 @@ impl Neg for TypedValue {
             Number(oc) => Number(I64Value(-oc.to_i64())),
             PlatformOp(..) => error("PlatformFunction".into()),
             StringValue(..) => error("String".into()),
-            StructureHard(..) => error("Structure".into()),
-            StructureSoft(..) => error("Structure".into()),
+            Structured(..) => error("Structure".into()),
             TableValue(..) => error("Table".into()),
             Undefined => Undefined,
         }
@@ -926,9 +936,9 @@ mod tests {
 
     #[test]
     fn test_from_json() {
-        let structure = HardStructure::from_parameters(&vec![
-            Parameter::new("name", Some("String(4)".into()), Some("John".into())),
-            Parameter::new("age", Some("i64".into()), Some("40".into()))
+        let structure = HardStructure::from_descriptors(&vec![
+            Descriptor::new("name", Some("String(4)".into()), Some("\"John\"".into())),
+            Descriptor::new("age", Some("i64".into()), Some("40".into()))
         ]).unwrap();
         let js_value0: Value = serde_json::from_str(r##"{"name":"John","age":40}"##).unwrap();
         let js_value1: Value = serde_json::from_str(structure.to_string().as_str()).unwrap();
@@ -937,28 +947,28 @@ mod tests {
 
     #[test]
     fn test_hard_structure_contains_key() {
-        let structure = StructureHard(HardStructure::new(make_quote_columns(), vec![
+        let structure = Structured(Hard(HardStructure::new(make_quote_columns(), vec![
             StringValue("PEW".into()),
             StringValue("NASDAQ".into()),
             Number(F64Value(304.69)),
-        ]));
+        ])));
         assert_eq!(structure.contains(&StringValue("symbol".into())), Boolean(true))
     }
 
     #[test]
     fn test_soft_structure_contains_key() {
-        let structure = StructureSoft(SoftStructure::new(&vec![
+        let structure = Structured(Soft(SoftStructure::new(&vec![
             ("name", StringValue("symbol".into())),
             ("param_type", StringValue("String(8)".into())),
             ("default_value", Null),
-        ]));
+        ])));
         assert_eq!(structure.contains(&StringValue("name".into())), Boolean(true))
     }
 
     #[test]
     fn test_table_contains_hard_structure() {
         let phys_columns = make_quote_columns();
-        let table = TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+        let table = TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
             make_quote(0, "BOX", "AMEX", 11.77),
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "BIZ", "NYSE", 23.67),
@@ -966,18 +976,18 @@ mod tests {
             make_quote(4, "BOOM", "NASDAQ", 56.87),
             make_quote(5, "TRX", "NASDAQ", 7.9311),
         ])));
-        let hs = StructureHard(HardStructure::new(make_quote_columns(), vec![
+        let hs = Structured(Hard(HardStructure::new(make_quote_columns(), vec![
             StringValue("GOTO".into()),
             StringValue("OTC".into()),
             Number(F64Value(0.1421)),
-        ]));
+        ])));
         assert_eq!(table.contains(&hs), Boolean(true))
     }
 
     #[test]
     fn test_table_contains_soft_structure() {
         let phys_columns = make_quote_columns();
-        let table = TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+        let table = TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "BIZ", "NYSE", 23.67),
@@ -985,30 +995,32 @@ mod tests {
             make_quote(4, "BOOM", "NASDAQ", 56.87),
             make_quote(5, "TRX", "NASDAQ", 7.9311),
         ])));
-        let ss = StructureSoft(SoftStructure::new(&vec![
+        let ss = Structured(Soft(SoftStructure::new(&vec![
             ("symbol", StringValue("BIZ".into())),
             ("exchange", StringValue("NYSE".into())),
             ("last_sale", Number(F64Value(23.67))),
-        ]));
+        ])));
         assert_eq!(table.contains(&ss), Boolean(true))
     }
 
     #[test]
     fn test_table_index() {
         let phys_columns = make_quote_columns();
-        let mrc = ModelRowCollection::from_rows(&phys_columns, &vec![
+        let mrc = ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "BIZ", "NYSE", 23.66),
             make_quote(3, "GOTO", "OTC", 0.1428),
             make_quote(4, "BOOM", "NASDAQ", 56.87)]);
-        assert_eq!(TableValue(Model(mrc))[0], StructureHard(HardStructure::new(
-            phys_columns, vec![
-                StringValue("ABC".into()),
-                StringValue("AMEX".into()),
-                Number(F64Value(11.77)),
-            ],
-        )))
+        assert_eq!(
+            TableValue(Model(mrc))[0],
+            Structured(Firm(Row::new(
+                0, vec![
+                    StringValue("ABC".into()),
+                    StringValue("AMEX".into()),
+                    Number(F64Value(11.77)),
+                ],
+            ), phys_columns)))
     }
 
     #[test]
@@ -1121,7 +1133,7 @@ mod tests {
         verify_wrap_unwrap("100.1", Number(F64Value(100.1)));
         verify_wrap_unwrap("100", Number(I64Value(100)));
         verify_wrap_unwrap("null", Null);
-        verify_wrap_unwrap("Hello World", StringValue("Hello World".into()));
+        verify_wrap_unwrap("\"Hello World\"", StringValue("Hello World".into()));
         verify_wrap_unwrap("undefined", Undefined);
     }
 
@@ -1145,7 +1157,7 @@ mod tests {
     }
 
     fn verify_wrap_unwrap(string_value: &str, typed_value: TypedValue) {
-        assert_eq!(typed_value.unwrap_value(), string_value);
+        assert_eq!(typed_value.to_code(), string_value);
         match TypedValue::wrap_value(string_value) {
             Ok(value) => assert_eq!(value, typed_value),
             Err(message) => panic!("{}", message)

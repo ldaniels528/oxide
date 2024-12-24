@@ -1,3 +1,4 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // Compiler class
 ////////////////////////////////////////////////////////////////////
@@ -5,6 +6,8 @@
 use serde::{Deserialize, Serialize};
 use std::convert::From;
 
+use crate::data_types::DataType;
+use crate::data_types::DataType::UnionType;
 use crate::errors::Errors;
 use crate::expression::Conditions::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
@@ -17,11 +20,12 @@ use crate::expression::*;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::structures::HardStructure;
+use crate::structures::Structures::Hard;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Function, Number, StringValue, StructureHard};
+use crate::typed_values::TypedValue::{Function, Null, Number, StringValue, Structured};
 use shared_lib::fail;
 
 /// Oxide language compiler - converts source code into [Expression]s.
@@ -272,6 +276,7 @@ impl Compiler {
                 "include" => self.parse_expression_1a(nts, Include),
                 "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &nts),
                 "mod" => self.parse_keyword_mod(nts),
+                "NaN" => Ok((Literal(Number(NaNValue)), nts)),
                 "ns" => self.parse_expression_1a(nts, Ns),
                 "null" => Ok((NULL, nts)),
                 "overwrite" => self.parse_keyword_overwrite(nts),
@@ -280,7 +285,7 @@ impl Compiler {
                 "PUT" => self.parse_keyword_http(ts),
                 "Scenario" => self.parse_keyword_scenario(nts),
                 "select" => self.parse_keyword_select(nts),
-                "struct" => self.parse_keyword_struct(nts),
+                "Struct" => self.parse_keyword_struct(nts),
                 "table" => self.parse_keyword_table(nts),
                 "true" => Ok((TRUE, nts)),
                 "undefined" => Ok((UNDEFINED, nts)),
@@ -646,11 +651,11 @@ impl Compiler {
     }
 
     /// Builds a language model from a 'struct' statement:
-    /// ex: struct(symbol: String(8), exchange: String(8), last_sale: f64)
-    /// ex: struct(symbol: String(8) = "TRX", exchange: String(8) = "AMEX", last_sale: f64 = 17.69)
+    /// ex: Struct(symbol: String(8), exchange: String(8), last_sale: f64)
+    /// ex: Struct(symbol: String(8) = "TRX", exchange: String(8) = "AMEX", last_sale: f64 = 17.69)
     fn parse_keyword_struct(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Parameters(fields), ts) = self.expect_parameters(ts.to_owned())? {
-            Ok((Literal(StructureHard(HardStructure::from_parameters(&fields)?)), ts))
+            Ok((Literal(Structured(Hard(HardStructure::from_parameters(&fields)))), ts))
         } else {
             fail_near("Expected column definitions", &ts)
         }
@@ -1000,13 +1005,13 @@ impl Compiler {
                 // finally, check for a default value
                 let (default_value, ts) = if ts.is("=") {
                     if let (Some(tok), ts) = ts.skip().next() {
-                        (Some(tok.get_raw_value()), ts)
+                        (TypedValue::from_token(&tok)?, ts)
                     } else {
                         return fail_near("An expression was expected", &ts);
                     }
-                } else { (None, ts) };
+                } else { (Null, ts) };
 
-                Ok((Parameter::new(name, type_decl, default_value), ts))
+                Ok((Parameter::with_default(name, type_decl.unwrap_or(UnionType(vec![])), default_value), ts))
             }
             (_, ats) => fail_near("Function name expected", &ats)
         }
@@ -1015,14 +1020,17 @@ impl Compiler {
     pub fn expect_parameter_type_decl(
         &mut self,
         ts: TokenSlice,
-    ) -> std::io::Result<(Option<String>, TokenSlice)> {
+    ) -> std::io::Result<(Option<DataType>, TokenSlice)> {
         if let (Some(Atom { text: type_name, .. }), ts) = ts.next() {
             // e.g. String(8)
             if ts.is("(") {
                 let (args, ts) = self.expect_arguments(ts)?;
-                Ok((Some(format!("{}({})", type_name,
-                                 args.iter().map(|e| e.to_code()).collect::<Vec<String>>().join(", "))), ts))
-            } else { Ok((Some(type_name), ts)) }
+                let kind = DataType::from_str(format!("{}({})", type_name, args.iter()
+                    .map(|expr| expr.to_code())
+                    .collect::<Vec<_>>()
+                    .join(", ")).as_str())?;
+                Ok((Some(kind), ts))
+            } else { Ok((Some(DataType::from_str(type_name.as_str())?), ts)) }
         } else { Ok((None, ts)) }
     }
 
@@ -1314,13 +1322,13 @@ mod tests {
             // fn add(a: u64, b: u64) => a + b
             // fn add(a: u64, b: u64) : u64 => a + b
             let code = Compiler::build(r#"
-            fn add(a, b) => a + b
-        "#).unwrap();
+                fn add(a, b) => a + b
+            "#).unwrap();
             assert_eq!(code, SetVariable("add".to_string(), Box::new(
                 Literal(Function {
                     params: vec![
-                        Parameter::new("a", None, None),
-                        Parameter::new("b", None, None),
+                        Parameter::build("a"),
+                        Parameter::build("b"),
                     ],
                     code: Box::new(Plus(Box::new(
                         Variable("a".into())
@@ -1338,12 +1346,12 @@ mod tests {
             // fn (a: u64, b: u64) : u64 => a + b
             // fn (a, b) => a + b
             let code = Compiler::build(r#"
-            fn (a, b) => a * b
-        "#).unwrap();
+                fn (a, b) => a * b
+            "#).unwrap();
             assert_eq!(code, Literal(Function {
                 params: vec![
-                    Parameter::new("a", None, None),
-                    Parameter::new("b", None, None),
+                    Parameter::build("a"),
+                    Parameter::build("b"),
                 ],
                 code: Box::new(Multiply(Box::new(
                     Variable("a".into())
@@ -1357,8 +1365,8 @@ mod tests {
         #[test]
         fn test_function_call() {
             let code = Compiler::build(r#"
-            f(2, 3)
-        "#).unwrap();
+                f(2, 3)
+            "#).unwrap();
             assert_eq!(code, FunctionCall {
                 fx: Box::new(Variable("f".into())),
                 args: vec![
@@ -1379,8 +1387,8 @@ mod tests {
         #[test]
         fn test_http_delete() {
             let model = Compiler::build(r#"
-            DELETE "http://localhost:9000/comments?id=675af"
-        "#).unwrap();
+                DELETE "http://localhost:9000/comments?id=675af"
+            "#).unwrap();
             assert_eq!(model, HTTP {
                 method: Box::new(Literal(StringValue("DELETE".to_string()))),
                 url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
@@ -1393,8 +1401,8 @@ mod tests {
         #[test]
         fn test_http_get() {
             let model = Compiler::build(r#"
-            GET "http://localhost:9000/comments?id=675af"
-        "#).unwrap();
+                GET "http://localhost:9000/comments?id=675af"
+            "#).unwrap();
             assert_eq!(model, HTTP {
                 method: Box::new(Literal(StringValue("GET".to_string()))),
                 url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
@@ -1407,8 +1415,8 @@ mod tests {
         #[test]
         fn test_http_head() {
             let model = Compiler::build(r#"
-            HEAD "http://localhost:9000/quotes/AMD/NYSE"
-        "#).unwrap();
+                HEAD "http://localhost:9000/quotes/AMD/NYSE"
+            "#).unwrap();
             assert_eq!(model, HTTP {
                 method: Box::new(Literal(StringValue("HEAD".to_string()))),
                 url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".to_string()))),
@@ -1421,8 +1429,8 @@ mod tests {
         #[test]
         fn test_http_patch() {
             let model = Compiler::build(r#"
-            PATCH "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE"
-        "#).unwrap();
+                PATCH "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE"
+            "#).unwrap();
             assert_eq!(model, HTTP {
                 method: Box::new(Literal(StringValue("PATCH".to_string()))),
                 url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".to_string()))),
@@ -1435,8 +1443,8 @@ mod tests {
         #[test]
         fn test_http_post() {
             let model = Compiler::build(r#"
-            POST "http://localhost:9000/quotes/AMD/NASDAQ"
-        "#).unwrap();
+                POST "http://localhost:9000/quotes/AMD/NASDAQ"
+            "#).unwrap();
             assert_eq!(model, HTTP {
                 method: Box::new(Literal(StringValue("POST".to_string()))),
                 url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
@@ -1449,10 +1457,10 @@ mod tests {
         #[test]
         fn test_http_post_with_body() {
             let model = Compiler::build(r#"
-            POST "http://localhost:8080/machine/www/stocks" FROM (
-                "Hello World"
-            )
-        "#).unwrap();
+                POST "http://localhost:8080/machine/www/stocks" FROM (
+                    "Hello World"
+                )
+            "#).unwrap();
             assert_eq!(model, HTTP {
                 method: Box::new(Literal(StringValue("POST".to_string()))),
                 url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
@@ -1465,10 +1473,10 @@ mod tests {
         #[test]
         fn test_http_post_with_multipart() {
             let model = Compiler::build(r#"
-            POST "http://localhost:8080/machine/www/stocks" MULTIPART ({
-                file: "./demoes/language/include_file.ox"
-            })
-        "#).unwrap();
+                POST "http://localhost:8080/machine/www/stocks" MULTIPART ({
+                    file: "./demoes/language/include_file.ox"
+                })
+            "#).unwrap();
             assert_eq!(model, HTTP {
                 method: Box::new(Literal(StringValue("POST".to_string()))),
                 url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
@@ -1866,6 +1874,8 @@ mod tests {
     #[cfg(test)]
     mod sql_tests {
         use crate::compiler::Compiler;
+        use crate::data_types::DataType::{NumberType, StringType};
+        use crate::data_types::StorageTypes::FixedSize;
         use crate::expression::Conditions::{Between, Betwixt, Equal, GreaterOrEqual, LessOrEqual, LessThan, Like};
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
         use crate::expression::DatabaseOps::{Mutate, Query};
@@ -1873,6 +1883,7 @@ mod tests {
         use crate::expression::MutateTarget::TableTarget;
         use crate::expression::Mutation::{Create, Declare, Drop, IntoNs};
         use crate::expression::{Mutation, Queryable};
+        use crate::number_kind::NumberKind::F64Kind;
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::parameter::Parameter;
         use crate::typed_values::TypedValue::{Number, StringValue};
@@ -1989,9 +2000,9 @@ mod tests {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
                 entity: TableEntity {
                     columns: vec![
-                        Parameter::new("symbol", Some("String(8)".into()), Some("ABC".into())),
-                        Parameter::new("exchange", Some("String(8)".into()), Some("NYSE".into())),
-                        Parameter::new("last_sale", Some("f64".into()), Some("23.54".into())),
+                        Parameter::with_default("symbol", StringType(FixedSize(8)), StringValue("ABC".into())),
+                        Parameter::with_default("exchange", StringType(FixedSize(8)), StringValue("NYSE".into())),
+                        Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.54))),
                     ],
                     from: None,
                 },
@@ -2008,9 +2019,9 @@ mod tests {
             "#).unwrap();
             assert_eq!(model, DatabaseOp(Mutate(Declare(TableEntity {
                 columns: vec![
-                    Parameter::new("symbol", Some("String(8)".into()), None),
-                    Parameter::new("exchange", Some("String(8)".into()), None),
-                    Parameter::new("last_sale", Some("f64".into()), None),
+                    Parameter::new("symbol", StringType(FixedSize(8))),
+                    Parameter::new("exchange", StringType(FixedSize(8))),
+                    Parameter::new("last_sale", NumberType(F64Kind)),
                 ],
                 from: None,
             }))));

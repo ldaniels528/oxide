@@ -1,21 +1,21 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // byte row-collection module
 ////////////////////////////////////////////////////////////////////
 
-use serde::{Deserialize, Serialize};
-
+use crate::columns::Column;
 use crate::field_metadata::FieldMetadata;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::RowsAffected;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Number, Undefined};
+use serde::{Deserialize, Serialize};
 
 /// Byte-vector-based RowCollection implementation
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct ByteRowCollection {
     columns: Vec<Column>,
     row_data: Vec<Vec<u8>>,
@@ -34,13 +34,6 @@ impl ByteRowCollection {
             .map(|chunk| chunk.to_vec())
             .collect();
         Self::new(columns, row_bytes)
-    }
-
-    /// Encodes the [ByteRowCollection] into a byte vector
-    pub fn encode(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        for row in &self.row_data { bytes.extend(row) }
-        bytes
     }
 
     /// Creates a new [ByteRowCollection] from the specified rows
@@ -62,6 +55,12 @@ impl ByteRowCollection {
 }
 
 impl RowCollection for ByteRowCollection {
+    fn encode(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for row in &self.row_data { bytes.extend(row) }
+        bytes
+    }
+
     fn get_columns(&self) -> &Vec<Column> { &self.columns }
 
     fn get_record_size(&self) -> usize { self.record_size }
@@ -69,7 +68,7 @@ impl RowCollection for ByteRowCollection {
     fn get_rows(&self) -> Vec<Row> {
         let mut rows = Vec::new();
         for buf in &self.row_data {
-            let (row, rmd) = Row::decode(buf, &self.columns);
+            let (row, rmd) = Row::decode(&self.columns, buf);
             if rmd.is_allocated { rows.push(row) }
         }
         rows
@@ -85,7 +84,7 @@ impl RowCollection for ByteRowCollection {
     ) -> TypedValue {
         let column = &self.columns[column_id];
         let offset = self.convert_rowid_to_offset(id) + column.get_offset() as u64;
-        let buffer = Row::encode_cell(
+        let buffer = column.get_data_type().encode_field(
             &new_value,
             &FieldMetadata::new(true),
             column.get_fixed_size(),
@@ -131,7 +130,7 @@ impl RowCollection for ByteRowCollection {
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
         let column = &self.columns[column_id];
         let buffer = self.row_data[id][column.get_offset()..(column.get_offset() + column.get_fixed_size())].to_vec();
-        Row::decode_value(&column.get_data_type(), &buffer, 0)
+        column.get_data_type().decode_field_value(&buffer, 0)
     }
 
     fn read_field_metadata(
@@ -147,7 +146,7 @@ impl RowCollection for ByteRowCollection {
 
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
         if id < self.row_data.len() {
-            Ok(Row::decode(&self.row_data[id], &self.columns))
+            Ok(Row::decode(&self.columns, &self.row_data[id]))
         } else {
             Ok((Row::empty(&self.columns), RowMetadata::new(false)))
         }
@@ -171,9 +170,9 @@ impl RowCollection for ByteRowCollection {
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
+    use crate::columns::Column;
     use crate::numbers::Numbers::U64Value;
     use crate::row_collection::RowCollection;
-    use crate::table_columns::Column;
     use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::Number;
 

@@ -1,20 +1,22 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
-// Parameter class
+// Parameter class - represents a class or function parameter
 ////////////////////////////////////////////////////////////////////
 
-use serde::{Deserialize, Serialize};
-use std::fmt::{Display, Formatter};
-
-use crate::table_columns::Column;
+use crate::columns::Column;
+use crate::data_types::DataType;
+use crate::data_types::DataType::UnionType;
+use crate::descriptor::Descriptor;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::Undefined;
+use crate::typed_values::TypedValue::Null;
+use serde::{Deserialize, Serialize};
 
-// Represents a generic parameter
+// Represents a class or function parameter
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct Parameter {
     name: String,
-    param_type: Option<String>,
-    default_value: Option<String>,
+    data_type: DataType,
+    default_value: TypedValue,
 }
 
 impl Parameter {
@@ -23,35 +25,59 @@ impl Parameter {
     //  STATIC METHODS
     ////////////////////////////////////////////////////////////////////
 
-    pub fn from_column(column: &Column) -> Self {
-        Parameter::new(column.get_name(), column.get_data_type().to_type_declaration(), match &column.get_default_value() {
-            TypedValue::Null | Undefined => None,
-            v => Some(v.to_json().to_string())
-        })
+    pub fn build(name: impl Into<String>) -> Self {
+        Self::new(name, UnionType(vec![]))
     }
 
-    pub fn from_columns(phys_columns: &Vec<Column>) -> Vec<Self> {
-        phys_columns.iter().map(|c| Self::from_column(c)).collect()
+    pub fn from_column(column: &Column) -> Self {
+        Parameter::with_default(
+            column.get_name(),
+            column.get_data_type().clone(),
+            column.get_default_value())
+    }
+
+    pub fn from_columns(columns: &Vec<Column>) -> Vec<Self> {
+        columns.iter().map(Self::from_column).collect()
+    }
+
+    pub fn from_descriptor(descriptor: &Descriptor) -> std::io::Result<Parameter> {
+        Ok(Self::with_default(
+            descriptor.get_name(),
+            DataType::from_str(descriptor.get_param_type().unwrap_or("".to_string()).as_str())?,
+            TypedValue::wrap_value_opt(&descriptor.get_default_value())?))
+    }
+
+    pub fn from_descriptors(descriptors: &Vec<Descriptor>) -> std::io::Result<Vec<Parameter>> {
+        let mut params: Vec<Parameter> = Vec::with_capacity(descriptors.len());
+        for descriptor in descriptors {
+            let param = Self::from_descriptor(&descriptor)?;
+            params.push(param);
+        }
+        Ok(params)
     }
 
     pub fn from_tuple(name: impl Into<String>, value: TypedValue) -> Self {
-        Self::new(
-            name.into(),
-            value.get_type().to_type_declaration(),
-            Some(value.to_code()),
-        )
+        Self::with_default(name.into(), value.get_type(), value)
     }
 
-    pub fn new(name: impl Into<String>,
-               param_type: Option<String>,
-               default_value: Option<String>) -> Self {
-        Parameter { name: name.into(), param_type, default_value }
+    pub fn new(name: impl Into<String>, param_type: DataType) -> Self {
+        Self::with_default(name, param_type, Null)
     }
 
-    pub fn render(params: &Vec<Parameter>) -> String {
-        params.iter().map(|p| p.to_code())
+    pub fn render(parameters: &Vec<Parameter>) -> String {
+        Self::render_f(parameters, |p| p.to_code())
+    }
+
+    pub fn render_f(parameters: &Vec<Parameter>, f: fn(&Parameter) -> String) -> String {
+        parameters.iter().map(|p| f(p))
             .collect::<Vec<String>>()
             .join(", ")
+    }
+
+    pub fn with_default(name: impl Into<String>,
+                        param_type: DataType,
+                        default_value: TypedValue) -> Self {
+        Parameter { name: name.into(), data_type: param_type, default_value }
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -60,13 +86,11 @@ impl Parameter {
 
     pub fn get_name(&self) -> &str { &self.name }
 
-    pub fn get_param_type(&self) -> Option<String> { self.param_type.clone() }
+    pub fn get_data_type(&self) -> DataType { self.data_type.clone() }
 
-    pub fn get_default_value(&self) -> &Option<String> { &self.default_value }
+    pub fn get_default_value(&self) -> TypedValue { self.default_value.clone() }
 
-    pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!(self)
-    }
+    pub fn get_param_type(&self) -> Option<String> { self.data_type.to_type_declaration() }
 
     pub fn to_code(&self) -> String {
         let mut buf = self.get_name().to_string();
@@ -75,61 +99,90 @@ impl Parameter {
                 buf = format!("{}: {}", buf, type_decl)
             }
         }
-        if let Some(value) = self.get_default_value() {
-            buf = format!("{} := {}", buf, value)
+        match self.get_default_value() {
+            TypedValue::Null | TypedValue::Undefined => {}
+            default_value => buf = format!("{} := {}", buf, default_value.to_code())
         }
         buf
     }
-}
 
-impl Display for Parameter {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_code())
+    pub fn to_code_enum(&self) -> String {
+        let mut buf = self.get_name().to_string();
+        match self.get_default_value() {
+            TypedValue::Null | TypedValue::Undefined => {}
+            default_value => buf = format!("{} := {}", buf, default_value.to_code())
+        }
+        buf
+    }
+
+    pub fn to_json(&self) -> serde_json::Value {
+        Descriptor::from_parameter(&self).to_json()
     }
 }
 
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::testdata::{make_quote_columns, make_quote_parameters};
-
     use super::*;
+    use crate::data_types::DataType::{NumberType, StringType};
+    use crate::data_types::StorageTypes::FixedSize;
+    use crate::descriptor::Descriptor;
+    use crate::number_kind::NumberKind::F64Kind;
+    use crate::typed_values::TypedValue::{Null, StringValue};
 
     #[test]
     fn test_from_columns() {
-        let parameters = Parameter::from_columns(&make_quote_columns());
-        assert_eq!(parameters, make_quote_parameters());
+        let parameters = vec![
+            Parameter::new("symbol", StringType(FixedSize(8))),
+            Parameter::new("exchange", StringType(FixedSize(8))),
+            Parameter::new("last_sale", NumberType(F64Kind)),
+        ];
+        let columns = vec![
+            Column::new("symbol", StringType(FixedSize(8)), Null, 9),
+            Column::new("exchange", StringType(FixedSize(8)), Null, 26),
+            Column::new("last_sale", NumberType(F64Kind), Null, 43),
+        ];
+        assert_eq!(Parameter::from_columns(&columns), parameters);
     }
 
     #[test]
-    fn test_parameter_new() {
-        let parameters = vec![
-            Parameter::new("symbol", Some("String(8)".into()), None),
-            Parameter::new("exchange", Some("String(10)".into()), None),
-            Parameter::new("last_sale", Some("f64".into()), Some("0.0".into())),
+    fn test_from_descriptor() {
+        let descr = Descriptor::new(
+            "symbol", Some("String(8)".into()), Some("\"N/A\"".into())
+        );
+        let param = Parameter::with_default(
+            "symbol",
+            StringType(FixedSize(8)),
+            StringValue("N/A".into()),
+        );
+        assert_eq!(Parameter::from_descriptor(&descr).unwrap(), param)
+    }
+
+    #[test]
+    fn test_from_descriptors() {
+        let descriptors = vec![
+            Descriptor::new("symbol", Some("String(8)".into()), None),
+            Descriptor::new("exchange", Some("String(8)".into()), None),
+            Descriptor::new("last_sale", Some("f64".into()), None),
         ];
-        assert_eq!(parameters, vec![
-            Parameter {
-                name: "symbol".into(),
-                param_type: Some("String(8)".into()),
-                default_value: None,
-            },
-            Parameter {
-                name: "exchange".into(),
-                param_type: Some("String(10)".into()),
-                default_value: None,
-            },
-            Parameter {
-                name: "last_sale".into(),
-                param_type: Some("f64".into()),
-                default_value: Some("0.0".into()),
-            },
-        ])
+        let parameters = vec![
+            Parameter::new("symbol", StringType(FixedSize(8))),
+            Parameter::new("exchange", StringType(FixedSize(8))),
+            Parameter::new("last_sale", NumberType(F64Kind)),
+        ];
+        assert_eq!(Parameter::from_descriptors(&descriptors).unwrap(), parameters)
+    }
+
+    #[test]
+    fn test_to_code() {
+        let param =
+            Parameter::with_default("symbol", StringType(FixedSize(8)), StringValue("N/A".into()));
+        assert_eq!(param.to_code(), r#"symbol: String(8) := "N/A""#)
     }
 
     #[test]
     fn test_to_json() {
-        let param = Parameter::new("symbol", Some("String(8)".into()), None);
+        let param = Parameter::new("symbol", StringType(FixedSize(8)));
         assert_eq!(param.to_json().to_string(), r#"{"default_value":null,"name":"symbol","param_type":"String(8)"}"#.to_string())
     }
 }

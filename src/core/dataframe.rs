@@ -1,8 +1,10 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // Dataframe class
 ////////////////////////////////////////////////////////////////////
 
 use crate::byte_row_collection::ByteRowCollection;
+use crate::columns::Column;
 use crate::dataframe::Dataframe::Disk;
 use crate::dataframe_config::DataFrameConfig;
 use crate::expression::{Conditions, Expression};
@@ -15,15 +17,14 @@ use crate::numbers::Numbers::RowsAffected;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
-use crate::rows::Row;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Number;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// DataFrame is a logical representation of table
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Dataframe {
     Binary(ByteRowCollection),
     Disk(FileRowCollection),
@@ -34,20 +35,11 @@ impl Dataframe {
     /// Creates a new table within the specified namespace and having the specified columns
     pub fn create_table(ns: &Namespace, params: &Vec<Parameter>) -> std::io::Result<Self> {
         let path = ns.get_table_file_path();
-        let columns = Column::from_parameters(params)?;
-        let config = DataFrameConfig::new(params.clone(), vec![], vec![]);
+        let columns = Column::from_parameters(params);
+        let config = DataFrameConfig::build(&params);
         config.save(&ns)?;
         let file = Arc::new(FileRowCollection::table_file_create(ns)?);
         Ok(Disk(FileRowCollection::new(columns, file, path.as_str())))
-    }
-
-    /// Encodes the table to a byte vector
-    pub fn encode(&self) -> Vec<u8> {
-        match self {
-            Self::Binary(rc) => rc.encode(),
-            Self::Disk(rc) => rc.encode(),
-            Self::Model(rc) => rc.encode(),
-        }
     }
 
     /// deletes rows from the table based on a condition
@@ -150,6 +142,14 @@ impl Dataframe {
 }
 
 impl RowCollection for Dataframe {
+    fn encode(&self) -> Vec<u8> {
+        match self {
+            Self::Binary(rc) => rc.encode(),
+            Self::Disk(rc) => rc.encode(),
+            Self::Model(rc) => rc.encode(),
+        }
+    }
+
     fn get_columns(&self) -> &Vec<Column> {
         match self {
             Self::Binary(rc) => rc.get_columns(),

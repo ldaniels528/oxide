@@ -1,14 +1,17 @@
+#![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
 // Platform class
 ////////////////////////////////////////////////////////////////////
 
 use crate::arrays::Array;
 use crate::byte_code_compiler::ByteCodeCompiler;
+use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
 use crate::dataframe::Dataframe::{Disk, Model};
+use crate::descriptor::Descriptor;
 use crate::errors::Errors::*;
 use crate::expression::Expression::{CodeBlock, Literal, Scenario};
 use crate::file_row_collection::FileRowCollection;
@@ -20,9 +23,9 @@ use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps::*;
 use crate::row_collection::RowCollection;
-use crate::rows::Row;
+use crate::structures::Row;
 use crate::structures::Structure;
-use crate::table_columns::Column;
+use crate::structures::Structures::{Hard, Soft};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use chrono::{Datelike, Local, TimeZone, Timelike};
@@ -43,10 +46,11 @@ pub const MINOR_VERSION: u8 = 2;
 /// Represents a Platform Function
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct PlatformFunction {
+    pub package_name: String,
     pub name: String,
     pub description: String,
-    pub package_name: String,
-    pub parameters: Vec<Parameter>,
+    pub example: String,
+    pub parameters: Vec<Descriptor>,
     pub return_type: DataType,
     pub opcode: PlatformOps,
 }
@@ -135,7 +139,7 @@ pub enum PlatformOps {
     WwwURLEncode,
 }
 
-const PLATFORM_OPCODES: [PlatformOps; 70] = {
+pub const PLATFORM_OPCODES: [PlatformOps; 70] = {
     use PlatformOps::*;
     [
         // cal
@@ -346,20 +350,53 @@ impl PlatformOps {
 
     pub fn get_example(&self) -> String {
         let result = match self {
-            PlatformOps::CalDate => "Returns the current local date and time",
-            PlatformOps::CalDateDay => "Returns the day of the month of a Date",
-            PlatformOps::CalDateHour12 => "Returns the hour of the day of a Date",
-            PlatformOps::CalDateHour24 => "Returns the hour (military time) of the day of a Date",
-            PlatformOps::CalDateMinute => "Returns the minute of the hour of a Date",
-            PlatformOps::CalDateMonth => "Returns the month of the year of a Date",
-            PlatformOps::CalDateSecond => "Returns the seconds of the minute of a Date",
-            PlatformOps::CalDateYear => "Returns the year of a Date",
-            PlatformOps::IoFileCreate => "Creates a new file",
-            PlatformOps::IoFileExists => "Returns true if the source path exists",
-            PlatformOps::IoFileReadText => "Reads the contents of a text file into memory",
-            PlatformOps::IoStdErr => "Writes a string to STDERR",
-            PlatformOps::IoStdOut => "Writes a string to STDOUT",
-            PlatformOps::KungFuAssert => "Evaluates an assertion returning Ack or an error",
+            PlatformOps::CalDate => "cal::now()",
+            PlatformOps::CalDateDay => r#"
+                import cal
+                now():::day_of()
+            "#,
+            PlatformOps::CalDateHour12 => r#"
+                import cal
+                now():::hour12()
+            "#,
+            PlatformOps::CalDateHour24 => r#"
+                import cal
+                now():::hour24()
+            "#,
+            PlatformOps::CalDateMinute => r#"
+                import cal
+                now():::minute_of()
+            "#,
+            PlatformOps::CalDateMonth => r#"
+                import cal
+                now():::month_of()
+            "#,
+            PlatformOps::CalDateSecond => r#"
+                import cal
+                now():::second_of()
+            "#,
+            PlatformOps::CalDateYear => r#"
+                import cal
+                now():::year_of()
+            "#,
+            PlatformOps::IoFileCreate => r#"
+                io::create_file("quote.json", { symbol: "TRX", exchange: "NYSE", last_sale: 45.32 })
+            "#,
+            PlatformOps::IoFileExists => r#"
+                io::exists("quote.json")
+            "#,
+            PlatformOps::IoFileReadText => r#"
+                import io, util
+                file := "temp_secret.txt"
+                file:::create_file(md5("**keep**this**secret**"))
+                file:::read_text_file()
+            "#,
+            PlatformOps::IoStdErr => r#"io::stderr("Goodbye Cruel World")"#,
+            PlatformOps::IoStdOut => r#"io::stdout("Hello World")"#,
+            PlatformOps::KungFuAssert => r#"
+                import kungfu
+                assert(matches([ 1 "a" "b" "c" ], [ 1 "a" "b" "c" ]))
+            "#,
             PlatformOps::KungFuFeature => r#"
             import kungfu
             feature("Matches function", {
@@ -384,61 +421,153 @@ impl PlatformOps {
                         { id: "A1537", scores: [82 78 99] }))
                 }
             })"#,
-            PlatformOps::KungFuMatches => "Compares two values",
-            PlatformOps::KungFuTypeOf => "Returns the type of a value",
-            PlatformOps::OsCall => "Invokes an operating system application",
-            PlatformOps::OsClear => "Clears the terminal/screen",
-            PlatformOps::OsCurrentDir => "Returns the current directory",
-            PlatformOps::OsEnv => "Returns a table of the OS environment variables",
-            PlatformOps::OxideCompile => "Compiles source code from a string input",
-            PlatformOps::OxidePrintln => "Print line function",
-            PlatformOps::OxideEval => "Evaluates a string containing Oxide code",
-            PlatformOps::OxideHelp => "Integrated help function",
-            PlatformOps::OxideHistory => "Returns all commands successfully executed during the session",
-            PlatformOps::OxideHome => "Returns the Oxide home directory path",
-            PlatformOps::OxideReset => "Clears the scope of all user-defined objects",
-            PlatformOps::OxideUUID => "Returns a random 128-bit UUID",
-            PlatformOps::OxideVersion => "Returns the Oxide version",
-            PlatformOps::StrEndsWith => "Returns true if string `a` ends with string `b`",
-            PlatformOps::StrFormat => "Returns an argument-formatted string",
-            PlatformOps::StrIndexOf => "Returns the index of string `b` in string `a`",
-            PlatformOps::StrJoin => "Combines an array into a string",
-            PlatformOps::StrLeft => "Returns n-characters from left-to-right",
-            PlatformOps::StrLen => "Returns the number of characters contained in the string",
-            PlatformOps::StrRight => "Returns n-characters from right-to-left",
-            PlatformOps::StrSplit => "Splits string `a` by delimiter string `b`",
-            PlatformOps::StrStartsWith => "Returns true if string `a` starts with string `b`",
-            PlatformOps::StrSubstring => "Returns a substring of string `s` from `m` to `n`",
-            PlatformOps::StrToString => "Converts a value to its text-based representation",
-            PlatformOps::ToolsCompact => "Shrinks a table by removing deleted rows",
-            PlatformOps::ToolsDescribe => "Describes a table or structure",
-            PlatformOps::ToolsFetch => "Retrieves a raw structure from a table",
-            PlatformOps::ToolsReverse => "Returns a reverse copy of a table, string or array",
-            PlatformOps::ToolsScan => "Returns existence metadata for a table",
-            PlatformOps::ToolsToArray => "Converts a collection into an array",
-            PlatformOps::ToolsToCSV => "Converts a collection to CSV format",
-            PlatformOps::ToolsToJSON => "Converts a collection to JSON format",
-            PlatformOps::ToolsToTable => "Converts an object into a to_table",
-            PlatformOps::UtilBase64 => "Translates bytes into Base 64",
-            PlatformOps::UtilHex => "Translates bytes into hexadecimal",
-            PlatformOps::UtilMD5 => "Creates a MD5 digest",
-            PlatformOps::UtilToASCII => "Converts an integer to ASCII",
-            PlatformOps::UtilToDate => "Converts a value to Date",
-            PlatformOps::UtilToF32 => "Converts a value to f32",
-            PlatformOps::UtilToF64 => "Converts a value to f64",
-            PlatformOps::UtilToI8 => "Converts a value to i8",
-            PlatformOps::UtilToI16 => "Converts a value to i16",
-            PlatformOps::UtilToI32 => "Converts a value to i32",
-            PlatformOps::UtilToI64 => "Converts a value to i64",
-            PlatformOps::UtilToI128 => "Converts a value to i128",
-            PlatformOps::UtilToU8 => "Converts a value to u8",
-            PlatformOps::UtilToU16 => "Converts a value to u16",
-            PlatformOps::UtilToU32 => "Converts a value to u32",
-            PlatformOps::UtilToU64 => "Converts a value to u64",
-            PlatformOps::UtilToU128 => "Converts a value to u128",
-            PlatformOps::WwwServe => "Starts a local HTTP service",
-            PlatformOps::WwwURLDecode => "Decodes a URL-encoded string",
-            PlatformOps::WwwURLEncode => "Encodes a URL string",
+            PlatformOps::KungFuMatches => r#"
+                import kungfu::matches
+                a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
+                b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
+                matches(a, b)
+            "#,
+            PlatformOps::KungFuTypeOf => "kungfu::type_of([12, 76, 444])",
+            PlatformOps::OsCall => r#"
+                create table ns("platform.os.call") (
+                    symbol: String(8),
+                    exchange: String(8),
+                    last_sale: f64
+                )
+                os::call("chmod", "777", oxide::home())
+            "#,
+            PlatformOps::OsClear => "os::clear()",
+            PlatformOps::OsCurrentDir => r#"
+                import str
+                cur_dir := os::current_dir()
+                prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
+                path_str := prefix + "/demoes/language/include_file.oxide"
+                include path_str
+            "#,
+            PlatformOps::OsEnv => "os::env()",
+            PlatformOps::OxideCompile => r#"
+                code := oxide::compile("2 ** 4")
+                code()
+            "#,
+            PlatformOps::OxidePrintln => r#"oxide::println("Hello World")"#,
+            PlatformOps::OxideEval => r#"
+                a := 'Hello '
+                b := 'World'
+                oxide::eval("a + b")
+            "#,
+            PlatformOps::OxideHelp => r#"from oxide::help() limit 3"#,
+            PlatformOps::OxideHistory => "from oxide::history() limit 3",
+            PlatformOps::OxideHome => "oxide::home()",
+            PlatformOps::OxideReset => "oxide::reset()",
+            PlatformOps::OxideUUID => "oxide::uuid()",
+            PlatformOps::OxideVersion => "oxide::version()",
+            PlatformOps::StrEndsWith => r#"str::ends_with('Hello World', 'World')"#,
+            PlatformOps::StrFormat => r#"str::format("This {} the {}", "is", "way")"#,
+            PlatformOps::StrIndexOf => r#"str::index_of('The little brown fox', 'brown')"#,
+            PlatformOps::StrJoin => r#"str::join(['1', 5, 9, '13'], ', ')"#,
+            PlatformOps::StrLeft => r#"str::left('Hello World', 5)"#,
+            PlatformOps::StrLen => r#"str::len('The little brown fox')"#,
+            PlatformOps::StrRight => "str::right('Hello World', 5)",
+            PlatformOps::StrSplit => r#"str::split('Hello,there World', ' ,')"#,
+            PlatformOps::StrStartsWith => "str::starts_with('Hello World', 'World')",
+            PlatformOps::StrSubstring => "str::substring('Hello World', 0, 5)",
+            PlatformOps::StrToString => "str::to_string(125.75)",
+            PlatformOps::ToolsCompact => r#"
+                [+] stocks := ns("platform.compact.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                     { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] delete from stocks where last_sale > 1.0
+                [+] from stocks
+            "#,
+            PlatformOps::ToolsDescribe => r#"
+                tools::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
+            "#,
+            PlatformOps::ToolsFetch => r#"
+                [+] stocks := ns("platform.fetch.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] tools::fetch(stocks, 2)
+            "#,
+            PlatformOps::ToolsReverse => r#"
+                import tools
+                to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
+            "#,
+            PlatformOps::ToolsScan => r#"
+                [+] import tools
+                [+] stocks := ns("platform.scan.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
+                     { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
+                [+] delete from stocks where last_sale > 1.0
+                [+] stocks:::scan()
+            "#,
+            PlatformOps::ToolsToArray => r#"tools::to_array("Hello")"#,
+            PlatformOps::ToolsToCSV => r#"
+                import tools::to_csv
+                [+] stocks := ns("platform.csv.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                stocks:::to_csv()
+            "#,
+            PlatformOps::ToolsToJSON => r#"
+                import tools::to_json
+                [+] stocks := ns("platform.json.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                stocks:::to_json()
+            "#,
+            PlatformOps::ToolsToTable => r#"
+                tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
+            "#,
+            PlatformOps::UtilBase64 => "util::base64('Hello World')",
+            PlatformOps::UtilHex => "util::hex('Hello World')",
+            PlatformOps::UtilMD5 => "util::md5('Hello World')",
+            PlatformOps::UtilToASCII => "util::to_ascii(177)",
+            PlatformOps::UtilToDate => "util::to_date(177)",
+            PlatformOps::UtilToF32 => "util::to_f32(4321)",
+            PlatformOps::UtilToF64 => "util::to_f64(4321)",
+            PlatformOps::UtilToI8 => "util::to_i8(88)",
+            PlatformOps::UtilToI16 => "util::to_i16(88)",
+            PlatformOps::UtilToI32 => "util::to_i32(88)",
+            PlatformOps::UtilToI64 => "util::to_i64(88)",
+            PlatformOps::UtilToI128 => "util::to_i128(88)",
+            PlatformOps::UtilToU8 => "util::to_u8(88)",
+            PlatformOps::UtilToU16 => "util::to_u16(88)",
+            PlatformOps::UtilToU32 => "util::to_u32(88)",
+            PlatformOps::UtilToU64 => "util::to_u64(88)",
+            PlatformOps::UtilToU128 => "util::to_u128(88)",
+            PlatformOps::WwwServe => r#"
+                [+] www::serve(8822)
+                [+] stocks := ns("platform.www.quotes")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
+                     { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
+                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                     { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
+                GET "http://localhost:8822/platform/www/quotes/1/4"
+            "#,
+            PlatformOps::WwwURLDecode => "www::url_decode('http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998')",
+            PlatformOps::WwwURLEncode => "www::url_encode('http://shocktrade.com?name=the hero&t=9998')",
         };
         result.to_string()
     }
@@ -447,6 +576,7 @@ impl PlatformOps {
         PlatformFunction {
             name: self.get_name(),
             description: self.get_description(),
+            example: self.get_example(),
             package_name: self.get_package_name(),
             parameters: self.get_parameters(),
             return_type: self.get_return_type(),
@@ -617,8 +747,7 @@ impl PlatformOps {
         }
     }
 
-    pub fn get_parameters(&self) -> Vec<Parameter> {
-        fn to_char(n: usize) -> char { ((n + 97) as u8) as char }
+    pub fn get_parameters(&self) -> Vec<Descriptor> {
         let names = match self.get_parameter_types().as_slice() {
             [BooleanType] => vec!['b'],
             [UnionType(..)] => vec!['x'],
@@ -629,13 +758,13 @@ impl PlatformOps {
             [TableType(..), NumberType(..)] => vec!['t', 'n'],
             [StringType(..), NumberType(..), NumberType(..)] => vec!['s', 'm', 'n'],
             params => params.iter().enumerate()
-                .map(|(n, _)| to_char(n))
+                .map(|(n, _)| (n as u8 + b'a') as char)
                 .collect()
         };
 
         names.iter().zip(self.get_parameter_types().iter()).enumerate()
             .map(|(n, (name, dt))|
-                Parameter::new(
+                Descriptor::new(
                     name.to_string(),
                     dt.to_type_declaration(),
                     None,
@@ -702,7 +831,7 @@ impl PlatformOps {
         self.to_code_with_params(&self.get_parameters())
     }
 
-    pub fn to_code_with_params(&self, parameters: &Vec<Parameter>) -> String {
+    pub fn to_code_with_params(&self, parameters: &Vec<Descriptor>) -> String {
         let pkg = self.get_package_name();
         let name = self.get_name();
         let params = parameters.iter()
@@ -897,14 +1026,14 @@ impl PlatformOps {
 
         // get the feature scenarios
         let scenarios = match body {
-            StructureSoft(ss) => {
+            Structured(Soft(ss)) => {
                 ss.get_tuples().iter().map(|(title, tv)| match tv {
                     Function { code, .. } =>
                         Scenario {
                             title: Box::new(Literal(StringValue(title.to_string()))),
                             verifications: match code.deref() {
                                 CodeBlock(ops) => ops.clone(),
-                                other => vec![other.deref().clone()]
+                                other => vec![other.clone()]
                             },
                         },
                     other => Literal(other.clone())
@@ -970,9 +1099,9 @@ impl PlatformOps {
 
     fn do_os_env(ms: Machine) -> (Machine, TypedValue) {
         use std::env;
-        let mut mrc = ModelRowCollection::construct(&vec![
-            Parameter::new("key", Some("String(256)".into()), None),
-            Parameter::new("value", Some("String(8192)".into()), None)
+        let mut mrc = ModelRowCollection::from_descriptors(&vec![
+            Descriptor::new("key", Some("String(256)".into()), None),
+            Descriptor::new("value", Some("String(8192)".into()), None)
         ]);
         for (key, value) in env::vars() {
             if let ErrorValue(err) = mrc.append_row(Row::new(0, vec![
@@ -1017,10 +1146,10 @@ impl PlatformOps {
 
     /// returns a table describing all modules
     fn do_oxide_help(ms: Machine) -> (Machine, TypedValue) {
-        let mut mrc = ModelRowCollection::construct(&Self::get_oxide_help_parameters());
+        let mut mrc = ModelRowCollection::from_parameters(&Self::get_oxide_help_parameters());
         for (module_name, module) in ms.get_variables().iter() {
             match module {
-                StructureHard(mod_struct) =>
+                Structured(Hard(mod_struct)) =>
                     for (name, func) in mod_struct.get_tuples() {
                         mrc.append_row(Row::new(0, vec![
                             // name
@@ -1325,8 +1454,8 @@ impl PlatformOps {
                     Ok(frc) => (ms, frc.describe()),
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
-            StructureHard(sh) => (ms, sh.to_table().describe()),
-            StructureSoft(ss) => (ms, ss.to_table().describe()),
+            Structured(Hard(sh)) => (ms, sh.to_table().describe()),
+            Structured(Soft(ss)) => (ms, ss.to_table().describe()),
             TableValue(rcv) => (ms, rcv.describe()),
             other =>
                 (ms, ErrorValue(TableExpected("table or struct".to_string(), other.to_code())))
@@ -1348,7 +1477,7 @@ impl PlatformOps {
                     Ok(frc) =>
                         match frc.read_row(offset) {
                             Ok((row, _)) => (ms, TableValue(Model(
-                                ModelRowCollection::from_rows(frc.get_columns(), &vec![row])
+                                ModelRowCollection::from_columns_and_rows(frc.get_columns(), &vec![row])
                             ))),
                             Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                         }
@@ -1358,7 +1487,7 @@ impl PlatformOps {
                 let columns = rcv.get_columns();
                 match rcv.read_row(offset) {
                     Ok((row, _)) =>
-                        (ms, TableValue(Model(ModelRowCollection::from_rows(columns, &vec![row])))),
+                        (ms, TableValue(Model(ModelRowCollection::from_columns_and_rows(columns, &vec![row])))),
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
             }
@@ -1396,7 +1525,7 @@ impl PlatformOps {
                     let columns = rows.first()
                         .map(|row| df.get_columns().to_owned())
                         .unwrap_or(Vec::new());
-                    let mrc = ModelRowCollection::from_rows(&columns, &rows);
+                    let mrc = ModelRowCollection::from_columns_and_rows(&columns, &rows);
                     (ms, TableValue(Model(mrc)))
                 }
                 Err(err) => (ms, ErrorValue(Exact(err.to_string())))
@@ -1462,7 +1591,7 @@ impl PlatformOps {
             let rc = value.to_table()?;
             let columns = rc.get_columns();
             let rows = rc.read_active_rows()?;
-            let mrc = ModelRowCollection::from_rows(columns, &rows);
+            let mrc = ModelRowCollection::from_columns_and_rows(columns, &rows);
             Ok((ms, TableValue(Model(mrc))))
         }
         // convert the value to a RowCollection
@@ -1568,27 +1697,27 @@ impl PlatformOps {
 
     pub fn get_kung_fu_feature_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("level", Some("u16".into()), None),
-            Parameter::new("item", Some("String(256)".into()), None),
-            Parameter::new("passed", Some("Boolean".into()), None),
-            Parameter::new("result", Some("String(256)".into()), None),
+            Parameter::new("level", NumberType(U16Kind)),
+            Parameter::new("item", StringType(FixedSize(256))),
+            Parameter::new("passed", BooleanType),
+            Parameter::new("result", StringType(FixedSize(256).into())),
         ]
     }
 
     pub fn get_os_env_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("key", Some("String(256)".into()), None),
-            Parameter::new("value", Some("String(8192)".into()), None)
+            Parameter::new("key", StringType(FixedSize(256))),
+            Parameter::new("value", StringType(FixedSize(8192))),
         ]
     }
 
     pub fn get_oxide_help_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("name", Some("String(20)".into()), None),
-            Parameter::new("module", Some("String(20)".into()), None),
-            Parameter::new("signature", Some("String(32)".into()), None),
-            Parameter::new("description", Some("String(60)".into()), None),
-            Parameter::new("returns", Some("String(32)".into()), None),
+            Parameter::new("name", StringType(FixedSize(20))),
+            Parameter::new("module", StringType(FixedSize(20))),
+            Parameter::new("signature", StringType(FixedSize(32))),
+            Parameter::new("description", StringType(FixedSize(60))),
+            Parameter::new("returns", StringType(FixedSize(32))),
         ]
     }
 
@@ -1598,19 +1727,19 @@ impl PlatformOps {
 
     pub fn get_oxide_history_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("session_id", Some("i64".into()), None),
-            Parameter::new("user_id", Some("i64".into()), None),
-            Parameter::new("cpu_time_ms", Some("f64".into()), None),
-            Parameter::new("input", Some("String(65536)".into()), None),
+            Parameter::new("session_id", NumberType(I64Kind)),
+            Parameter::new("user_id", NumberType(I64Kind)),
+            Parameter::new("cpu_time_ms", NumberType(F64Kind)),
+            Parameter::new("input", StringType(FixedSize(65536))),
         ]
     }
 
     pub fn get_tools_describe_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("name", Some("String(128)".into()), None),
-            Parameter::new("type", Some("String(128)".into()), None),
-            Parameter::new("default_value", Some("String(128)".into()), None),
-            Parameter::new("is_nullable", Some("Boolean".into()), None),
+            Parameter::new("name", StringType(FixedSize(128))),
+            Parameter::new("type", StringType(FixedSize(128))),
+            Parameter::new("default_value", StringType(FixedSize(128))),
+            Parameter::new("is_nullable", BooleanType),
         ]
     }
 
@@ -1621,7 +1750,7 @@ impl PlatformOps {
                 let columns = frc.get_columns();
                 match frc.read_active_rows() {
                     Err(err) => ErrorValue(Exact(err.to_string())),
-                    Ok(rows) => TableValue(Model(ModelRowCollection::from_rows(columns, &rows)))
+                    Ok(rows) => TableValue(Model(ModelRowCollection::from_columns_and_rows(columns, &rows)))
                 }
             }
         }
@@ -1633,11 +1762,11 @@ impl PlatformOps {
 mod tests {
     use super::*;
     use super::*;
+    use crate::columns::Column;
     use crate::data_types::StorageTypes::BLOBSized;
     use crate::interpreter::Interpreter;
     use crate::platform::{PlatformOps, PLATFORM_OPCODES};
     use crate::structures::{HardStructure, SoftStructure};
-    use crate::table_columns::Column;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
     use serde_json::json;
@@ -1666,6 +1795,7 @@ mod tests {
         assert_eq!(CalDate.get_info(), PlatformFunction {
             name: "now".into(),
             description: "Returns the current local date and time".into(),
+            example: "cal::now()".into(),
             package_name: "cal".into(),
             parameters: Vec::new(),
             return_type: NumberType(DateKind),
@@ -1674,29 +1804,15 @@ mod tests {
     }
 
     #[test]
-    fn test_get_info_kung_fu_matches() {
-        assert_eq!(KungFuMatches.get_info(), PlatformFunction {
-            name: "matches".into(),
-            description: "Compares two values".into(),
-            package_name: "kungfu".into(),
-            parameters: vec![
-                Parameter::new("a", None, None),
-                Parameter::new("b", None, None),
-            ],
-            return_type: BooleanType,
-            opcode: KungFuMatches,
-        });
-    }
-
-    #[test]
     fn test_get_info_str_left() {
         assert_eq!(StrLeft.get_info(), PlatformFunction {
             name: "left".into(),
             description: "Returns n-characters from left-to-right".into(),
+            example: "str::left('Hello World', 5)".into(),
             package_name: "str".into(),
             parameters: vec![
-                Parameter::new("s", Some("String()".into()), None),
-                Parameter::new("n", Some("i64".into()), None),
+                Descriptor::new("s", Some("String()".into()), None),
+                Descriptor::new("n", Some("i64".into()), None),
             ],
             return_type: StringType(BLOBSized),
             opcode: StrLeft,
@@ -1708,15 +1824,35 @@ mod tests {
         assert_eq!(StrSubstring.get_info(), PlatformFunction {
             name: "substring".into(),
             description: "Returns a substring of string `s` from `m` to `n`".into(),
+            example: "str::substring('Hello World', 0, 5)".into(),
             package_name: "str".into(),
             parameters: vec![
-                Parameter::new("s", Some("String()".into()), None),
-                Parameter::new("m", Some("i64".into()), None),
-                Parameter::new("n", Some("i64".into()), None)
+                Descriptor::new("s", Some("String()".into()), None),
+                Descriptor::new("m", Some("i64".into()), None),
+                Descriptor::new("n", Some("i64".into()), None)
             ],
             return_type: StringType(BLOBSized),
             opcode: StrSubstring,
         });
+    }
+
+    #[ignore]
+    #[test]
+    fn test_examples() {
+        let mut errors = 0;
+        let mut interpreter = Interpreter::new();
+        for op in PLATFORM_OPCODES {
+            match interpreter.evaluate(op.get_example().as_str()) {
+                Ok(response) => assert_ne!(response, Undefined),
+                Err(err) => {
+                    println!("{}", "*".repeat(60));
+                    println!("{}", op.get_example());
+                    eprintln!("ERROR: {}", err);
+                    errors += 1
+                }
+            }
+        }
+        assert_eq!(errors, 0)
     }
 
     #[test]
@@ -1751,7 +1887,7 @@ mod tests {
         assert_eq!(IoStdOut.to_code(), "io::stdout(s: String())");
         // kungfu
         assert_eq!(KungFuAssert.to_code(), "kungfu::assert(b: Boolean)");
-        assert_eq!(KungFuFeature.to_code(), "kungfu::feature(a: String(), b: struct())");
+        assert_eq!(KungFuFeature.to_code(), "kungfu::feature(a: String(), b: Struct())");
         assert_eq!(KungFuMatches.to_code(), "kungfu::matches(a, b)");
         assert_eq!(KungFuTypeOf.to_code(), "kungfu::type_of(x)");
         // os
@@ -2097,14 +2233,14 @@ mod tests {
 
         #[test]
         fn test_kung_fu_type_of_structure_hard() {
-            verify_exact_text_q(r#"kungfu::type_of(struct(symbol: String(3) = "ABC"))"#,
-                                r#"struct(symbol: String(3) := "ABC")"#);
+            verify_exact_text_q(r#"kungfu::type_of(Struct(symbol: String(3) = "ABC"))"#,
+                                r#"Struct(symbol: String(3) := "ABC")"#);
         }
 
         #[test]
         fn test_kung_fu_type_of_structure_soft() {
             verify_exact_text_q(r#"kungfu::type_of({symbol:"ABC"})"#,
-                                r#"struct(symbol: String(3) := "ABC")"#);
+                                r#"Struct(symbol: String(3) := "ABC")"#);
         }
 
         #[test]
@@ -2154,13 +2290,13 @@ mod tests {
         #[test]
         fn test_os_call() {
             verify_exact(r#"
-            create table ns("platform.os.call") (
-                symbol: String(8),
-                exchange: String(8),
-                last_sale: f64
-            )
-            os::call("chmod", "777", oxide::home())
-        "#, StringValue(String::new()))
+                create table ns("platform.os.call") (
+                    symbol: String(8),
+                    exchange: String(8),
+                    last_sale: f64
+                )
+                os::call("chmod", "777", oxide::home())
+            "#, StringValue(String::new()))
         }
 
         #[test]
@@ -2508,10 +2644,10 @@ mod tests {
     #[cfg(test)]
     mod tools_tests {
         use super::*;
+        use crate::columns::Column;
         use crate::interpreter::Interpreter;
         use crate::platform::PlatformOps;
         use crate::structures::HardStructure;
-        use crate::table_columns::Column;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
         use PlatformOps::*;
@@ -2520,183 +2656,183 @@ mod tests {
         fn test_tools_compact() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_table_where(interpreter, r#"
-            [+] stocks := ns("platform.compact.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-            [+] delete from stocks where last_sale > 1.0
-            [+] from stocks
-        "#, vec![
-                "|------------------------------------|",
-                "| id | symbol | exchange | last_sale |",
-                "|------------------------------------|",
-                "| 1  | UNO    | OTC      | 0.2456    |",
-                "| 3  | GOTO   | OTC      | 0.1428    |",
-                "| 5  | BOOM   | NASDAQ   | 0.0872    |",
-                "|------------------------------------|"
-            ]);
+                [+] stocks := ns("platform.compact.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                     { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] delete from stocks where last_sale > 1.0
+                [+] from stocks
+            "#, vec![
+                    "|------------------------------------|",
+                    "| id | symbol | exchange | last_sale |",
+                    "|------------------------------------|",
+                    "| 1  | UNO    | OTC      | 0.2456    |",
+                    "| 3  | GOTO   | OTC      | 0.1428    |",
+                    "| 5  | BOOM   | NASDAQ   | 0.0872    |",
+                    "|------------------------------------|"
+                ]);
 
             verify_exact_table_where(interpreter, r#"
-            [+] import tools
-            [+] stocks:::compact()
-            [+] from stocks
-        "#, vec![
-                "|------------------------------------|",
-                "| id | symbol | exchange | last_sale |",
-                "|------------------------------------|",
-                "| 0  | BOOM   | NASDAQ   | 0.0872    |",
-                "| 1  | UNO    | OTC      | 0.2456    |",
-                "| 2  | GOTO   | OTC      | 0.1428    |",
-                "|------------------------------------|"
-            ]);
+                [+] import tools
+                [+] stocks:::compact()
+                [+] from stocks
+            "#, vec![
+                    "|------------------------------------|",
+                    "| id | symbol | exchange | last_sale |",
+                    "|------------------------------------|",
+                    "| 0  | BOOM   | NASDAQ   | 0.0872    |",
+                    "| 1  | UNO    | OTC      | 0.2456    |",
+                    "| 2  | GOTO   | OTC      | 0.1428    |",
+                    "|------------------------------------|"
+                ]);
         }
 
         #[test]
         fn test_tools_describe() {
             // fully-qualified
             verify_exact_table_with_ids(r#"
-            tools::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
-        "#, vec![
-                "|----------------------------------------------------------|",
-                "| id | name      | type      | default_value | is_nullable |",
-                "|----------------------------------------------------------|",
-                "| 0  | symbol    | String(3) | \"BIZ\"         | true        |",
-                "| 1  | exchange  | String(4) | \"NYSE\"        | true        |",
-                "| 2  | last_sale | f64       | 23.66         | true        |",
-                "|----------------------------------------------------------|"
-            ]);
+                tools::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
+            "#, vec![
+                    "|----------------------------------------------------------|",
+                    "| id | name      | type      | default_value | is_nullable |",
+                    "|----------------------------------------------------------|",
+                    "| 0  | symbol    | String(3) | BIZ           | true        |",
+                    "| 1  | exchange  | String(4) | NYSE          | true        |",
+                    "| 2  | last_sale | f64       | 23.66         | true        |",
+                    "|----------------------------------------------------------|"
+                ]);
 
             // postfix
             verify_exact_table_with_ids(r#"
-            [+] import tools
-            [+] stocks := ns("platform.describe.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            stocks:::describe()
-        "#, vec![
-                "|----------------------------------------------------------|",
-                "| id | name      | type      | default_value | is_nullable |",
-                "|----------------------------------------------------------|",
-                "| 0  | symbol    | String(8) | null          | true        |",
-                "| 1  | exchange  | String(8) | null          | true        |",
-                "| 2  | last_sale | f64       | null          | true        |",
-                "|----------------------------------------------------------|"
-            ]);
+                [+] import tools
+                [+] stocks := ns("platform.describe.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                stocks:::describe()
+            "#, vec![
+                    "|----------------------------------------------------------|",
+                    "| id | name      | type      | default_value | is_nullable |",
+                    "|----------------------------------------------------------|",
+                    "| 0  | symbol    | String(8) | null          | true        |",
+                    "| 1  | exchange  | String(8) | null          | true        |",
+                    "| 2  | last_sale | f64       | null          | true        |",
+                    "|----------------------------------------------------------|"
+                ]);
         }
 
         #[test]
         fn test_tools_fetch() {
             // fully-qualified
             verify_exact_table_with_ids(r#"
-            [+] stocks := ns("platform.fetch.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-            [+] tools::fetch(stocks, 2)
-        "#, vec![
-                "|------------------------------------|",
-                "| id | symbol | exchange | last_sale |",
-                "|------------------------------------|",
-                "| 2  | JET    | NASDAQ   | 32.12     |",
-                "|------------------------------------|"
-            ]);
+                [+] stocks := ns("platform.fetch.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] tools::fetch(stocks, 2)
+            "#, vec![
+                    "|------------------------------------|",
+                    "| id | symbol | exchange | last_sale |",
+                    "|------------------------------------|",
+                    "| 2  | JET    | NASDAQ   | 32.12     |",
+                    "|------------------------------------|"
+                ]);
 
             // postfix
             verify_exact_table_with_ids(r#"
-            [+] import tools
-            [+] stocks := to_table([
-                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-                ])
-            [+] stocks:::fetch(1)
-        "#, vec![
-                "|------------------------------------|",
-                "| id | symbol | exchange | last_sale |",
-                "|------------------------------------|",
-                "| 1  | BOOM   | NYSE     | 56.88     |",
-                "|------------------------------------|"
-            ]);
+                [+] import tools
+                [+] stocks := to_table([
+                        { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                        { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                        { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                    ])
+                [+] stocks:::fetch(1)
+            "#, vec![
+                    "|------------------------------------|",
+                    "| id | symbol | exchange | last_sale |",
+                    "|------------------------------------|",
+                    "| 1  | BOOM   | NYSE     | 56.88     |",
+                    "|------------------------------------|"
+                ]);
         }
 
         #[test]
         fn test_tools_reverse_arrays() {
             verify_exact_table_with_ids(r#"
-            import tools
-            to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
-        "#, vec![
-                "|-------------|",
-                "| id | value  |",
-                "|-------------|",
-                "| 0  | mouse  |",
-                "| 1  | ferret |",
-                "| 2  | dog    |",
-                "| 3  | cat    |",
-                "|-------------|"
-            ])
+                import tools
+                to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
+            "#, vec![
+                    "|-------------|",
+                    "| id | value  |",
+                    "|-------------|",
+                    "| 0  | mouse  |",
+                    "| 1  | ferret |",
+                    "| 2  | dog    |",
+                    "| 3  | cat    |",
+                    "|-------------|"
+                ])
         }
 
         #[test]
         fn test_tools_reverse_tables() {
             // fully-qualified (ephemeral)
             verify_exact_table_with_ids(r#"
-            import tools
-            stocks := to_table([
-                { symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
-                { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
-                { symbol: "XYZ", exchange: "NASDAQ", last_sale: 89.11 }
-            ])
-            reverse(stocks)
-        "#, vec![
-                "|------------------------------------|",
-                "| id | symbol | exchange | last_sale |",
-                "|------------------------------------|",
-                "| 0  | XYZ    | NASDAQ   | 89.11     |",
-                "| 1  | BIZ    | NYSE     | 9.775     |",
-                "| 2  | ABC    | AMEX     | 12.33     |",
-                "|------------------------------------|"
-            ]);
+                import tools
+                stocks := to_table([
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+                    { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+                    { symbol: "XYZ", exchange: "NASDAQ", last_sale: 89.11 }
+                ])
+                reverse(stocks)
+            "#, vec![
+                    "|------------------------------------|",
+                    "| id | symbol | exchange | last_sale |",
+                    "|------------------------------------|",
+                    "| 0  | XYZ    | NASDAQ   | 89.11     |",
+                    "| 1  | BIZ    | NYSE     | 9.775     |",
+                    "| 2  | ABC    | AMEX     | 12.33     |",
+                    "|------------------------------------|"
+                ]);
 
             // postfix (durable)
             verify_exact_table_with_ids(r#"
-            [+] import tools
-            [+] stocks := ns("platform.reverse.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-            [+] stocks:::reverse()
-        "#, vec![
-                "|------------------------------------|",
-                "| id | symbol | exchange | last_sale |",
-                "|------------------------------------|",
-                "| 0  | JET    | NASDAQ   | 32.12     |",
-                "| 1  | BOOM   | NYSE     | 56.88     |",
-                "| 2  | ABC    | AMEX     | 12.49     |",
-                "|------------------------------------|"
-            ]);
+                [+] import tools
+                [+] stocks := ns("platform.reverse.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] stocks:::reverse()
+            "#, vec![
+                    "|------------------------------------|",
+                    "| id | symbol | exchange | last_sale |",
+                    "|------------------------------------|",
+                    "| 0  | JET    | NASDAQ   | 32.12     |",
+                    "| 1  | BOOM   | NYSE     | 56.88     |",
+                    "| 2  | ABC    | AMEX     | 12.49     |",
+                    "|------------------------------------|"
+                ]);
         }
 
         #[test]
         fn test_tools_scan() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-            [+] import tools
-            [+] stocks := ns("platform.scan.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
-                 { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
-            [+] delete from stocks where last_sale > 1.0
-            [+] stocks:::scan()
-        "#).unwrap();
+                [+] import tools
+                [+] stocks := ns("platform.scan.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
+                     { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
+                [+] delete from stocks where last_sale > 1.0
+                [+] stocks:::scan()
+            "#).unwrap();
             assert_eq!(result.to_table().unwrap().read_active_rows().unwrap(), vec![
                 make_scan_quote(0, "ABC", "AMEX", 12.33, false),
                 make_scan_quote(1, "UNO", "OTC", 0.2456, true),
@@ -2709,8 +2845,8 @@ mod tests {
         #[test]
         fn test_tools_to_array_with_strings_qualified() {
             verify_exact(r#"
-             tools::to_array("Hello")
-        "#, ArrayValue(Array::from(vec![
+                 tools::to_array("Hello")
+            "#, ArrayValue(Array::from(vec![
                 StringValue("H".into()), StringValue("e".into()),
                 StringValue("l".into()), StringValue("l".into()),
                 StringValue("o".into())
@@ -2720,9 +2856,9 @@ mod tests {
         #[test]
         fn test_tools_to_array_with_strings_postfix() {
             verify_exact(r#"
-            import tools
-            "World":::to_array()
-        "#, ArrayValue(Array::from(vec![
+                import tools
+                "World":::to_array()
+            "#, ArrayValue(Array::from(vec![
                 StringValue("W".into()), StringValue("o".into()),
                 StringValue("r".into()), StringValue("l".into()),
                 StringValue("d".into())
@@ -2734,39 +2870,39 @@ mod tests {
             // fully qualified
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-             tools::to_array(tools::to_table([
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
-             ]))
-        "#).unwrap();
-            let columns = Column::from_parameters(&vec![
-                Parameter::new("symbol", Some("String(3)".into()), Some("\"BIZ\"".into())),
-                Parameter::new("exchange", Some("String(4)".into()), Some("\"NYSE\"".into())),
-                Parameter::new("last_sale", Some("f64".into()), Some("23.66".into())),
+                 tools::to_array(tools::to_table([
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
+                 ]))
+            "#).unwrap();
+            let columns = Column::from_descriptors(&vec![
+                Descriptor::new("symbol", Some("String(3)".into()), Some("\"BIZ\"".into())),
+                Descriptor::new("exchange", Some("String(4)".into()), Some("\"NYSE\"".into())),
+                Descriptor::new("last_sale", Some("f64".into()), Some("23.66".into())),
             ]).unwrap();
             assert_eq!(result, ArrayValue(Array::from(vec![
-                StructureHard(HardStructure::new(columns.clone(), vec![
+                Structured(Hard(HardStructure::new(columns.clone(), vec![
                     StringValue("BIZ".into()), StringValue("NYSE".into()), Number(F64Value(23.66))
-                ])),
-                StructureHard(HardStructure::new(columns.clone(), vec![
+                ]))),
+                Structured(Hard(HardStructure::new(columns.clone(), vec![
                     StringValue("DMX".into()), StringValue("OTC_BB".into()), Number(F64Value(1.17))
-                ]))
+                ])))
             ])));
         }
 
         #[test]
         fn test_tools_to_csv() {
             verify_exact(r#"
-            import tools::to_csv
-            [+] stocks := ns("platform.csv.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            stocks:::to_csv()
-        "#, ArrayValue(Array::from(vec![
+                import tools::to_csv
+                [+] stocks := ns("platform.csv.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                stocks:::to_csv()
+            "#, ArrayValue(Array::from(vec![
                 StringValue(r#""ABC","AMEX",11.11"#.into()),
                 StringValue(r#""UNO","OTC",0.2456"#.into()),
                 StringValue(r#""BIZ","NYSE",23.66"#.into()),
@@ -2778,16 +2914,16 @@ mod tests {
         #[test]
         fn test_tools_to_json() {
             verify_exact(r#"
-            import tools::to_json
-            [+] stocks := ns("platform.json.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            stocks:::to_json()
-        "#, ArrayValue(Array::from(vec![
+                import tools::to_json
+                [+] stocks := ns("platform.json.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                stocks:::to_json()
+            "#, ArrayValue(Array::from(vec![
                 StringValue(r#"{"symbol":"ABC","exchange":"AMEX","last_sale":11.11}"#.into()),
                 StringValue(r#"{"symbol":"UNO","exchange":"OTC","last_sale":0.2456}"#.into()),
                 StringValue(r#"{"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}"#.into()),
@@ -2799,64 +2935,64 @@ mod tests {
         #[test]
         fn test_tools_to_table_with_arrays() {
             verify_exact_table_with_ids(r#"
-            tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
-        "#, vec![
-                "|-------------|",
-                "| id | value  |",
-                "|-------------|",
-                "| 0  | cat    |",
-                "| 1  | dog    |",
-                "| 2  | ferret |",
-                "| 3  | mouse  |",
-                "|-------------|"
-            ])
+                tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
+            "#, vec![
+                    "|-------------|",
+                    "| id | value  |",
+                    "|-------------|",
+                    "| 0  | cat    |",
+                    "| 1  | dog    |",
+                    "| 2  | ferret |",
+                    "| 3  | mouse  |",
+                    "|-------------|"
+                ])
         }
 
         #[test]
         fn test_tools_to_table_with_hard_structures() {
             verify_exact_table_with_ids(r#"
-            tools::to_table(struct(
-                symbol: String(8) = "ABC",
-                exchange: String(8) = "NYSE",
-                last_sale: f64 = 45.67
-            ))
-        "#, vec![
-                "|------------------------------------|",
-                "| id | symbol | exchange | last_sale |",
-                "|------------------------------------|",
-                "| 0  | ABC    | NYSE     | 45.67     |",
-                "|------------------------------------|"
-            ])
+                tools::to_table(Struct(
+                    symbol: String(8) = "ABC",
+                    exchange: String(8) = "NYSE",
+                    last_sale: f64 = 45.67
+                ))
+            "#, vec![
+                    "|------------------------------------|",
+                    "| id | symbol | exchange | last_sale |",
+                    "|------------------------------------|",
+                    "| 0  | ABC    | NYSE     | 45.67     |",
+                    "|------------------------------------|"
+                ])
         }
 
         #[test]
         fn test_tools_to_table_with_soft_and_hard_structures() {
             verify_exact_table_with_ids(r#"
-            stocks := tools::to_table([
-                { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
-            ])
+                stocks := tools::to_table([
+                    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
+                ])
 
-            tools::to_table([
-                stocks,
-                struct(
-                    symbol: String(8) = "ABC",
-                    exchange: String(8) = "OTHER_OTC",
-                    last_sale: f64 = 0.67),
-                { symbol: "TRX", exchange: "AMEX", last_sale: 29.88 },
-                { symbol: "BMX", exchange: "NASDAQ", last_sale: 46.11 }
-            ])
-        "#, vec![
-                "|-------------------------------------|",
-                "| id | symbol | exchange  | last_sale |",
-                "|-------------------------------------|",
-                "| 0  | BIZ    | NYSE      | 23.66     |",
-                "| 1  | DMX    | OTC_BB    | 1.17      |",
-                "| 2  | ABC    | OTHER_OTC | 0.67      |",
-                "| 3  | TRX    | AMEX      | 29.88     |",
-                "| 4  | BMX    | NASDAQ    | 46.11     |",
-                "|-------------------------------------|"
-            ])
+                tools::to_table([
+                    stocks,
+                    Struct(
+                        symbol: String(8) = "ABC",
+                        exchange: String(8) = "OTHER_OTC",
+                        last_sale: f64 = 0.67),
+                    { symbol: "TRX", exchange: "AMEX", last_sale: 29.88 },
+                    { symbol: "BMX", exchange: "NASDAQ", last_sale: 46.11 }
+                ])
+            "#, vec![
+                    "|-------------------------------------|",
+                    "| id | symbol | exchange  | last_sale |",
+                    "|-------------------------------------|",
+                    "| 0  | BIZ    | NYSE      | 23.66     |",
+                    "| 1  | DMX    | OTC_BB    | 1.17      |",
+                    "| 2  | ABC    | OTHER_OTC | 0.67      |",
+                    "| 3  | TRX    | AMEX      | 29.88     |",
+                    "| 4  | BMX    | NASDAQ    | 46.11     |",
+                    "|-------------------------------------|"
+                ])
         }
     }
 
@@ -2878,6 +3014,13 @@ mod tests {
         }
 
         #[test]
+        fn test_util_hex() {
+            verify_exact(
+                "util::hex('Hello World')",
+                StringValue("48656c6c6f20576f726c64".into()))
+        }
+
+        #[test]
         fn test_util_md5() {
             verify_exact_text(
                 "util::md5('Hello World')",
@@ -2887,6 +3030,13 @@ mod tests {
         #[test]
         fn test_util_md5_type() {
             verify_data_type("util::md5(x)", BinaryType(FixedSize(16)));
+        }
+
+        #[test]
+        fn test_util_to_ascii() {
+            verify_exact_text(
+                "util::to_ascii(177)",
+                "\"±\"")
         }
 
         #[test]
@@ -2946,10 +3096,10 @@ mod tests {
     #[cfg(test)]
     mod www_tests {
         use super::*;
+        use crate::columns::Column;
         use crate::interpreter::Interpreter;
         use crate::platform::PlatformOps;
         use crate::structures::HardStructure;
-        use crate::table_columns::Column;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
         use PlatformOps::*;
@@ -3060,7 +3210,7 @@ mod tests {
                 HEAD "http://localhost:8833/platform/www/stocks/{row_id}"
             "#).as_str()).unwrap();
             println!("HEAD: {}", result.to_string());
-            assert!(matches!(result, StructureSoft(..)));
+            assert!(matches!(result, Structured(Soft(..))));
 
             // delete the previously updated row
             let result = interpreter.evaluate(format!(r#"
@@ -3072,7 +3222,7 @@ mod tests {
             let row = interpreter.evaluate(format!(r#"
                 GET "http://localhost:8833/platform/www/stocks/{row_id}"
             "#).as_str()).unwrap();
-            assert_eq!(row, StructureSoft(SoftStructure::empty()));
+            assert_eq!(row, Structured(Soft(SoftStructure::empty())));
         }
     }
 }

@@ -3,14 +3,16 @@
 //                    expressions to and from byte code.
 ////////////////////////////////////////////////////////////////////
 
+use crate::columns::Column;
+use crate::data_types::DataType;
+use crate::descriptor::Descriptor;
 use crate::errors::Errors::Exact;
 use crate::expression::Expression::Literal;
 use crate::expression::*;
 use crate::model_row_collection::ModelRowCollection;
 use crate::parameter::Parameter;
-use crate::rows::Row;
 use crate::structures::HardStructure;
-use crate::table_columns::Column;
+use crate::structures::Row;
 use crate::typed_values::TypedValue::ErrorValue;
 use crate::typed_values::*;
 use shared_lib::fail;
@@ -270,14 +272,31 @@ impl ByteCodeCompiler {
         result
     }
 
-    pub fn next_parameter(&mut self) -> Parameter {
+    pub fn next_descriptor(&mut self) -> Descriptor {
         let name = self.next_string();
         let param_type = match self.next_string() {
             s if s.is_empty() => None,
             s => Some(s)
         };
         let default_value = self.next_string_opt();
-        Parameter::new(name, param_type, default_value)
+        Descriptor::new(name, param_type, default_value)
+    }
+
+    pub fn next_descriptors(&mut self) -> Vec<Descriptor> {
+        let length = self.next_u16();
+        let mut parameters = Vec::new();
+        for _ in 0..length {
+            parameters.push(self.next_descriptor());
+        }
+        parameters
+    }
+
+    pub fn next_parameter(&mut self) -> Parameter {
+        let name = self.next_string();
+        let param_type = self.next_parameter_type();
+        let default_value = self.next_value()
+            .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())));
+        Parameter::with_default(name, param_type, default_value)
     }
 
     pub fn next_parameters(&mut self) -> Vec<Parameter> {
@@ -287,6 +306,10 @@ impl ByteCodeCompiler {
             parameters.push(self.next_parameter());
         }
         parameters
+    }
+
+    pub fn next_parameter_type(&mut self) -> DataType {
+        todo!()
     }
 
     pub fn disassemble(buf: &mut ByteCodeCompiler) -> std::io::Result<Expression> {
@@ -316,7 +339,7 @@ impl ByteCodeCompiler {
         &mut self,
         parameters: &Vec<Parameter>,
     ) -> std::io::Result<Vec<Row>> {
-        let columns = Column::from_parameters(parameters)?;
+        let columns = Column::from_parameters(parameters);
         let n_rows = self.next_u64();
         let mut rows = Vec::new();
         for _ in 0..n_rows {
@@ -346,7 +369,7 @@ impl ByteCodeCompiler {
         &mut self,
         parameters: &Vec<Parameter>,
     ) -> std::io::Result<HardStructure> {
-        let fields = Column::from_parameters(parameters)?;
+        let fields = Column::from_parameters(parameters);
         Ok(HardStructure::new(fields, self.next_array()?))
     }
 
@@ -354,9 +377,9 @@ impl ByteCodeCompiler {
         &mut self,
         parameters: &Vec<Parameter>,
     ) -> std::io::Result<ModelRowCollection> {
-        let phys_columns = Column::from_parameters(&parameters)?;
+        let phys_columns = Column::from_parameters(&parameters);
         let rows = self.next_rows_with_columns(parameters)?;
-        Ok(ModelRowCollection::from_rows(&phys_columns, &rows))
+        Ok(ModelRowCollection::from_columns_and_rows(&phys_columns, &rows))
     }
 
     pub fn next_u8(&mut self) -> u8 {
@@ -414,14 +437,14 @@ impl ByteCodeCompiler {
         self
     }
 
-    pub fn put_column(&mut self, column: &Parameter) -> &Self {
+    pub fn put_column(&mut self, column: &Descriptor) -> &Self {
         self.put_string(column.get_name());
         self.put_string(column.get_param_type().unwrap_or("".to_string()).as_str());
         self.put_string_opt(column.get_default_value());
         self
     }
 
-    pub fn put_parameters(&mut self, parameters: &Vec<Parameter>) -> &Self {
+    pub fn put_descriptors(&mut self, parameters: &Vec<Descriptor>) -> &Self {
         self.put_u16(parameters.len() as u16);
         for column in parameters {
             self.put_column(&column);
@@ -550,7 +573,7 @@ mod tests {
     use crate::expression::{DatabaseOps, Mutation, Queryable};
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::{F64Value, I64Value};
-    use crate::testdata::make_quote_parameters;
+    use crate::testdata::make_quote_descriptors;
     use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::{Number, StringValue, TableValue};
 
@@ -559,7 +582,7 @@ mod tests {
     #[test]
     fn test_table_codec() {
         let phys_columns = make_quote_columns();
-        let expected = TableValue(Model(ModelRowCollection::from_rows(&phys_columns, &vec![
+        let expected = TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "BIZ", "NYSE", 23.66),
@@ -753,14 +776,14 @@ mod tests {
     #[test]
     fn test_parameters() {
         let mut buffer = ByteCodeCompiler::new(512);
-        buffer.put_parameters(&make_quote_parameters());
+        buffer.put_descriptors(&make_quote_descriptors());
         assert_eq!(buffer.position(), 118);
 
         buffer.flip();
-        assert_eq!(buffer.next_parameters(), vec![
-            Parameter::new("symbol", Some("String(8)".into()), None),
-            Parameter::new("exchange", Some("String(8)".into()), None),
-            Parameter::new("last_sale", Some("f64".into()), None),
+        assert_eq!(buffer.next_descriptors(), vec![
+            Descriptor::new("symbol", Some("String(8)".into()), None),
+            Descriptor::new("exchange", Some("String(8)".into()), None),
+            Descriptor::new("last_sale", Some("f64".into()), None),
         ])
     }
 
