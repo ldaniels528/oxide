@@ -57,6 +57,15 @@ impl TokenSlice {
         (tokens, self.copy(pos))
     }
 
+    pub fn current(&self) -> Token {
+        let pos = match self.pos {
+            pos if pos <= 0 => 0usize,
+            pos if pos >= self.tokens.len() as isize => self.tokens.len() - 1,
+            pos => pos as usize
+        };
+        self.tokens[pos].clone()
+    }
+
     /// Creates a new Token Slice via a vector of tokens.
     pub fn copy(&self, pos: isize) -> Self {
         Self { tokens: self.tokens.to_owned(), pos }
@@ -182,17 +191,6 @@ impl TokenSlice {
             return (Some(self[n as usize].to_owned()), self.copy(n));
         }
         (None, self.to_owned())
-    }
-
-    /// Scans the slice moving the cursor forward until the desired match is found.
-    /// However, if the end of the sequence is reached before the token is found
-    /// there is no effect.
-    pub fn scan_to(&self, f: fn(&Token) -> bool) -> (&[Token], Self) {
-        let mut pos = self.pos;
-        while pos < self.tokens.len() as isize && !f(&self.tokens[pos as usize]) { pos += 1 }
-        if pos > self.pos && pos < self.tokens.len() as isize {
-            (&self.tokens[self.pos as usize..pos as usize], self.copy(pos))
-        } else { (&[], self.to_owned()) }
     }
 
     /// Scans the slice moving the cursor forward until the desired match is found.
@@ -354,19 +352,6 @@ mod tests {
         let (tok0, ts) = ts.next();
         assert_eq!(tok0.map(|t| t.get_raw_value()), Some("items".to_string()));
         assert!(!ts.is_same_line_as_previous());
-    }
-
-    #[test]
-    fn test_scan_to() {
-        let ts = TokenSlice::from_string("the fox was too 'fast!' for me");
-        let (rows, ts) = ts.scan_to(|t| t.is_single_quoted());
-        assert_eq!(rows, &[
-            Token::atom("the".into(), 0, 3, 1, 2),
-            Token::atom("fox".into(), 4, 7, 1, 6),
-            Token::atom("was".into(), 8, 11, 1, 10),
-            Token::atom("too".into(), 12, 15, 1, 14)
-        ]);
-        assert_eq!(ts.get_position(), 4);
     }
 
     #[test]

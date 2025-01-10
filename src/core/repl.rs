@@ -13,9 +13,9 @@ use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
+use crate::oxide_server::SharedState;
 use crate::platform::PlatformOps;
 use crate::repl;
-use crate::rest_server::SharedState;
 use crate::row_collection::RowCollection;
 use crate::structures::Row;
 use crate::structures::Structures::{Hard, Soft};
@@ -301,7 +301,7 @@ fn show_title() {
 
 /// Starts the listener server
 async fn start_server(args: Vec<String>) -> std::io::Result<()> {
-    use crate::rest_server::*;
+    use crate::oxide_server::*;
     use crate::web_routes;
     use actix_web::web::Data;
     use crate::platform::{MAJOR_VERSION, MINOR_VERSION};

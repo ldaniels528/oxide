@@ -11,7 +11,9 @@ use crate::data_types::DataType::NumberType;
 use crate::descriptor::Descriptor;
 use crate::errors::Errors;
 use crate::errors::Errors::*;
-use crate::field_metadata::FieldMetadata;
+use crate::errors::TypeMismatchErrors::*;
+use crate::errors::TypeMismatchErrors::{OutcomeExpected, RowsAffectedExpected};
+use crate::field::FieldMetadata;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::U64Value;
@@ -252,10 +254,6 @@ impl HashTableRowCollection {
 }
 
 impl RowCollection for HashTableRowCollection {
-    fn encode(&self) -> Vec<u8> {
-        self.data_table.encode()
-    }
-
     fn delete_row(&mut self, id: usize) -> TypedValue {
         let key_value = self.read_field(id, self.key_column_index);
         let keys_row_id = self.convert_key_to_row_id(&key_value);
@@ -268,7 +266,7 @@ impl RowCollection for HashTableRowCollection {
                 match self.keys_table.delete_row(keys_row_id) {
                     Number(..) => self.data_table.delete_row(id),
                     ErrorValue(msg) => ErrorValue(msg),
-                    other => ErrorValue(OutcomeExpected(other.to_code()))
+                    other => ErrorValue(TypeMismatch(OutcomeExpected(other.to_code())))
                 }
         }
     }
@@ -298,7 +296,7 @@ impl RowCollection for HashTableRowCollection {
         match self.link_key_value(id, &new_value) {
             Number(..) => self.data_table.overwrite_field(id, column_id, new_value),
             ErrorValue(msg) => ErrorValue(msg),
-            other => ErrorValue(OutcomeExpected(other.to_code()))
+            other => ErrorValue(TypeMismatch(OutcomeExpected(other.to_code())))
         }
     }
 
@@ -317,7 +315,7 @@ impl RowCollection for HashTableRowCollection {
             Number(oc) if oc.to_usize() > 0 => self.data_table.overwrite_row(id, row),
             Number(oc) => Number(oc),
             ErrorValue(err) => ErrorValue(err),
-            other => ErrorValue(OutcomeExpected(other.to_code()))
+            other => ErrorValue(TypeMismatch(OutcomeExpected(other.to_code())))
         }
     }
 
@@ -375,7 +373,7 @@ impl RowCollection for HashTableRowCollection {
                 match self.move_key_value(id, &old_value, new_value) {
                     Number(..) => self.data_table.update_row(id, row),
                     ErrorValue(err) => ErrorValue(err),
-                    other => ErrorValue(RowsAffectedExpected(other.to_code()))
+                    other => ErrorValue(TypeMismatch(RowsAffectedExpected(other.to_code())))
                 }
         }
     }

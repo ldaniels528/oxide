@@ -8,11 +8,10 @@ use std::fs::File;
 use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::{NumberType, StringType, UnionType};
-use crate::data_types::StorageTypes::FixedSize;
+use crate::data_types::DataType::{NumberType, StringType, VaryingType};
+use crate::data_types::*;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Disk;
-use crate::dataframe_config::DataFrameConfig;
 use crate::descriptor::Descriptor;
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
@@ -20,6 +19,7 @@ use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::{F64Kind, I64Kind};
 use crate::numbers::Numbers::{F64Value, U64Value};
+use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::structures::Row;
 use crate::table_renderer::TableRenderer;
@@ -40,8 +40,8 @@ pub fn make_dataframe_ns(ns: Namespace, columns: Vec<Parameter>) -> std::io::Res
     Ok(Disk(FileRowCollection::create_table(&ns, &columns)?))
 }
 
-pub fn make_dataframe_config(columns: Vec<Parameter>) -> DataFrameConfig {
-    DataFrameConfig::build(&columns)
+pub fn make_dataframe_config(columns: Vec<Parameter>) -> ObjectConfig {
+    ObjectConfig::build_table(columns)
 }
 
 pub fn make_quote(id: usize,
@@ -69,8 +69,8 @@ pub fn make_quote_descriptors() -> Vec<Descriptor> {
 
 pub fn make_quote_parameters() -> Vec<Parameter> {
     vec![
-        Parameter::new("symbol", StringType(FixedSize(8))),
-        Parameter::new("exchange", StringType(FixedSize(8))),
+        Parameter::new("symbol", StringType(8)),
+        Parameter::new("exchange", StringType(8)),
         Parameter::new("last_sale", NumberType(F64Kind)),
     ]
 }
@@ -111,13 +111,13 @@ pub fn verify_data_type(code: &str, expected: DataType) {
 
 pub fn verify_bit_operator(op: &str) {
     verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
-    verify_data_type(format!("a {} b", op).as_str(), UnionType(vec![]));
+    verify_data_type(format!("a {} b", op).as_str(), VaryingType(vec![]));
 }
 
 pub fn verify_math_operator(op: &str) {
     verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
     verify_data_type(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
-    verify_data_type(format!("a {} b", op).as_str(), UnionType(vec![]));
+    verify_data_type(format!("a {} b", op).as_str(), VaryingType(vec![]));
 }
 
 pub fn verify_exact(code: &str, expected: TypedValue) {
@@ -274,5 +274,4 @@ mod tests {
         assert_eq!(parameters, Parameter::from_columns(&make_quote_columns()));
         assert_eq!(parameters, Parameter::from_descriptors(&make_quote_descriptors()).unwrap());
     }
-
 }

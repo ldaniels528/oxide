@@ -713,7 +713,7 @@ impl Neg for Numbers {
         match self {
             Ack => I64Value(0),
             RowId(n) => I64Value(-(n as i64)),
-            RowsAffected(n) => I64Value(-(n as i64)),
+            RowsAffected(n) => I64Value(-n),
             DateValue(d) => I64Value(-d),
             F32Value(n) => F32Value(-n),
             F64Value(n) => F64Value(-n),

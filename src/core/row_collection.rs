@@ -6,13 +6,13 @@
 use crate::arrays::Array;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
-use crate::compiler::fail_value;
 use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe::Model;
-use crate::errors::Errors;
-use crate::errors::Errors::InvalidNamespace;
+use crate::errors::Errors::{InvalidNamespace, TypeMismatch};
+use crate::errors::TypeMismatchErrors::TableExpected;
+use crate::errors::{throw, Errors};
 use crate::expression::Conditions;
-use crate::field_metadata::FieldMetadata;
+use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
@@ -171,16 +171,13 @@ pub trait RowCollection: Debug {
         for column in self.get_columns() {
             mrc.append_row(Row::new(0, vec![
                 StringValue(column.get_name().to_string()),
-                StringValue(column.get_data_type().to_type_declaration().unwrap_or("".to_string())),
+                StringValue(column.get_data_type().to_type_declaration().unwrap_or(String::new())),
                 StringValue(column.get_default_value().unwrap_value()),
                 Boolean(true),
             ]));
         }
         TableValue(Model(mrc))
     }
-
-    /// Encodes the [RowCollection] into a byte vector
-    fn encode(&self) -> Vec<u8>;
 
     fn examine_range(&self, range: std::ops::Range<usize>) -> TypedValue {
         // create the augmented columns
@@ -212,9 +209,9 @@ pub trait RowCollection: Debug {
     /// Reads active and inactive (deleted) rows
     fn examine_rows(&self) -> std::io::Result<Vec<Row>> {
         match self.examine_range(self.get_indices()?) {
-            ErrorValue(err) => fail(err.to_string()),
+            ErrorValue(err) => throw(err),
             TableValue(rcv) => Ok(rcv.get_rows()),
-            z => fail_value("Table", &z)
+            z => throw(TypeMismatch(TableExpected(String::new(), z.to_code())))
         }
     }
 
@@ -780,7 +777,7 @@ pub trait RowCollection: Debug {
 impl dyn RowCollection {
     /// creates a new in-memory [RowCollection] from a byte vector.
     pub fn from_bytes(columns: Vec<Column>, rows: Vec<Vec<u8>>) -> impl RowCollection {
-        ByteRowCollection::new(columns, rows)
+        ByteRowCollection::from_bytes(columns, rows)
     }
 
     /// creates a new [RowCollection] from a file.
@@ -793,27 +790,42 @@ impl dyn RowCollection {
     }
 }
 
+/// Row Encoding interface
+pub trait RowEncoding {
+    /// Returns an empty binary field
+    fn empty_cell(column: &Column) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.resize(column.get_fixed_size(), 0u8);
+        bytes
+    }
+
+    fn read_at(&self, offset: u64, count: usize) -> std::io::Result<Vec<u8>>;
+
+    fn write_at(&self, offset: u64, bytes: &Vec<u8>) -> std::io::Result<Numbers>;
+}
+
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    use chrono::Local;
-    use num_traits::ToPrimitive;
-    use rand::{thread_rng, Rng, RngCore};
-    use shared_lib::{cnv_error, compute_time_millis};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use super::*;
+    use crate::byte_code_compiler::ByteCodeCompiler;
     use crate::dataframe::Dataframe;
     use crate::descriptor::Descriptor;
     use crate::expression::Conditions::Equal;
     use crate::expression::Expression::{Literal, Variable};
     use crate::hash_table_row_collection::HashTableRowCollection;
+    use crate::hybrid_row_collection::HybridRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::numbers::Numbers::{Ack, F64Value, RowId, RowsAffected};
     use crate::parameter::Parameter;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::*;
+    use chrono::Local;
+    use num_traits::ToPrimitive;
+    use rand::{thread_rng, Rng, RngCore};
+    use shared_lib::{cnv_error, compute_time_millis};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn test_from_bytes() {
@@ -890,7 +902,7 @@ mod tests {
             ]));
 
             // encode the table
-            let encoded_table = rc.encode();
+            let encoded_table = ByteCodeCompiler::encode_rc(&rc);
             assert_eq!(encoded_table.len(), 208);
 
             // reconstitute the table
@@ -1743,7 +1755,8 @@ mod tests {
     #[test]
     fn test_performance() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            test_write_performance(label, &mut rc, &columns, 10_000).unwrap();
+            rc.resize(0);
+            test_write_performance(label, &mut rc, &columns, 20_000).unwrap();
             test_read_performance(label, &rc).unwrap();
             rc.len().unwrap() as u64
         }
@@ -1837,6 +1850,7 @@ mod tests {
         mrc = work(mrc, name, "Binary", &columns, verify_byte_array_variant, test);
         mrc = work(mrc, name, "File", &columns, verify_file_variant, test);
         mrc = work(mrc, name, "HashTable", &columns, verify_hash_table_variant, test);
+        mrc = work(mrc, name, "Hybrid", &columns, verify_hybrid_table_variant, test);
         mrc = work(mrc, name, "Model", &columns, verify_model_variant, test);
 
         mrc = work(mrc, name, "Proxy|Binary", &columns, verify_proxy_binary_variant, test);
@@ -1850,12 +1864,12 @@ mod tests {
     }
 
     fn verify_byte_array_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let brc = ByteRowCollection::new(columns.to_owned(), Vec::new());
+        let brc = ByteRowCollection::from_bytes(columns.to_owned(), Vec::new());
         test_variant(kind, Box::new(brc), columns)
     }
 
     fn verify_proxy_binary_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let brc = Dataframe::Binary(ByteRowCollection::new(columns.to_owned(), Vec::new()));
+        let brc = Dataframe::Binary(ByteRowCollection::from_bytes(columns.to_owned(), Vec::new()));
         test_variant(kind, Box::new(brc), columns)
     }
 
@@ -1883,6 +1897,13 @@ mod tests {
         let params = Parameter::from_columns(&columns);
         let frc = FileRowCollection::create_table(&ns, &params).unwrap();
         let hrc = HashTableRowCollection::new(0, Box::new(frc)).unwrap();
+        test_variant(kind, Box::new(hrc), columns.to_owned())
+    }
+
+    fn verify_hybrid_table_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
+        let ns = Namespace::new("hybrid_row_collection", name, "stocks");
+        let params = Parameter::from_columns(&columns);
+        let hrc = HybridRowCollection::new(&ns, &params, 100).unwrap();
         test_variant(kind, Box::new(hrc), columns.to_owned())
     }
 

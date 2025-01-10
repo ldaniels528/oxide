@@ -5,12 +5,16 @@
 
 use crate::columns::Column;
 use crate::data_types::DataType;
+use crate::dataframe::Dataframe;
 use crate::descriptor::Descriptor;
 use crate::errors::Errors::Exact;
 use crate::expression::Expression::Literal;
 use crate::expression::*;
+use crate::field::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
 use crate::parameter::Parameter;
+use crate::row_collection::RowCollection;
+use crate::row_metadata::RowMetadata;
 use crate::structures::HardStructure;
 use crate::structures::Row;
 use crate::typed_values::TypedValue::ErrorValue;
@@ -58,8 +62,71 @@ impl ByteCodeCompiler {
                               |err| Literal(ErrorValue(Exact(err.to_string()))))
     }
 
+    /// Decodes the supplied buffer returning a row and its metadata
+    pub fn decode_row(columns: &Vec<Column>, buffer: &Vec<u8>) -> (Row, RowMetadata) {
+        // if the buffer is empty, just return an empty row
+        if buffer.len() == 0 {
+            return (Row::create(0, columns), RowMetadata::new(false));
+        }
+        let metadata = RowMetadata::from_bytes(buffer, 0);
+        let id = ByteCodeCompiler::decode_row_id(buffer, 1);
+        let values = columns.iter().map(|column| {
+            let data_type = column.get_data_type();
+            data_type.decode_field_value(&buffer, column.get_offset())
+        }).collect();
+        (Row::new(id, values), metadata)
+    }
+
+    /// Decodes the supplied buffer returning a collection of rows.
+    pub fn decode_rows(columns: &Vec<Column>, row_data: Vec<Vec<u8>>) -> Vec<Row> {
+        let mut rows = Vec::new();
+        for row_bytes in row_data {
+            let (row, metadata) = Self::decode_row(&columns, &row_bytes);
+            if metadata.is_allocated { rows.push(row); }
+        }
+        rows
+    }
+
     pub fn encode(model: &Expression) -> std::io::Result<Vec<u8>> {
         Self::unwrap_as_result(bincode::serialize(model))
+    }
+
+    pub fn encode_df(df: &Dataframe) -> Vec<u8> {
+        //Self::unwrap_as_result(bincode::serialize(df))
+        let mut encoded = vec![];
+        let columns = df.get_columns();
+        for row in df.iter() {
+            encoded.extend(Self::encode_row(&row, columns));
+        }
+        encoded
+    }
+
+    pub fn encode_rc(rc: &Box<dyn RowCollection>) -> Vec<u8> {
+        //Self::unwrap_as_result(bincode::serialize(df))
+        let mut encoded = vec![];
+        let columns = rc.get_columns();
+        for row in rc.iter() {
+            encoded.extend(Self::encode_row(&row, columns));
+        }
+        encoded
+    }
+
+    /// Returns the binary-encoded equivalent of the row.
+    pub fn encode_row(row: &Row, phys_columns: &Vec<Column>) -> Vec<u8> {
+        let capacity = Row::compute_record_size(phys_columns);
+        let mut fixed_buf = Vec::with_capacity(capacity);
+        // include the field metadata and row ID
+        fixed_buf.push(RowMetadata::new(true).encode());
+        fixed_buf.extend(ByteCodeCompiler::encode_row_id(row.get_id()));
+        // include the fields
+        let fmd = FieldMetadata::new(true);
+        let bb: Vec<u8> = row.get_values().iter().zip(phys_columns.iter())
+            .flat_map(|(value, column)| {
+                column.get_data_type().encode_field(value, &fmd, column.get_fixed_size())
+            }).collect();
+        fixed_buf.extend(bb);
+        fixed_buf.resize(capacity, 0u8);
+        fixed_buf
     }
 
     pub fn decode_value(bytes: &Vec<u8>) -> TypedValue {
@@ -439,7 +506,7 @@ impl ByteCodeCompiler {
 
     pub fn put_column(&mut self, column: &Descriptor) -> &Self {
         self.put_string(column.get_name());
-        self.put_string(column.get_param_type().unwrap_or("".to_string()).as_str());
+        self.put_string(column.get_param_type().unwrap_or(String::new()).as_str());
         self.put_string_opt(column.get_default_value());
         self
     }
@@ -570,14 +637,12 @@ mod tests {
     use crate::dataframe::Dataframe::Model;
     use crate::expression::Conditions::{Equal, GreaterThan, LessOrEqual};
     use crate::expression::Expression::{Condition, DatabaseOp, If, JSONExpression, Literal, Multiply, Plus, Variable, Via};
-    use crate::expression::{DatabaseOps, Mutation, Queryable};
+    use crate::expression::{DatabaseOps, Mutations, Queryables};
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::{F64Value, I64Value};
     use crate::testdata::make_quote_descriptors;
     use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::{Number, StringValue, TableValue};
-
-    use super::*;
 
     #[test]
     fn test_table_codec() {
@@ -611,7 +676,7 @@ mod tests {
 
     #[test]
     fn test_expression_delete() {
-        let model = DatabaseOp(DatabaseOps::Mutate(Mutation::Delete {
+        let model = DatabaseOp(DatabaseOps::Mutation(Mutations::Delete {
             path: Box::new(Variable("stocks".into())),
             condition: Some(LessOrEqual(
                 Box::new(Variable("last_sale".into())),
@@ -652,7 +717,7 @@ mod tests {
 
     #[test]
     fn test_select() {
-        let model = DatabaseOp(DatabaseOps::Query(Queryable::Select {
+        let model = DatabaseOp(DatabaseOps::Queryable(Queryables::Select {
             fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
             from: Some(Box::new(Variable("stocks".into()))),
             condition: Some(LessOrEqual(
@@ -671,7 +736,7 @@ mod tests {
 
     #[test]
     fn test_update() {
-        let model = DatabaseOp(DatabaseOps::Mutate(Mutation::Update {
+        let model = DatabaseOp(DatabaseOps::Mutation(Mutations::Update {
             path: Box::new(Variable("stocks".into())),
             source: Box::new(Via(Box::new(JSONExpression(vec![
                 ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
@@ -764,6 +829,19 @@ mod tests {
         let expected: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 30, 84, 104, 101, 32, 108, 105, 116, 116, 108, 101, 32, 121, 111, 114, 107, 105, 101, 32, 98, 97, 114, 107, 101, 100, 32, 97, 116, 32, 109, 101];
         let actual: Vec<u8> = ByteCodeCompiler::encode_chars("The little yorkie barked at me".chars().collect());
         assert_eq!(actual, expected)
+    }
+
+    #[test]
+    fn test_encode_row() {
+        let phys_columns = make_quote_columns();
+        let row = make_quote(255, "RED", "NYSE", 78.35);
+        let bytes = ByteCodeCompiler::encode_row(&row, &phys_columns);
+        assert_eq!(bytes, vec![
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 255,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 3, b'R', b'E', b'D', 0, 0, 0, 0, 0,
+            0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
+            0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
+        ]);
     }
 
     #[test]

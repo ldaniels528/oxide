@@ -8,13 +8,11 @@ use crate::columns::Column;
 use crate::descriptor::Descriptor;
 use crate::errors::Errors::Exact;
 use crate::expression::Conditions;
-use crate::field_metadata::FieldMetadata;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::U64Value;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
-use crate::structures::Structures::{Hard, Soft};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
@@ -26,6 +24,7 @@ use std::ops::Index;
 
 /// Represents a JSON-like data structure
 pub trait Structure {
+    /// Returns true, if the structure contains an attribute with the specified name
     fn contains(&self, name: &str) -> bool {
         self.get_tuples().iter()
             .find(|(k, _)| *k == *name)
@@ -64,7 +63,7 @@ pub trait Structure {
                 ms.with_variable(name, value.to_owned())
             });
         // add self-reference
-        ms1.with_variable("self", Structured(Soft(SoftStructure::from_tuples(tuples))))
+        ms1.with_variable("self", Structured(Structures::Soft(SoftStructure::from_tuples(tuples))))
     }
 
     /// Decompiles the structure back to source code
@@ -91,7 +90,8 @@ pub trait Structure {
         ModelRowCollection::from_columns_and_rows(&columns, &vec![row])
     }
 
-    fn update(&self, name: &str, value: TypedValue) -> TypedValue;
+    /// Sets the value of an attribute by name
+    fn update_by_name(&self, name: &str, value: TypedValue) -> Structures;
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -121,33 +121,33 @@ impl Structure for Structures {
 
     fn get_descriptors(&self) -> Vec<Descriptor> {
         match self {
-            Structures::Firm(row, ..) => row.get_descriptors(),
-            Structures::Hard(hs) => hs.get_descriptors(),
-            Structures::Soft(ss) => ss.get_descriptors(),
+            Self::Firm(row, ..) => row.get_descriptors(),
+            Self::Hard(hs) => hs.get_descriptors(),
+            Self::Soft(ss) => ss.get_descriptors(),
         }
     }
 
     fn get_parameters(&self) -> Vec<Parameter> {
         match self {
-            Structures::Firm(row, ..) => row.get_parameters(),
-            Structures::Hard(hs) => hs.get_parameters(),
-            Structures::Soft(ss) => ss.get_parameters(),
+            Self::Firm(row, ..) => row.get_parameters(),
+            Self::Hard(hs) => hs.get_parameters(),
+            Self::Soft(ss) => ss.get_parameters(),
         }
     }
 
     fn get_tuples(&self) -> Vec<(String, TypedValue)> {
         match self {
-            Structures::Firm(row, columns) => row.get_named_tuples(columns),
-            Structures::Hard(hs) => hs.get_tuples(),
-            Structures::Soft(ss) => ss.get_tuples(),
+            Self::Firm(row, columns) => row.get_named_tuples(columns),
+            Self::Hard(hs) => hs.get_tuples(),
+            Self::Soft(ss) => ss.get_tuples(),
         }
     }
 
     fn get_values(&self) -> Vec<TypedValue> {
         match self {
-            Structures::Firm(row, ..) => row.get_values(),
-            Structures::Hard(hs) => hs.get_values(),
-            Structures::Soft(ss) => ss.get_values(),
+            Self::Firm(row, ..) => row.get_values(),
+            Self::Hard(hs) => hs.get_values(),
+            Self::Soft(ss) => ss.get_values(),
         }
     }
 
@@ -155,34 +155,34 @@ impl Structure for Structures {
     /// ex: Struct(symbol: String(8), exchange: String(8), last_sale: f64)
     fn to_code(&self) -> String {
         match self {
-            Structures::Firm(row, columns) => row.to_code_with_keys(columns),
-            Structures::Hard(hs) => hs.to_code(),
-            Structures::Soft(ss) => ss.to_code(),
+            Self::Firm(row, columns) => row.to_code_with_keys(columns),
+            Self::Hard(hs) => hs.to_code(),
+            Self::Soft(ss) => ss.to_code(),
         }
     }
 
     /// Returns the structure as a JSON object
     fn to_json(&self) -> Value {
         match self {
-            Structures::Firm(row, columns) => row.to_json_object(columns),
-            Structures::Hard(hs) => hs.to_json(),
-            Structures::Soft(ss) => ss.to_json(),
+            Self::Firm(row, columns) => row.to_json_object(columns),
+            Self::Hard(hs) => hs.to_json(),
+            Self::Soft(ss) => ss.to_json(),
         }
     }
 
     fn to_table(&self) -> ModelRowCollection {
         match self {
-            Structures::Firm(row, ..) => row.to_table(),
-            Structures::Hard(hs) => hs.to_table(),
-            Structures::Soft(ss) => ss.to_table(),
+            Self::Firm(row, ..) => row.to_table(),
+            Self::Hard(hs) => hs.to_table(),
+            Self::Soft(ss) => ss.to_table(),
         }
     }
 
-    fn update(&self, name: &str, value: TypedValue) -> TypedValue {
+    fn update_by_name(&self, name: &str, value: TypedValue) -> Structures {
         match self {
-            Structures::Firm(row, ..) => row.update(name, value),
-            Structures::Hard(hs) => hs.update(name, value),
-            Structures::Soft(ss) => ss.update(name, value),
+            Self::Firm(row, columns) => row.with_named_value(columns, name, value),
+            Self::Hard(hs) => hs.update_by_name(name, value),
+            Self::Soft(ss) => ss.update_by_name(name, value),
         }
     }
 }
@@ -395,8 +395,8 @@ impl Structure for HardStructure {
         ModelRowCollection::from_parameters_and_rows(&self.fields, &vec![self.to_row()])
     }
 
-    fn update(&self, name: &str, value: TypedValue) -> TypedValue {
-        Structured(Hard(self.with_variable(name, value)))
+    fn update_by_name(&self, name: &str, value: TypedValue) -> Structures {
+        Structures::Hard(self.with_variable(name, value))
     }
 }
 
@@ -506,8 +506,8 @@ impl Structure for SoftStructure {
         Value::Object(mapping)
     }
 
-    fn update(&self, name: &str, value: TypedValue) -> TypedValue {
-        Structured(Soft(self.with_variable(name, value)))
+    fn update_by_name(&self, name: &str, value: TypedValue) -> Structures {
+        Structures::Soft(self.with_variable(name, value))
     }
 }
 
@@ -530,33 +530,9 @@ impl Row {
             .map(|c| c.get_fixed_size()).sum::<usize>()
     }
 
-    /// Decodes the supplied buffer returning a row and its metadata
-    pub fn decode(columns: &Vec<Column>, buffer: &Vec<u8>) -> (Self, RowMetadata) {
-        // if the buffer is empty, just return an empty row
-        if buffer.len() == 0 {
-            return (Self::empty(columns), RowMetadata::new(false));
-        }
-        let metadata = RowMetadata::from_bytes(buffer, 0);
-        let id = ByteCodeCompiler::decode_row_id(buffer, 1);
-        let values: Vec<TypedValue> = columns.iter().map(|column| {
-            column.get_data_type().decode_field_value(&buffer, column.get_offset())
-        }).collect();
-        (Self::new(id, values), metadata)
-    }
-
-    /// Decodes the supplied buffer returning a collection of rows.
-    pub fn decode_rows(columns: &Vec<Column>, row_data: Vec<Vec<u8>>) -> Vec<Self> {
-        let mut rows = Vec::new();
-        for row_bytes in row_data {
-            let (row, metadata) = Self::decode(&columns, &row_bytes);
-            if metadata.is_allocated { rows.push(row); }
-        }
-        rows
-    }
-
-    /// Returns an empty row.
-    pub fn empty(columns: &Vec<Column>) -> Self {
-        Self::new(0, columns.iter().map(|_| Null).collect())
+    /// Returns a new row; pre-populating with defaults.
+    pub fn create(id: usize, columns: &Vec<Column>) -> Self {
+        Self::new(id, columns.iter().map(|c| c.get_default_value()).collect())
     }
 
     pub fn from_buffer(
@@ -566,7 +542,7 @@ impl Row {
         // if the buffer is empty, just return an empty row
         let size = buffer.next_u64();
         if size == 0 {
-            return Ok((Self::empty(columns), RowMetadata::new(false)));
+            return Ok((Self::create(0, columns), RowMetadata::new(false)));
         }
         let metadata = RowMetadata::decode(buffer.next_u8());
         let id = buffer.next_row_id();
@@ -621,24 +597,6 @@ impl Row {
 
     pub fn as_soft(&self, columns: &Vec<Column>) -> SoftStructure {
         SoftStructure::from_tuples(self.get_named_tuples(columns))
-    }
-
-    /// Returns the binary-encoded equivalent of the row.
-    pub fn encode(&self, phys_columns: &Vec<Column>) -> Vec<u8> {
-        let capacity = Self::compute_record_size(phys_columns);
-        let mut buf = Vec::with_capacity(capacity);
-        // include the field metadata and row ID
-        buf.push(RowMetadata::new(true).encode());
-        buf.extend(ByteCodeCompiler::encode_row_id(self.id));
-        // include the fields
-        let fmd = FieldMetadata::new(true);
-        let bb: Vec<u8> = self.values.iter().zip(phys_columns.iter())
-            .flat_map(|(value, column)|
-                column.get_data_type().encode_field(value, &fmd, column.get_fixed_size())
-            ).collect();
-        buf.extend(bb);
-        buf.resize(capacity, 0u8);
-        buf
     }
 
     pub fn get(&self, index: usize) -> TypedValue {
@@ -799,6 +757,16 @@ impl Row {
         values
     }
 
+    pub fn with_named_value(
+        &self,
+        columns: &Vec<Column>,
+        name: &str,
+        value: TypedValue,
+    ) -> Structures {
+        SoftStructure::from_tuples(self.get_named_tuples(columns))
+            .update_by_name(name, value)
+    }
+
     pub fn with_row_id(&self, id: usize) -> Self {
         Self::new(id, self.values.to_owned())
     }
@@ -882,24 +850,148 @@ impl Structure for Row {
         Value::Object(mapping)
     }
 
-    fn update(&self, name: &str, value: TypedValue) -> TypedValue {
-        Structured(Soft(self.with_variable(name, value)))
+    fn update_by_name(&self, name: &str, value: TypedValue) -> Structures {
+        Structures::Soft(self.with_variable(name, value))
     }
 }
 
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    /// Unit tests
+    /// common unit tests
     #[cfg(test)]
     mod common_tests {}
 
-    /// Unit tests
+    /// firm structure unit tests
+    #[cfg(test)]
+    mod firm_structure_tests {
+        use crate::byte_code_compiler::ByteCodeCompiler;
+        use crate::numbers::Numbers::*;
+        use crate::structures::Row;
+        use crate::testdata::{make_quote, make_quote_columns};
+        use crate::typed_values::TypedValue::*;
+
+        #[test]
+        fn test_make_quote() {
+            let row = make_quote(187, "KING", "YHWH", 100.00);
+            assert_eq!(row, Row {
+                id: 187,
+                values: vec![
+                    StringValue("KING".into()),
+                    StringValue("YHWH".into()),
+                    Number(F64Value(100.00)),
+                ],
+            });
+        }
+
+        #[test]
+        fn test_decode() {
+            let buf: Vec<u8> = vec![
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 187,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'M', b'A', b'N', b'A', 0, 0, 0, 0,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
+                0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
+            ];
+            let (row, rmd) = ByteCodeCompiler::decode_row(&make_quote_columns(), &buf);
+            assert!(rmd.is_allocated);
+            assert_eq!(row, make_quote(187, "MANA", "NYSE", 78.35));
+        }
+
+        #[test]
+        fn test_decode_rows() {
+            let columns = make_quote_columns();
+            let rows_a = vec![
+                make_quote(0, "BEAM", "NYSE", 11.99),
+                make_quote(1, "LITE", "AMEX", 78.35),
+            ];
+            let rows_b = ByteCodeCompiler::decode_rows(&columns, vec![vec![
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'A', b'M', 0, 0, 0, 0,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
+                0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
+            ], vec![
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 1,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'L', b'I', b'T', b'E', 0, 0, 0, 0,
+                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'A', b'M', b'E', b'X', 0, 0, 0, 0,
+                0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
+            ]]);
+            assert_eq!(rows_a, rows_b);
+        }
+
+        #[test]
+        fn test_empty() {
+            let columns = make_quote_columns();
+            let row_a = Row::create(0, &columns);
+            let row_b = Row::new(0, vec![Null, Null, Null]);
+            assert_eq!(row_a, row_b);
+        }
+
+        #[test]
+        fn test_fields_by_index() {
+            let row = make_quote(213, "YRU", "OTC", 88.44);
+            assert_eq!(row.id, 213);
+            assert_eq!(row[0], StringValue("YRU".into()));
+            assert_eq!(row[1], StringValue("OTC".into()));
+            assert_eq!(row[2], Number(F64Value(88.44)));
+        }
+
+        #[test]
+        fn test_get() {
+            let row = Row::new(111, vec![
+                StringValue("GE".into()), StringValue("NYSE".into()), Number(F64Value(48.88)),
+            ]);
+            assert_eq!(row.get(0), StringValue("GE".into()));
+            assert_eq!(row.get(1), StringValue("NYSE".into()));
+            assert_eq!(row.get(2), Number(F64Value(48.88)));
+            assert_eq!(row.get(3), Undefined);
+        }
+
+        #[test]
+        fn test_to_row_offset() {
+            let phys_columns = make_quote_columns();
+            let row = Row::new(111, vec![
+                StringValue("GE".into()), StringValue("NYSE".into()), Number(F64Value(48.88)),
+            ]);
+            assert_eq!(row.get_row_offset(&phys_columns, 2), 2 * Row::compute_record_size(&phys_columns) as u64);
+        }
+
+        #[test]
+        fn test_to_string() {
+            let row = make_quote(106, "XRS", "NYSE", 55.44);
+            assert_eq!(row.to_string(), r#"["XRS", "NYSE", 55.44]"#.to_string());
+        }
+
+        #[test]
+        fn test_unwrap() {
+            let row = make_quote(100, "ZZZ", "AMEX", 0.9876);
+            assert_eq!(row.id, 100);
+            assert_eq!(row.unwrap(), vec![
+                &StringValue("ZZZ".into()), &StringValue("AMEX".into()), &Number(F64Value(0.9876)),
+            ]);
+        }
+
+        #[test]
+        fn test_with_variable() {
+            let row = make_quote(100, "ABC", "NYSE", 19.86);
+            let obj = row.with_variable("n", Number(I64Value(32)));
+            assert_eq!(obj.to_string(), r#"{_id: 100, a: "ABC", b: "NYSE", c: 19.86, n: 32}"#);
+        }
+
+        #[test]
+        fn test_as_struct_with_variable() {
+            let obj =
+                make_quote(100, "ABC", "NYSE", 19.88)
+                    .as_hard(&make_quote_columns())
+                    .with_variable("last_sale", Number(F64Value(19.87)));
+            assert_eq!(obj.to_string(), r#"{"symbol":"ABC","exchange":"NYSE","last_sale":19.87}"#);
+        }
+    }
+
+    /// hard structure unit tests
     #[cfg(test)]
     mod hard_structure_tests {
         use crate::columns::Column;
         use crate::data_types::DataType::*;
-        use crate::data_types::StorageTypes::FixedSize;
         use crate::number_kind::NumberKind::F64Kind;
         use crate::numbers::Numbers::F64Value;
         use crate::parameter::Parameter;
@@ -984,8 +1076,8 @@ mod tests {
         fn test_new() {
             let structure = HardStructure::new(make_quote_columns(), Vec::new());
             assert_eq!(structure.get_fields(), vec![
-                Parameter::new("symbol", StringType(FixedSize(8))),
-                Parameter::new("exchange", StringType(FixedSize(8))),
+                Parameter::new("symbol", StringType(8)),
+                Parameter::new("exchange", StringType(8)),
                 Parameter::new("last_sale", NumberType(F64Kind)),
             ]);
             assert_eq!(structure.get("symbol"), Null);
@@ -1100,7 +1192,7 @@ mod tests {
         }
     }
 
-    /// Unit tests
+    /// soft structure unit tests
     #[cfg(test)]
     mod soft_structure_tests {
         use crate::numbers::Numbers::U8Value;
@@ -1134,142 +1226,6 @@ mod tests {
 
             let bytes = model.encode().unwrap();
             assert_eq!(model, SoftStructure::decode(bytes).unwrap())
-        }
-    }
-
-    // Unit tests
-    #[cfg(test)]
-    mod row_tests {
-        use crate::numbers::Numbers::*;
-        use crate::structures::Row;
-        use crate::testdata::{make_quote, make_quote_columns};
-        use crate::typed_values::TypedValue::*;
-
-        #[test]
-        fn test_make_quote() {
-            let row = make_quote(187, "KING", "YHWH", 100.00);
-            assert_eq!(row, Row {
-                id: 187,
-                values: vec![
-                    StringValue("KING".into()),
-                    StringValue("YHWH".into()),
-                    Number(F64Value(100.00)),
-                ],
-            });
-        }
-
-        #[test]
-        fn test_decode() {
-            let buf: Vec<u8> = vec![
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 187,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'M', b'A', b'N', b'A', 0, 0, 0, 0,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
-                0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
-            ];
-            let (row, rmd) = Row::decode(&make_quote_columns(), &buf);
-            assert!(rmd.is_allocated);
-            assert_eq!(row, make_quote(187, "MANA", "NYSE", 78.35));
-        }
-
-        #[test]
-        fn test_decode_rows() {
-            let columns = make_quote_columns();
-            let rows_a = vec![
-                make_quote(0, "BEAM", "NYSE", 11.99),
-                make_quote(1, "LITE", "AMEX", 78.35),
-            ];
-            let rows_b = Row::decode_rows(&columns, vec![vec![
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 0,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'B', b'E', b'A', b'M', 0, 0, 0, 0,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
-                0b1000_0000, 64, 39, 250, 225, 71, 174, 20, 123,
-            ], vec![
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 1,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'L', b'I', b'T', b'E', 0, 0, 0, 0,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'A', b'M', b'E', b'X', 0, 0, 0, 0,
-                0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
-            ]]);
-            assert_eq!(rows_a, rows_b);
-        }
-
-        #[test]
-        fn test_empty() {
-            let columns = make_quote_columns();
-            let row_a = Row::empty(&columns);
-            let row_b = Row::new(0, vec![Null, Null, Null]);
-            assert_eq!(row_a, row_b);
-        }
-
-        #[test]
-        fn test_encode() {
-            let phys_columns = make_quote_columns();
-            let row = make_quote(255, "RED", "NYSE", 78.35);
-            assert_eq!(row.encode(&phys_columns), vec![
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 255,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 3, b'R', b'E', b'D', 0, 0, 0, 0, 0,
-                0b1000_0000, 0, 0, 0, 0, 0, 0, 0, 4, b'N', b'Y', b'S', b'E', 0, 0, 0, 0,
-                0b1000_0000, 64, 83, 150, 102, 102, 102, 102, 102,
-            ]);
-        }
-
-        #[test]
-        fn test_fields_by_index() {
-            let row = make_quote(213, "YRU", "OTC", 88.44);
-            assert_eq!(row.id, 213);
-            assert_eq!(row[0], StringValue("YRU".into()));
-            assert_eq!(row[1], StringValue("OTC".into()));
-            assert_eq!(row[2], Number(F64Value(88.44)));
-        }
-
-        #[test]
-        fn test_get() {
-            let row = Row::new(111, vec![
-                StringValue("GE".into()), StringValue("NYSE".into()), Number(F64Value(48.88)),
-            ]);
-            assert_eq!(row.get(0), StringValue("GE".into()));
-            assert_eq!(row.get(1), StringValue("NYSE".into()));
-            assert_eq!(row.get(2), Number(F64Value(48.88)));
-            assert_eq!(row.get(3), Undefined);
-        }
-
-        #[test]
-        fn test_to_row_offset() {
-            let phys_columns = make_quote_columns();
-            let row = Row::new(111, vec![
-                StringValue("GE".into()), StringValue("NYSE".into()), Number(F64Value(48.88)),
-            ]);
-            assert_eq!(row.get_row_offset(&phys_columns, 2), 2 * Row::compute_record_size(&phys_columns) as u64);
-        }
-
-        #[test]
-        fn test_to_string() {
-            let row = make_quote(106, "XRS", "NYSE", 55.44);
-            assert_eq!(row.to_string(), r#"["XRS", "NYSE", 55.44]"#.to_string());
-        }
-
-        #[test]
-        fn test_unwrap() {
-            let row = make_quote(100, "ZZZ", "AMEX", 0.9876);
-            assert_eq!(row.id, 100);
-            assert_eq!(row.unwrap(), vec![
-                &StringValue("ZZZ".into()), &StringValue("AMEX".into()), &Number(F64Value(0.9876)),
-            ]);
-        }
-
-        #[test]
-        fn test_with_variable() {
-            let row = make_quote(100, "ABC", "NYSE", 19.86);
-            let obj = row.with_variable("n", Number(I64Value(32)));
-            assert_eq!(obj.to_string(), r#"{_id: 100, a: "ABC", b: "NYSE", c: 19.86, n: 32}"#);
-        }
-
-        #[test]
-        fn test_as_struct_with_variable() {
-            let obj =
-                make_quote(100, "ABC", "NYSE", 19.88)
-                    .as_hard(&make_quote_columns())
-                    .with_variable("last_sale", Number(F64Value(19.87)));
-            assert_eq!(obj.to_string(), r#"{"symbol":"ABC","exchange":"NYSE","last_sale":19.87}"#);
         }
     }
 }

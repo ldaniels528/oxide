@@ -5,15 +5,15 @@
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
-use crate::dataframe::Dataframe::Disk;
-use crate::dataframe_config::DataFrameConfig;
 use crate::expression::{Conditions, Expression};
-use crate::field_metadata::FieldMetadata;
+use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
+use crate::hybrid_row_collection::HybridRowCollection;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::numbers::Numbers::RowsAffected;
+use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
@@ -28,6 +28,7 @@ use std::sync::Arc;
 pub enum Dataframe {
     Binary(ByteRowCollection),
     Disk(FileRowCollection),
+    Hybrid(HybridRowCollection),
     Model(ModelRowCollection),
 }
 
@@ -36,10 +37,10 @@ impl Dataframe {
     pub fn create_table(ns: &Namespace, params: &Vec<Parameter>) -> std::io::Result<Self> {
         let path = ns.get_table_file_path();
         let columns = Column::from_parameters(params);
-        let config = DataFrameConfig::build(&params);
+        let config = ObjectConfig::build_table(params.clone());
         config.save(&ns)?;
         let file = Arc::new(FileRowCollection::table_file_create(ns)?);
-        Ok(Disk(FileRowCollection::new(columns, file, path.as_str())))
+        Ok(Self::Disk(FileRowCollection::new(columns, file, path.as_str())))
     }
 
     /// deletes rows from the table based on a condition
@@ -88,6 +89,11 @@ impl Dataframe {
             }
         }
         Ok((df, Number(RowsAffected(overwritten))))
+    }
+
+    pub fn to_model(self) -> ModelRowCollection {
+        let (rows, columns) = (self.get_rows(), self.get_columns());
+        ModelRowCollection::from_columns_and_rows(columns, &rows)
     }
 
     /// restores rows from the table based on a condition
@@ -142,18 +148,11 @@ impl Dataframe {
 }
 
 impl RowCollection for Dataframe {
-    fn encode(&self) -> Vec<u8> {
-        match self {
-            Self::Binary(rc) => rc.encode(),
-            Self::Disk(rc) => rc.encode(),
-            Self::Model(rc) => rc.encode(),
-        }
-    }
-
     fn get_columns(&self) -> &Vec<Column> {
         match self {
             Self::Binary(rc) => rc.get_columns(),
             Self::Disk(rc) => rc.get_columns(),
+            Self::Hybrid(rc) => rc.get_columns(),
             Self::Model(rc) => rc.get_columns(),
         }
     }
@@ -162,6 +161,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.get_record_size(),
             Self::Disk(rc) => rc.get_record_size(),
+            Self::Hybrid(rc) => rc.get_record_size(),
             Self::Model(rc) => rc.get_record_size(),
         }
     }
@@ -170,6 +170,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.get_rows(),
             Self::Disk(rc) => rc.get_rows(),
+            Self::Hybrid(rc) => rc.get_rows(),
             Self::Model(rc) => rc.get_rows(),
         }
     }
@@ -178,6 +179,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.len(),
             Self::Disk(rc) => rc.len(),
+            Self::Hybrid(rc) => rc.len(),
             Self::Model(rc) => rc.len(),
         }
     }
@@ -186,6 +188,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.overwrite_field(id, column_id, new_value),
             Self::Disk(rc) => rc.overwrite_field(id, column_id, new_value),
+            Self::Hybrid(rc) => rc.overwrite_field(id, column_id, new_value),
             Self::Model(rc) => rc.overwrite_field(id, column_id, new_value),
         }
     }
@@ -194,6 +197,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
             Self::Disk(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
+            Self::Hybrid(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
             Self::Model(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
         }
     }
@@ -202,6 +206,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.overwrite_row(id, row),
             Self::Disk(rc) => rc.overwrite_row(id, row),
+            Self::Hybrid(rc) => rc.overwrite_row(id, row),
             Self::Model(rc) => rc.overwrite_row(id, row),
         }
     }
@@ -210,6 +215,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.overwrite_row_metadata(id, metadata),
             Self::Disk(rc) => rc.overwrite_row_metadata(id, metadata),
+            Self::Hybrid(rc) => rc.overwrite_row_metadata(id, metadata),
             Self::Model(rc) => rc.overwrite_row_metadata(id, metadata),
         }
     }
@@ -218,6 +224,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.read_field(id, column_id),
             Self::Disk(rc) => rc.read_field(id, column_id),
+            Self::Hybrid(rc) => rc.read_field(id, column_id),
             Self::Model(rc) => rc.read_field(id, column_id),
         }
     }
@@ -226,6 +233,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.read_field_metadata(id, column_id),
             Self::Disk(rc) => rc.read_field_metadata(id, column_id),
+            Self::Hybrid(rc) => rc.read_field_metadata(id, column_id),
             Self::Model(rc) => rc.read_field_metadata(id, column_id),
         }
     }
@@ -234,6 +242,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.read_row(id),
             Self::Disk(rc) => rc.read_row(id),
+            Self::Hybrid(rc) => rc.read_row(id),
             Self::Model(rc) => rc.read_row(id),
         }
     }
@@ -242,6 +251,7 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.read_row_metadata(id),
             Self::Disk(rc) => rc.read_row_metadata(id),
+            Self::Hybrid(rc) => rc.read_row_metadata(id),
             Self::Model(rc) => rc.read_row_metadata(id),
         }
     }
@@ -250,7 +260,40 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(rc) => rc.resize(new_size),
             Self::Disk(rc) => rc.resize(new_size),
+            Self::Hybrid(rc) => rc.resize(new_size),
             Self::Model(rc) => rc.resize(new_size),
         }
+    }
+}
+
+/// Unit tests
+#[cfg(test)]
+mod tests {
+    use crate::byte_row_collection::ByteRowCollection;
+    use crate::dataframe::Dataframe;
+    use crate::row_collection::RowCollection;
+    use crate::testdata::{make_quote, make_quote_columns};
+
+    #[test]
+    fn test_to_model() {
+        let df = create_dataframe();
+        let mrc = df.clone().to_model();
+        assert_eq!(mrc.get_columns(), df.get_columns());
+        assert_eq!(mrc.get_rows(), df.get_rows());
+    }
+
+    fn create_dataframe() -> Dataframe {
+        Dataframe::Binary(ByteRowCollection::from_rows(
+            make_quote_columns(),
+            vec![
+                make_quote(0, "AAB", "NYSE", 22.44),
+                make_quote(1, "XYZ", "NASDAQ", 66.67),
+                make_quote(2, "SSO", "NYSE", 123.44),
+                make_quote(3, "RAND", "AMEX", 11.33),
+                make_quote(4, "IBM", "NYSE", 21.22),
+                make_quote(5, "ATT", "NYSE", 98.44),
+                make_quote(6, "HOCK", "AMEX", 0.0076),
+                make_quote(7, "XIE", "NASDAQ", 33.33),
+            ]))
     }
 }

@@ -110,7 +110,6 @@ impl Display for Descriptor {
 mod tests {
     use super::*;
     use crate::data_types::DataType::{NumberType, StringType};
-    use crate::data_types::StorageTypes::FixedSize;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::typed_values::TypedValue::{Null, StringValue};
 
@@ -122,8 +121,8 @@ mod tests {
             Descriptor::new("last_sale", Some("f64".into()), None),
         ];
         let columns = vec![
-            Column::new("symbol", StringType(FixedSize(8)), Null, 9),
-            Column::new("exchange", StringType(FixedSize(8)), Null, 26),
+            Column::new("symbol", StringType(8), Null, 9),
+            Column::new("exchange", StringType(8), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ];
         assert_eq!(Descriptor::from_columns(&columns), descriptors);
@@ -133,7 +132,7 @@ mod tests {
     fn test_from_parameter() {
         let param = Parameter::with_default(
             "symbol",
-            StringType(FixedSize(8)),
+            StringType(8),
             StringValue("N/A".into()),
         );
         let descr = Descriptor::from_parameter(&param);
@@ -150,8 +149,8 @@ mod tests {
             Descriptor::new("last_sale", Some("f64".into()), None),
         ];
         let parameters = vec![
-            Parameter::new("symbol", StringType(FixedSize(8))),
-            Parameter::new("exchange", StringType(FixedSize(8))),
+            Parameter::new("symbol", StringType(8)),
+            Parameter::new("exchange", StringType(8)),
             Parameter::new("last_sale", NumberType(F64Kind)),
         ];
         assert_eq!(Descriptor::from_parameters(&parameters), descriptors)

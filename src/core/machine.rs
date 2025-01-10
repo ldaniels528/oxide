@@ -25,28 +25,28 @@ use uuid::Uuid;
 use crate::arrays::Array;
 use crate::columns::Column;
 use crate::compiler::Compiler;
-use crate::compiler::{fail_expr, fail_unexpected, fail_value};
 use crate::cursor::Cursor;
 use crate::data_types::DataType;
-use crate::data_types::DataType::{ArrayType, StringType, StructureType, TableType, UnionType};
-use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
+use crate::data_types::DataType::{ArrayType, FunctionType, StringType, StructureType, TableType, VaryingType};
+
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, Model};
-use crate::dataframe_config::{DataFrameConfig, HashIndexConfig};
 use crate::descriptor::Descriptor;
 use crate::errors::Errors::*;
+use crate::errors::TypeMismatchErrors::{FunctionArgsExpected, OutcomeExpected, ParameterExpected, StructExpected, UnsupportedType};
 use crate::errors::{throw, Errors};
 use crate::expression::Conditions::{False, True};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
-use crate::expression::{BitwiseOps, Conditions, Expression, ImportOps, ACK, UNDEFINED};
-use crate::expression::{DatabaseOps, Directives, Mutation, Queryable};
+use crate::expression::{Conditions, Expression, ImportOps, ACK, UNDEFINED};
+use crate::expression::{DatabaseOps, Directives, Mutations, Queryables};
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::numbers::Numbers::*;
+use crate::object_config::{HashIndexConfig, ObjectConfig};
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::query_engine;
@@ -96,9 +96,13 @@ impl Machine {
     }
 
     /// creates a new state machine prepopulated with platform packages
-    /// and default imports
+    /// and default imports and/or constants
     pub fn new_platform() -> Self {
         Self::new()
+            .with_variable("e", Number(F64Value(std::f64::consts::E)))
+            .with_variable("π", Number(F64Value(std::f64::consts::PI)))
+            .with_variable("γ", Number(F64Value(0.577215664901532860606512090082402431_f64)))
+            .with_variable("φ", Number(F64Value((1f64 + 5.0f64.sqrt()) / 2f64)))
     }
 
     ////////////////////////////////////////////////////////////////
@@ -138,9 +142,19 @@ impl Machine {
                 let (machine, tv) = self.evaluate(expr)?;
                 Ok((machine.with_variable(name, tv.to_owned()), tv))
             }
-            BitwiseOp(bitwise) => self.do_bitwise_ops(bitwise),
+            BitwiseAnd(a, b) =>
+                self.do_inline_2(a, b, |aa, bb| aa & bb),
+            BitwiseOr(a, b) =>
+                self.do_inline_2(a, b, |aa, bb| aa | bb),
+            BitwiseShiftLeft(a, b) =>
+                self.do_inline_2(a, b, |aa, bb| aa << bb),
+            BitwiseShiftRight(a, b) =>
+                self.do_inline_2(a, b, |aa, bb| aa >> bb),
+            BitwiseXor(a, b) =>
+                self.do_inline_2(a, b, |aa, bb| aa ^ bb),
             CodeBlock(ops) => Ok(self.evaluate_scope(ops)),
             Condition(condition) => self.evaluate_cond(condition),
+            DatabaseOp(op) => query_engine::evaluate(self, op),
             Directive(d) => self.do_directive(d),
             Divide(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa / bb),
@@ -150,7 +164,8 @@ impl Machine {
             Factorial(a) => self.do_inline_1(a, |aa| aa.factorial()),
             Feature { title, scenarios } => self.do_feature(title, scenarios),
             ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
-            From(src) => do_table_row_query(self, src, &True, Undefined),
+            From(src) => do_table_or_view_query(self, src, &True, &Undefined),
+            Tuple(args) => self.evaluate_array(args),
             FunctionCall { fx, args } =>
                 Ok(self.do_function_call(fx, args)),
             HTTP { method, url, body, headers, multipart } => {
@@ -170,7 +185,7 @@ impl Machine {
             Multiply(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa * bb),
             Neg(a) => Ok(self.do_negate(a)),
-            Ns(a) => do_table_ns(self, a),
+            Ns(a) => do_eval_ns(self, a),
             Parameters(params) => Ok(self.evaluate_parameters(params)),
             Plus(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa + bb),
@@ -178,7 +193,6 @@ impl Machine {
                 self.do_inline_2(a, b, Self::do_plus_plus),
             Pow(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
-            DatabaseOp(op) => query_engine::evaluate(self, op),
             Range(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
             Return(a) => {
@@ -191,7 +205,7 @@ impl Machine {
                 Ok((machine.set(name, value), Number(Ack)))
             }
             Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
-            Via(src) => do_table_row_query(self, src, &True, Undefined),
+            Via(src) => do_table_or_view_query(self, src, &True, &Undefined),
             While { condition, code } =>
                 self.do_while(condition, code),
         }
@@ -230,7 +244,7 @@ impl Machine {
                           (ma, array, errors)
                       }
                       expr => {
-                          errors.push(ErrorValue(ParameterExpected(expr.to_code())));
+                          errors.push(ErrorValue(TypeMismatch(ParameterExpected(expr.to_code()))));
                           (ma, array, errors)
                       }
                   });
@@ -327,25 +341,6 @@ impl Machine {
                         })
     }
 
-    /// evaluates the specified [Expression]; returning a [TypedValue] result.
-    fn do_bitwise_ops(
-        &self,
-        bitwise: &BitwiseOps,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        match bitwise {
-            BitwiseOps::And(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa & bb),
-            BitwiseOps::Or(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa | bb),
-            BitwiseOps::ShiftLeft(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa << bb),
-            BitwiseOps::ShiftRight(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa >> bb),
-            BitwiseOps::Xor(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa ^ bb),
-        }
-    }
-
     fn do_contains(
         &self,
         a: &Expression,
@@ -377,7 +372,7 @@ impl Machine {
         let (machine, value) = self.evaluate(expr)?;
         match value {
             v if v.is_ok() => Ok((machine, v.to_owned())),
-            v => throw(OutcomeExpected(v.to_code()))
+            v => throw(TypeMismatch(OutcomeExpected(v.to_code())))
         }
     }
 
@@ -431,7 +426,7 @@ impl Machine {
                             z => fail(format!("Illegal structure {}", z.to_code()))
                         }
                 }
-            z => fail_expr(Syntax(z.to_code()).to_string(), &z)
+            z => throw(Syntax(z.to_code()))
         }
     }
 
@@ -449,7 +444,7 @@ impl Machine {
             // stock::last_sale := 24.11
             SetVariable(name, expr) => {
                 let (ms, value) = ms.evaluate(expr)?;
-                Ok((ms.with_variable(var_name, structure.update(name, value)), Number(Ack)))
+                Ok((ms.with_variable(var_name, Structured(structure.update_by_name(name, value))), Number(Ack)))
             }
             // stock::symbol
             Variable(name) => Ok((ms, structure.get(name))),
@@ -532,7 +527,7 @@ impl Machine {
                 let mut index = 0;
                 while index < array.len() {
                     match ms0
-                        .with_variable(name, array.get(index).unwrap_or(Null))
+                        .with_variable(name, array.get_or_else(index, Null))
                         .evaluate(block) {
                         Ok(..) => {}
                         Err(err) => return (ms0, ErrorValue(Exact(err.to_string())))
@@ -542,10 +537,7 @@ impl Machine {
                 (ms0, Number(Ack))
             }
             Ok((ms, other)) =>
-                (ms, ErrorValue(TypeMismatch(
-                    ArrayType(Box::from(UnionType(vec![]))),
-                    other.get_type(),
-                ))),
+                (ms, ErrorValue(TypeMismatch(UnsupportedType(ArrayType(0), other.get_type())))),
             Err(err) => (ms0, ErrorValue(Exact(err.to_string())))
         }
     }
@@ -579,7 +571,7 @@ impl Machine {
                     Ok((_, z)) => (ms, ErrorValue(Exact(format!("'{}' is not a function ({})", fx.to_code(), z)))),
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
-            Ok((ms, other)) => (ms, ErrorValue(FunctionArgsExpected(other.to_code()))),
+            Ok((ms, other)) => (ms, ErrorValue(TypeMismatch(FunctionArgsExpected(other.to_code())))),
             Err(err) => (ms, ErrorValue(Exact(err.to_string())))
         }
     }
@@ -633,7 +625,7 @@ impl Machine {
         fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
             match value {
                 Structured(structure) => Ok(structure.get_tuples()),
-                z => fail_value(TypeMismatch(StructureType(vec![]), z.get_type()).to_string(), &z),
+                z => throw(TypeMismatch(UnsupportedType(StructureType(vec![]), z.get_type()))),
             }
         }
 
@@ -647,15 +639,15 @@ impl Machine {
             },
             match multipart {
                 Some(Structured(structure)) => Some(create_form(Box::new(structure))),
-                Some(z) => return Ok((ms, ErrorValue(TypeMismatch(
-                    UnionType(vec![
-                        ArrayType(Box::new(StructureType(vec![]))),
-                        StringType(BLOBSized),
+                Some(z) => return Ok((ms, ErrorValue(TypeMismatch(UnsupportedType(
+                    VaryingType(vec![
+                        ArrayType(0),
+                        StringType(0),
                         StructureType(vec![]),
-                        TableType(vec![], BLOBSized),
+                        TableType(vec![], 0),
                     ]),
                     z.get_type(),
-                )))),
+                ))))),
                 None => None
             },
         )
@@ -842,7 +834,7 @@ impl Machine {
             let opcode = Compiler::build(script_code.as_str())?;
             machine.evaluate(&opcode)
         } else {
-            throw(TypeMismatch(StringType(BLOBSized), path_value.get_type()))
+            throw(TypeMismatch(UnsupportedType(StringType(0), path_value.get_type())))
         }
     }
 
@@ -857,7 +849,7 @@ impl Machine {
         let value = match collection {
             ArrayValue(items) => {
                 let idx = index.to_usize();
-                if idx < items.len() { items.get(idx).unwrap_or(Undefined) } else {
+                if idx < items.len() { items.get_or_else(idx, Undefined) } else {
                     ErrorValue(IndexOutOfRange("Array".to_string(), idx, items.len()))
                 }
             }
@@ -866,7 +858,7 @@ impl Machine {
                 let frc = FileRowCollection::open(&ns)?;
                 match frc.read_one(id)? {
                     Some(row) => Structured(Firm(row, frc.get_columns().clone())),
-                    None => Structured(Firm(Row::empty(frc.get_columns()), frc.get_columns().to_owned()))
+                    None => Structured(Firm(Row::create(id, frc.get_columns()), frc.get_columns().to_owned()))
                 }
             }
             StringValue(string) => {
@@ -882,17 +874,17 @@ impl Machine {
                 let id = index.to_usize();
                 match rcv.read_one(id)? {
                     Some(row) => Structured(Firm(row, rcv.get_columns().clone())),
-                    None => Structured(Firm(Row::empty(rcv.get_columns()), rcv.get_columns().to_owned()))
+                    None => Structured(Firm(Row::create(id, rcv.get_columns()), rcv.get_columns().to_owned()))
                 }
             }
             other =>
-                ErrorValue(TypeMismatch(
-                    UnionType(vec![
-                        ArrayType(Box::from(StructureType(vec![]))),
-                        TableType(vec![], BLOBSized)
+                ErrorValue(TypeMismatch(UnsupportedType(
+                    VaryingType(vec![
+                        ArrayType(0),
+                        TableType(vec![], 0)
                     ]),
                     other.get_type(),
-                ))
+                )))
         };
         Ok((machine, value))
     }
@@ -991,7 +983,7 @@ impl Machine {
                             },
                         z => ErrorValue(IllegalExpression(z.to_code()))
                     },
-                z => ErrorValue(StructExpected(name.to_string(), z.to_code()))
+                z => ErrorValue(TypeMismatch(StructExpected(name.to_string(), z.to_code())))
             });
         Ok((self.with_variable(name, result), Number(Ack)))
     }
@@ -1010,11 +1002,9 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> (Self, TypedValue) {
         match self.get(name) {
-            Some(Structured(Hard(structure))) =>
-                self.do_structure_hard_impl(name, structure, ops),
-            Some(Structured(Soft(structure))) =>
-                self.do_structure_soft_impl(name, structure, ops),
-            Some(v) => (self.clone(), ErrorValue(StructExpected(name.into(), v.to_code()))),
+            Some(Structured(structure)) =>
+                self.do_structure_module_impl(name, structure, ops),
+            Some(v) => (self.clone(), ErrorValue(TypeMismatch(StructExpected(name.into(), v.to_code())))),
             None => match self.do_module_alone(name, ops) {
                 Ok(result) => result,
                 Err(err) => (self.to_owned(), ErrorValue(Exact(err.to_string())))
@@ -1022,51 +1012,25 @@ impl Machine {
         }
     }
 
-    fn do_structure_hard_impl(
+    fn do_structure_module_impl(
         &self,
         name: &str,
-        structure: HardStructure,
+        structure: Structures,
         ops: &Vec<Expression>,
     ) -> (Self, TypedValue) {
         let result = ops.iter()
-            .fold(Structured(Hard(structure)), |tv, op| match tv {
+            .fold(Structured(structure), |tv, op| match tv {
                 ErrorValue(msg) => ErrorValue(msg),
-                Structured(Hard(structure)) =>
+                Structured(structure) =>
                     match op {
                         SetVariable(name, expr) =>
                             match self.evaluate(expr) {
-                                Ok((_, value)) => Structured(Hard(structure.with_variable(name, value))),
+                                Ok((_, value)) => Structured(structure.update_by_name(name, value)),
                                 Err(err) => ErrorValue(Exact(err.to_string()))
                             },
                         z => ErrorValue(IllegalExpression(z.to_code()))
                     },
-                z => ErrorValue(StructExpected(name.to_string(), z.to_code()))
-            });
-        match result {
-            ErrorValue(err) => (self.to_owned(), ErrorValue(err)),
-            result => (self.with_variable(name, result), Number(Ack))
-        }
-    }
-
-    fn do_structure_soft_impl(
-        &self,
-        name: &str,
-        structure: SoftStructure,
-        ops: &Vec<Expression>,
-    ) -> (Self, TypedValue) {
-        let result = ops.iter()
-            .fold(Structured(Soft(structure)), |tv, op| match tv {
-                ErrorValue(msg) => ErrorValue(msg),
-                Structured(Soft(structure)) =>
-                    match op {
-                        SetVariable(name, expr) =>
-                            match self.evaluate(expr) {
-                                Ok((_, value)) => Structured(Soft(structure.with_variable(name, value))),
-                                Err(err) => ErrorValue(Exact(err.to_string()))
-                            },
-                        z => ErrorValue(IllegalExpression(z.to_code()))
-                    },
-                z => ErrorValue(StructExpected(name.to_string(), z.to_code()))
+                z => ErrorValue(TypeMismatch(StructExpected(name.to_string(), z.to_code())))
             });
         match result {
             ErrorValue(err) => (self.to_owned(), ErrorValue(err)),
@@ -1119,8 +1083,7 @@ impl Machine {
             NamespaceValue(ns) =>
                 f(Box::new(FileRowCollection::open(&ns)?)),
             TableValue(rcv) => f(Box::new(rcv.to_owned())),
-            z =>
-                fail_value(format!("{} is not a table", z), z)
+            z => throw(Exact(format!("{} is not a table", z)))
         }
     }
 
@@ -1132,7 +1095,7 @@ impl Machine {
         match table {
             NamespaceValue(ns) => f(Disk(FileRowCollection::open(&ns)?)),
             TableValue(rc) => f(rc.to_owned()),
-            z => throw(TypeMismatch(TableType(vec![], BLOBSized), z.get_type()))
+            z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
         }
     }
 
@@ -1256,9 +1219,9 @@ mod tests {
     use crate::data_types::DataType::NumberType;
     use crate::expression::Conditions::{Equal, GreaterOrEqual, GreaterThan, LessOrEqual, LessThan};
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-    use crate::expression::DatabaseOps::Query;
+    use crate::expression::DatabaseOps::Queryable;
     use crate::expression::MutateTarget::TableTarget;
-    use crate::expression::Queryable;
+    use crate::expression::Queryables;
     use crate::expression::{FALSE, NULL, TRUE};
     use crate::number_kind::NumberKind::I64Kind;
     use crate::table_renderer::TableRenderer;
@@ -1323,7 +1286,7 @@ mod tests {
     #[test]
     fn test_factorial() {
         let model = Factorial(Box::new(Literal(Number(U64Value(6)))));
-        assert_eq!(model.to_code(), "¡6");
+        assert_eq!(model.to_code(), "6¡");
 
         let machine = Machine::empty();
         let (_, result) = machine.evaluate(&model).unwrap();
@@ -1612,10 +1575,10 @@ mod tests {
         use crate::compiler::Compiler;
         use crate::expression::Conditions::Equal;
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-        use crate::expression::DatabaseOps::Mutate;
+        use crate::expression::DatabaseOps::Mutation;
         use crate::expression::MutateTarget::TableTarget;
-        use crate::expression::Mutation::{Append, Create, Declare, Drop, Overwrite, Truncate, Update};
-        use crate::expression::{DatabaseOps, Mutation};
+        use crate::expression::Mutations::{Append, Create, Declare, Drop, Overwrite, Truncate, Update};
+        use crate::expression::{DatabaseOps, Mutations};
         use crate::number_kind::NumberKind::F64Kind;
         use crate::testdata::{make_quote, make_quote_columns, make_quote_descriptors};
 
@@ -1633,8 +1596,8 @@ mod tests {
                     make_quote(4, "XYZ", "NYSE", 0.0289),
                 ]))));
 
-            let model = DatabaseOp(Query(Queryable::Limit {
-                from: Box::new(DatabaseOp(Query(Queryable::Where {
+            let model = DatabaseOp(Queryable(Queryables::Limit {
+                from: Box::new(DatabaseOp(Queryable(Queryables::Where {
                     from: Box::new(From(Box::new(Variable("stocks".into())))),
                     condition: GreaterOrEqual(
                         Box::new(Variable("last_sale".into())),
@@ -1719,7 +1682,7 @@ mod tests {
 
         #[test]
         fn test_create_table() {
-            let model = DatabaseOp(Mutate(Create {
+            let model = DatabaseOp(Mutation(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue("machine.create.stocks".into()))))),
                 entity: TableEntity {
                     columns: make_quote_parameters(),
@@ -1745,12 +1708,12 @@ mod tests {
             let machine = Machine::empty();
 
             // drop table if exists ns("machine.index.stocks")
-            let (machine, _) = machine.evaluate(&DatabaseOp(Mutate(Drop(TableTarget {
+            let (machine, _) = machine.evaluate(&DatabaseOp(Mutation(Drop(TableTarget {
                 path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
             })))).unwrap();
 
             // create table ns("machine.index.stocks") (...)
-            let (machine, result) = machine.evaluate(&DatabaseOp(Mutate(Create {
+            let (machine, result) = machine.evaluate(&DatabaseOp(Mutation(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
                 entity: TableEntity {
                     columns: make_quote_parameters(),
@@ -1760,7 +1723,7 @@ mod tests {
             assert_eq!(result, Number(Ack));
 
             // create index ns("machine.index.stocks") [symbol, exchange]
-            let model = DatabaseOp(Mutate(Create {
+            let model = DatabaseOp(Mutation(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
                 entity: IndexEntity {
                     columns: vec![
@@ -1781,10 +1744,10 @@ mod tests {
 
         #[test]
         fn test_declare_table() {
-            let model = DatabaseOp(Mutate(Declare(TableEntity {
+            let model = DatabaseOp(Mutation(Declare(TableEntity {
                 columns: vec![
-                    Parameter::new("symbol", StringType(FixedSize(8))),
-                    Parameter::new("exchange", StringType(FixedSize(8))),
+                    Parameter::new("symbol", StringType(8)),
+                    Parameter::new("exchange", StringType(8)),
                     Parameter::new("last_sale", NumberType(F64Kind)),
                 ],
                 from: None,
@@ -1804,7 +1767,7 @@ mod tests {
             let ns = Ns(Box::new(Literal(StringValue(ns_path.into()))));
             create_dataframe(ns_path);
 
-            let model = DatabaseOp(Mutate(Drop(TableTarget { path: Box::new(ns) })));
+            let model = DatabaseOp(Mutation(Drop(TableTarget { path: Box::new(ns) })));
             assert_eq!(model.to_code(), "drop table ns(\"machine.drop.stocks\")");
 
             let machine = Machine::empty();
@@ -1883,7 +1846,7 @@ mod tests {
 
             // insert some rows
             let machine = Machine::empty();
-            let (_, result) = machine.evaluate(&DatabaseOp(Mutate(Append {
+            let (_, result) = machine.evaluate(&DatabaseOp(Mutation(Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
                 source: Box::new(From(Box::new(JSONExpression(vec![
                     ("symbol".into(), Literal(StringValue("REX".into()))),
@@ -1908,7 +1871,7 @@ mod tests {
         #[test]
         fn test_overwrite_rows_in_namespace() {
             let ns_path = "machine.overwrite.stocks";
-            let model = DatabaseOp(Mutate(Overwrite {
+            let model = DatabaseOp(Mutation(Overwrite {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("symbol".into(), Literal(StringValue("BOOM".into()))),
@@ -1951,7 +1914,7 @@ mod tests {
 
             // execute the query
             let machine = Machine::empty();
-            let (_, result) = machine.evaluate(&DatabaseOp(Query(Queryable::Select {
+            let (_, result) = machine.evaluate(&DatabaseOp(Queryable(Queryables::Select {
                 fields: vec![
                     Variable("symbol".into()),
                     Variable("exchange".into()),
@@ -1982,7 +1945,7 @@ mod tests {
                 .with_variable("stocks", TableValue(Model(mrc)));
 
             // execute the code
-            let (_, result) = machine.evaluate(&DatabaseOp(Query(Queryable::Select {
+            let (_, result) = machine.evaluate(&DatabaseOp(Queryable(Queryables::Select {
                 fields: vec![
                     Variable("symbol".into()),
                     Variable("exchange".into()),
@@ -2008,7 +1971,7 @@ mod tests {
         #[test]
         fn test_update_rows_in_memory() {
             // build the update model
-            let model = DatabaseOp(Mutate(Update {
+            let model = DatabaseOp(Mutation(Update {
                 path: Box::new(Variable("stocks".into())),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
@@ -2046,7 +2009,7 @@ mod tests {
             let (df, _) = create_dataframe(ns_path);
 
             // create the instruction model
-            let model = DatabaseOp(Mutate(Update {
+            let model = DatabaseOp(Mutation(Update {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
@@ -2075,7 +2038,7 @@ mod tests {
 
         #[test]
         fn test_truncate_table() {
-            let model = DatabaseOp(Mutate(Truncate {
+            let model = DatabaseOp(Mutation(Truncate {
                 path: Box::new(Variable("stocks".into())),
                 limit: Some(Box::new(Literal(Number(I64Value(0))))),
             }));

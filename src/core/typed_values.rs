@@ -22,17 +22,17 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::cnv_error;
 use crate::columns::Column;
-use crate::compiler::fail_value;
 use crate::data_types::DataType::*;
-use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
+
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, Model};
 use crate::descriptor::Descriptor;
-use crate::errors::Errors::{CannotSubtract, Exact, Syntax, TypeMismatch, Various};
+use crate::errors::Errors::{CannotSubtract, Exact, Multiple, Syntax, TypeMismatch};
+use crate::errors::TypeMismatchErrors::UnsupportedType;
 use crate::errors::{throw, Errors};
 use crate::expression::Expression;
-use crate::field_metadata::FieldMetadata;
+use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
 use crate::machine::Machine;
@@ -42,6 +42,7 @@ use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::*;
+use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::row_collection::RowCollection;
@@ -85,6 +86,16 @@ impl TypedValue {
     //  Static Methods
     ////////////////////////////////////////////////////////////////////
 
+    pub fn express_range(a: Self, b: Self, step: Self) -> Vec<Self> {
+        let mut items = Vec::new();
+        let mut n = a;
+        while n < b {
+            items.push(n.clone());
+            n = n + step.clone();
+        }
+        items
+    }
+
     pub fn from_json(j_value: &serde_json::Value) -> Self {
         match j_value {
             serde_json::Value::Null => Null,
@@ -112,6 +123,9 @@ impl TypedValue {
             .filter(|c| *c != '_' && *c != ',')
             .collect();
         match number.trim() {
+            s if s.starts_with("0b") => Ok(Number(U64Value(u64::from_str_radix(&s[2..], 2).map_err(|e| cnv_error!(e))?))),
+            s if s.starts_with("0o") => Ok(Number(U64Value(u64::from_str_radix(&s[2..], 8).map_err(|e| cnv_error!(e))?))),
+            s if s.starts_with("0x") => Ok(Number(U64Value(u64::from_str_radix(&s[2..], 16).map_err(|e| cnv_error!(e))?))),
             s if int_regex.is_match(s) => Ok(Number(I64Value(s.parse().map_err(|e| cnv_error!(e))?))),
             s if decimal_regex.is_match(s) => Ok(Number(F64Value(s.parse().map_err(|e| cnv_error!(e))?))),
             s => Ok(StringValue(s.to_string()))
@@ -227,7 +241,7 @@ impl TypedValue {
             Number(number) => number.encode(),
             PlatformOp(pf) => pf.encode().unwrap_or(vec![]),
             StringValue(string) => ByteCodeCompiler::encode_string(string),
-            TableValue(rc) => rc.encode(),
+            TableValue(rc) => ByteCodeCompiler::encode_df(rc),
             other => ByteCodeCompiler::encode_value(other).unwrap_or_else(|err| {
                 error!("decode error: {err}");
                 Vec::new()
@@ -237,24 +251,24 @@ impl TypedValue {
 
     pub fn get_type(&self) -> DataType {
         match self {
-            ArrayValue(a) => ArrayType(Box::new(Inferences::infer_values(a.values()))),
-            Binary(v) => BinaryType(FixedSize(v.len())),
+            ArrayValue(a) => ArrayType(a.len()),
+            Binary(bytes) => BinaryType(bytes.len()),
             BLOB(tv) => BLOBType(Box::from(tv.get_type())),
             Boolean(..) => BooleanType,
             ErrorValue(..) => ErrorType,
             Function { params, .. } => FunctionType(params.clone()),
-            NamespaceValue(..) => TableType(Vec::new(), BLOBSized),
-            Null | Undefined => UnionType(Vec::new()),
+            NamespaceValue(..) => TableType(Vec::new(), 0),
+            Null | Undefined => VaryingType(Vec::new()),
             Number(n) => NumberType(n.kind()),
             PlatformOp(op) => op.get_type(),
             Structured(s) => StructureType(s.get_parameters()),
-            StringValue(s) => StringType(FixedSize(s.len())),
-            TableValue(tv) => TableType(Parameter::from_columns(tv.get_columns()), BLOBSized),
+            StringValue(s) => StringType(s.len()),
+            TableValue(tv) => TableType(Parameter::from_columns(tv.get_columns()), 0),
         }
     }
 
     pub fn get_type_name(&self) -> String {
-        self.get_type().to_type_declaration().unwrap_or("".to_string())
+        self.get_type().to_type_declaration().unwrap_or(String::new())
     }
 
     pub fn hash_code(&self) -> u64 {
@@ -291,7 +305,7 @@ impl TypedValue {
             Structured(Hard(hs)) => ArrayValue(hs.to_table().to_array()),
             Structured(Soft(ss)) => ArrayValue(ss.to_table().to_array()),
             TableValue(rc) => ArrayValue(rc.to_array()),
-            z => ErrorValue(TypeMismatch(TableType(vec![], BLOBSized), z.get_type()))
+            z => ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
         }
     }
 
@@ -422,8 +436,8 @@ impl TypedValue {
     pub fn to_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
         match self.to_table_value() {
             ErrorValue(error) => throw(error),
-            TableValue(rcv) => Ok(Box::new(rcv)),
-            z => throw(TypeMismatch(TableType(vec![], BLOBSized), z.get_type()))
+            TableValue(df) => Ok(Box::new(df)),
+            z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
         }
     }
 
@@ -432,12 +446,16 @@ impl TypedValue {
             ArrayValue(items) => self.convert_array_to_table(items.values()),
             ErrorValue(err) => ErrorValue(err.to_owned()),
             NamespaceValue(ns) =>
-                match FileRowCollection::open(ns) {
-                    Ok(frc) => TableValue(Disk(frc)),
-                    Err(err) => ErrorValue(Exact(err.to_string())),
+                match ObjectConfig::load(ns) {
+                    Ok(ObjectConfig::TableConfig { .. }) =>
+                        match FileRowCollection::open(ns) {
+                            Ok(frc) => TableValue(Disk(frc)),
+                            Err(err) => ErrorValue(Exact(err.to_string())),
+                        },
+                    Err(err) => ErrorValue(Exact(err.to_string()))
                 }
             Structured(s) => TableValue(Model(s.to_table())),
-            TableValue(rcv) => TableValue(rcv.to_owned()),
+            TableValue(df) => TableValue(df.to_owned()),
             z => z.to_owned()
         }
     }
@@ -620,19 +638,19 @@ impl Add for TypedValue {
                 .collect::<Vec<_>>())),
             (Boolean(..), Number(Numbers::Ack)) => Boolean(true),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
-            (ErrorValue(Various(mut errors0)), ErrorValue(Various(errors1))) => {
+            (ErrorValue(Multiple(mut errors0)), ErrorValue(Multiple(errors1))) => {
                 errors0.extend(errors1);
-                ErrorValue(Various(errors0))
+                ErrorValue(Multiple(errors0))
             }
-            (ErrorValue(err), ErrorValue(Various(mut errors))) => {
+            (ErrorValue(err), ErrorValue(Multiple(mut errors))) => {
                 errors.push(err);
-                ErrorValue(Various(errors))
+                ErrorValue(Multiple(errors))
             }
-            (ErrorValue(Various(mut errors)), ErrorValue(err)) => {
+            (ErrorValue(Multiple(mut errors)), ErrorValue(err)) => {
                 errors.push(err);
-                ErrorValue(Various(errors))
+                ErrorValue(Multiple(errors))
             }
-            (ErrorValue(a), ErrorValue(b)) => ErrorValue(Various(vec![a, b])),
+            (ErrorValue(a), ErrorValue(b)) => ErrorValue(Multiple(vec![a, b])),
             (ErrorValue(a), _) => ErrorValue(a),
             (_, ErrorValue(b)) => ErrorValue(b),
             (Number(a), Number(b)) => Number(a + b),
@@ -654,7 +672,7 @@ impl Add for TypedValue {
                     Ok(mrc) => TableValue(Model(mrc)),
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 },
-            (a, b) => ErrorValue(TypeMismatch(a.get_type(), b.get_type()))
+            (a, b) => ErrorValue(TypeMismatch(UnsupportedType(a.get_type(), b.get_type())))
         }
     }
 }
@@ -734,7 +752,7 @@ fn fetch(mrc: &Box<dyn RowCollection>, index: usize) -> TypedValue {
         Ok((row, meta)) => {
             Structured(match meta.is_allocated {
                 true => Firm(row, columns.to_owned()),
-                false => Firm(Row::empty(columns), columns.to_owned()),
+                false => Firm(Row::create(row.get_id(), columns), columns.to_owned()),
             })
         }
         Err(err) => ErrorValue(Exact(err.to_string())),
@@ -882,9 +900,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_express_range() {
+        let (a, b, c) = (
+            Number(I64Value(1)), Number(I64Value(5)), Number(I64Value(1))
+        );
+        let list = TypedValue::express_range(a, b, c);
+        assert_eq!(list, vec![
+            Number(I64Value(1)), Number(I64Value(2)), Number(I64Value(3)),
+            Number(I64Value(4)),
+        ])
+    }
+
+    #[test]
     fn test_decode() {
         let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
-        assert_eq!(StringType(FixedSize(5)).decode(&buf, 0), StringValue("Hello".into()))
+        assert_eq!(StringType(5).decode(&buf, 0), StringValue("Hello".into()))
     }
 
     #[test]

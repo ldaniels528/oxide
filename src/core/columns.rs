@@ -7,7 +7,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::data_types::DataType;
 use crate::descriptor::Descriptor;
-use crate::errors::Errors::ArgumentsMismatched;
+use crate::errors::Errors::TypeMismatch;
+use crate::errors::TypeMismatchErrors::ArgumentsMismatched;
 use crate::numbers::Numbers;
 use crate::parameter::Parameter;
 use crate::structures::Row;
@@ -42,7 +43,7 @@ impl Column {
     pub fn from_descriptor(descriptor: &Descriptor, offset: usize) -> std::io::Result<Self> {
         Ok(Self::new(
             descriptor.get_name(),
-            DataType::from_str(descriptor.get_param_type().unwrap_or("".to_string()).as_str())?,
+            DataType::from_str(descriptor.get_param_type().unwrap_or(String::new()).as_str())?,
             TypedValue::wrap_value_opt(&descriptor.get_default_value())?, offset))
     }
 
@@ -115,7 +116,7 @@ impl Column {
     pub fn validate_compatibility(cs0: &Vec<Self>, cs1: &Vec<Self>) -> TypedValue {
         match (cs0, cs1) {
             (a, b) if a.len() != b.len() =>
-                ErrorValue(ArgumentsMismatched(cs0.len(), cs1.len())),
+                ErrorValue(TypeMismatch(ArgumentsMismatched(cs0.len(), cs1.len()))),
             _ =>
                 Number(Numbers::Ack)
         }
@@ -126,7 +127,6 @@ impl Column {
 #[cfg(test)]
 mod tests {
     use crate::data_types::DataType::*;
-    use crate::data_types::StorageTypes::FixedSize;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::F64Value;
     use crate::testdata::make_quote_descriptors;
@@ -149,7 +149,7 @@ mod tests {
         let column = Column::from_descriptor(&column_desc, 0)
             .expect("Deserialization error");
         assert_eq!(column.name, "exchange");
-        assert_eq!(column.data_type, StringType(FixedSize(10)));
+        assert_eq!(column.data_type, StringType(10));
         assert_eq!(column.default_value, StringValue("N/A".into()));
         assert_eq!(column.data_type.to_type_declaration(), column_desc.get_param_type());
         assert_eq!(column.fixed_size, 19);
@@ -158,13 +158,13 @@ mod tests {
     #[test]
     fn test_from_parameters() {
         let parameters = vec![
-            Parameter::new("symbol", StringType(FixedSize(8))),
-            Parameter::new("exchange", StringType(FixedSize(8))),
+            Parameter::new("symbol", StringType(8)),
+            Parameter::new("exchange", StringType(8)),
             Parameter::new("last_sale", NumberType(F64Kind)),
         ];
         let columns = vec![
-            Column::new("symbol", StringType(FixedSize(8)), Null, 9),
-            Column::new("exchange", StringType(FixedSize(8)), Null, 26),
+            Column::new("symbol", StringType(8), Null, 9),
+            Column::new("exchange", StringType(8), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ];
         assert_eq!(Column::from_parameters(&parameters), columns);
@@ -174,8 +174,8 @@ mod tests {
     fn test_differences() {
         let generated: Vec<Column> = Column::from_descriptors(&make_quote_descriptors()).unwrap();
         let natural: Vec<Column> = vec![
-            Column::new("symbol", StringType(FixedSize(8)), Null, 9),
-            Column::new("exchange", StringType(FixedSize(8)), Null, 26),
+            Column::new("symbol", StringType(8), Null, 9),
+            Column::new("exchange", StringType(8), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ];
         assert_eq!(generated, natural);

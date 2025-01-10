@@ -3,30 +3,33 @@
 // Compiler class
 ////////////////////////////////////////////////////////////////////
 
-use serde::{Deserialize, Serialize};
-use std::convert::From;
-
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::UnionType;
-use crate::errors::Errors;
+use crate::data_types::DataType::VaryingType;
+use crate::errors::throw;
+use crate::errors::Errors::{Exact, ExactNear, Syntax, TypeMismatch};
+use crate::errors::TypeMismatchErrors::{CodeBlockExpected, VariableExpected};
 use crate::expression::Conditions::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-use crate::expression::DatabaseOps::{Mutate, Query};
+use crate::expression::DatabaseOps::{Mutation, Queryable};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::TableTarget;
-use crate::expression::Mutation::{Create, Declare, Drop, IntoNs, Undelete};
-use crate::expression::Queryable::Select;
+use crate::expression::Mutations::{Create, Declare, Drop, IntoNs, Undelete};
+use crate::expression::Queryables::Select;
 use crate::expression::*;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::structures::HardStructure;
 use crate::structures::Structures::Hard;
 use crate::token_slice::TokenSlice;
-use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Function, Null, Number, StringValue, Structured};
+use serde::{Deserialize, Serialize};
 use shared_lib::fail;
+use std::convert::From;
+use std::fs;
+use std::io::Read;
 
 /// Oxide language compiler - converts source code into [Expression]s.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -43,9 +46,23 @@ impl Compiler {
     /// compiles the source code into a [Vec<Expression>]; a graph representing
     /// the program's executable code
     pub fn build(source_code: &str) -> std::io::Result<Expression> {
-        let mut compiler = Compiler::new();
-        let (code, _) = compiler.compile(TokenSlice::from_string(source_code))?;
+        let (code, _) = Self::new()
+            .compile(TokenSlice::from_string(source_code))?;
         Ok(code)
+    }
+
+    /// Compiles the provided source code and saves it as binary to the provided path
+    pub fn build_and_save(path: &str, source_code: &str) -> std::io::Result<Expression> {
+        let expr = Self::build(source_code)?;
+        Self::save(path, &expr)?;
+        Ok(expr)
+    }
+
+    /// Loads an Oxide binary from disk
+    pub fn load(path: &str) -> std::io::Result<Expression> {
+        let bytes = fs::read(path)?;
+        let expr = ByteCodeCompiler::decode(&bytes);
+        Ok(expr)
     }
 
     /// creates a new [Compiler] instance
@@ -53,6 +70,13 @@ impl Compiler {
         Compiler {
             stack: Vec::new(),
         }
+    }
+
+    /// Compiles the provided source code and saves it as binary to the provided path
+    pub fn save(path: &str, expr: &Expression) -> std::io::Result<()> {
+        let bytes = ByteCodeCompiler::encode(&expr)?;
+        fs::write(path, bytes)?;
+        Ok(())
     }
 
     ////////////////////////////////////////////////////////////////
@@ -90,7 +114,7 @@ impl Compiler {
                 Ok((Literal(StringValue(text.into())), ts)),
             (Some(Numeric { text, .. }), ts) =>
                 Ok((Literal(TypedValue::from_numeric(text.as_str())?), ts)),
-            (None, ts) => fail_near("Unexpected end of input", &ts)
+            (None, ts) => throw(ExactNear("Unexpected end of input".into(), ts.current()))
         }?;
 
         // handle postfix operator?
@@ -152,7 +176,7 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         match self.compile_next(ts)? {
             (expr, ts) => Ok((Condition(f(Box::new(expr))), ts)),
-            //(_, ts) => fail_near("Boolean expression expected", &ts)
+            //(_, ts) => throw("Boolean expression expected", &ts)
         }
     }
 
@@ -173,7 +197,7 @@ impl Compiler {
         f: fn(Box<Expression>) -> Expression,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         match self.pop() {
-            None => fail_near("expected an expression", &ts),
+            None => throw(ExactNear("Expected an expression".into(), ts.current())),
             Some(expr0) => Ok((f(Box::new(expr0)), ts))
         }
     }
@@ -207,7 +231,7 @@ impl Compiler {
         f: fn(Box<Expression>, Box<Expression>) -> Expression,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         match self.pop() {
-            None => fail_near("expected an expression", &ts),
+            None => fail(ExactNear("expected an expression".into(), ts.current()).to_string()),
             Some(expr0) => Ok((f(Box::new(expr0), Box::new(expr1)), ts))
         }
     }
@@ -228,7 +252,7 @@ impl Compiler {
                 let (expr1, ts) = self.compile_next(ts)?;
                 Ok((f(name, Box::new(expr1)), ts))
             }
-            _ => fail_near("an identifier name was expected", &ts)
+            _ => throw(ExactNear("an identifier name was expected".into(), ts.current()))
         }
     }
 
@@ -242,7 +266,7 @@ impl Compiler {
             (Some(
                 Atom { text: name, .. } |
                 Backticks { text: name, .. }), ts) => Ok((f(name), ts)),
-            (_, ts) => fail_near("Invalid identifier", &ts)
+            (_, ts) => throw(ExactNear("Invalid identifier".into(), ts.current()))
         }
     }
 
@@ -259,7 +283,7 @@ impl Compiler {
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
                 "DELETE" => self.parse_keyword_http(ts),
-                "drop" => self.parse_mutate_target(nts, |m| DatabaseOp(Mutate(Drop(m)))),
+                "drop" => self.parse_mutate_target(nts, |m| DatabaseOp(Mutation(Drop(m)))),
                 "false" => Ok((FALSE, nts)),
                 "Feature" => self.parse_keyword_feature(nts),
                 "fn" => self.parse_keyword_fn(nts),
@@ -274,7 +298,7 @@ impl Compiler {
                 "if" => self.parse_keyword_if(nts),
                 "import" => self.parse_keyword_import(nts),
                 "include" => self.parse_expression_1a(nts, Include),
-                "limit" => fail_near("`from` is expected before `limit`: from stocks limit 5", &nts),
+                "limit" => throw(ExactNear("`from` is expected before `limit`: from stocks limit 5".into(), nts.current())),
                 "mod" => self.parse_keyword_mod(nts),
                 "NaN" => Ok((Literal(Number(NaNValue)), nts)),
                 "ns" => self.parse_expression_1a(nts, Ns),
@@ -292,7 +316,7 @@ impl Compiler {
                 "undelete" => self.parse_keyword_undelete(nts),
                 "update" => self.parse_keyword_update(nts),
                 "via" => self.parse_expression_1a(nts, Via),
-                "where" => fail_near("`from` is expected before `where`: from stocks where last_sale < 1.0", &nts),
+                "where" => throw(ExactNear("`from` is expected before `where`: from stocks where last_sale < 1.0".into(), nts.current())),
                 "while" => self.parse_keyword_while(nts),
                 name => self.expect_function_call_or_variable(name, nts)
             }
@@ -307,7 +331,7 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (table, ts) = self.compile_next(ts)?;
         let (source, ts) = self.compile_next(ts)?;
-        Ok((DatabaseOp(Mutate(Mutation::Append { path: Box::new(table), source: Box::new(source) })), ts))
+        Ok((DatabaseOp(Mutation(Mutations::Append { path: Box::new(table), source: Box::new(source) })), ts))
     }
 
     /// Creates a database object (e.g., table or index)
@@ -319,7 +343,7 @@ impl Compiler {
             match t.get_raw_value().as_str() {
                 "index" => self.parse_keyword_create_index(ts),
                 "table" => self.parse_keyword_create_table(ts),
-                name => fail_near(format!("Syntax error: expect type identifier, got '{}'", name), &ts)
+                name => throw(ExactNear(format!("Syntax error: expect type identifier, got '{}'", name), ts.current()))
             }
         } else { fail("Unexpected end of input") }
     }
@@ -331,15 +355,16 @@ impl Compiler {
         let (index, ts) = self.compile_next(ts)?;
         let ts = ts.expect("on")?;
         if let (ArrayExpression(columns), ts) = self.compile_next(ts.to_owned())? {
-            Ok((DatabaseOp(Mutate(Create {
+            Ok((DatabaseOp(Mutation(Create {
                 path: Box::new(index),
                 entity: IndexEntity { columns },
             })), ts))
         } else {
-            fail_near("Columns expected", &ts)
+            throw(ExactNear("Columns expected".into(), ts.current()))
         }
     }
 
+    /// Parses a table creation expression
     fn parse_keyword_create_table(
         &mut self,
         ts: TokenSlice,
@@ -356,16 +381,17 @@ impl Compiler {
                 } else {
                     (None, ts)
                 };
-            Ok((DatabaseOp(Mutate(Create {
+            Ok((DatabaseOp(Mutation(Create {
                 path: Box::new(table),
                 entity: TableEntity { columns, from },
             })), ts))
         } else {
-            fail_near("Expected column definitions", &ts)
+            throw(ExactNear("Expected column definitions".into(), ts.current()))
         }
     }
 
-    /// SQL Delete statement. ex: delete from stocks where last_sale > 1.00
+    /// SQL Delete statement.
+    /// ex: delete from stocks where last_sale > 1.00
     fn parse_keyword_delete(
         &mut self,
         ts: TokenSlice,
@@ -374,7 +400,7 @@ impl Compiler {
         let from = from.expect("Expected keyword 'from'");
         let (condition, ts) = self.next_keyword_cond("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((DatabaseOp(Mutate(Mutation::Delete { path: Box::new(from), condition, limit: limit.map(Box::new) })), ts))
+        Ok((DatabaseOp(Mutation(Mutations::Delete { path: Box::new(from), condition, limit: limit.map(Box::new) })), ts))
     }
 
     fn parse_keyword_feature(
@@ -397,7 +423,7 @@ impl Compiler {
                 .collect::<Vec<_>>(),
             other => {
                 println!("parse_keyword_feature: other {:?}", other);
-                return fail_expr("Code block expected", &other);
+                return throw(TypeMismatch(CodeBlockExpected(other.to_code())));
             }
         };
         Ok((Feature {
@@ -418,7 +444,7 @@ impl Compiler {
                 Ok((Scenario { title: Box::new(title), verifications }, ts)),
             other => {
                 println!("parse_keyword_scenario: other {:?}", other);
-                fail_expr("Code block expected", &other)
+                throw(TypeMismatch(CodeBlockExpected(other.to_code())))
             }
         }
     }
@@ -438,7 +464,7 @@ impl Compiler {
             (Some(Atom { text: name, .. }), ts) =>
                 self.expect_function_parameters_and_body(Some(name), ts),
             // unrecognized
-            _ => fail_near("Function name expected", &ts)
+            _ => throw(ExactNear("Function name expected".into(), ts.current()))
         }
     }
 
@@ -456,8 +482,7 @@ impl Compiler {
                 let (block, ts) = self.compile_next(ts)?;
                 Ok((ForEach(name, Box::from(items), Box::from(block)), ts))
             }
-            (_, ts) =>
-                fail_near("Variable expected", &ts)
+            (_, ts) => throw(TypeMismatch(VariableExpected(ts.current())))
         }
     }
 
@@ -495,7 +520,7 @@ impl Compiler {
             let url = Box::new(url);
             Ok((HTTP { method, url, body, headers, multipart }, ts))
         } else {
-            fail_near("HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT", &ts)
+            throw(ExactNear("HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT".into(), ts.current()))
         }
     }
 
@@ -563,16 +588,16 @@ impl Compiler {
                                 match item {
                                     Literal(StringValue(name)) => func_list.push(name),
                                     Variable(name) => func_list.push(name),
-                                    other => return fail_near(Errors::Syntax(other.to_code()).to_string(), &ts0)
+                                    other => return throw(Syntax(other.to_code()))
                                 }
                             }
                             ops.push(ImportOps::Selection(pkg, func_list))
                         }
-                        (a, ..) => return fail_near(Errors::Syntax(a.to_code()).to_string(), &ts0)
+                        (a, ..) => return throw(Syntax(a.to_code()))
                     }
                 }
                 // syntax error
-                other => return fail_near(Errors::Syntax(other.to_code()).to_string(), &ts0)
+                other => return throw(Syntax(other.to_code()))
             }
 
             // if there's a comma, keep going
@@ -596,11 +621,11 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (name, ts) = match self.compile_next(ts)? {
             (Variable(name), ts) => (name, ts),
-            (_, ts) => return fail_near("Variable expected", &ts)
+            (_, ts) => return throw(TypeMismatch(VariableExpected(ts.current())))
         };
         match self.compile_next(ts)? {
             (CodeBlock(ops), ts) => Ok((Module(name, ops), ts)),
-            (_, ts) => fail_near("Code block expected", &ts)
+            (_, ts) => throw(TypeMismatch(CodeBlockExpected(ts.current().get_raw_value())))
         }
     }
 
@@ -617,10 +642,10 @@ impl Compiler {
         let (source, ts) = self.compile_next(ts)?;
         let (condition, ts) = match self.next_keyword_expr("where", ts)? {
             (Some(Condition(cond)), ts) => (cond, ts),
-            (.., ts) => return fail_near("Expected a boolean expression", &ts)
+            (.., ts) => return throw(ExactNear("Expected a boolean expression".into(), ts.current()))
         };
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((DatabaseOp(Mutate(Mutation::Overwrite {
+        Ok((DatabaseOp(Mutation(Mutations::Overwrite {
             path: Box::new(table),
             source: Box::new(source),
             condition: Some(condition),
@@ -639,7 +664,7 @@ impl Compiler {
         let (having, ts) = self.next_keyword_expr("having", ts)?;
         let (order_by, ts) = self.next_keyword_expression_list("order", "by", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((DatabaseOp(Query(Select {
+        Ok((DatabaseOp(Queryable(Select {
             fields,
             from: from.map(Box::new),
             condition,
@@ -657,7 +682,7 @@ impl Compiler {
         if let (Parameters(fields), ts) = self.expect_parameters(ts.to_owned())? {
             Ok((Literal(Structured(Hard(HardStructure::from_parameters(&fields)))), ts))
         } else {
-            fail_near("Expected column definitions", &ts)
+            throw(ExactNear("Expected column definitions".into(), ts.current()))
         }
     }
 
@@ -676,9 +701,9 @@ impl Compiler {
             } else {
                 (None, ts)
             };
-            Ok((DatabaseOp(Mutate(Declare(TableEntity { columns: params, from }))), ts))
+            Ok((DatabaseOp(Mutation(Declare(TableEntity { columns: params, from }))), ts))
         } else {
-            fail_near("Expected column definitions", &ts)
+            throw(ExactNear("Expected column definitions".into(), ts.current()))
         }
     }
 
@@ -692,7 +717,7 @@ impl Compiler {
         let from = from.expect("Expected keyword 'from'");
         let (condition, ts) = self.next_keyword_cond("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((DatabaseOp(Mutate(Undelete { path: Box::new(from), condition, limit: limit.map(Box::new) })), ts))
+        Ok((DatabaseOp(Mutation(Undelete { path: Box::new(from), condition, limit: limit.map(Box::new) })), ts))
     }
 
     /// Builds a language model from an UPDATE statement:
@@ -702,7 +727,7 @@ impl Compiler {
         let (source, ts) = self.compile_next(ts)?;
         let (condition, ts) = self.next_keyword_cond("where", ts)?;
         let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((DatabaseOp(Mutate(Mutation::Update {
+        Ok((DatabaseOp(Mutation(Mutations::Update {
             path: Box::new(table),
             source: Box::new(source),
             condition,
@@ -739,10 +764,10 @@ impl Compiler {
                         let (expr, ts) = self.compile_next(ts)?;
                         Ok((f(TableTarget { path: Box::new(expr) }), ts))
                     }
-                    z => fail_near(format!("Invalid type `{}`, try `table` instead", z), &ts)
+                    z => throw(ExactNear(format!("Invalid type `{}`, try `table` instead", z), ts.current()))
                 }
             }
-            (_, ts) => fail_near("Syntax error".to_string(), &ts)
+            (_, ts) => throw(ExactNear("Syntax error".into(), ts.current()))
         }
     }
 
@@ -781,11 +806,11 @@ impl Compiler {
             sym =>
                 if let Some(op0) = self.pop() {
                     match sym {
-                        "&&" => self.parse_conditional_2a(ts, op0, And),
+                        "&&" => self.parse_conditional_2a(ts, op0, Conditions::And),
                         ":" => self.parse_expression_2nv(ts, op0, AsValue),
-                        "&" => self.parse_expression_2a(ts, op0, |a, b| BitwiseOp(BitwiseOps::And(a, b))),
-                        "|" => self.parse_expression_2a(ts, op0, |a, b| BitwiseOp(BitwiseOps::Or(a, b))),
-                        "^" => self.parse_expression_2a(ts, op0, |a, b| BitwiseOp(BitwiseOps::Xor(a, b))),
+                        "&" => self.parse_expression_2a(ts, op0, |a, b| BitwiseAnd(a, b)),
+                        "|" => self.parse_expression_2a(ts, op0, |a, b| BitwiseOr(a, b)),
+                        "^" => self.parse_expression_2a(ts, op0, |a, b| BitwiseXor(a, b)),
                         "÷" | "/" => self.parse_expression_2a(ts, op0, Divide),
                         "==" => self.parse_conditional_2a(ts, op0, Equal),
                         "::" => self.parse_expression_2a(ts, op0, Extraction),
@@ -797,16 +822,16 @@ impl Compiler {
                         "-" => self.parse_expression_2a(ts, op0, Minus),
                         "%" => self.parse_expression_2a(ts, op0, Modulo),
                         "×" | "*" => self.parse_expression_2a(ts, op0, Multiply),
-                        "~>" => self.parse_expression_2a(ts, op0, |a, b| DatabaseOp(Mutate(IntoNs(a, b)))),
+                        "~>" => self.parse_expression_2a(ts, op0, |a, b| DatabaseOp(Mutation(IntoNs(a, b)))),
                         "!=" => self.parse_conditional_2a(ts, op0, NotEqual),
-                        "||" => self.parse_conditional_2a(ts, op0, Or),
+                        "||" => self.parse_conditional_2a(ts, op0, Conditions::Or),
                         "+" => self.parse_expression_2a(ts, op0, Plus),
                         "++" => self.parse_expression_2a(ts, op0, PlusPlus),
                         "**" => self.parse_expression_2a(ts, op0, Pow),
                         ".." => self.parse_expression_2a(ts, op0, Range),
                         ":=" => self.parse_expression_2nv(ts, op0, SetVariable),
-                        "<<" => self.parse_expression_2a(ts, op0, |a, b| BitwiseOp(BitwiseOps::ShiftLeft(a, b))),
-                        ">>" => self.parse_expression_2a(ts, op0, |a, b| BitwiseOp(BitwiseOps::ShiftRight(a, b))),
+                        "<<" => self.parse_expression_2a(ts, op0, |a, b| BitwiseShiftLeft(a, b)),
+                        ">>" => self.parse_expression_2a(ts, op0, |a, b| BitwiseShiftRight(a, b)),
                         unknown => fail(format!("Invalid operator '{}'", unknown))
                     }
                 } else { fail(format!("Illegal start of expression '{}'", symbol)) }
@@ -821,14 +846,14 @@ impl Compiler {
         match ts.to_owned() {
             t if t.is("limit") => {
                 let (expr, ts) = self.compile_next(ts.skip())?;
-                self.parse_queryable(DatabaseOp(Query(Queryable::Limit { from: Box::new(host), limit: Box::new(expr) })), ts)
+                self.parse_queryable(DatabaseOp(Queryable(Queryables::Limit { from: Box::new(host), limit: Box::new(expr) })), ts)
             }
             t if t.is("where") => {
                 match self.compile_next(ts.skip())? {
                     (Condition(condition), ts) =>
-                        self.parse_queryable(DatabaseOp(Query(Queryable::Where { from: Box::new(host), condition })), ts),
+                        self.parse_queryable(DatabaseOp(Queryable(Queryables::Where { from: Box::new(host), condition })), ts),
                     (_, ts) =>
-                        fail_near("Boolean expression expected", &ts)
+                        throw(ExactNear("Boolean expression expected".into(), ts.current()))
                 }
             }
             _ => Ok((host, ts))
@@ -868,7 +893,7 @@ impl Compiler {
                 args.push(name);
                 ts = if ats.is(")") { ats } else { ats.expect(",")? }
             } else {
-                return fail_near("an atom was expected", &ts);
+                return throw(ExactNear("an atom was expected".into(), ts.current()));
             }
         }
         Ok((args, ts.expect(")")?))
@@ -936,7 +961,7 @@ impl Compiler {
                     a: Box::new(a.to_owned()),
                     b: Some(Box::new(b.to_owned())),
                 }, ts)),
-            _ => fail_near("Syntax error; usage: iff(condition, if_true, if_false)", &ts)
+            _ => throw(ExactNear("Syntax error; usage: iff(condition, if_true, if_false)".into(), ts.current()))
         }
     }
 
@@ -961,12 +986,12 @@ impl Compiler {
                 // if there's not a body, must be an anonymous function head
                 // ex: fn(symbol: String(8), exchange: String(8), last_sale: f64)
                 _ => match name {
-                    Some(..) => fail_near("Symbol expected '=>'", &ts),
+                    Some(..) => throw(ExactNear("Symbol expected '=>'".into(), ts.current())),
                     None => Ok((Literal(Function { params, code: Box::new(UNDEFINED) }), ts))
                 }
             }
         } else {
-            fail_near("Function parameters expected", &ts)
+            throw(ExactNear("Function parameters expected".into(), ts.current()))
         }
     }
 
@@ -1007,13 +1032,13 @@ impl Compiler {
                     if let (Some(tok), ts) = ts.skip().next() {
                         (TypedValue::from_token(&tok)?, ts)
                     } else {
-                        return fail_near("An expression was expected", &ts);
+                        return throw(ExactNear("An expression was expected".into(), ts.current()));
                     }
                 } else { (Null, ts) };
 
-                Ok((Parameter::with_default(name, type_decl.unwrap_or(UnionType(vec![])), default_value), ts))
+                Ok((Parameter::with_default(name, type_decl.unwrap_or(VaryingType(vec![])), default_value), ts))
             }
-            (_, ats) => fail_near("Function name expected", &ats)
+            (_, ats) => throw(ExactNear("Function name expected".into(), ats.current()))
         }
     }
 
@@ -1035,24 +1060,59 @@ impl Compiler {
     }
 
     fn expect_parentheses(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (innards, ts) = ts.scan_to(|t| t.get_raw_value() == ")");
-        let innards = TokenSlice::new(innards.to_vec());
-        let (opcode, _) = self.compile(innards)?;
-        self.pop();
-        Ok((opcode, ts.expect(")")?))
+        let mut items = vec![];
+        let mut ts = ts;
+        while ts.isnt(")") {
+            // compile the next expression
+            let (expr, tts) = self.compile_next(ts)?;
+            items.push(expr);
+            ts = tts;
+
+            // commas are optional
+            if ts.is(",") { ts = ts.skip(); }
+        }
+
+        // expect the closing parenthesis
+        ts = ts.expect(")")?;
+
+        // what did we get?
+        match items.as_slice() {
+            // are they parameters?
+            args if args.iter().find(|arg| matches!(arg, AsValue(..))).is_some() =>
+                Ok((Self::convert_to_parameters(args)?, ts)),
+            [expr] => Ok((expr.clone(), ts)),
+            args => Ok((Tuple(args.to_vec()), ts))
+        }
     }
 
-    fn expect_square_brackets(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (innards, ts) = ts.scan_to(|t| t.get_raw_value() == "]");
-        let mut innards = TokenSlice::new(innards.to_vec());
-        let mut items = Vec::new();
-        while innards.has_more() {
-            let (expr, its) = self.compile_next(innards)?;
-            items.push(expr);
-            innards = match its {
-                t if t.is(",") => t.next().1,
-                t => t
+    fn convert_to_parameters(args: &[Expression]) -> std::io::Result<Expression> {
+        let mut params = vec![];
+        for arg in args.iter() {
+            match arg {
+                AsValue(name, expr) =>
+                    params.push(Parameter::new(name, DataType::decipher_type(expr)?)),
+                Variable(name) =>
+                    params.push(Parameter::new(name, VaryingType(vec![]))),
+                expr =>
+                    return throw(Exact(format!("Parameter expected near {}", expr.to_code())))
             }
+        }
+        Ok(Parameters(params))
+    }
+
+    /// Parses a square bracket expression
+    /// ex: ["Hello", 123, cal::now()]
+    fn expect_square_brackets(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        let mut items = vec![];
+        let mut ts = ts;
+        while ts.isnt("]") {
+            // compile the next expression
+            let (expr, tts) = self.compile_next(ts)?;
+            items.push(expr);
+            ts = tts;
+
+            // commas are optional
+            if ts.is(",") { ts = ts.skip(); }
         }
         Ok((ArrayExpression(items), ts.expect("]")?))
     }
@@ -1098,7 +1158,7 @@ impl Compiler {
     fn next_keyword_cond(&mut self, keyword: &str, ts: TokenSlice) -> std::io::Result<(Option<Conditions>, TokenSlice)> {
         match self.next_keyword_expr(keyword, ts)? {
             (Some(Condition(cond)), ts) => Ok((Some(cond), ts)),
-            (Some(..), ts) => return fail_near("Expected a boolean expression", &ts),
+            (Some(..), ts) => return throw(ExactNear("Expected a boolean expression".into(), ts.current())),
             (None, ts) => Ok((None, ts)),
         }
     }
@@ -1122,33 +1182,41 @@ impl Compiler {
     }
 }
 
-pub fn fail_expr<A>(message: impl Into<String>, expr: &Expression) -> std::io::Result<A> {
-    fail(format!("{} near {}", message.into(), expr.to_code()))
-}
-
-pub fn fail_near<A>(message: impl Into<String>, ts: &TokenSlice) -> std::io::Result<A> {
-    fail(format!("{} near {}", message.into(), ts))
-}
-
-pub fn fail_token<A>(message: impl Into<String>, t: &Token) -> std::io::Result<A> {
-    fail(format!("{} near {}", message.into(), t))
-}
-
-pub fn fail_unexpected<A>(expected_type: impl Into<String>, value: &TypedValue) -> std::io::Result<A> {
-    fail(format!("Expected a(n) {}, but got {:?}", expected_type.into(), value))
-}
-
-pub fn fail_unhandled_expr<A>(expr: &Expression) -> std::io::Result<A> {
-    fail_expr("Unhandled expression", expr)
-}
-
-pub fn fail_value<A>(message: impl Into<String>, value: &TypedValue) -> std::io::Result<A> {
-    fail(format!("{} near {}", message.into(), value.unwrap_value()))
-}
-
 /// Unit tests
 #[cfg(test)]
 mod tests {
+    /// Build tests
+    #[cfg(test)]
+    mod build_tests {
+        use crate::compiler::Compiler;
+        use crate::machine::Machine;
+        use crate::numbers::Numbers::RowsAffected;
+        use crate::typed_values::TypedValue::Number;
+
+        #[test]
+        fn test_build_save_load() {
+            let src_path = "stocks.oxc";
+
+            // compile and save as a binary
+            Compiler::build_and_save(src_path, r#"
+                stocks := ns("compiler.build_save_load.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                append stocks from [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
+                    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                    { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }
+                ]
+            "#).unwrap();
+
+            // load the binary
+            let expr = Compiler::load(src_path).unwrap();
+            let (_, result) = Machine::new_platform().evaluate(&expr).unwrap();
+            assert_eq!(result, Number(RowsAffected(5)))
+        }
+    }
+
     /// Core tests
     #[cfg(test)]
     mod core_tests {
@@ -1251,8 +1319,8 @@ mod tests {
     #[cfg(test)]
     mod bitwise_tests {
         use crate::compiler::Compiler;
-        use crate::expression::BitwiseOps;
-        use crate::expression::Expression::{BitwiseOp, Literal};
+        use crate::expression::Expression;
+        use crate::expression::Expression::Literal;
         use crate::numbers::Numbers::I64Value;
         use crate::typed_values::TypedValue::Number;
 
@@ -1260,50 +1328,50 @@ mod tests {
         fn test_bitwise_and() {
             assert_eq!(
                 Compiler::build("20 & 3").unwrap(),
-                BitwiseOp(BitwiseOps::And(
+                Expression::BitwiseAnd(
                     Box::new(Literal(Number(I64Value(20)))),
                     Box::new(Literal(Number(I64Value(3)))),
-                )));
+                ));
         }
 
         #[test]
         fn test_bitwise_or() {
             assert_eq!(
                 Compiler::build("20 | 3").unwrap(),
-                BitwiseOp(BitwiseOps::Or(
+                Expression::BitwiseOr(
                     Box::new(Literal(Number(I64Value(20)))),
                     Box::new(Literal(Number(I64Value(3)))),
-                )));
+                ));
         }
 
         #[test]
         fn test_bitwise_shl() {
             assert_eq!(
                 Compiler::build("20 << 3").unwrap(),
-                BitwiseOp(BitwiseOps::ShiftLeft(
+                Expression::BitwiseShiftLeft(
                     Box::new(Literal(Number(I64Value(20)))),
                     Box::new(Literal(Number(I64Value(3)))),
-                )));
+                ));
         }
 
         #[test]
         fn test_bitwise_shr() {
             assert_eq!(
                 Compiler::build("20 >> 3").unwrap(),
-                BitwiseOp(BitwiseOps::ShiftRight(
+                Expression::BitwiseShiftRight(
                     Box::new(Literal(Number(I64Value(20)))),
                     Box::new(Literal(Number(I64Value(3)))),
-                )));
+                ));
         }
 
         #[test]
         fn test_bitwise_xor() {
             assert_eq!(
                 Compiler::build("19 ^ 13").unwrap(),
-                BitwiseOp(BitwiseOps::Xor(
+                Expression::BitwiseXor(
                     Box::new(Literal(Number(I64Value(19)))),
                     Box::new(Literal(Number(I64Value(13)))),
-                )));
+                ));
         }
     }
 
@@ -1870,19 +1938,64 @@ mod tests {
         }
     }
 
+    /// Parameter and Tuple tests
+    #[cfg(test)]
+    mod parameter_and_tuple_tests {
+        use crate::compiler::Compiler;
+        use crate::data_types::DataType::{NumberType, VaryingType};
+        use crate::expression::Expression::{Parameters, Tuple, Variable};
+        use crate::number_kind::NumberKind::I64Kind;
+        use crate::parameter::Parameter;
+
+        #[test]
+        fn test_parentheses_for_qualified_parameters() {
+            let expr = Compiler::build(r#"
+                (a: i64, b: i64, c: i64)
+            "#).unwrap();
+            assert_eq!(expr, Parameters(vec![
+                Parameter::new("a", NumberType(I64Kind)),
+                Parameter::new("b", NumberType(I64Kind)),
+                Parameter::new("c", NumberType(I64Kind)),
+            ]))
+        }
+
+        #[test]
+        fn test_parentheses_for_parameters() {
+            let expr = Compiler::build(r#"
+                (a, b, c: i64)
+            "#).unwrap();
+            assert_eq!(expr, Parameters(vec![
+                Parameter::new("a", VaryingType(vec![])),
+                Parameter::new("b", VaryingType(vec![])),
+                Parameter::new("c", NumberType(I64Kind)),
+            ]))
+        }
+
+        #[test]
+        fn test_parentheses_for_tuples() {
+            let expr = Compiler::build(r#"
+                (a, b, c)
+            "#).unwrap();
+            assert_eq!(expr, Tuple(vec![
+                Variable("a".into()),
+                Variable("b".into()),
+                Variable("c".into()),
+            ]))
+        }
+    }
+
     /// SQL tests
     #[cfg(test)]
     mod sql_tests {
         use crate::compiler::Compiler;
         use crate::data_types::DataType::{NumberType, StringType};
-        use crate::data_types::StorageTypes::FixedSize;
         use crate::expression::Conditions::{Between, Betwixt, Equal, GreaterOrEqual, LessOrEqual, LessThan, Like};
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
-        use crate::expression::DatabaseOps::{Mutate, Query};
+        use crate::expression::DatabaseOps::{Mutation, Queryable};
         use crate::expression::Expression::{ArrayExpression, Condition, DatabaseOp, From, JSONExpression, Literal, Ns, Variable, Via};
         use crate::expression::MutateTarget::TableTarget;
-        use crate::expression::Mutation::{Create, Declare, Drop, IntoNs};
-        use crate::expression::{Mutation, Queryable};
+        use crate::expression::Mutations::{Create, Declare, Drop, IntoNs};
+        use crate::expression::{Mutations, Queryables};
         use crate::number_kind::NumberKind::F64Kind;
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::parameter::Parameter;
@@ -1894,7 +2007,7 @@ mod tests {
                 append ns("compiler.append2.stocks")
                 from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Append {
+            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append2.stocks".to_string()))))),
                 source: Box::new(From(Box::new(JSONExpression(vec![
                     ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -1914,7 +2027,7 @@ mod tests {
                     { symbol: "SHARK", exchange: "AMEX", last_sale: 52.08 }
                 ]
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Append {
+            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
                 source: Box::new(From(Box::new(
                     ArrayExpression(vec![
@@ -1943,7 +2056,7 @@ mod tests {
             let opcodes = Compiler::build(r#"
                 append ns("compiler.append.stocks") from stocks
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Append {
+            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append.stocks".to_string()))))),
                 source: Box::new(From(Box::new(Variable("stocks".into())))),
             })))
@@ -1976,7 +2089,7 @@ mod tests {
             let code = Compiler::build(r#"
                 create index ns("compiler.create.stocks") on [symbol, exchange]
             "#).unwrap();
-            assert_eq!(code, DatabaseOp(Mutate(Create {
+            assert_eq!(code, DatabaseOp(Mutation(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.create.stocks".into()))))),
                 entity: IndexEntity {
                     columns: vec![
@@ -1996,12 +2109,12 @@ mod tests {
                     exchange: String(8) = "NYSE",
                     last_sale: f64 = 23.54)
                 "#).unwrap();
-            assert_eq!(code, DatabaseOp(Mutate(Create {
+            assert_eq!(code, DatabaseOp(Mutation(Create {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
                 entity: TableEntity {
                     columns: vec![
-                        Parameter::with_default("symbol", StringType(FixedSize(8)), StringValue("ABC".into())),
-                        Parameter::with_default("exchange", StringType(FixedSize(8)), StringValue("NYSE".into())),
+                        Parameter::with_default("symbol", StringType(8), StringValue("ABC".into())),
+                        Parameter::with_default("exchange", StringType(8), StringValue("NYSE".into())),
                         Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.54))),
                     ],
                     from: None,
@@ -2017,10 +2130,10 @@ mod tests {
                     exchange: String(8),
                     last_sale: f64)
             "#).unwrap();
-            assert_eq!(model, DatabaseOp(Mutate(Declare(TableEntity {
+            assert_eq!(model, DatabaseOp(Mutation(Declare(TableEntity {
                 columns: vec![
-                    Parameter::new("symbol", StringType(FixedSize(8))),
-                    Parameter::new("exchange", StringType(FixedSize(8))),
+                    Parameter::new("symbol", StringType(8)),
+                    Parameter::new("exchange", StringType(8)),
                     Parameter::new("last_sale", NumberType(F64Kind)),
                 ],
                 from: None,
@@ -2032,8 +2145,8 @@ mod tests {
             let opcodes = Compiler::build(r#"
                 delete from stocks
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(
-                Mutation::Delete {
+            assert_eq!(opcodes, DatabaseOp(Mutation(
+                Mutations::Delete {
                     path: Box::new(Variable("stocks".into())),
                     condition: None,
                     limit: None,
@@ -2047,7 +2160,7 @@ mod tests {
                 where last_sale >= 1.0
                 limit 100
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Delete {
+            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Delete {
                 path: Box::new(Variable("stocks".into())),
                 condition: Some(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
@@ -2064,7 +2177,7 @@ mod tests {
             "#).unwrap();
             assert_eq!(
                 code,
-                DatabaseOp(Mutate(Drop(TableTarget {
+                DatabaseOp(Mutation(Drop(TableTarget {
                     path: Box::new(Ns(Box::new(Literal(StringValue("finance.securities.stocks".into()))))),
                 })))
             );
@@ -2081,9 +2194,9 @@ mod tests {
             let opcodes = Compiler::build(r#"
                 from stocks where last_sale >= 1.0 limit 20
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Query(Queryable::Limit {
+            assert_eq!(opcodes, DatabaseOp(Queryable(Queryables::Limit {
                 from: Box::new(
-                    DatabaseOp(Query(Queryable::Where {
+                    DatabaseOp(Queryable(Queryables::Where {
                         from: Box::new(From(Box::new(Variable("stocks".into())))),
                         condition: GreaterOrEqual(
                             Box::new(Variable("last_sale".into())),
@@ -2121,7 +2234,7 @@ mod tests {
                 where symbol == "ABCQ"
                 limit 5
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Overwrite {
+            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Overwrite {
                 path: Box::new(Variable("stocks".into())),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -2141,7 +2254,7 @@ mod tests {
             let opcodes = Compiler::build(r#"
                 select symbol, exchange, last_sale from stocks
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Query(Queryable::Select {
+            assert_eq!(opcodes, DatabaseOp(Queryable(Queryables::Select {
                 fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                 from: Some(Box::new(Variable("stocks".into()))),
                 condition: None,
@@ -2158,8 +2271,8 @@ mod tests {
                 select symbol, exchange, last_sale from stocks
                 where last_sale >= 1.0
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Query(
-                Queryable::Select {
+            assert_eq!(opcodes, DatabaseOp(Queryable(
+                Queryables::Select {
                     fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                     from: Some(Box::new(Variable("stocks".into()))),
                     condition: Some(GreaterOrEqual(
@@ -2180,7 +2293,7 @@ mod tests {
                 where last_sale <= 1.0
                 limit 5
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Query(Queryable::Select {
+            assert_eq!(opcodes, DatabaseOp(Queryable(Queryables::Select {
                 fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                 from: Some(Box::new(Variable("stocks".into()))),
                 condition: Some(LessOrEqual(
@@ -2202,7 +2315,7 @@ mod tests {
                 order by symbol
                 limit 5
                 "#).unwrap();
-            assert_eq!(opcode, DatabaseOp(Query(Queryable::Select {
+            assert_eq!(opcode, DatabaseOp(Queryable(Queryables::Select {
                 fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                 from: Some(Box::new(Variable("stocks".into()))),
                 condition: Some(LessThan(
@@ -2221,7 +2334,7 @@ mod tests {
             let opcodes = Compiler::build(r#"
                 undelete from stocks
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Undelete {
+            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Undelete {
                 path: Box::new(Variable("stocks".into())),
                 condition: None,
                 limit: None,
@@ -2235,7 +2348,7 @@ mod tests {
                 where last_sale >= 1.0
                 limit 100
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Undelete {
+            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Undelete {
                 path: Box::new(Variable("stocks".into())),
                 condition: Some(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
@@ -2253,7 +2366,7 @@ mod tests {
                 where symbol == "ABC"
                 limit 10
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(Mutation::Update {
+            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Update {
                 path: Box::new(Variable("stocks".into())),
                 source: Box::new(Via(Box::new(JSONExpression(vec![
                     ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
@@ -2274,7 +2387,7 @@ mod tests {
                  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
                         ~> ns("interpreter.into.stocks")
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutate(IntoNs(
+            assert_eq!(opcodes, DatabaseOp(Mutation(IntoNs(
                 Box::new(ArrayExpression(vec![
                     JSONExpression(vec![
                         ("symbol".into(), Literal(StringValue("ABC".into()))),

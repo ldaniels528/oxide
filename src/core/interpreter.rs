@@ -3,11 +3,11 @@
 // Interpreter class
 ////////////////////////////////////////////////////////////////////
 
-use serde::{Deserialize, Serialize};
-
 use crate::compiler::Compiler;
 use crate::machine::Machine;
 use crate::typed_values::TypedValue;
+use num_traits::real::Real;
+use serde::{Deserialize, Serialize};
 
 /// Represents the Oxide language interpreter.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -21,9 +21,14 @@ impl Interpreter {
     // static methods
     ////////////////////////////////////////////////////////////////
 
+    /// Constructs a new Interpreter using the provided machine state
+    pub fn build(machine: Machine) -> Self {
+        Self { machine }
+    }
+
     /// Constructs a new Interpreter
     pub fn new() -> Self {
-        Self { machine: Machine::new_platform() }
+        Self::build(Machine::new_platform())
     }
 
     ////////////////////////////////////////////////////////////////
@@ -56,6 +61,12 @@ mod tests {
     use crate::numbers::Numbers::*;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
+
+    #[test]
+    fn test_math_pi() {
+        let pi = std::f64::consts::PI;
+        verify_exact("2 * π", Number(F64Value(2. * pi)))
+    }
 
     #[test]
     fn test_basic_state_manipulation() {
@@ -587,28 +598,28 @@ mod tests {
                 "|----------------------------------|",
                 "| id | symbol | exchange | history |",
                 "|----------------------------------|",
-                "| 0  | BIZ    | NYSE     | []      |",
-                "| 1  | GOTO   | OTC      | []      |",
+                "| 0  | BIZ    | NYSE     | null    |",
+                "| 1  | GOTO   | OTC      | null    |",
                 "|----------------------------------|"])
         }
 
         #[test]
-        fn test_table_embedded_append_rows() {
+        fn test_table_append_rows_with_embedded_table() {
             verify_exact_table_with_ids(r#"
                 stocks := ns("interpreter.embedded_c.stocks")
-                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64)) ~> stocks
                 append stocks from [
-                    { symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66, processed_time: cal::now() } },
-                    { symbol: "GOTO", exchange: "OTC", history: { last_sale: 0.051, processed_time: cal::now() } }
+                    { symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66 } },
+                    { symbol: "GOTO", exchange: "OTC", history: [{ last_sale: 0.051 }, { last_sale: 0.048 }] }
                 ]
                 from stocks
             "#, vec![
-                "|----------------------------------|",
-                "| id | symbol | exchange | history |",
-                "|----------------------------------|",
-                "| 0  | BIZ    | NYSE     | []      |",
-                "| 1  | GOTO   | OTC      | []      |",
-                "|----------------------------------|"])
+                r#"|---------------------------------------------------------------------|"#,
+                r#"| id | symbol | exchange | history                                    |"#,
+                r#"|---------------------------------------------------------------------|"#,
+                r#"| 0  | BIZ    | NYSE     | {"last_sale":23.66}                        |"#,
+                r#"| 1  | GOTO   | OTC      | [{"last_sale":0.051}, {"last_sale":0.048}] |"#,
+                r#"|---------------------------------------------------------------------|"#]);
         }
     }
 
@@ -627,6 +638,38 @@ mod tests {
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
         use serde_json::json;
+
+        #[test]
+        fn test_array_of_soft_structures() {
+            verify_exact(r#"
+                [{ last_sale: 0.051 }, { last_sale: 0.048 }]
+            "#, ArrayValue(Array::from(vec![
+                Structured(Soft(SoftStructure::new(&vec![
+                    ("last_sale", Number(F64Value(0.051))),
+                ]))),
+                Structured(Soft(SoftStructure::new(&vec![
+                    ("last_sale", Number(F64Value(0.048))),
+                ])))
+            ])))
+        }
+
+        #[test]
+        fn test_firm_structure_from_table() {
+            verify_exact(r#"
+                [+] stocks := ns("interpreter.struct.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                stocks[0]
+        "#, Structured(Firm(Row::new(0, vec![
+                StringValue("ABC".into()),
+                StringValue("AMEX".into()),
+                Number(F64Value(11.11)),
+            ]), make_quote_columns())));
+        }
 
         #[test]
         fn test_hard_structure() {
@@ -713,25 +756,6 @@ mod tests {
             assert_eq!(interpreter.get("symbol"), Some(StringValue("ABC".into())));
             assert_eq!(interpreter.get("exchange"), Some(StringValue("NYSE".into())));
             assert_eq!(interpreter.get("last_sale"), Some(Number(F64Value(23.67))));
-        }
-
-        #[test]
-        fn test_hard_structure_from_table() {
-            verify_exact(r#"
-            [+] stocks := ns("interpreter.struct.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            stocks[0]
-        "#, Structured(Firm(Row::new(0, vec![
-                StringValue("ABC".into()),
-                StringValue("AMEX".into()),
-                Number(F64Value(11.11)),
-            ],
-            ), make_quote_columns())));
         }
 
         #[test]

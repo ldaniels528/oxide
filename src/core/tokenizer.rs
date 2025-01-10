@@ -16,6 +16,8 @@ const COMPOUND_OPERATORS: [&str; 24] = [
     "~>",
 ];
 
+const PSEUDO_NUMERICAL: [&str; 3] = ["0x", "0b", "0o"];
+
 const COMPOUND_SYMBOLS: [&str; 6] = [
     "[^]", "[!]", "[+]", "[-]", "[~]", "[_]",
 ];
@@ -99,6 +101,7 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
         next_compound_symbol_token,
         next_compound_operator_token,
         next_operator_token,
+        next_pseudo_numeric_token,
         next_numeric_token,
         next_atom_token,
         next_backticks_quoted_token,
@@ -154,6 +157,30 @@ fn next_glyph_token(inputs: &Vec<char>,
     None
 }
 
+fn next_pseudo_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    /// Parses the alphanumeric digits
+    fn parse_digits(inputs: &Vec<char>, start: usize, pos: &mut usize, is_digit: fn(char) -> bool) -> Option<Token> {
+        while has_more(inputs, pos) && is_digit(inputs[*pos]) { *pos += 1 }
+        let end = *pos;
+        generate_token(&inputs, start, end, Token::numeric)
+    }
+
+    // can start with '0x', '0b' or '0o'
+    let symbol_len = 2;
+    let start = *pos;
+    let limit = start + symbol_len;
+    if has_at_least(inputs, pos, symbol_len) && PSEUDO_NUMERICAL.iter()
+        .any(|pn| is_same(&inputs[start..limit], pn)) {
+        *pos += symbol_len;
+        match String::from_iter(&inputs[start..limit]).as_str() {
+            "0b" => parse_digits(inputs, start, pos, |c| "01_".contains(c)),
+            "0o" => parse_digits(inputs, start, pos, |c| "01234567_".contains(c)),
+            "0x" => parse_digits(inputs, start, pos, |c| "0123456789_ABCDEFabcdef".contains(c)),
+            _ => None
+        }
+    } else { None }
+}
+
 fn next_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     fn is_digit(c: char) -> bool { "0123456789".contains(c) }
     fn is_digit_or_underscore(c: char) -> bool { is_digit(c) || c == '_' }
@@ -180,14 +207,16 @@ fn next_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
             return generate_token(inputs, start, *pos, Token::numeric);
         }
 
-        // was the length only one?
+        // if length (*pos - start) and initial character are ...
         match (*pos - start, inputs[start]) {
-            // if just an underscore, it must be an atom
+            // single character '_' => it's an atom
             (1, '_') => {
                 *pos = start;
                 next_atom_token(inputs, pos)
             }
+            // single character '.' => it's an operator
             (1, '.') => generate_token(inputs, start, *pos, Token::operator),
+            // otherwise, assume numeric
             _ => generate_token(inputs, start, *pos, Token::numeric)
         }
     } else { None }
@@ -316,6 +345,16 @@ mod tests {
             Token::numeric("100_000_000".to_string(), 11, 22, 1, 13),
             Token::atom("_ace".to_string(), 23, 27, 1, 25),
             Token::numeric(".3567".to_string(), 28, 33, 1, 30),
+        ])
+    }
+
+    #[test]
+    fn test_next_pseudo_numbers() {
+        assert_eq!(parse_fully("100 0xdead_beef_babe_face 0b1101 0o1234675"), vec![
+            Token::numeric("100".to_string(), 0, 3, 1, 2),
+            Token::numeric("0xdead_beef_babe_face".to_string(), 4, 25, 1, 6),
+            Token::numeric("0b1101".to_string(), 26, 32, 1, 28),
+            Token::numeric("0o1234675".to_string(), 33, 42, 1, 35),
         ])
     }
 

@@ -4,7 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType;
-use crate::data_types::DataType::{ArrayType, UnionType};
+use crate::data_types::DataType::{ArrayType, VaryingType};
 use crate::row_collection::RowCollection;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Undefined;
@@ -60,6 +60,12 @@ impl Array {
         if index < self.items.len() { Some(self.items[index].clone()) } else { None }
     }
 
+    /// Returns the [Option] of a [TypedValue] from specified index or the
+    /// default value if not found
+    pub fn get_or_else(&self, index: usize, default: TypedValue) -> TypedValue {
+        self.get(index).unwrap_or(default)
+    }
+
     /// Returns the component type; the resolved internal type
     pub fn get_component_type(&self) -> DataType {
         let kinds = self.items.iter()
@@ -74,13 +80,13 @@ impl Array {
             });
         match kinds.as_slice() {
             [kind] => kind.clone(),
-            kinds => UnionType(kinds.to_vec())
+            kinds => VaryingType(kinds.to_vec())
         }
     }
 
     /// Returns the type
     pub fn get_type(&self) -> DataType {
-        ArrayType(Box::from(self.get_component_type()))
+        ArrayType(self.items.len())
     }
 
     /// Returns true, if the [Array] is empty
@@ -141,8 +147,7 @@ impl PartialOrd for Array {
 #[cfg(test)]
 mod tests {
     use crate::arrays::Array;
-    use crate::data_types::DataType::{ArrayType, BooleanType, StringType, UnionType};
-    use crate::data_types::StorageTypes::FixedSize;
+    use crate::data_types::DataType::{ArrayType, BooleanType, StringType, VaryingType};
     use crate::typed_values::TypedValue::{Boolean, StringValue};
 
     #[test]
@@ -164,22 +169,20 @@ mod tests {
     fn test_get_component_type() {
         let mut array = Array::new();
         array.push(StringValue("Hello".into()));
-        assert_eq!(array.get_component_type(), StringType(FixedSize(5)));
+        assert_eq!(array.get_component_type(), StringType(5));
 
         array.push(Boolean(true));
-        assert_eq!(array.get_component_type(), UnionType(vec![
-            StringType(FixedSize(5)), BooleanType
+        assert_eq!(array.get_component_type(), VaryingType(vec![
+            StringType(5), BooleanType
         ]));
 
         array.push(StringValue("Hello World".into()));
         array.push(StringValue("Hello World".into()));
-        assert_eq!(array.get_component_type(), UnionType(vec![
-            StringType(FixedSize(5)), BooleanType, StringType(FixedSize(11))
+        assert_eq!(array.get_component_type(), VaryingType(vec![
+            StringType(5), BooleanType, StringType(11)
         ]));
 
-        assert_eq!(array.get_type(), ArrayType(Box::from(UnionType(vec![
-            StringType(FixedSize(5)), BooleanType, StringType(FixedSize(11))
-        ]))));
+        assert_eq!(array.get_type(), ArrayType(4));
     }
 
     #[test]

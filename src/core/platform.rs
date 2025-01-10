@@ -9,10 +9,11 @@ use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
-use crate::data_types::StorageTypes::{BLOBSized, FixedSize};
+
 use crate::dataframe::Dataframe::{Disk, Model};
 use crate::descriptor::Descriptor;
 use crate::errors::Errors::*;
+use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CollectionExpected, DateExpected, StringExpected, TableExpected, UnsupportedType};
 use crate::expression::Expression::{CodeBlock, Literal, Scenario};
 use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
@@ -20,6 +21,7 @@ use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers::*;
+use crate::oxide_server;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps::*;
 use crate::row_collection::RowCollection;
@@ -30,14 +32,14 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
+use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::ops::Deref;
 use std::path::Path;
-use std::{env, thread};
-use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 pub const MAJOR_VERSION: u8 = 0;
@@ -117,6 +119,7 @@ pub enum PlatformOps {
     ToolsToTable,
     // util package
     UtilBase64,
+    UtilBinary,
     UtilHex,
     UtilMD5,
     UtilToASCII,
@@ -139,7 +142,7 @@ pub enum PlatformOps {
     WwwURLEncode,
 }
 
-pub const PLATFORM_OPCODES: [PlatformOps; 70] = {
+pub const PLATFORM_OPCODES: [PlatformOps; 71] = {
     use PlatformOps::*;
     [
         // cal
@@ -161,7 +164,7 @@ pub const PLATFORM_OPCODES: [PlatformOps; 70] = {
         ToolsCompact, ToolsDescribe, ToolsFetch, ToolsReverse, ToolsScan,
         ToolsToArray, ToolsToCSV, ToolsToJSON, ToolsToTable,
         // util
-        UtilBase64, UtilHex, UtilMD5, UtilToASCII, UtilToDate,
+        UtilBase64, UtilBinary, UtilHex, UtilMD5, UtilToASCII, UtilToDate,
         UtilToF32, UtilToF64,
         UtilToI8, UtilToI16, UtilToI32, UtilToI64, UtilToI128,
         UtilToU8, UtilToU16, UtilToU32, UtilToU64, UtilToU128,
@@ -244,6 +247,7 @@ impl PlatformOps {
             PlatformOps::ToolsToJSON => self.adapter_fn1(ms, args, Self::do_tools_to_json),
             PlatformOps::ToolsToTable => self.adapter_fn1(ms, args, Self::do_tools_to_table),
             PlatformOps::UtilBase64 => self.adapter_fn1(ms, args, Self::do_util_base64),
+            PlatformOps::UtilBinary => self.adapter_fn1(ms, args, Self::do_util_binary),
             PlatformOps::UtilMD5 => self.adapter_fn1(ms, args, Self::do_util_md5),
             PlatformOps::UtilToASCII => self.adapter_fn1(ms, args, Self::do_util_to_ascii),
             PlatformOps::UtilHex => self.adapter_fn1(ms, args, Self::do_util_to_hex),
@@ -325,6 +329,7 @@ impl PlatformOps {
             PlatformOps::ToolsToJSON => "Converts a collection to JSON format",
             PlatformOps::ToolsToTable => "Converts an object into a to_table",
             PlatformOps::UtilBase64 => "Translates bytes into Base 64",
+            PlatformOps::UtilBinary => "Translates a numeric value into binary",
             PlatformOps::UtilHex => "Translates bytes into hexadecimal",
             PlatformOps::UtilMD5 => "Creates a MD5 digest",
             PlatformOps::UtilToASCII => "Converts an integer to ASCII",
@@ -539,6 +544,7 @@ impl PlatformOps {
                 tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
             "#,
             PlatformOps::UtilBase64 => "util::base64('Hello World')",
+            PlatformOps::UtilBinary => "(0b1011 & 0b1101):::to_binary()",
             PlatformOps::UtilHex => "util::hex('Hello World')",
             PlatformOps::UtilMD5 => "util::md5('Hello World')",
             PlatformOps::UtilToASCII => "util::to_ascii(177)",
@@ -637,6 +643,7 @@ impl PlatformOps {
             PlatformOps::ToolsToJSON => "to_json",
             PlatformOps::ToolsToTable => "to_table",
             PlatformOps::UtilBase64 => "base64",
+            PlatformOps::UtilBinary => "to_binary",
             PlatformOps::UtilHex => "hex",
             PlatformOps::UtilMD5 => "md5",
             PlatformOps::UtilToASCII => "to_ascii",
@@ -683,7 +690,7 @@ impl PlatformOps {
             ToolsCompact | ToolsDescribe | ToolsFetch | ToolsReverse | ToolsScan |
             ToolsToArray | ToolsToCSV | ToolsToJSON | ToolsToTable => "tools",
             // util
-            UtilBase64 | UtilHex | UtilMD5 | UtilToASCII | UtilToDate |
+            UtilBase64 | UtilBinary | UtilHex | UtilMD5 | UtilToASCII | UtilToDate |
             UtilToF32 | UtilToF64 |
             UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 | UtilToI128 |
             UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128 => "util",
@@ -711,46 +718,46 @@ impl PlatformOps {
             UtilToASCII | WwwServe
             => vec![NumberType(U32Kind)],
             // single-parameter (lazy)
-            KungFuTypeOf | StrToString | UtilBase64 | UtilHex | UtilMD5 | UtilToDate |
+            KungFuTypeOf | StrToString | UtilBase64 | UtilBinary | UtilHex | UtilMD5 | UtilToDate |
             UtilToF32 | UtilToF64 | UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 | UtilToI128 |
             ToolsToTable | UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128
-            => vec![UnionType(vec![])],
+            => vec![VaryingType(vec![])],
             // single-parameter (string)
             IoFileExists | IoFileReadText | IoStdErr | IoStdOut | OxidePrintln | OsCall |
             OxideCompile | OxideEval | StrLen | WwwURLDecode | WwwURLEncode
-            => vec![StringType(BLOBSized)],
+            => vec![StringType(0)],
             // single-parameter (table)
             ToolsCompact | ToolsDescribe | ToolsReverse | ToolsScan |
             ToolsToArray | ToolsToCSV | ToolsToJSON
-            => vec![TableType(Vec::new(), BLOBSized)],
+            => vec![TableType(Vec::new(), 0)],
             // two-parameter (lazy, lazy)
             KungFuMatches
-            => vec![UnionType(vec![]), UnionType(vec![])],
+            => vec![VaryingType(vec![]), VaryingType(vec![])],
             // two-parameter (string, string)
             IoFileCreate | StrEndsWith | StrFormat | StrSplit | StrStartsWith
-            => vec![StringType(BLOBSized), StringType(BLOBSized)],
+            => vec![StringType(0), StringType(0)],
             // two-parameter (string, i64)
             StrIndexOf | StrLeft | StrRight
-            => vec![StringType(BLOBSized), NumberType(I64Kind)],
+            => vec![StringType(0), NumberType(I64Kind)],
             // two-parameter (string, struct)
             KungFuFeature
-            => vec![StringType(BLOBSized), StructureType(vec![])],
+            => vec![StringType(0), StructureType(vec![])],
             // two-parameter (table, u64)
             ToolsFetch
-            => vec![TableType(vec![], BLOBSized), NumberType(U64Kind)],
+            => vec![TableType(vec![], 0), NumberType(U64Kind)],
             // two-parameter (array, string)
             StrJoin
-            => vec![ArrayType(Box::from(UnionType(vec![]))), StringType(BLOBSized)],
+            => vec![ArrayType(0), StringType(0)],
             // three-parameter (string, i64, i64)
             StrSubstring
-            => vec![StringType(BLOBSized), NumberType(I64Kind), NumberType(I64Kind)],
+            => vec![StringType(0), NumberType(I64Kind), NumberType(I64Kind)],
         }
     }
 
     pub fn get_parameters(&self) -> Vec<Descriptor> {
         let names = match self.get_parameter_types().as_slice() {
             [BooleanType] => vec!['b'],
-            [UnionType(..)] => vec!['x'],
+            [VaryingType(..)] => vec!['x'],
             [NumberType(..)] => vec!['n'],
             [StringType(..)] => vec!['s'],
             [StringType(..), NumberType(..)] => vec!['s', 'n'],
@@ -776,12 +783,12 @@ impl PlatformOps {
         use PlatformOps::*;
         match self {
             // array
-            ToolsToArray => ArrayType(Box::from(UnionType(vec![]))),
-            IoFileReadText | StrSplit | ToolsToCSV | ToolsToJSON => ArrayType(Box::from(StringType(BLOBSized))),
+            ToolsToArray => ArrayType(0),
+            IoFileReadText | StrSplit | ToolsToCSV | ToolsToJSON => ArrayType(0),
             // boolean
             IoFileExists | KungFuMatches | StrEndsWith | StrStartsWith => BooleanType,
             // bytes
-            UtilMD5 => BinaryType(FixedSize(16)),
+            UtilMD5 => BinaryType(16),
             // date
             CalDate | UtilToDate => NumberType(DateKind),
             // f64
@@ -810,16 +817,16 @@ impl PlatformOps {
             // string
             IoStdErr | IoStdOut | KungFuTypeOf | OsCall | OsCurrentDir |
             OxideEval | OxideHome | StrFormat | StrJoin | StrLeft | StrRight |
-            StrSubstring | StrToString | UtilBase64 | UtilToASCII | UtilHex |
-            WwwURLDecode | WwwURLEncode => StringType(BLOBSized),
+            StrSubstring | StrToString | UtilBase64 | UtilBinary | UtilToASCII | UtilHex |
+            WwwURLDecode | WwwURLEncode => StringType(0),
             // table
-            KungFuFeature => TableType(Self::get_kung_fu_feature_parameters(), BLOBSized),
-            OsEnv => TableType(Self::get_os_env_parameters(), BLOBSized),
-            OxideHelp => TableType(Self::get_oxide_help_parameters(), BLOBSized),
-            OxideHistory => TableType(Self::get_oxide_history_parameters(), BLOBSized),
+            KungFuFeature => TableType(Self::get_kung_fu_feature_parameters(), 0),
+            OsEnv => TableType(Self::get_os_env_parameters(), 0),
+            OxideHelp => TableType(Self::get_oxide_help_parameters(), 0),
+            OxideHistory => TableType(Self::get_oxide_history_parameters(), 0),
             ToolsCompact | ToolsFetch | ToolsReverse | ToolsScan |
-            ToolsToTable => TableType(Vec::new(), BLOBSized),
-            ToolsDescribe => TableType(Self::get_tools_describe_parameters(), BLOBSized),
+            ToolsToTable => TableType(Vec::new(), 0),
+            ToolsDescribe => TableType(Self::get_tools_describe_parameters(), 0),
         }
     }
 
@@ -853,7 +860,7 @@ impl PlatformOps {
     ) -> (Machine, TypedValue) {
         match args.len() {
             0 => f(ms),
-            n => (ms, ErrorValue(ArgumentsMismatched(0, n)))
+            n => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(0, n))))
         }
     }
 
@@ -865,7 +872,7 @@ impl PlatformOps {
     ) -> (Machine, TypedValue) {
         match args.as_slice() {
             [value] => f(ms, value),
-            args => (ms, ErrorValue(ArgumentsMismatched(1, args.len())))
+            args => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(1, args.len()))))
         }
     }
 
@@ -877,7 +884,7 @@ impl PlatformOps {
     ) -> (Machine, TypedValue) {
         match args.as_slice() {
             [a] => f(ms, a, self),
-            args => (ms, ErrorValue(ArgumentsMismatched(1, args.len())))
+            args => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(1, args.len()))))
         }
     }
 
@@ -889,7 +896,7 @@ impl PlatformOps {
     ) -> (Machine, TypedValue) {
         match args.as_slice() {
             [a, b] => f(ms, a, b),
-            args => (ms, ErrorValue(ArgumentsMismatched(2, args.len())))
+            args => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(2, args.len()))))
         }
     }
 
@@ -901,7 +908,7 @@ impl PlatformOps {
     ) -> (Machine, TypedValue) {
         match args.as_slice() {
             [a, b, c] => f(ms, a, b, c),
-            args => (ms, ErrorValue(ArgumentsMismatched(3, args.len())))
+            args => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(3, args.len()))))
         }
     }
 
@@ -932,10 +939,10 @@ impl PlatformOps {
                     PlatformOps::CalDateMonth => (ms, Number(U32Value(datetime.second()))),
                     PlatformOps::CalDateSecond => (ms, Number(U32Value(datetime.second()))),
                     PlatformOps::CalDateYear => (ms, Number(I32Value(datetime.year()))),
-                    pf => (ms, ErrorValue(ConversionError(pf.to_owned())))
+                    pf => (ms, ErrorValue(PlatformOpError(pf.to_owned())))
                 }
             }
-            other => (ms, ErrorValue(DateExpected(other.to_code())))
+            other => (ms, ErrorValue(TypeMismatch(DateExpected(other.to_code()))))
         }
     }
 
@@ -956,7 +963,7 @@ impl PlatformOps {
                     let n_bytes = file.write(contents_v.unwrap_value().as_bytes())? as u64;
                     Ok((ms, Number(U64Value(n_bytes))))
                 }
-                other => Ok((ms, ErrorValue(StringExpected(other.to_code()))))
+                other => Ok((ms, ErrorValue(TypeMismatch(StringExpected(other.to_code())))))
             }
         }
 
@@ -967,7 +974,7 @@ impl PlatformOps {
     fn do_io_exists(ms: Machine, path_value: &TypedValue) -> (Machine, TypedValue) {
         match path_value {
             StringValue(path) => (ms, Boolean(Path::new(path).exists())),
-            other => (ms, ErrorValue(StringExpected(other.to_string())))
+            other => (ms, ErrorValue(TypeMismatch(StringExpected(other.to_string()))))
         }
     }
 
@@ -987,7 +994,7 @@ impl PlatformOps {
                     let _count = file.read_to_string(&mut buffer)?;
                     Ok((ms, StringValue(buffer)))
                 }
-                other => Ok((ms, ErrorValue(StringExpected(other.to_code()))))
+                other => Ok((ms, ErrorValue(TypeMismatch(StringExpected(other.to_code())))))
             }
         }
 
@@ -1021,7 +1028,7 @@ impl PlatformOps {
         // get the feature title
         let title = match title {
             StringValue(s) => Literal(StringValue(s.to_string())),
-            other => return (ms, ErrorValue(TypeMismatch(StringType(BLOBSized), other.get_type())))
+            other => return (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), other.get_type()))))
         };
 
         // get the feature scenarios
@@ -1039,8 +1046,8 @@ impl PlatformOps {
                     other => Literal(other.clone())
                 }).collect::<Vec<_>>()
             }
-            other => return (ms, ErrorValue(TypeMismatch(
-                ArrayType(Box::from(UnionType(vec![]))), other.get_type())))
+            other => return (ms, ErrorValue(TypeMismatch(UnsupportedType(
+                ArrayType(0), other.get_type()))))
         };
 
         // execute the feature
@@ -1075,10 +1082,10 @@ impl PlatformOps {
                 Err(err) => (ms, ErrorValue(Exact(err.to_string())))
             }
         } else {
-            (ms, ErrorValue(CollectionExpected(args.iter()
+            (ms, ErrorValue(TypeMismatch(CollectionExpected(args.iter()
                 .map(|e| e.to_code())
                 .collect::<Vec<_>>()
-                .join(", "))))
+                .join(", ")))))
         }
     }
 
@@ -1125,7 +1132,7 @@ impl PlatformOps {
                     Err(err) => (ms, ErrorValue(Exact(err.to_string()))),
                 }
             }
-            z => (ms, ErrorValue(TypeMismatch(StringType(BLOBSized), z.get_type())))
+            z => (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), z.get_type()))))
         }
     }
 
@@ -1140,7 +1147,7 @@ impl PlatformOps {
                         }
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
-            x => (ms, ErrorValue(StringExpected(x.get_type_name())))
+            x => (ms, ErrorValue(TypeMismatch(StringExpected(x.get_type_name()))))
         }
     }
 
@@ -1182,8 +1189,8 @@ impl PlatformOps {
             let frc = FileRowCollection::open_or_create(&PlatformOps::get_oxide_history_ns())?;
             let row_maybe = frc.read_one(pid)?;
             let code = row_maybe.map(|r| r.get_values().last()
-                .map(|v| v.unwrap_value()).unwrap_or("".to_string())
-            ).unwrap_or("".to_string());
+                .map(|v| v.unwrap_value()).unwrap_or(String::new())
+            ).unwrap_or(String::new());
             for line in code.split(|c| c == ';').collect::<Vec<_>>() {
                 println!(">>> {}", line);
             }
@@ -1206,7 +1213,7 @@ impl PlatformOps {
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
             // history(..)
-            other => (ms, ErrorValue(ArgumentsMismatched(other.len(), 1)))
+            other => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(other.len(), 1))))
         }
     }
 
@@ -1231,9 +1238,9 @@ impl PlatformOps {
             StringValue(src) =>
                 match slice_value {
                     StringValue(slice) => (ms, Boolean(src.ends_with(slice))),
-                    z => (ms, ErrorValue(StringExpected(z.to_code())))
+                    z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
                 }
-            z => (ms, ErrorValue(StringExpected(z.to_code())))
+            z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
         }
     }
 
@@ -1266,12 +1273,12 @@ impl PlatformOps {
         }
 
         // parse the arguments
-        if args.is_empty() { (ms, StringValue("".to_string())) } else {
+        if args.is_empty() { (ms, StringValue(String::new())) } else {
             match (args[0].to_owned(), args[1..].to_owned()) {
                 (StringValue(format_str), format_args) =>
                     format_text(ms, format_str, format_args),
                 (other, ..) =>
-                    (ms, ErrorValue(StringExpected(other.to_code())))
+                    (ms, ErrorValue(TypeMismatch(StringExpected(other.to_code()))))
             }
         }
     }
@@ -1291,10 +1298,10 @@ impl PlatformOps {
                             Some(index) => (ms, Number(I64Value(index as i64))),
                         }
                     }
-                    z => (ms, ErrorValue(TypeMismatch(StringType(BLOBSized), z.get_type())))
+                    z => (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), z.get_type()))))
                 }
             }
-            z => (ms, ErrorValue(TypeMismatch(StringType(BLOBSized), z.get_type())))
+            z => (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), z.get_type()))))
         }
     }
 
@@ -1313,10 +1320,8 @@ impl PlatformOps {
                 }
                 (ms, StringValue(buf))
             }
-            z => (ms, ErrorValue(TypeMismatch(
-                ArrayType(Box::new(StringType(BLOBSized))),
-                z.get_type(),
-            )))
+            z =>
+                (ms, ErrorValue(TypeMismatch(UnsupportedType(ArrayType(0), z.get_type()))))
         }
     }
 
@@ -1382,10 +1387,10 @@ impl PlatformOps {
                             .collect::<Vec<_>>();
                         (ms, ArrayValue(Array::from(pcs)))
                     }
-                    z => (ms, ErrorValue(StringExpected(z.to_code())))
+                    z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
                 }
             }
-            z => (ms, ErrorValue(StringExpected(z.to_code())))
+            z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
         }
     }
 
@@ -1398,10 +1403,10 @@ impl PlatformOps {
             StringValue(src) => {
                 match slice_value {
                     StringValue(slice) => (ms, Boolean(src.starts_with(slice))),
-                    z => (ms, ErrorValue(StringExpected(z.to_code())))
+                    z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
                 }
             }
-            z => (ms, ErrorValue(StringExpected(z.to_code())))
+            z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
         }
     }
 
@@ -1439,7 +1444,7 @@ impl PlatformOps {
                 }
             }
             TableValue(rcv) => (ms, rcv.to_owned().compact()),
-            z => (ms, ErrorValue(CollectionExpected(z.to_code())))
+            z => (ms, ErrorValue(TypeMismatch(CollectionExpected(z.to_code()))))
         }
     }
 
@@ -1458,7 +1463,7 @@ impl PlatformOps {
             Structured(Soft(ss)) => (ms, ss.to_table().describe()),
             TableValue(rcv) => (ms, rcv.describe()),
             other =>
-                (ms, ErrorValue(TableExpected("table or struct".to_string(), other.to_code())))
+                (ms, ErrorValue(TypeMismatch(TableExpected("table or struct".to_string(), other.to_code()))))
         }
     }
 
@@ -1492,7 +1497,7 @@ impl PlatformOps {
                 }
             }
             other =>
-                (ms, ErrorValue(TableExpected("table or struct".to_string(), other.to_code())))
+                (ms, ErrorValue(TypeMismatch(TableExpected("[Table(), Struct()]".to_string(), other.to_code()))))
         }
     }
 
@@ -1502,18 +1507,18 @@ impl PlatformOps {
             NamespaceValue(ns) =>
                 (ms.clone(), match Self::open_namespace(&ns) {
                     TableValue(rcv) => rcv.reverse_table_value(),
-                    other => ErrorValue(TypeMismatch(TableType(vec![], BLOBSized), other.get_type()))
+                    other => ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
                 }),
-            StringValue(s) => (ms, StringValue(s.to_owned().reverse().to_string())),
+            StringValue(s) => (ms, StringValue(s.chars().rev().collect())),
             TableValue(rcv) => (ms, rcv.reverse_table_value()),
-            other => (ms, ErrorValue(TypeMismatch(
-                UnionType(vec![
-                    ArrayType(Box::new(StructureType(vec![]))),
-                    StringType(BLOBSized),
-                    TableType(vec![], BLOBSized)
+            other => (ms, ErrorValue(TypeMismatch(UnsupportedType(
+                VaryingType(vec![
+                    ArrayType(0),
+                    StringType(0),
+                    TableType(vec![], 0)
                 ]),
                 other.get_type(),
-            )))
+            ))))
         }
     }
 
@@ -1530,7 +1535,7 @@ impl PlatformOps {
                 }
                 Err(err) => (ms, ErrorValue(Exact(err.to_string())))
             }
-            other => (ms, ErrorValue(TypeMismatch(TableType(vec![], BLOBSized), other.get_type())))
+            other => (ms, ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type()))))
         }
     }
 
@@ -1608,6 +1613,13 @@ impl PlatformOps {
         (ms, StringValue(base64::encode(a.to_bytes())))
     }
 
+    fn do_util_binary(
+        ms: Machine,
+        a: &TypedValue,
+    ) -> (Machine, TypedValue) {
+        (ms, StringValue(format!("{:b}", a.to_u64())))
+    }
+
     fn do_util_numeric_conv(
         ms: Machine,
         value: &TypedValue,
@@ -1652,7 +1664,7 @@ impl PlatformOps {
         args: Vec<TypedValue>,
     ) -> (Machine, TypedValue) {
         if !args.is_empty() {
-            return (ms, ErrorValue(ArgumentsMismatched(0, args.len())));
+            return (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(0, args.len()))));
         }
         (ms, Number(UUIDValue(Uuid::new_v4().as_u128())))
     }
@@ -1661,20 +1673,7 @@ impl PlatformOps {
         ms: Machine,
         port: &TypedValue,
     ) -> (Machine, TypedValue) {
-        use crate::web_routes;
-        use actix_web::web;
-        use crate::rest_server::*;
-        let port = port.to_usize();
-        thread::spawn(move || {
-            let server = actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
-                .bind(format!("{}:{}", "0.0.0.0", port))
-                .expect(format!("Can not bind to port {port}").as_str())
-                .run();
-            Runtime::new()
-                .expect("Failed to create a Runtime instance")
-                .block_on(server)
-                .expect(format!("Failed while blocking on port {port}").as_str());
-        });
+        oxide_server::start_server(port.to_i32());
         (ms, Number(Ack))
     }
 
@@ -1684,40 +1683,40 @@ impl PlatformOps {
                 Ok(decoded) => (ms, StringValue(decoded.to_string())),
                 Err(err) => (ms, ErrorValue(Exact(err.to_string())))
             }
-            other => (ms, ErrorValue(StringExpected(other.to_code())))
+            other => (ms, ErrorValue(TypeMismatch(StringExpected(other.to_code()))))
         }
     }
 
     fn do_www_url_encode(ms: Machine, url: &TypedValue) -> (Machine, TypedValue) {
         match url {
             StringValue(uri) => (ms, StringValue(urlencoding::encode(uri).to_string())),
-            other => (ms, ErrorValue(StringExpected(other.to_code())))
+            other => (ms, ErrorValue(TypeMismatch(StringExpected(other.to_code()))))
         }
     }
 
     pub fn get_kung_fu_feature_parameters() -> Vec<Parameter> {
         vec![
             Parameter::new("level", NumberType(U16Kind)),
-            Parameter::new("item", StringType(FixedSize(256))),
+            Parameter::new("item", StringType(256)),
             Parameter::new("passed", BooleanType),
-            Parameter::new("result", StringType(FixedSize(256).into())),
+            Parameter::new("result", StringType(256)),
         ]
     }
 
     pub fn get_os_env_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("key", StringType(FixedSize(256))),
-            Parameter::new("value", StringType(FixedSize(8192))),
+            Parameter::new("key", StringType(256)),
+            Parameter::new("value", StringType(8192)),
         ]
     }
 
     pub fn get_oxide_help_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("name", StringType(FixedSize(20))),
-            Parameter::new("module", StringType(FixedSize(20))),
-            Parameter::new("signature", StringType(FixedSize(32))),
-            Parameter::new("description", StringType(FixedSize(60))),
-            Parameter::new("returns", StringType(FixedSize(32))),
+            Parameter::new("name", StringType(20)),
+            Parameter::new("module", StringType(20)),
+            Parameter::new("signature", StringType(32)),
+            Parameter::new("description", StringType(60)),
+            Parameter::new("returns", StringType(32)),
         ]
     }
 
@@ -1730,15 +1729,15 @@ impl PlatformOps {
             Parameter::new("session_id", NumberType(I64Kind)),
             Parameter::new("user_id", NumberType(I64Kind)),
             Parameter::new("cpu_time_ms", NumberType(F64Kind)),
-            Parameter::new("input", StringType(FixedSize(65536))),
+            Parameter::new("input", StringType(65536)),
         ]
     }
 
     pub fn get_tools_describe_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("name", StringType(FixedSize(128))),
-            Parameter::new("type", StringType(FixedSize(128))),
-            Parameter::new("default_value", StringType(FixedSize(128))),
+            Parameter::new("name", StringType(128)),
+            Parameter::new("type", StringType(128)),
+            Parameter::new("default_value", StringType(128)),
             Parameter::new("is_nullable", BooleanType),
         ]
     }
@@ -1763,7 +1762,6 @@ mod tests {
     use super::*;
     use super::*;
     use crate::columns::Column;
-    use crate::data_types::StorageTypes::BLOBSized;
     use crate::interpreter::Interpreter;
     use crate::platform::{PlatformOps, PLATFORM_OPCODES};
     use crate::structures::{HardStructure, SoftStructure};
@@ -1811,10 +1809,10 @@ mod tests {
             example: "str::left('Hello World', 5)".into(),
             package_name: "str".into(),
             parameters: vec![
-                Descriptor::new("s", Some("String()".into()), None),
+                Descriptor::new("s", Some("String(0)".into()), None),
                 Descriptor::new("n", Some("i64".into()), None),
             ],
-            return_type: StringType(BLOBSized),
+            return_type: StringType(0),
             opcode: StrLeft,
         });
     }
@@ -1827,11 +1825,11 @@ mod tests {
             example: "str::substring('Hello World', 0, 5)".into(),
             package_name: "str".into(),
             parameters: vec![
-                Descriptor::new("s", Some("String()".into()), None),
+                Descriptor::new("s", Some("String(0)".into()), None),
                 Descriptor::new("m", Some("i64".into()), None),
                 Descriptor::new("n", Some("i64".into()), None)
             ],
-            return_type: StringType(BLOBSized),
+            return_type: StringType(0),
             opcode: StrSubstring,
         });
     }
@@ -1880,42 +1878,42 @@ mod tests {
         assert_eq!(CalDateSecond.to_code(), "cal::second_of(n: Date)");
         assert_eq!(CalDateYear.to_code(), "cal::year_of(n: Date)");
         // io
-        assert_eq!(IoFileCreate.to_code(), "io::create_file(a: String(), b: String())");
-        assert_eq!(IoFileExists.to_code(), "io::exists(s: String())");
-        assert_eq!(IoFileReadText.to_code(), "io::read_text_file(s: String())");
-        assert_eq!(IoStdErr.to_code(), "io::stderr(s: String())");
-        assert_eq!(IoStdOut.to_code(), "io::stdout(s: String())");
+        assert_eq!(IoFileCreate.to_code(), "io::create_file(a: String(0), b: String(0))");
+        assert_eq!(IoFileExists.to_code(), "io::exists(s: String(0))");
+        assert_eq!(IoFileReadText.to_code(), "io::read_text_file(s: String(0))");
+        assert_eq!(IoStdErr.to_code(), "io::stderr(s: String(0))");
+        assert_eq!(IoStdOut.to_code(), "io::stdout(s: String(0))");
         // kungfu
         assert_eq!(KungFuAssert.to_code(), "kungfu::assert(b: Boolean)");
-        assert_eq!(KungFuFeature.to_code(), "kungfu::feature(a: String(), b: Struct())");
+        assert_eq!(KungFuFeature.to_code(), "kungfu::feature(a: String(0), b: Struct())");
         assert_eq!(KungFuMatches.to_code(), "kungfu::matches(a, b)");
         assert_eq!(KungFuTypeOf.to_code(), "kungfu::type_of(x)");
         // os
-        assert_eq!(OsCall.to_code(), "os::call(s: String())");
+        assert_eq!(OsCall.to_code(), "os::call(s: String(0))");
         assert_eq!(OsClear.to_code(), "os::clear()");
         assert_eq!(OsCurrentDir.to_code(), "os::current_dir()");
         assert_eq!(OsEnv.to_code(), "os::env()");
         // oxide
-        assert_eq!(OxideCompile.to_code(), "oxide::compile(s: String())");
-        assert_eq!(OxideEval.to_code(), "oxide::eval(s: String())");
+        assert_eq!(OxideCompile.to_code(), "oxide::compile(s: String(0))");
+        assert_eq!(OxideEval.to_code(), "oxide::eval(s: String(0))");
         assert_eq!(OxideHelp.to_code(), "oxide::help()");
         assert_eq!(OxideHistory.to_code(), "oxide::history()");
         assert_eq!(OxideHome.to_code(), "oxide::home()");
-        assert_eq!(OxidePrintln.to_code(), "oxide::println(s: String())");
+        assert_eq!(OxidePrintln.to_code(), "oxide::println(s: String(0))");
         assert_eq!(OxideReset.to_code(), "oxide::reset()");
         assert_eq!(OxideUUID.to_code(), "oxide::uuid()");
         assert_eq!(OxideVersion.to_code(), "oxide::version()");
         // str
-        assert_eq!(StrEndsWith.to_code(), "str::ends_with(a: String(), b: String())");
-        assert_eq!(StrFormat.to_code(), "str::format(a: String(), b: String())");
-        assert_eq!(StrIndexOf.to_code(), "str::index_of(s: String(), n: i64)");
-        assert_eq!(StrJoin.to_code(), "str::join(a: Array(), b: String())");
-        assert_eq!(StrLeft.to_code(), "str::left(s: String(), n: i64)");
-        assert_eq!(StrLen.to_code(), "str::len(s: String())");
-        assert_eq!(StrRight.to_code(), "str::right(s: String(), n: i64)");
-        assert_eq!(StrSplit.to_code(), "str::split(a: String(), b: String())");
-        assert_eq!(StrStartsWith.to_code(), "str::starts_with(a: String(), b: String())");
-        assert_eq!(StrSubstring.to_code(), "str::substring(s: String(), m: i64, n: i64)");
+        assert_eq!(StrEndsWith.to_code(), "str::ends_with(a: String(0), b: String(0))");
+        assert_eq!(StrFormat.to_code(), "str::format(a: String(0), b: String(0))");
+        assert_eq!(StrIndexOf.to_code(), "str::index_of(s: String(0), n: i64)");
+        assert_eq!(StrJoin.to_code(), "str::join(a: Array(0), b: String(0))");
+        assert_eq!(StrLeft.to_code(), "str::left(s: String(0), n: i64)");
+        assert_eq!(StrLen.to_code(), "str::len(s: String(0))");
+        assert_eq!(StrRight.to_code(), "str::right(s: String(0), n: i64)");
+        assert_eq!(StrSplit.to_code(), "str::split(a: String(0), b: String(0))");
+        assert_eq!(StrStartsWith.to_code(), "str::starts_with(a: String(0), b: String(0))");
+        assert_eq!(StrSubstring.to_code(), "str::substring(s: String(0), m: i64, n: i64)");
         assert_eq!(StrToString.to_code(), "str::to_string(x)");
         // tools
         assert_eq!(ToolsCompact.to_code(), "tools::compact(t: Table())");
@@ -1946,8 +1944,8 @@ mod tests {
         assert_eq!(UtilToU64.to_code(), "util::to_u64(x)");
         assert_eq!(UtilToU128.to_code(), "util::to_u128(x)");
         // www
-        assert_eq!(WwwURLDecode.to_code(), "www::url_decode(s: String())");
-        assert_eq!(WwwURLEncode.to_code(), "www::url_encode(s: String())");
+        assert_eq!(WwwURLDecode.to_code(), "www::url_decode(s: String(0))");
+        assert_eq!(WwwURLEncode.to_code(), "www::url_encode(s: String(0))");
         assert_eq!(WwwServe.to_code(), "www::serve(n: u32)");
     }
 
@@ -2181,22 +2179,22 @@ mod tests {
 
         #[test]
         fn test_kung_fu_type_of_array_bool() {
-            verify_exact_text_q("kungfu::type_of([true, false])", "Array(Boolean)");
+            verify_exact_text_q("kungfu::type_of([true, false])", "Array(2)");
         }
 
         #[test]
         fn test_kung_fu_type_of_array_i64() {
-            verify_exact_text_q("kungfu::type_of([12, 76, 444])", "Array(i64)");
+            verify_exact_text_q("kungfu::type_of([12, 76, 444])", "Array(3)");
         }
 
         #[test]
         fn test_kung_fu_type_of_array_str() {
-            verify_exact_text_q("kungfu::type_of(['ciao', 'hello', 'world'])", "Array(String(5))");
+            verify_exact_text_q("kungfu::type_of(['ciao', 'hello', 'world'])", "Array(3)");
         }
 
         #[test]
         fn test_kung_fu_type_of_array_f64() {
-            verify_exact_text_q("kungfu::type_of([12, 'hello', 76.78])", "Array(f64)");
+            verify_exact_text_q("kungfu::type_of([12, 'hello', 76.78])", "Array(3)");
         }
 
         #[test]
@@ -2334,6 +2332,7 @@ mod tests {
     #[cfg(test)]
     mod oxide_tests {
         use super::*;
+        use crate::errors::TypeMismatchErrors::StringExpected;
         use crate::platform::PlatformOps;
         use crate::typed_values::TypedValue::*;
         use PlatformOps::*;
@@ -2367,7 +2366,7 @@ mod tests {
         #[test]
         fn test_oxide_eval_qualified() {
             verify_exact("oxide::eval('2 ** 4')", Number(F64Value(16.)));
-            verify_exact("oxide::eval(123)", ErrorValue(StringExpected("i64".into())));
+            verify_exact("oxide::eval(123)", ErrorValue(TypeMismatch(StringExpected("i64".into()))));
         }
 
         #[test]
@@ -2375,7 +2374,7 @@ mod tests {
             let mut interpreter = Interpreter::new();
             interpreter.evaluate("import oxide").unwrap();
             interpreter = verify_where(interpreter, "'2 ** 4':::eval()", Number(F64Value(16.)));
-            interpreter = verify_where(interpreter, "123:::eval()", ErrorValue(StringExpected("i64".into())));
+            interpreter = verify_where(interpreter, "123:::eval()", ErrorValue(TypeMismatch(StringExpected("i64".into()))));
         }
 
         #[test]
@@ -2668,28 +2667,28 @@ mod tests {
                 [+] delete from stocks where last_sale > 1.0
                 [+] from stocks
             "#, vec![
-                    "|------------------------------------|",
-                    "| id | symbol | exchange | last_sale |",
-                    "|------------------------------------|",
-                    "| 1  | UNO    | OTC      | 0.2456    |",
-                    "| 3  | GOTO   | OTC      | 0.1428    |",
-                    "| 5  | BOOM   | NASDAQ   | 0.0872    |",
-                    "|------------------------------------|"
-                ]);
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 1  | UNO    | OTC      | 0.2456    |",
+                "| 3  | GOTO   | OTC      | 0.1428    |",
+                "| 5  | BOOM   | NASDAQ   | 0.0872    |",
+                "|------------------------------------|"
+            ]);
 
             verify_exact_table_where(interpreter, r#"
                 [+] import tools
                 [+] stocks:::compact()
                 [+] from stocks
             "#, vec![
-                    "|------------------------------------|",
-                    "| id | symbol | exchange | last_sale |",
-                    "|------------------------------------|",
-                    "| 0  | BOOM   | NASDAQ   | 0.0872    |",
-                    "| 1  | UNO    | OTC      | 0.2456    |",
-                    "| 2  | GOTO   | OTC      | 0.1428    |",
-                    "|------------------------------------|"
-                ]);
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | BOOM   | NASDAQ   | 0.0872    |",
+                "| 1  | UNO    | OTC      | 0.2456    |",
+                "| 2  | GOTO   | OTC      | 0.1428    |",
+                "|------------------------------------|"
+            ]);
         }
 
         #[test]
@@ -2698,14 +2697,14 @@ mod tests {
             verify_exact_table_with_ids(r#"
                 tools::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
             "#, vec![
-                    "|----------------------------------------------------------|",
-                    "| id | name      | type      | default_value | is_nullable |",
-                    "|----------------------------------------------------------|",
-                    "| 0  | symbol    | String(3) | BIZ           | true        |",
-                    "| 1  | exchange  | String(4) | NYSE          | true        |",
-                    "| 2  | last_sale | f64       | 23.66         | true        |",
-                    "|----------------------------------------------------------|"
-                ]);
+                "|----------------------------------------------------------|",
+                "| id | name      | type      | default_value | is_nullable |",
+                "|----------------------------------------------------------|",
+                "| 0  | symbol    | String(3) | BIZ           | true        |",
+                "| 1  | exchange  | String(4) | NYSE          | true        |",
+                "| 2  | last_sale | f64       | 23.66         | true        |",
+                "|----------------------------------------------------------|"
+            ]);
 
             // postfix
             verify_exact_table_with_ids(r#"
@@ -2714,14 +2713,14 @@ mod tests {
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 stocks:::describe()
             "#, vec![
-                    "|----------------------------------------------------------|",
-                    "| id | name      | type      | default_value | is_nullable |",
-                    "|----------------------------------------------------------|",
-                    "| 0  | symbol    | String(8) | null          | true        |",
-                    "| 1  | exchange  | String(8) | null          | true        |",
-                    "| 2  | last_sale | f64       | null          | true        |",
-                    "|----------------------------------------------------------|"
-                ]);
+                "|----------------------------------------------------------|",
+                "| id | name      | type      | default_value | is_nullable |",
+                "|----------------------------------------------------------|",
+                "| 0  | symbol    | String(8) | null          | true        |",
+                "| 1  | exchange  | String(8) | null          | true        |",
+                "| 2  | last_sale | f64       | null          | true        |",
+                "|----------------------------------------------------------|"
+            ]);
         }
 
         #[test]
@@ -2735,12 +2734,12 @@ mod tests {
                      { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                 [+] tools::fetch(stocks, 2)
             "#, vec![
-                    "|------------------------------------|",
-                    "| id | symbol | exchange | last_sale |",
-                    "|------------------------------------|",
-                    "| 2  | JET    | NASDAQ   | 32.12     |",
-                    "|------------------------------------|"
-                ]);
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 2  | JET    | NASDAQ   | 32.12     |",
+                "|------------------------------------|"
+            ]);
 
             // postfix
             verify_exact_table_with_ids(r#"
@@ -2752,12 +2751,12 @@ mod tests {
                     ])
                 [+] stocks:::fetch(1)
             "#, vec![
-                    "|------------------------------------|",
-                    "| id | symbol | exchange | last_sale |",
-                    "|------------------------------------|",
-                    "| 1  | BOOM   | NYSE     | 56.88     |",
-                    "|------------------------------------|"
-                ]);
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 1  | BOOM   | NYSE     | 56.88     |",
+                "|------------------------------------|"
+            ]);
         }
 
         #[test]
@@ -2766,19 +2765,27 @@ mod tests {
                 import tools
                 to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
             "#, vec![
-                    "|-------------|",
-                    "| id | value  |",
-                    "|-------------|",
-                    "| 0  | mouse  |",
-                    "| 1  | ferret |",
-                    "| 2  | dog    |",
-                    "| 3  | cat    |",
-                    "|-------------|"
-                ])
+                "|-------------|",
+                "| id | value  |",
+                "|-------------|",
+                "| 0  | mouse  |",
+                "| 1  | ferret |",
+                "| 2  | dog    |",
+                "| 3  | cat    |",
+                "|-------------|"
+            ])
         }
 
         #[test]
-        fn test_tools_reverse_tables() {
+        fn test_tools_reverse_strings() {
+            verify_exact(r#"
+                fn backwards(a) => tools::reverse(a)
+                "Hello World":::backwards()
+            "#, StringValue("dlroW olleH".into()));
+        }
+
+        #[test]
+        fn test_tools_reverse_tables_function() {
             // fully-qualified (ephemeral)
             verify_exact_table_with_ids(r#"
                 import tools
@@ -2789,15 +2796,18 @@ mod tests {
                 ])
                 reverse(stocks)
             "#, vec![
-                    "|------------------------------------|",
-                    "| id | symbol | exchange | last_sale |",
-                    "|------------------------------------|",
-                    "| 0  | XYZ    | NASDAQ   | 89.11     |",
-                    "| 1  | BIZ    | NYSE     | 9.775     |",
-                    "| 2  | ABC    | AMEX     | 12.33     |",
-                    "|------------------------------------|"
-                ]);
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | XYZ    | NASDAQ   | 89.11     |",
+                "| 1  | BIZ    | NYSE     | 9.775     |",
+                "| 2  | ABC    | AMEX     | 12.33     |",
+                "|------------------------------------|"
+            ]);
+        }
 
+        #[test]
+        fn test_tools_reverse_tables_method() {
             // postfix (durable)
             verify_exact_table_with_ids(r#"
                 [+] import tools
@@ -2808,14 +2818,14 @@ mod tests {
                      { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                 [+] stocks:::reverse()
             "#, vec![
-                    "|------------------------------------|",
-                    "| id | symbol | exchange | last_sale |",
-                    "|------------------------------------|",
-                    "| 0  | JET    | NASDAQ   | 32.12     |",
-                    "| 1  | BOOM   | NYSE     | 56.88     |",
-                    "| 2  | ABC    | AMEX     | 12.49     |",
-                    "|------------------------------------|"
-                ]);
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | JET    | NASDAQ   | 32.12     |",
+                "| 1  | BOOM   | NYSE     | 56.88     |",
+                "| 2  | ABC    | AMEX     | 12.49     |",
+                "|------------------------------------|"
+            ]);
         }
 
         #[test]
@@ -2937,15 +2947,15 @@ mod tests {
             verify_exact_table_with_ids(r#"
                 tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
             "#, vec![
-                    "|-------------|",
-                    "| id | value  |",
-                    "|-------------|",
-                    "| 0  | cat    |",
-                    "| 1  | dog    |",
-                    "| 2  | ferret |",
-                    "| 3  | mouse  |",
-                    "|-------------|"
-                ])
+                "|-------------|",
+                "| id | value  |",
+                "|-------------|",
+                "| 0  | cat    |",
+                "| 1  | dog    |",
+                "| 2  | ferret |",
+                "| 3  | mouse  |",
+                "|-------------|"
+            ])
         }
 
         #[test]
@@ -2957,12 +2967,12 @@ mod tests {
                     last_sale: f64 = 45.67
                 ))
             "#, vec![
-                    "|------------------------------------|",
-                    "| id | symbol | exchange | last_sale |",
-                    "|------------------------------------|",
-                    "| 0  | ABC    | NYSE     | 45.67     |",
-                    "|------------------------------------|"
-                ])
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | ABC    | NYSE     | 45.67     |",
+                "|------------------------------------|"
+            ])
         }
 
         #[test]
@@ -2983,16 +2993,16 @@ mod tests {
                     { symbol: "BMX", exchange: "NASDAQ", last_sale: 46.11 }
                 ])
             "#, vec![
-                    "|-------------------------------------|",
-                    "| id | symbol | exchange  | last_sale |",
-                    "|-------------------------------------|",
-                    "| 0  | BIZ    | NYSE      | 23.66     |",
-                    "| 1  | DMX    | OTC_BB    | 1.17      |",
-                    "| 2  | ABC    | OTHER_OTC | 0.67      |",
-                    "| 3  | TRX    | AMEX      | 29.88     |",
-                    "| 4  | BMX    | NASDAQ    | 46.11     |",
-                    "|-------------------------------------|"
-                ])
+                "|-------------------------------------|",
+                "| id | symbol | exchange  | last_sale |",
+                "|-------------------------------------|",
+                "| 0  | BIZ    | NYSE      | 23.66     |",
+                "| 1  | DMX    | OTC_BB    | 1.17      |",
+                "| 2  | ABC    | OTHER_OTC | 0.67      |",
+                "| 3  | TRX    | AMEX      | 29.88     |",
+                "| 4  | BMX    | NASDAQ    | 46.11     |",
+                "|-------------------------------------|"
+            ])
         }
     }
 
@@ -3029,7 +3039,7 @@ mod tests {
 
         #[test]
         fn test_util_md5_type() {
-            verify_data_type("util::md5(x)", BinaryType(FixedSize(16)));
+            verify_data_type("util::md5(x)", BinaryType(16));
         }
 
         #[test]

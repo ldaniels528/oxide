@@ -13,10 +13,9 @@ use serde::{Deserialize, Serialize};
 use crate::columns::Column;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Disk;
-use crate::dataframe_config::DataFrameConfig;
 use crate::file_row_collection::FileRowCollection;
 use crate::namespaces::Namespace;
-use crate::parameter::Parameter;
+use crate::object_config::ObjectConfig;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;
@@ -39,7 +38,7 @@ impl DataframeActor {
         Ok(self.get_or_load_dataframe(ns)?.append_row(row).to_usize())
     }
 
-    fn create_table(&mut self, ns: Namespace, cfg: DataFrameConfig) -> std::io::Result<&mut Dataframe> {
+    fn create_table(&mut self, ns: Namespace, cfg: ObjectConfig) -> std::io::Result<&mut Dataframe> {
         self.get_or_create_dataframe(ns, cfg)
     }
 
@@ -55,13 +54,13 @@ impl DataframeActor {
         Ok(self.resources.iter().map(|(s, _)| s.to_string()).collect::<Vec<String>>())
     }
 
-    fn get_or_create_dataframe(&mut self, ns: Namespace, cfg: DataFrameConfig) -> std::io::Result<&mut Dataframe> {
+    fn get_or_create_dataframe(&mut self, ns: Namespace, cfg: ObjectConfig) -> std::io::Result<&mut Dataframe> {
         match self.resources.entry(ns.id()) {
             Entry::Occupied(v) => Ok(v.into_mut()),
             Entry::Vacant(x) =>
                 Ok(x.insert({
-                    let params = Parameter::from_descriptors(cfg.get_columns())?;
-                    DataFrameConfig::build(&params).save(&ns)?;
+                    let params = cfg.get_columns();
+                    ObjectConfig::build_table(params.clone()).save(&ns)?;
                     Dataframe::create_table(&ns, &params)?
                 }))
         }
@@ -188,7 +187,7 @@ fn handle_result<T: serde::Serialize>(result: std::io::Result<T>) -> String {
 #[rtype(result = "String")]
 pub enum IORequest {
     AppendRow { ns: Namespace, row: Row },
-    CreateTable { ns: Namespace, cfg: DataFrameConfig },
+    CreateTable { ns: Namespace, cfg: ObjectConfig },
     DeleteRow { ns: Namespace, id: usize },
     GetColumns { ns: Namespace },
     GetNamespaces,
@@ -221,7 +220,7 @@ macro_rules! create_table {
     ($actor:expr, $ns:expr, $columns:expr) => {
         $actor.send(crate::dataframe_actor::IORequest::CreateTable {
             ns: $ns.to_owned(),
-            cfg: DataFrameConfig::new($columns, Vec::new(), Vec::new())
+            cfg: ObjectConfig::build_table($columns)
         }).await
             .map(|s|serde_json::from_str::<usize>(&s).unwrap())
             .map_err(|e|crate::cnv_error!(e))
@@ -355,7 +354,6 @@ mod tests {
     use actix::prelude::*;
 
     use crate::data_types::DataType::*;
-    use crate::data_types::StorageTypes;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::*;
     use crate::testdata::{make_quote_columns, make_quote_parameters};
@@ -367,10 +365,10 @@ mod tests {
     async fn test_get_columns() {
         let actor = DataframeActor::new().start();
         let ns = Namespace::parse("dataframe.columns.stocks").unwrap();
-        assert_eq!(1, create_table!(actor, ns, &make_quote_parameters()).unwrap());
+        assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
-            Column::new("symbol", StringType(StorageTypes::FixedSize(8)), Null, 9),
-            Column::new("exchange", StringType(StorageTypes::FixedSize(8)), Null, 26),
+            Column::new("symbol", StringType(8), Null, 9),
+            Column::new("exchange", StringType(8), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ]);
     }
@@ -382,7 +380,7 @@ mod tests {
         let table_columns = make_quote_columns();
 
         // create the new empty table
-        assert_eq!(1, create_table!(actor, ns, &make_quote_parameters()).unwrap());
+        assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns, Row::new(0, vec![
@@ -402,7 +400,7 @@ mod tests {
         let ns = Namespace::parse("dataframe.actor_crud.stocks").unwrap();
 
         // create the new empty table
-        assert_eq!(1, create_table!(actor, ns, &make_quote_parameters()).unwrap());
+        assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns, Row::new(111, vec![
@@ -466,8 +464,8 @@ mod tests {
         let ns1 = Namespace::parse("dataframe.namespaces2.stocks").unwrap();
 
         // create the new empty tables
-        assert_eq!(1, create_table!(actor, ns0, &make_quote_parameters()).unwrap());
-        assert_eq!(1, create_table!(actor, ns1, &make_quote_parameters()).unwrap());
+        assert_eq!(1, create_table!(actor, ns0, make_quote_parameters()).unwrap());
+        assert_eq!(1, create_table!(actor, ns1, make_quote_parameters()).unwrap());
 
         // append a new row to the table
         assert_eq!(0, append_row!(actor, ns0, Row::new(111, vec![

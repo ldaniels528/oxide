@@ -5,7 +5,7 @@
 
 use crate::columns::Column;
 use crate::data_types::DataType;
-use crate::data_types::DataType::UnionType;
+use crate::data_types::DataType::VaryingType;
 use crate::descriptor::Descriptor;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Null;
@@ -26,7 +26,7 @@ impl Parameter {
     ////////////////////////////////////////////////////////////////////
 
     pub fn build(name: impl Into<String>) -> Self {
-        Self::new(name, UnionType(vec![]))
+        Self::new(name, VaryingType(vec![]))
     }
 
     pub fn from_column(column: &Column) -> Self {
@@ -43,7 +43,7 @@ impl Parameter {
     pub fn from_descriptor(descriptor: &Descriptor) -> std::io::Result<Parameter> {
         Ok(Self::with_default(
             descriptor.get_name(),
-            DataType::from_str(descriptor.get_param_type().unwrap_or("".to_string()).as_str())?,
+            DataType::from_str(descriptor.get_param_type().unwrap_or(String::new()).as_str())?,
             TypedValue::wrap_value_opt(&descriptor.get_default_value())?))
     }
 
@@ -125,7 +125,6 @@ impl Parameter {
 mod tests {
     use super::*;
     use crate::data_types::DataType::{NumberType, StringType};
-    use crate::data_types::StorageTypes::FixedSize;
     use crate::descriptor::Descriptor;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::typed_values::TypedValue::{Null, StringValue};
@@ -133,13 +132,13 @@ mod tests {
     #[test]
     fn test_from_columns() {
         let parameters = vec![
-            Parameter::new("symbol", StringType(FixedSize(8))),
-            Parameter::new("exchange", StringType(FixedSize(8))),
+            Parameter::new("symbol", StringType(8)),
+            Parameter::new("exchange", StringType(8)),
             Parameter::new("last_sale", NumberType(F64Kind)),
         ];
         let columns = vec![
-            Column::new("symbol", StringType(FixedSize(8)), Null, 9),
-            Column::new("exchange", StringType(FixedSize(8)), Null, 26),
+            Column::new("symbol", StringType(8), Null, 9),
+            Column::new("exchange", StringType(8), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ];
         assert_eq!(Parameter::from_columns(&columns), parameters);
@@ -148,11 +147,11 @@ mod tests {
     #[test]
     fn test_from_descriptor() {
         let descr = Descriptor::new(
-            "symbol", Some("String(8)".into()), Some("\"N/A\"".into())
+            "symbol", Some("String(8)".into()), Some("\"N/A\"".into()),
         );
         let param = Parameter::with_default(
             "symbol",
-            StringType(FixedSize(8)),
+            StringType(8),
             StringValue("N/A".into()),
         );
         assert_eq!(Parameter::from_descriptor(&descr).unwrap(), param)
@@ -166,8 +165,8 @@ mod tests {
             Descriptor::new("last_sale", Some("f64".into()), None),
         ];
         let parameters = vec![
-            Parameter::new("symbol", StringType(FixedSize(8))),
-            Parameter::new("exchange", StringType(FixedSize(8))),
+            Parameter::new("symbol", StringType(8)),
+            Parameter::new("exchange", StringType(8)),
             Parameter::new("last_sale", NumberType(F64Kind)),
         ];
         assert_eq!(Parameter::from_descriptors(&descriptors).unwrap(), parameters)
@@ -176,13 +175,13 @@ mod tests {
     #[test]
     fn test_to_code() {
         let param =
-            Parameter::with_default("symbol", StringType(FixedSize(8)), StringValue("N/A".into()));
+            Parameter::with_default("symbol", StringType(8), StringValue("N/A".into()));
         assert_eq!(param.to_code(), r#"symbol: String(8) := "N/A""#)
     }
 
     #[test]
     fn test_to_json() {
-        let param = Parameter::new("symbol", StringType(FixedSize(8)));
+        let param = Parameter::new("symbol", StringType(8));
         assert_eq!(param.to_json().to_string(), r#"{"default_value":null,"name":"symbol","param_type":"String(8)"}"#.to_string())
     }
 }

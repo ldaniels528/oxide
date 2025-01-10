@@ -1,29 +1,33 @@
 #![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
-// REST server module
+// Oxide Server module
 ////////////////////////////////////////////////////////////////////
-
-use std::collections::HashMap;
-use std::error::Error;
-
-use actix::{Actor, Addr};
-use actix_session::Session;
-use actix_web::{web, HttpRequest, HttpResponse, Responder};
-use actix_web_actors::ws;
-use log::{error, info};
-use serde_json::{json, Value};
-use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse};
 
 use crate::columns::Column;
 use crate::dataframe_actor::DataframeActor;
-use crate::dataframe_config::DataFrameConfig;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
+use crate::object_config::ObjectConfig;
 use crate::row_metadata::RowMetadata;
 use crate::server::SystemInfoJs;
 use crate::structures::Row;
-use crate::websockets::OxideWebSocket;
 use crate::*;
+use actix::{Actor, Addr, StreamHandler};
+use actix_session::Session;
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use actix_web_actors::ws;
+use futures_util::SinkExt;
+use log::{error, info};
+use serde_json::{json, Value};
+use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse};
+use std::collections::HashMap;
+use std::error::Error;
+use std::thread;
+use std::thread::JoinHandle;
+use tokio::net::TcpStream;
+use tokio::runtime::Runtime;
+use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 pub const SECS_IN_WEEK: i64 = 60 * 60 * 24 * 7;
 
@@ -46,6 +50,7 @@ macro_rules! web_routes {
     ($shared_state: expr) => {
         actix_web::App::new()
             .app_data(web::Data::new($shared_state))
+            .service(web::resource("/ws").to(handle_websockets))
             .route("/{database}/{schema}/{name}/{a}/{b}", web::get().to(handle_row_range_get))
             .route("/{database}/{schema}/{name}/{id}", web::delete().to(handle_row_delete))
             .route("/{database}/{schema}/{name}/{id}", web::get().to(handle_row_get))
@@ -64,7 +69,6 @@ macro_rules! web_routes {
             //     actix_web::cookie::Key::from(&[0; 64])
             //  ).session_lifecycle(actix_session::config::PersistentSession::default()
             //     .session_ttl(actix_web::cookie::time::Duration::seconds(SECS_IN_WEEK))).build())
-            .service(web::resource("/ws").to(handle_websockets))
     }
 }
 
@@ -112,7 +116,7 @@ pub async fn handle_index(_session: Session) -> impl Responder {
 pub async fn handle_config_delete(
     path: web::Path<(String, String, String)>
 ) -> impl Responder {
-    match DataFrameConfig::delete(&Namespace::new(&path.0, &path.1, &path.2)) {
+    match ObjectConfig::delete(&Namespace::new(&path.0, &path.1, &path.2)) {
         Ok(_) => HttpResponse::Ok().finish(),
         Err(err) => {
             error!("error {}", err.to_string());
@@ -126,7 +130,7 @@ pub async fn handle_config_delete(
 pub async fn handle_config_get(
     path: web::Path<(String, String, String)>
 ) -> impl Responder {
-    match DataFrameConfig::load(&Namespace::new(&path.0, &path.1, &path.2)) {
+    match ObjectConfig::load(&Namespace::new(&path.0, &path.1, &path.2)) {
         Ok(cfg) => HttpResponse::Ok().json(cfg),
         Err(err) => {
             error!("error {}", err.to_string());
@@ -139,11 +143,11 @@ pub async fn handle_config_get(
 // ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_config_post(
     req: HttpRequest,
-    data: web::Json<DataFrameConfig>,
+    data: web::Json<ObjectConfig>,
     path: web::Path<(String, String, String)>,
 ) -> impl Responder {
     async fn intern(req: HttpRequest,
-                    data: web::Json<DataFrameConfig>,
+                    data: web::Json<ObjectConfig>,
                     path: web::Path<(String, String, String)>) -> std::io::Result<usize> {
         let ns = Namespace::new(&path.0, &path.1, &path.2);
         Ok(create_table_from_config!(get_shared_state(&req)?.actor, ns, data.0)?)
@@ -298,6 +302,24 @@ pub async fn handle_websockets(
     ws::start(OxideWebSocket::new(), &req, stream)
 }
 
+pub async fn send_ws_message(mut ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>, message: &str) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Box<dyn std::error::Error>> {
+    ws_stream.send(Message::Text(message.to_string())).await?;
+    Ok(ws_stream)
+}
+
+pub fn start_server(port: i32) -> JoinHandle<()> {
+    thread::spawn(move || {
+        let server = actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
+            .bind(format!("{}:{}", "0.0.0.0", port))
+            .expect(format!("Can't bind to port {port}").as_str())
+            .run();
+        Runtime::new()
+            .expect("Failed to create a Runtime instance")
+            .block_on(server)
+            .expect(format!("Failed while blocking on port {port}").as_str());
+    })
+}
+
 async fn append_row(
     req: HttpRequest,
     data: web::Json<Value>,
@@ -377,16 +399,63 @@ async fn update_row_by_id(
     update_row!(actor, ns, Row::from_json(&columns, &data.0).with_row_id(id))
 }
 
+// Oxide WebSocket
+pub struct OxideWebSocket {}
+
+impl OxideWebSocket {
+    pub fn new() -> Self {
+        OxideWebSocket {}
+    }
+}
+
+impl Actor for OxideWebSocket {
+    type Context = ws::WebsocketContext<Self>;
+}
+
+impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for OxideWebSocket {
+    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
+        match msg {
+            Ok(ws::Message::Ping(msg)) => {
+                println!("Ping! [{:?}]", msg);
+                ctx.pong(&msg)
+            }
+            Ok(ws::Message::Pong(msg)) => {
+                println!("Pong! [{:?}]", msg);
+                ctx.ping(&msg)
+            }
+            Ok(ws::Message::Text(text)) => {
+                println!("Text! [{:?}]", text);
+                ctx.text(text)
+            }
+            Ok(ws::Message::Binary(bytes)) => {
+                println!("Binary! [{:?}]", bytes);
+                ctx.binary(bytes)
+            }
+            Ok(ws::Message::Close(reason)) => {
+                println!("Close! [{:?}]", reason);
+                ctx.close(reason)
+            }
+            other => {
+                println!("other {:?}", other)
+            }
+        }
+    }
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
     use actix_web::test;
     use futures_util::SinkExt;
     use serde_json::json;
-    use tokio_tungstenite::connect_async;
+    use std::thread;
+    use tokio::net::TcpStream;
+    use tokio::runtime::Runtime;
     use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
     use super::*;
+    use crate::testdata::make_quote_parameters;
     use crate::typed_values::TypedValue;
     use shared_lib::{ns_uri, range_uri, row_uri};
 
@@ -397,12 +466,9 @@ mod tests {
 
         // send a POST with the config
         let (database, schema, name) = ("web", "rest", "config");
+        let config = ObjectConfig::build_table(make_quote_parameters());
         let req = test::TestRequest::post().uri(&ns_uri(database, schema, name))
-            .set_json(&json!({"columns":[
-                {"name":"symbol","param_type":"String(4)","default_value":null},
-                {"name":"exchange","param_type":"String(4)","default_value":null},
-                {"name":"last_sale","param_type":"f64","default_value":null}],
-                "indices":[],"partitions":[]}))
+            .set_json(&json!(config))
             .to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
@@ -412,7 +478,7 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"columns":[{"name":"symbol","param_type":"String(4)","default_value":null},{"name":"exchange","param_type":"String(4)","default_value":null},{"name":"last_sale","param_type":"f64","default_value":null}],"indices":[],"partitions":[]}"#);
+        assert_eq!(body, r#"{"TableConfig":{"columns":[{"name":"symbol","data_type":{"StringType":8},"default_value":"Null"},{"name":"exchange","data_type":{"StringType":8},"default_value":"Null"},{"name":"last_sale","data_type":{"NumberType":"F64Kind"},"default_value":"Null"}],"indices":[],"partitions":[]}}"#);
 
         // DELETE the config
         let req = test::TestRequest::delete().uri(&ns_uri(database, schema, name)).to_request();
@@ -442,15 +508,12 @@ mod tests {
         // set up the sessions
         let mut app = test::init_service(web_routes!(SharedState::new())).await;
         let (database, schema, name) = ("web", "dataframe", "lifecycle");
+        let config = ObjectConfig::build_table(make_quote_parameters());
 
         // POST to create a new table
         let req = test::TestRequest::post()
             .uri(&ns_uri(database, schema, name))
-            .set_json(&json!({"columns":[
-                {"name":"symbol","param_type":"String(8)","default_value":null},
-                {"name":"exchange","param_type":"String(8)","default_value":null},
-                {"name":"last_sale","param_type":"f64","default_value":null}],
-                "indices":[],"partitions":[]})).to_request();
+            .set_json(&json!(config)).to_request();
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
 
@@ -538,26 +601,26 @@ mod tests {
 
     #[actix::test]
     async fn test_websocket() {
+        let port = 8033;
+
+        // Start the server
+        start_server(port);
+
+        // Connect to the WebSocket server
+        let (mut ws_stream, response) =
+            connect_async(format!("ws://localhost:{port}/ws")).await.unwrap();
+        println!("connect_async: {:?}", response);
+
         // set up the sessions
-        let _app = test::init_service(web_routes!(SharedState::new())).await;
-        match send_message("Hello, WebSocket Server!").await {
-            Ok(_) =>
-                match send_message("I need some info!").await {
-                    Ok(_) => {}
+        match send_ws_message(ws_stream, "Hello, WebSocket Server!").await {
+            Ok(ws_stream) =>
+                match send_ws_message(ws_stream, "I need some info!").await {
+                    Ok(ws_stream) => {
+                        println!("Done.")
+                    }
                     Err(e) => eprintln!("Error: {}", e)
                 }
             Err(e) => eprintln!("Error: {}", e)
         }
-    }
-
-    async fn send_message(message: &str) -> Result<(), Box<dyn std::error::Error>> {
-        // Connect to the WebSocket server
-        let (mut ws_stream, response) =
-            connect_async("ws://localhost:8080/ws").await?;
-        println!("send_message - response: {:?}", response);
-
-        // Send a message
-        ws_stream.send(Message::Text(message.to_string())).await?;
-        Ok(())
     }
 }

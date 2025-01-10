@@ -4,11 +4,10 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::arrays::Array;
+use crate::data_types::DataType;
 use crate::data_types::DataType::*;
-use crate::data_types::StorageTypes::BLOBSized;
-use crate::data_types::{DataType, StorageTypes};
 use crate::expression::Expression::*;
-use crate::expression::{BitwiseOps, DatabaseOps, Expression, Mutation};
+use crate::expression::{DatabaseOps, Expression, Mutations};
 use crate::number_kind::NumberKind;
 use crate::platform::PlatformOps;
 use crate::typed_values::TypedValue;
@@ -22,37 +21,36 @@ impl Inferences {
     /// provides type inference for the given [Expression]
     pub fn infer(expr: &Expression) -> DataType {
         match expr {
-            ArrayExpression(items) => ArrayType(Box::new(Inferences::infer_all(items))),
+            ArrayExpression(items) => ArrayType(items.len()),
             AsValue(_, e) => Inferences::infer(e),
-            BitwiseOp(bwo) => match bwo {
-                BitwiseOps::And(a, b) => Inferences::infer_a_or_b(a, b),
-                BitwiseOps::Or(a, b) => Inferences::infer_a_or_b(a, b),
-                BitwiseOps::ShiftLeft(a, b) => Inferences::infer_a_or_b(a, b),
-                BitwiseOps::ShiftRight(a, b) => Inferences::infer_a_or_b(a, b),
-                BitwiseOps::Xor(a, b) => Inferences::infer_a_or_b(a, b),
-            }
-            CodeBlock(ops) => ops.last().map(Inferences::infer).unwrap_or(UnionType(vec![])),
+            BitwiseAnd(a, b) => Inferences::infer_a_or_b(a, b),
+            BitwiseOr(a, b) => Inferences::infer_a_or_b(a, b),
+            BitwiseShiftLeft(a, b) => Inferences::infer_a_or_b(a, b),
+            BitwiseShiftRight(a, b) => Inferences::infer_a_or_b(a, b),
+            BitwiseXor(a, b) => Inferences::infer_a_or_b(a, b),
+            CodeBlock(ops) => ops.last().map(Inferences::infer).unwrap_or(VaryingType(vec![])),
             Condition(..) => BooleanType,
             Directive(..) => NumberType(NumberKind::AckKind),
             Divide(a, b) => Inferences::infer_a_or_b(a, b),
-            ElementAt(..) => UnionType(vec![]),
+            ElementAt(..) => VaryingType(vec![]),
             Extraction(a, b) => match (a.deref(), b.deref()) {
                 (Variable(pkg), FunctionCall { fx, .. }) => match fx.deref() {
                     Variable(name) =>
                         PlatformOps::find_function(pkg, name)
                             .map(|pf| pf.return_type.clone())
-                            .unwrap_or(UnionType(vec![])),
-                    _ => UnionType(vec![]),
+                            .unwrap_or(VaryingType(vec![])),
+                    _ => VaryingType(vec![]),
                 }
-                _ => UnionType(vec![])
+                _ => VaryingType(vec![])
             }
-            ExtractPostfix(..) => UnionType(vec![]),
+            ExtractPostfix(..) => VaryingType(vec![]),
             Factorial(a) => Inferences::infer(a),
             Feature { .. } => NumberType(NumberKind::AckKind),
             ForEach(..) => NumberType(NumberKind::AckKind),
-            From(..) => TableType(vec![], StorageTypes::BLOBSized),
+            From(..) => TableType(vec![], 0),
+            Tuple(..) => FunctionType(vec![]),
             FunctionCall { fx, .. } => Inferences::infer(fx),
-            HTTP { .. } => UnionType(vec![]),
+            HTTP { .. } => VaryingType(vec![]),
             If { a: true_v, b: Some(false_v), .. } =>
                 Inferences::infer_alles(vec![true_v, false_v]),
             If { a: true_v, .. } => Inferences::infer(true_v),
@@ -68,14 +66,14 @@ impl Inferences {
             Multiply(a, b) => Inferences::infer_a_or_b(a, b),
             Neg(a) => Inferences::infer(a),
             Ns(..) => NumberType(NumberKind::AckKind),
-            Parameters(params) => ArrayType(Box::new(StructureType(params.to_owned()))),
+            Parameters(params) => ArrayType(params.len()),
             Plus(a, b) => Inferences::infer_a_or_b(a, b),
             PlusPlus(a, b) => Inferences::infer_a_or_b(a, b),
             Pow(a, b) => Inferences::infer_a_or_b(a, b),
             DatabaseOp(a) => match a {
-                DatabaseOps::Query(_) => NumberType(NumberKind::AckKind),
-                DatabaseOps::Mutate(m) => match m {
-                    Mutation::Append { .. } => NumberType(NumberKind::RowIdKind),
+                DatabaseOps::Queryable(_) => NumberType(NumberKind::AckKind),
+                DatabaseOps::Mutation(m) => match m {
+                    Mutations::Append { .. } => NumberType(NumberKind::RowIdKind),
                     _ => NumberType(NumberKind::RowsAffectedKind),
                 }
             }
@@ -83,9 +81,9 @@ impl Inferences {
             Return(a) => Self::infer_all(a),
             Scenario { .. } => NumberType(NumberKind::AckKind),
             SetVariable(..) => NumberType(NumberKind::AckKind),
-            Variable(..) => UnionType(vec![]),
-            Via(..) => TableType(vec![], BLOBSized),
-            While { .. } => UnionType(vec![]),
+            Variable(..) => VaryingType(vec![]),
+            Via(..) => TableType(vec![], 0),
+            While { .. } => VaryingType(vec![]),
         }
     }
 
@@ -118,21 +116,21 @@ impl Inferences {
 
     /// provides type resolution for the given [Vec<DataType>]
     fn infer_best_fit(types: Vec<DataType>) -> DataType {
-        fn larger(a: &StorageTypes, b: &StorageTypes) -> StorageTypes {
+        fn larger(a: &usize, b: &usize) -> usize {
             (if a > b { a } else { b }).to_owned()
         }
 
         let result = match types.len() {
-            0 => UnionType(vec![]),
+            0 => VaryingType(vec![]),
             1 => types[0].to_owned(),
             _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
                 match (agg, t) {
-                    (UnionType(a), b) => UnionType({
+                    (VaryingType(a), b) => VaryingType({
                         let mut c = a.clone();
                         c.push(b.clone());
                         c
                     }),
-                    (b, UnionType(a)) => UnionType({
+                    (b, VaryingType(a)) => VaryingType({
                         let mut c = a.clone();
                         c.push(b.clone());
                         c
@@ -145,7 +143,7 @@ impl Inferences {
 
         // final massaging
         match result {
-            UnionType(a) if a.len() == 1 => a[0].clone(),
+            VaryingType(a) if a.len() == 1 => a[0].clone(),
             z => z
         }
     }
@@ -162,7 +160,6 @@ impl Inferences {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_types::StorageTypes::FixedSize;
     use crate::number_kind::NumberKind::{F64Kind, I64Kind};
     use crate::numbers::Numbers::{F64Value, I64Value};
     use crate::testdata::{verify_bit_operator, verify_data_type, verify_math_operator};
@@ -173,7 +170,7 @@ mod tests {
         let kind = Inferences::infer(
             &Literal(StringValue("hello world".into()))
         );
-        assert_eq!(kind, StringType(FixedSize(11)))
+        assert_eq!(kind, StringType(11))
     }
 
     #[test]
@@ -182,7 +179,7 @@ mod tests {
             &Literal(StringValue("yes".into())),
             &Literal(StringValue("hello".into())),
         );
-        assert_eq!(kind, StringType(FixedSize(5)))
+        assert_eq!(kind, StringType(5))
     }
 
     #[test]
@@ -201,17 +198,17 @@ mod tests {
             Literal(StringValue("banana".into())),
             Literal(StringValue("cherry".into())),
         ]);
-        assert_eq!(kind, StringType(FixedSize(6)))
+        assert_eq!(kind, StringType(6))
     }
 
     #[test]
     fn test_infer_best_fit() {
         let kind = Inferences::infer_best_fit(vec![
-            StringType(FixedSize(11)),
-            StringType(FixedSize(110)),
-            StringType(FixedSize(55))
+            StringType(11),
+            StringType(110),
+            StringType(55)
         ]);
-        assert_eq!(kind, StringType(FixedSize(110)))
+        assert_eq!(kind, StringType(110))
     }
 
     #[test]
@@ -326,6 +323,6 @@ mod tests {
             StringValue("banana".into()),
             StringValue("cherry".into()),
         ]);
-        assert_eq!(kind, StringType(FixedSize(6)))
+        assert_eq!(kind, StringType(6))
     }
 }
