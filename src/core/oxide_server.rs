@@ -3,47 +3,44 @@
 // Oxide Server module
 ////////////////////////////////////////////////////////////////////
 
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
+use crate::compiler::Compiler;
 use crate::dataframe_actor::DataframeActor;
+use crate::errors::throw;
+use crate::errors::Errors::Exact;
+use crate::expression::Expression;
+use crate::expression::Expression::Literal;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::object_config::ObjectConfig;
 use crate::row_metadata::RowMetadata;
 use crate::server::SystemInfoJs;
 use crate::structures::Row;
+use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::{ErrorValue, StringValue, Undefined};
+use crate::websockets::OxideWebSocketServer;
 use crate::*;
 use actix::{Actor, Addr, StreamHandler};
 use actix_session::Session;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws;
-use futures_util::SinkExt;
+use actix_web_actors::ws::WebsocketContext;
+use futures_util::stream::{SplitSink, SplitStream};
+use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
 use serde_json::{json, Value};
 use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse};
 use std::collections::HashMap;
 use std::error::Error;
+use std::io::{stdout, Write};
 use std::thread;
 use std::thread::JoinHandle;
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
+use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-
-pub const SECS_IN_WEEK: i64 = 60 * 60 * 24 * 7;
-
-/// represents all the shared state of the application
-#[derive(Debug)]
-pub struct SharedState {
-    actor: Addr<DataframeActor>,
-}
-
-impl SharedState {
-    pub fn new() -> Self {
-        SharedState {
-            actor: DataframeActor::new().start(),
-        }
-    }
-}
 
 #[macro_export]
 macro_rules! web_routes {
@@ -64,11 +61,6 @@ macro_rules! web_routes {
             .route("/", web::get().to(handle_index))
             .route("/info", web::get().to(handle_sys_info_get))
             .route("/rpc", web::post().to(handle_rpc_post))
-            // .wrap(actix_session::SessionMiddleware::builder(
-            //     actix_session::storage::CookieSessionStore::default(),
-            //     actix_web::cookie::Key::from(&[0; 64])
-            //  ).session_lifecycle(actix_session::config::PersistentSession::default()
-            //     .session_ttl(actix_web::cookie::time::Duration::seconds(SECS_IN_WEEK))).build())
     }
 }
 
@@ -299,15 +291,10 @@ pub async fn handle_websockets(
     req: HttpRequest, stream: web::Payload,
 ) -> impl Responder {
     info!("received ws <- {}", req.peer_addr().unwrap());
-    ws::start(OxideWebSocket::new(), &req, stream)
+    ws::start(OxideWebSocketServer::new(), &req, stream)
 }
 
-pub async fn send_ws_message(mut ws_stream: WebSocketStream<MaybeTlsStream<TcpStream>>, message: &str) -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Box<dyn std::error::Error>> {
-    ws_stream.send(Message::Text(message.to_string())).await?;
-    Ok(ws_stream)
-}
-
-pub fn start_server(port: i32) -> JoinHandle<()> {
+pub fn start_http_server(port: u16) -> JoinHandle<()> {
     thread::spawn(move || {
         let server = actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
             .bind(format!("{}:{}", "0.0.0.0", port))
@@ -399,54 +386,26 @@ async fn update_row_by_id(
     update_row!(actor, ns, Row::from_json(&columns, &data.0).with_row_id(id))
 }
 
-// Oxide WebSocket
-pub struct OxideWebSocket {}
+/// Represents all the shared state of the application
+#[derive(Debug)]
+pub struct SharedState {
+    actor: Addr<DataframeActor>,
+}
 
-impl OxideWebSocket {
+impl SharedState {
     pub fn new() -> Self {
-        OxideWebSocket {}
-    }
-}
-
-impl Actor for OxideWebSocket {
-    type Context = ws::WebsocketContext<Self>;
-}
-
-impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for OxideWebSocket {
-    fn handle(&mut self, msg: Result<ws::Message, ws::ProtocolError>, ctx: &mut Self::Context) {
-        match msg {
-            Ok(ws::Message::Ping(msg)) => {
-                println!("Ping! [{:?}]", msg);
-                ctx.pong(&msg)
-            }
-            Ok(ws::Message::Pong(msg)) => {
-                println!("Pong! [{:?}]", msg);
-                ctx.ping(&msg)
-            }
-            Ok(ws::Message::Text(text)) => {
-                println!("Text! [{:?}]", text);
-                ctx.text(text)
-            }
-            Ok(ws::Message::Binary(bytes)) => {
-                println!("Binary! [{:?}]", bytes);
-                ctx.binary(bytes)
-            }
-            Ok(ws::Message::Close(reason)) => {
-                println!("Close! [{:?}]", reason);
-                ctx.close(reason)
-            }
-            other => {
-                println!("other {:?}", other)
-            }
+        SharedState {
+            actor: DataframeActor::new().start(),
         }
     }
 }
 
-// Unit tests
+/// Unit tests
 #[cfg(test)]
 mod tests {
     use actix_web::test;
-    use futures_util::SinkExt;
+    use futures_util::stream::SplitSink;
+    use futures_util::{SinkExt, StreamExt};
     use serde_json::json;
     use std::thread;
     use tokio::net::TcpStream;
@@ -457,6 +416,7 @@ mod tests {
     use super::*;
     use crate::testdata::make_quote_parameters;
     use crate::typed_values::TypedValue;
+    use crate::typed_values::TypedValue::StringValue;
     use shared_lib::{ns_uri, range_uri, row_uri};
 
     #[actix::test]
@@ -596,31 +556,6 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"title":"Oxide","version":"0.1.0"}"#);
-    }
-
-    #[actix::test]
-    async fn test_websocket() {
-        let port = 8033;
-
-        // Start the server
-        start_server(port);
-
-        // Connect to the WebSocket server
-        let (mut ws_stream, response) =
-            connect_async(format!("ws://localhost:{port}/ws")).await.unwrap();
-        println!("connect_async: {:?}", response);
-
-        // set up the sessions
-        match send_ws_message(ws_stream, "Hello, WebSocket Server!").await {
-            Ok(ws_stream) =>
-                match send_ws_message(ws_stream, "I need some info!").await {
-                    Ok(ws_stream) => {
-                        println!("Done.")
-                    }
-                    Err(e) => eprintln!("Error: {}", e)
-                }
-            Err(e) => eprintln!("Error: {}", e)
-        }
+        assert_eq!(body, r#"{"title":"Oxide","version":"0.3"}"#);
     }
 }

@@ -4,6 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::compiler::Compiler;
+use crate::expression::Expression;
 use crate::machine::Machine;
 use crate::typed_values::TypedValue;
 use num_traits::real::Real;
@@ -38,14 +39,19 @@ impl Interpreter {
     /// Executes the supplied source code returning the result of the evaluation
     pub fn evaluate(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
         let opcode = Compiler::build(source_code)?;
-        let (machine, result) = self.machine.evaluate(&opcode)?;
-        self.machine = machine;
-        Ok(result)
+        self.invoke(&opcode)
     }
 
     /// returns a variable by name
     pub fn get(&self, name: &str) -> Option<TypedValue> {
         self.machine.get(name)
+    }
+
+    /// Executes the supplied source code returning the result of the evaluation
+    pub fn invoke(&mut self, opcode: &Expression) -> std::io::Result<TypedValue> {
+        let (machine, result) = self.machine.evaluate(&opcode)?;
+        self.machine = machine;
+        Ok(result)
     }
 
     /// Sets the value of a variable

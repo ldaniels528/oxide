@@ -255,7 +255,8 @@ server response:
 ```json
 1
 ```
-    <a name="examples"></a>
+    
+<a name="examples"></a>
 #### Platform Examples
 
 <hr>
@@ -264,7 +265,7 @@ server response:
 cal::now()
 </pre>
 <pre>
-2024-12-10T16:20:57.358Z
+2025-01-11T22:39:59.811Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -275,7 +276,7 @@ now():::day_of()
 
 </pre>
 <pre>
-10
+11
 </pre>
 <hr>
 <h4>cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -286,7 +287,7 @@ now():::hour12()
 
 </pre>
 <pre>
-8
+2
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -297,7 +298,7 @@ now():::hour24()
 
 </pre>
 <pre>
-8
+14
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -308,7 +309,7 @@ now():::minute_of()
 
 </pre>
 <pre>
-20
+39
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -319,7 +320,7 @@ now():::month_of()
 
 </pre>
 <pre>
-57
+59
 </pre>
 <hr>
 <h4>cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
@@ -330,7 +331,7 @@ now():::second_of()
 
 </pre>
 <pre>
-57
+59
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -341,7 +342,7 @@ now():::year_of()
 
 </pre>
 <pre>
-2024
+2025
 </pre>
 <hr>
 <h4>io::create_file &#8212; Creates a new file</h4>
@@ -465,7 +466,7 @@ true
 kungfu::type_of([12, 76, 444])
 </pre>
 <pre>
-Array(i64)
+Array(3)
 </pre>
 <hr>
 <h4>os::call &#8212; Invokes an operating system application</h4>
@@ -537,7 +538,7 @@ os::env()
 | 15 | CARGO_PKG_VERSION_PATCH    | 0                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 16 | CARGO_PKG_VERSION_PRE      |                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 17 | COMMAND_MODE               | unix2003                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 18 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-56ed43732862b803/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib                     |
+| 18 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-8327af3d7ec62fa6/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib                     |
 | 19 | HOME                       | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                               |
 | 20 | IDEA_INITIAL_DIRECTORY     | /                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 21 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                               |
@@ -596,13 +597,13 @@ Hello World
 from oxide::help() limit 3
 </pre>
 <pre>
-|----------------------------------------------------------------------------|
-| id | name   | module | signature       | description             | returns |
-|----------------------------------------------------------------------------|
-| 0  | to_u8  | util   | util::to_u8(x)  | Converts a value to u8  | u8      |
-| 1  | to_u64 | util   | util::to_u64(x) | Converts a value to u64 | u64     |
-| 2  | to_u32 | util   | util::to_u32(x) | Converts a value to u32 | u32     |
-|----------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name        | module | signature         | description                                     | returns                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
+| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String(0)                                    |
+| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Ack                                          |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -610,10 +611,13 @@ from oxide::help() limit 3
 from oxide::history() limit 3
 </pre>
 <pre>
-|-------------------------------------------------|
-| id | session_id | user_id | cpu_time_ms | input |
-|-------------------------------------------------|
-|-------------------------------------------------|
+|-------------------------------------------------------------------|
+| id | session_id    | user_id | cpu_time_ms | input                |
+|-------------------------------------------------------------------|
+| 0  | 1736578263280 | 501     | 2.237       | import oxide; help() |
+| 1  | 1736603663752 | 501     | 2.283       | import oxide; help() |
+| 2  | 1736603786872 | 501     | 7.763       | import oxide; help() |
+|-------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::home &#8212; Returns the Oxide home directory path</h4>
@@ -645,7 +649,7 @@ Ack
 oxide::uuid()
 </pre>
 <pre>
-36376789-55d8-471a-baeb-31b6b53c0301
+7f787745-c05c-419b-b0eb-e83a60019bde
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>
@@ -653,316 +657,477 @@ oxide::uuid()
 oxide::version()
 </pre>
 <pre>
-0.2
+0.3
 </pre>
 <hr>
 <h4>str::ends_with &#8212; Returns true if string `a` ends with string `b`</h4>
 <pre>
-Returns true if string `a` ends with string `b`
+str::ends_with('Hello World', 'World')
 </pre>
 <pre>
-undefined
+true
 </pre>
 <hr>
 <h4>str::format &#8212; Returns an argument-formatted string</h4>
 <pre>
-Returns an argument-formatted string
+str::format("This {} the {}", "is", "way")
 </pre>
 <pre>
-undefined
+This is the way
 </pre>
 <hr>
 <h4>str::index_of &#8212; Returns the index of string `b` in string `a`</h4>
 <pre>
-Returns the index of string `b` in string `a`
+str::index_of('The little brown fox', 'brown')
 </pre>
 <pre>
-undefined
+11
 </pre>
 <hr>
 <h4>str::join &#8212; Combines an array into a string</h4>
 <pre>
-Combines an array into a string
+str::join(['1', 5, 9, '13'], ', ')
 </pre>
 <pre>
-undefined
+1, 5, 9, 13
 </pre>
 <hr>
 <h4>str::left &#8212; Returns n-characters from left-to-right</h4>
 <pre>
-Returns n-characters from left-to-right
+str::left('Hello World', 5)
 </pre>
 <pre>
-Cannot subtract Cannot subtract undefined from undefined from undefined
+Hello
 </pre>
 <hr>
 <h4>str::len &#8212; Returns the number of characters contained in the string</h4>
 <pre>
-Returns the number of characters contained in the string
+str::len('The little brown fox')
 </pre>
 <pre>
-undefined
+20
 </pre>
 <hr>
 <h4>str::right &#8212; Returns n-characters from right-to-left</h4>
 <pre>
-Returns n-characters from right-to-left
+str::right('Hello World', 5)
 </pre>
 <pre>
-Cannot subtract Cannot subtract undefined from undefined from undefined
+World
 </pre>
 <hr>
 <h4>str::split &#8212; Splits string `a` by delimiter string `b`</h4>
 <pre>
-Splits string `a` by delimiter string `b`
+str::split('Hello,there World', ' ,')
 </pre>
 <pre>
-undefined
+|------------|
+| id | value |
+|------------|
+| 0  | Hello |
+| 1  | there |
+| 2  | World |
+|------------|
 </pre>
 <hr>
 <h4>str::starts_with &#8212; Returns true if string `a` starts with string `b`</h4>
 <pre>
-Returns true if string `a` starts with string `b`
+str::starts_with('Hello World', 'World')
 </pre>
 <pre>
-undefined
+false
 </pre>
 <hr>
 <h4>str::substring &#8212; Returns a substring of string `s` from `m` to `n`</h4>
 <pre>
-Returns a substring of string `s` from `m` to `n`
+str::substring('Hello World', 0, 5)
 </pre>
 <pre>
-undefined
+Hello
 </pre>
 <hr>
 <h4>str::to_string &#8212; Converts a value to its text-based representation</h4>
 <pre>
-Converts a value to its text-based representation
+str::to_string(125.75)
 </pre>
 <pre>
-undefined
+125.75
 </pre>
 <hr>
 <h4>tools::compact &#8212; Shrinks a table by removing deleted rows</h4>
 <pre>
-Shrinks a table by removing deleted rows
+
+[+] stocks := ns("platform.compact.stocks")
+[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+{ symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+{ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+{ symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+{ symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+{ symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+[+] delete from stocks where last_sale > 1.0
+[+] from stocks
+
 </pre>
-ERROR: Expected '(' but got 'by'
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 1  | UNO    | OTC      | 0.2456    |
+| 3  | GOTO   | OTC      | 0.1428    |
+| 5  | BOOM   | NASDAQ   | 0.0872    |
+|------------------------------------|
+</pre>
 <hr>
 <h4>tools::describe &#8212; Describes a table or structure</h4>
 <pre>
-Describes a table or structure
+
+tools::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
+
 </pre>
-ERROR: Expected '(' but got 'or'
+<pre>
+|----------------------------------------------------------|
+| id | name      | type      | default_value | is_nullable |
+|----------------------------------------------------------|
+| 0  | symbol    | String(3) | BIZ           | true        |
+| 1  | exchange  | String(4) | NYSE          | true        |
+| 2  | last_sale | f64       | 23.66         | true        |
+|----------------------------------------------------------|
+</pre>
 <hr>
 <h4>tools::fetch &#8212; Retrieves a raw structure from a table</h4>
 <pre>
-Retrieves a raw structure from a table
+
+[+] stocks := ns("platform.fetch.stocks")
+[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+{ symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+[+] tools::fetch(stocks, 2)
+
 </pre>
-ERROR: Expected '('
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 2  | JET    | NASDAQ   | 32.12     |
+|------------------------------------|
+</pre>
 <hr>
 <h4>tools::reverse &#8212; Returns a reverse copy of a table, string or array</h4>
 <pre>
-Returns a reverse copy of a table, string or array
+
+import tools
+to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
+
 </pre>
-ERROR: Expected '(' but got ','
+<pre>
+|-------------|
+| id | value  |
+|-------------|
+| 0  | mouse  |
+| 1  | ferret |
+| 2  | dog    |
+| 3  | cat    |
+|-------------|
+</pre>
 <hr>
 <h4>tools::scan &#8212; Returns existence metadata for a table</h4>
 <pre>
-Returns existence metadata for a table
+
+[+] import tools
+[+] stocks := ns("platform.scan.stocks")
+[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+{ symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+{ symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+{ symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
+{ symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
+[+] delete from stocks where last_sale > 1.0
+[+] stocks:::scan()
+
 </pre>
-ERROR: Expected '('
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 0  | ABC    | AMEX     | 12.33     |
+| 1  | UNO    | OTC      | 0.2456    |
+| 2  | BIZ    | NYSE     | 9.775     |
+| 3  | GOTO   | OTC      | 0.1442    |
+| 4  | XYZ    | NYSE     | 0.0289    |
+|------------------------------------|
+</pre>
 <hr>
 <h4>tools::to_array &#8212; Converts a collection into an array</h4>
 <pre>
-Converts a collection into an array
+tools::to_array("Hello")
 </pre>
 <pre>
-undefined
+|------------|
+| id | value |
+|------------|
+| 0  | H     |
+| 1  | e     |
+| 2  | l     |
+| 3  | l     |
+| 4  | o     |
+|------------|
 </pre>
 <hr>
 <h4>tools::to_csv &#8212; Converts a collection to CSV format</h4>
 <pre>
-Converts a collection to CSV format
+
+import tools::to_csv
+[+] stocks := ns("platform.csv.stocks")
+[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+{ symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+{ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+{ symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+{ symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+stocks:::to_csv()
+
 </pre>
 <pre>
-undefined
+|-----------------------------|
+| id | value                  |
+|-----------------------------|
+| 0  | "ABC","AMEX",11.11     |
+| 1  | "UNO","OTC",0.2456     |
+| 2  | "BIZ","NYSE",23.66     |
+| 3  | "GOTO","OTC",0.1428    |
+| 4  | "BOOM","NASDAQ",0.0872 |
+|-----------------------------|
 </pre>
 <hr>
 <h4>tools::to_json &#8212; Converts a collection to JSON format</h4>
 <pre>
-Converts a collection to JSON format
+
+import tools::to_json
+[+] stocks := ns("platform.json.stocks")
+[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+{ symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+{ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+{ symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+{ symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+stocks:::to_json()
+
 </pre>
 <pre>
-undefined
+|---------------------------------------------------------------|
+| id | value                                                    |
+|---------------------------------------------------------------|
+| 0  | {"symbol":"ABC","exchange":"AMEX","last_sale":11.11}     |
+| 1  | {"symbol":"UNO","exchange":"OTC","last_sale":0.2456}     |
+| 2  | {"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}     |
+| 3  | {"symbol":"GOTO","exchange":"OTC","last_sale":0.1428}    |
+| 4  | {"symbol":"BOOM","exchange":"NASDAQ","last_sale":0.0872} |
+|---------------------------------------------------------------|
 </pre>
 <hr>
 <h4>tools::to_table &#8212; Converts an object into a to_table</h4>
 <pre>
-Converts an object into a to_table
+
+tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
+
 </pre>
 <pre>
-undefined
+|-------------|
+| id | value  |
+|-------------|
+| 0  | cat    |
+| 1  | dog    |
+| 2  | ferret |
+| 3  | mouse  |
+|-------------|
 </pre>
 <hr>
 <h4>util::base64 &#8212; Translates bytes into Base 64</h4>
 <pre>
-Translates bytes into Base 64
+util::base64('Hello World')
 </pre>
 <pre>
-64
+SGVsbG8gV29ybGQ=
+</pre>
+<hr>
+<h4>util::to_binary &#8212; Translates a numeric value into binary</h4>
+<pre>
+(0b1011 & 0b1101):::to_binary()
+</pre>
+<pre>
+'to_binary' is not a function (undefined)
 </pre>
 <hr>
 <h4>util::hex &#8212; Translates bytes into hexadecimal</h4>
 <pre>
-Translates bytes into hexadecimal
+util::hex('Hello World')
 </pre>
 <pre>
-undefined
+48656c6c6f20576f726c64
 </pre>
 <hr>
 <h4>util::md5 &#8212; Creates a MD5 digest</h4>
 <pre>
-Creates a MD5 digest
+util::md5('Hello World')
 </pre>
 <pre>
-undefined
+b10a8db164e0754105b7a99be72e3fe5
 </pre>
 <hr>
 <h4>util::to_ascii &#8212; Converts an integer to ASCII</h4>
 <pre>
-Converts an integer to ASCII
+util::to_ascii(177)
 </pre>
 <pre>
-undefined
+±
 </pre>
 <hr>
 <h4>util::to_date &#8212; Converts a value to Date</h4>
 <pre>
-Converts a value to Date
+util::to_date(177)
 </pre>
 <pre>
-undefined
+1970-01-01T00:00:00.177Z
 </pre>
 <hr>
 <h4>util::to_f32 &#8212; Converts a value to f32</h4>
 <pre>
-Converts a value to f32
+util::to_f32(4321)
 </pre>
 <pre>
-undefined
+4321
 </pre>
 <hr>
 <h4>util::to_f64 &#8212; Converts a value to f64</h4>
 <pre>
-Converts a value to f64
+util::to_f64(4321)
 </pre>
 <pre>
-undefined
+4321
 </pre>
 <hr>
 <h4>util::to_i8 &#8212; Converts a value to i8</h4>
 <pre>
-Converts a value to i8
+util::to_i8(88)
 </pre>
 <pre>
-undefined
+88
 </pre>
 <hr>
 <h4>util::to_i16 &#8212; Converts a value to i16</h4>
 <pre>
-Converts a value to i16
+util::to_i16(88)
 </pre>
 <pre>
-undefined
+88
 </pre>
 <hr>
 <h4>util::to_i32 &#8212; Converts a value to i32</h4>
 <pre>
-Converts a value to i32
+util::to_i32(88)
 </pre>
 <pre>
-undefined
+88
 </pre>
 <hr>
 <h4>util::to_i64 &#8212; Converts a value to i64</h4>
 <pre>
-Converts a value to i64
+util::to_i64(88)
 </pre>
 <pre>
-undefined
+88
 </pre>
 <hr>
 <h4>util::to_i128 &#8212; Converts a value to i128</h4>
 <pre>
-Converts a value to i128
+util::to_i128(88)
 </pre>
 <pre>
-undefined
+88
 </pre>
 <hr>
 <h4>util::to_u8 &#8212; Converts a value to u8</h4>
 <pre>
-Converts a value to u8
+util::to_u8(88)
 </pre>
 <pre>
-undefined
+88
 </pre>
 <hr>
 <h4>util::to_u16 &#8212; Converts a value to u16</h4>
 <pre>
-Converts a value to u16
+util::to_u16(88)
 </pre>
 <pre>
-undefined
+88
 </pre>
 <hr>
 <h4>util::to_u32 &#8212; Converts a value to u32</h4>
 <pre>
-Converts a value to u32
+util::to_u32(88)
 </pre>
 <pre>
-undefined
+88
 </pre>
 <hr>
 <h4>util::to_u64 &#8212; Converts a value to u64</h4>
 <pre>
-Converts a value to u64
+util::to_u64(88)
 </pre>
 <pre>
-undefined
+88
 </pre>
 <hr>
 <h4>util::to_u128 &#8212; Converts a value to u128</h4>
 <pre>
-Converts a value to u128
+util::to_u128(88)
 </pre>
 <pre>
-undefined
+00000000-0000-0000-0000-000000000058
 </pre>
 <hr>
 <h4>www::url_decode &#8212; Decodes a URL-encoded string</h4>
 <pre>
-Decodes a URL-encoded string
+www::url_decode('http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998')
 </pre>
 <pre>
-undefined
+http://shocktrade.com?name=the hero&t=9998
 </pre>
 <hr>
 <h4>www::url_encode &#8212; Encodes a URL string</h4>
 <pre>
-Encodes a URL string
+www::url_encode('http://shocktrade.com?name=the hero&t=9998')
 </pre>
 <pre>
-undefined
+http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998
 </pre>
 <hr>
 <h4>www::serve &#8212; Starts a local HTTP service</h4>
 <pre>
-Starts a local HTTP service
+
+[+] www::serve(8822)
+[+] stocks := ns("platform.www.quotes")
+[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[+] [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
+{ symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
+{ symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
+{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+{ symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
+GET "http://localhost:8822/platform/www/quotes/1/4"
+
 </pre>
-ERROR: Unexpected end of input near 
+<pre>
+|------------------------------------|
+| id | exchange | symbol | last_sale |
+|------------------------------------|
+| 0  | NYSE     | BOX    | 56.88     |
+| 1  | NASDAQ   | JET    | 32.12     |
+| 2  | AMEX     | 12.49  | ABC       |
+|------------------------------------|
+</pre>
 
 <a name="rpc"></a>
 #### Remote Procedure Calls

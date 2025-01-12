@@ -4,8 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use serde::{Deserialize, Serialize};
-
-pub const VERSION: &str = "0.1.0";
+use crate::platform::VERSION;
 
 // JSON representation of Oxide system information
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

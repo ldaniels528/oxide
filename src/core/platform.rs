@@ -43,7 +43,8 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub const MAJOR_VERSION: u8 = 0;
-pub const MINOR_VERSION: u8 = 2;
+pub const MINOR_VERSION: u8 = 3;
+pub const VERSION: &str = "0.3";
 
 /// Represents a Platform Function
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -1673,7 +1674,7 @@ impl PlatformOps {
         ms: Machine,
         port: &TypedValue,
     ) -> (Machine, TypedValue) {
-        oxide_server::start_server(port.to_i32());
+        oxide_server::start_http_server(port.to_u16());
         (ms, Number(Ack))
     }
 

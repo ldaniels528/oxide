@@ -654,8 +654,7 @@ impl Add for TypedValue {
             (ErrorValue(a), _) => ErrorValue(a),
             (_, ErrorValue(b)) => ErrorValue(b),
             (Number(a), Number(b)) => Number(a + b),
-            (Number(Numbers::Ack), Boolean(..)) => Boolean(true),
-            (Number(a), Number(b)) => Number(Numbers::RowsAffected(a.to_i64() + b.to_i64())),
+            (Number(Numbers::Ack), Boolean(b)) => Boolean(b),
             (StringValue(a), StringValue(b)) => StringValue(a + b.as_str()),
             (TableValue(a), Structured(Hard(b))) => {
                 let mut mrc = match ModelRowCollection::from_table(Box::new(&a)) {

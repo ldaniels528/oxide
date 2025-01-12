@@ -1,6 +1,6 @@
 #![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
-// REPL module
+// Oxide REPL module
 ////////////////////////////////////////////////////////////////////
 
 use crate::arrays::Array;
@@ -34,16 +34,15 @@ use std::io;
 use std::io::{stdout, Read, Write};
 
 /// REPL application state
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct REPLState {
     database: String,
     schema: String,
-    interpreter: Interpreter,
     session_id: i64,
     user_id: i64,
     user_name: String,
     counter: usize,
     is_alive: bool,
+    interpreter: Interpreter,
 }
 
 impl REPLState {
@@ -137,7 +136,7 @@ fn do_terminal_input(
 }
 
 /// Builds the execution result output
-fn build_output(
+pub fn build_output(
     pid: usize,
     result: TypedValue,
     execution_time: f64,
@@ -145,8 +144,8 @@ fn build_output(
     let mut out: Vec<String> = vec![];
     out.push(build_output_header(pid, &result, execution_time)?);
     match result {
-        TableValue(rcv) => {
-            let rc: Box<dyn RowCollection> = Box::from(rcv);
+        TableValue(df) => {
+            let rc: Box<dyn RowCollection> = Box::from(df);
             let lines = TableRenderer::from_table_with_ids(&rc)?;
             out.extend(lines)
         }
@@ -157,7 +156,7 @@ fn build_output(
 
 /// Builds the execution result output header
 /// ex: "12: 5 row(s) in 13.2 ms ~ Table(String(128), String(128), String(128), Boolean)"
-fn build_output_header(
+pub fn build_output_header(
     pid: usize,
     result: &TypedValue,
     execution_time: f64,
@@ -175,6 +174,13 @@ fn build_output_header(
         }
     };
     Ok(format!("{pid}: {label}"))
+}
+
+pub fn cleanup(raw: &str) -> String {
+    raw.split(|c| "\n\r\t".contains(c))
+        .map(|s| s.trim())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 /// Generates a less verbose hard structure signature
@@ -206,13 +212,13 @@ fn get_table_type(rc: &Dataframe) -> String {
     format!("Table({})", param_types)
 }
 
-fn limit_width(lines: Vec<String>, limit: usize) -> Vec<String> {
+pub fn limit_width(lines: Vec<String>, limit: usize) -> Vec<String> {
     lines.iter()
         .map(|s| if s.len() > limit { s[0..limit].to_string() } else { s.to_string() })
         .collect::<Vec<_>>()
 }
 
-fn read_line_from(lines: Vec<String>) -> Box<dyn FnMut() -> std::io::Result<Option<String>>> {
+pub fn read_line_from(lines: Vec<String>) -> Box<dyn FnMut() -> std::io::Result<Option<String>>> {
     let mut index = 0;
     Box::new(move || {
         Ok(if index < lines.len() {
@@ -235,7 +241,7 @@ pub fn read_line_from_stdin() -> Box<dyn FnMut() -> std::io::Result<Option<Strin
 
 /// Reads lines of input until a blank line is entered.
 /// Returns the accumulated input as a single `String`.
-fn read_until_blank(
+pub fn read_until_blank(
     mut reader: Box<dyn FnMut() -> std::io::Result<Option<String>>>
 ) -> std::io::Result<String> {
     let mut input_buffer = String::new();
@@ -294,7 +300,7 @@ fn setup_system_variables(mut state: REPLState, args: Vec<String>) -> REPLState 
     state
 }
 
-fn show_title() {
+pub fn show_title() {
     use crate::platform::{MAJOR_VERSION, MINOR_VERSION};
     println!("Welcome to Oxide v{MAJOR_VERSION}.{MINOR_VERSION}\n");
 }
@@ -327,12 +333,6 @@ fn update_history(
     input: &str,
     processing_time: f64,
 ) -> std::io::Result<TypedValue> {
-    fn cleanup(raw: &str) -> String {
-        raw.split(|c| "\n\r\t".contains(c))
-            .map(|s| s.trim())
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
     let ns = PlatformOps::get_oxide_history_ns();
     let mut frc = FileRowCollection::open_or_create(&ns)?;
     let result = frc.append_row(Row::new(0, vec![
@@ -362,7 +362,10 @@ mod tests {
             "\n".into(),
         ]);
         let (_, new_state) = do_terminal_input(state, stdout, reader).unwrap();
-        println!("new_state {:?}", new_state);
+        assert_eq!(new_state.database, "oxide");
+        assert_eq!(new_state.schema, "public");
+        assert_eq!(new_state.counter, 1);
+        assert_eq!(new_state.is_alive, true);
     }
 
     #[test]

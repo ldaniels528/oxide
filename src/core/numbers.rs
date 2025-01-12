@@ -560,15 +560,17 @@ impl Add for Numbers {
 
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            (NaNValue, _) => NaNValue,
+            (_, NaNValue) => NaNValue,
+            (DateValue(dt), I64Value(n)) => DateValue(dt + n),
             (F32Value(a), F32Value(b)) => F32Value(a + b),
             (F64Value(a), F64Value(b)) => F64Value(a + b),
             (I128Value(a), I128Value(b)) => I128Value(a + b),
+            (I64Value(n), DateValue(dt)) => DateValue(dt + n),
             (I64Value(a), I64Value(b)) => I64Value(a + b),
             (I32Value(a), I32Value(b)) => I32Value(a + b),
             (I16Value(a), I16Value(b)) => I16Value(a + b),
             (I8Value(a), I8Value(b)) => I8Value(a + b),
-            (NaNValue, _) => NaNValue,
-            (_, NaNValue) => NaNValue,
             (U128Value(a), U128Value(b)) => U128Value(a + b),
             (U64Value(a), U64Value(b)) => U64Value(a + b),
             (U32Value(a), U32Value(b)) => U32Value(a + b),
