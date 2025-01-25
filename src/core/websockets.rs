@@ -5,7 +5,7 @@
 
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::errors::throw;
-use crate::errors::Errors::Exact;
+use crate::errors::Errors::{Exact, TypeMismatch};
 use crate::expression::Expression;
 use crate::interpreter::Interpreter;
 use crate::typed_values::TypedValue;
@@ -19,6 +19,7 @@ use shared_lib::cnv_error;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use crate::errors::TypeMismatchErrors::UnexpectedResult;
 
 /// Oxide WebSocket Client
 pub struct OxideWebSocketClient {
@@ -28,9 +29,9 @@ pub struct OxideWebSocketClient {
 
 impl OxideWebSocketClient {
     /// Starts the websocket client
-    pub async fn connect(host: &str, port: u16) -> std::io::Result<OxideWebSocketClient> {
+    pub async fn connect(host: &str, port: u16, path: &str) -> std::io::Result<OxideWebSocketClient> {
         let (mut ws_stream, _response) =
-            connect_async(format!("ws://{host}:{port}/ws")).await
+            connect_async(format!("ws://{host}:{port}{path}")).await
                 .map_err(|e| cnv_error!(e))?;
         let (mut write, mut read) = ws_stream.split();
         Ok(Self { read, write })
@@ -58,7 +59,7 @@ impl OxideWebSocketClient {
                 Ok(match message {
                     Message::Binary(bytes) => ByteCodeCompiler::decode_value(&bytes),
                     Message::Text(text) => StringValue(text.to_string()),
-                    msg => ErrorValue(Exact(format!("Unexpected result: {}", msg)))
+                    msg => ErrorValue(TypeMismatch(UnexpectedResult(msg.to_string())))
                 }),
             Some(Err(err)) => throw(Exact(err.to_string()))
         }
@@ -131,9 +132,8 @@ mod tests {
     use crate::dataframe::Dataframe::Model;
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::I64Value;
-    use crate::oxide_server::start_http_server;
     use crate::repl;
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::testdata::{make_quote, make_quote_columns, start_test_server};
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::{Number, TableValue};
     use crate::websockets::OxideWebSocketClient;
@@ -141,9 +141,9 @@ mod tests {
     #[actix::test]
     async fn test_websockets_conversational() {
         let port = 8010;
-        start_http_server(port);
+        start_test_server(port);
 
-        let mut wsc = OxideWebSocketClient::connect("0.0.0.0", port).await.unwrap();
+        let mut wsc = OxideWebSocketClient::connect("0.0.0.0", port, "/ws").await.unwrap();
         wsc.evaluate("a := [0, 1, 3, 5]").await.unwrap();
         let value = wsc.evaluate("a[2]").await.unwrap();
         show_value(value.clone());
@@ -153,9 +153,9 @@ mod tests {
     #[actix::test]
     async fn test_websockets_script() {
         let port = 8011;
-        start_http_server(port);
+        start_test_server(port);
 
-        let mut wsc = OxideWebSocketClient::connect("0.0.0.0", port).await.unwrap();
+        let mut wsc = OxideWebSocketClient::connect("0.0.0.0", port, "/ws").await.unwrap();
         let value = wsc.evaluate(r#"
             stocks := ns("ws.script.stocks")
             table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks

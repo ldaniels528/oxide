@@ -175,7 +175,7 @@ pub async fn handle_row_get(
     path: web::Path<(String, String, String, usize)>,
 ) -> impl Responder {
     match get_row_by_id(req, path).await {
-        Ok((columns, Some(row))) => HttpResponse::Ok().json(row.to_json_hash(&columns)),
+        Ok((columns, Some(row))) => HttpResponse::Ok().json(row.to_hash_json_value(&columns)),
         Ok((_, None)) => HttpResponse::Ok().json(serde_json::json!({})),
         Err(err) => {
             error!("error {}", err.to_string());

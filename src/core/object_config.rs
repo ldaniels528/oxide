@@ -8,7 +8,6 @@ use std::fs;
 use serde::{Deserialize, Serialize};
 
 use crate::cnv_error;
-use crate::descriptor::Descriptor;
 use crate::namespaces::Namespace;
 use crate::object_config::ObjectConfig::TableConfig;
 use crate::parameter::Parameter;
@@ -48,14 +47,6 @@ impl ObjectConfig {
     pub fn get_indices(&self) -> Vec<HashIndexConfig> {
         match self {
             ObjectConfig::TableConfig { indices, .. } => indices.clone(),
-            _ => vec![]
-        }
-    }
-
-    pub fn get_descriptors(&self) -> Vec<Descriptor> {
-        match self {
-            ObjectConfig::TableConfig { columns, .. } =>
-                Descriptor::from_parameters(&columns),
             _ => vec![]
         }
     }

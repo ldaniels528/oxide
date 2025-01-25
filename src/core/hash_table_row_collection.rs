@@ -5,10 +5,10 @@
 
 use std::ops::Range;
 
-use crate::arrays::Array;
 use crate::columns::Column;
 use crate::data_types::DataType::NumberType;
-use crate::descriptor::Descriptor;
+use crate::sequences::Array;
+
 use crate::errors::Errors;
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
@@ -381,11 +381,11 @@ impl RowCollection for HashTableRowCollection {
 
 #[cfg(test)]
 mod tests {
-    use crate::arrays::Array;
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
     use crate::numbers::Numbers::{Ack, F64Value, RowsAffected};
     use crate::row_collection::RowCollection;
+    use crate::sequences::{Array, Sequence};
     use crate::structures::Row;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote_columns, make_quote_parameters, StockQuote};

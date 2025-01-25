@@ -5,7 +5,7 @@
 
 use std::cmp::Ordering;
 use std::collections::Bound;
-use std::fmt::Display;
+use std::fmt::{format, Display};
 use std::hash::{DefaultHasher, Hasher};
 use std::i32;
 use std::ops::*;
@@ -17,7 +17,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::arrays::Array;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::cnv_error;
@@ -27,9 +26,9 @@ use crate::data_types::DataType::*;
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, Model};
-use crate::descriptor::Descriptor;
+
 use crate::errors::Errors::{CannotSubtract, Exact, Multiple, Syntax, TypeMismatch};
-use crate::errors::TypeMismatchErrors::UnsupportedType;
+use crate::errors::TypeMismatchErrors::{CannotBeNegated, StructsOneOrMoreExpected, UnsupportedType};
 use crate::errors::{throw, Errors};
 use crate::expression::Expression;
 use crate::field::FieldMetadata;
@@ -47,6 +46,7 @@ use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
+use crate::sequences::*;
 use crate::structures::Row;
 use crate::structures::Structures::{Firm, Hard, Soft};
 use crate::structures::*;
@@ -65,18 +65,20 @@ const UUID_FORMAT: &str =
 #[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     ArrayValue(Array),
+    ASCII(Vec<char>),
     Binary(Vec<u8>),
-    BLOB(Box<TypedValue>),
     Boolean(bool),
     ErrorValue(Errors),
-    Function { params: Vec<Parameter>, code: Box<Expression> },
+    Function { params: Vec<Parameter>, body: Box<Expression>, returns: DataType },
+    Kind(DataType),
     NamespaceValue(Namespace),
     Null,
     Number(Numbers),
     PlatformOp(PlatformOps),
-    Structured(Structures),
     StringValue(String),
+    Structured(Structures),
     TableValue(Dataframe),
+    TupleValue(Vec<TypedValue>),
     Undefined,
 }
 
@@ -103,16 +105,13 @@ impl TypedValue {
             serde_json::Value::Number(n) => n.as_f64().map(|v| Number(F64Value(v))).unwrap_or(Null),
             serde_json::Value::String(s) => StringValue(s.to_owned()),
             serde_json::Value::Array(a) => ArrayValue(Array::from(a.iter().map(Self::from_json).collect())),
-            serde_json::Value::Object(args) =>
-                match HardStructure::from_descriptors(&args.iter()
+            serde_json::Value::Object(args) => Structured(Hard(
+                HardStructure::from_parameters(&args.iter()
                     .map(|(name, value)| {
-                        let value = TypedValue::from_json(value);
-                        let data_type = value.get_type().to_type_declaration();
-                        Descriptor::new(name, data_type, Some(value.to_code()))
-                    }).collect::<Vec<_>>()) {
-                    Ok(structure) => Structured(Hard(structure)),
-                    Err(err) => ErrorValue(Exact(err.to_string()))
-                }
+                        let tv = TypedValue::from_json(value);
+                        Parameter::with_default(name, tv.get_type().clone(), tv)
+                    }).collect::<Vec<_>>())
+            ))
         }
     }
 
@@ -252,11 +251,13 @@ impl TypedValue {
     pub fn get_type(&self) -> DataType {
         match self {
             ArrayValue(a) => ArrayType(a.len()),
+            ASCII(chars) => ASCIIType(chars.len()),
             Binary(bytes) => BinaryType(bytes.len()),
-            BLOB(tv) => BLOBType(Box::from(tv.get_type())),
             Boolean(..) => BooleanType,
             ErrorValue(..) => ErrorType,
-            Function { params, .. } => FunctionType(params.clone()),
+            Function { params, returns, .. } =>
+                FunctionType(params.clone(), Box::from(returns.clone())),
+            Kind(dt) => dt.clone(),
             NamespaceValue(..) => TableType(Vec::new(), 0),
             Null | Undefined => VaryingType(Vec::new()),
             Number(n) => NumberType(n.kind()),
@@ -264,11 +265,14 @@ impl TypedValue {
             Structured(s) => StructureType(s.get_parameters()),
             StringValue(s) => StringType(s.len()),
             TableValue(tv) => TableType(Parameter::from_columns(tv.get_columns()), 0),
+            TupleValue(items) => TupleType(items.iter()
+                .map(|i| i.get_type())
+                .collect()),
         }
     }
 
     pub fn get_type_name(&self) -> String {
-        self.get_type().to_type_declaration().unwrap_or(String::new())
+        self.get_type().to_code()
     }
 
     pub fn hash_code(&self) -> u64 {
@@ -289,7 +293,7 @@ impl TypedValue {
         match (self, other) {
             (a, b) if *a == *b => Boolean(true),
             (Structured(Soft(a)), Structured(Soft(b))) => {
-                Boolean(a.to_hash_map() == b.to_hash_map())
+                Boolean(a.to_name_values_mapping() == b.to_name_values_mapping())
             }
             (Structured(Hard(a)), Structured(Hard(b))) => Boolean(a == b),
             _ => Boolean(false)
@@ -305,6 +309,7 @@ impl TypedValue {
             Structured(Hard(hs)) => ArrayValue(hs.to_table().to_array()),
             Structured(Soft(ss)) => ArrayValue(ss.to_table().to_array()),
             TableValue(rc) => ArrayValue(rc.to_array()),
+            TupleValue(items) => ArrayValue(Array::from(items.clone())),
             z => ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
         }
     }
@@ -407,28 +412,33 @@ impl TypedValue {
             ArrayValue(items) => serde_json::json!(items.iter()
                     .map(|v|v.to_json())
                     .collect::<Vec<_>>()),
+            ASCII(chars) => serde_json::json!(chars),
             Binary(bytes) => serde_json::json!(bytes),
-            BLOB(tv) => tv.to_json(),
             Boolean(b) => serde_json::json!(b),
             ErrorValue(message) => serde_json::json!(message),
-            Function { params, code } => {
+            Function { params, body: code, returns } => {
                 let my_params = serde_json::Value::Array(params.iter()
                     .map(|c| c.to_json()).collect());
-                serde_json::json!({ "params": my_params, "code": code.to_code() })
+                serde_json::json!({ "params": my_params, "code": code.to_code(), "returns": returns.to_type_declaration() })
             }
+            Kind(dt) => serde_json::json!(dt),
             NamespaceValue(ns) => serde_json::json!(ns.get_full_name()),
             Null => serde_json::Value::Null,
             Number(nv) => nv.to_json(),
             PlatformOp(nf) => serde_json::json!(nf),
             StringValue(s) => serde_json::json!(s),
             Structured(s) => s.to_json(),
-            TableValue(rcv) => {
-                let columns = rcv.get_columns();
-                let rows = rcv.iter()
-                    .map(|r| r.to_json_hash(columns))
+            TableValue(df) => {
+                let columns = df.get_columns();
+                let rows = df.iter()
+                    .map(|r| r.to_hash_json_value(columns))
                     .collect::<Vec<_>>();
                 serde_json::json!(rows)
             }
+            TupleValue(items) => serde_json::json!(
+                items.iter()
+                    .map(|v|v.to_json())
+                    .collect::<Vec<_>>()),
             Undefined => serde_json::Value::Null,
         }
     }
@@ -443,7 +453,7 @@ impl TypedValue {
 
     pub fn to_table_value(&self) -> TypedValue {
         match self {
-            ArrayValue(items) => self.convert_array_to_table(items.values()),
+            ArrayValue(items) => self.convert_array_to_table(&items.get_values()),
             ErrorValue(err) => ErrorValue(err.to_owned()),
             NamespaceValue(ns) =>
                 match ObjectConfig::load(ns) {
@@ -462,43 +472,32 @@ impl TypedValue {
 
     fn convert_array_to_table(&self, items: &Vec<TypedValue>) -> TypedValue {
         // gather each struct in the array as a table
-        fn value_parameters(value: &TypedValue) -> Vec<Descriptor> {
-            vec![Descriptor::new("value".to_string(), value.get_type().to_type_declaration(), None)]
+        fn value_parameters(value: &TypedValue) -> Vec<Parameter> {
+            vec![Parameter::new("value", value.get_type().clone())]
         }
-        let tables = items.iter()
+        let dataframes = items.iter()
             .fold(Vec::new(), |mut tables, tv| match tv {
                 Structured(ss) => {
-                    tables.push(ss.to_table());
+                    tables.push(Model(ss.to_table()));
                     tables
                 }
                 TableValue(Model(mrc)) => {
-                    tables.push(mrc.to_owned());
+                    tables.push(Model(mrc.to_owned()));
                     tables
                 }
                 z => {
-                    let mut mrc = ModelRowCollection::from_descriptors(&value_parameters(z));
+                    let mut mrc = ModelRowCollection::from_parameters(&value_parameters(z));
                     mrc.append_row(Row::new(0, vec![z.clone()]));
-                    tables.push(mrc);
+                    tables.push(Model(mrc));
                     tables
                 }
             });
 
-        // process the tables
-        match tables.as_slice() {
-            [] => ErrorValue(Exact("At least one struct is required.".into())),
-            [mrc] => TableValue(Model(mrc.to_owned())),
-            rcs => {
-                let columns = rcs[0].get_columns().to_owned();
-                TableValue(Model(rcs.iter().fold(
-                    ModelRowCollection::new(columns),
-                    |mut mrc, rc| {
-                        match mrc.append_rows(rc.get_rows()) {
-                            ErrorValue(err) => error!("{}", err),
-                            _ => {}
-                        }
-                        mrc
-                    })))
-            }
+        // process the dataframes
+        match dataframes.as_slice() {
+            [] => ErrorValue(TypeMismatch(StructsOneOrMoreExpected)),
+            [df] => TableValue(df.to_owned()),
+            dfs => TableValue(Dataframe::combine_tables(dfs.to_vec()))
         }
     }
 
@@ -563,13 +562,18 @@ impl TypedValue {
                 format!("[{}]", values.join(", "))
             }
             TypedValue::Binary(bytes) => hex::encode(bytes),
-            TypedValue::BLOB(tv) => tv.unwrap_value(),
+            TypedValue::ASCII(chars) => format!("{:#?}", chars),
             TypedValue::Boolean(b) => (if *b { "true" } else { "false" }).into(),
             TypedValue::ErrorValue(message) => message.to_string(),
-            TypedValue::Function { params, code } =>
-                format!("(fn({}) => {})",
+            TypedValue::Function { params, body: code, returns } =>
+                format!("(fn({}){} => {})",
                         params.iter().map(|c| c.to_code()).collect::<Vec<_>>().join(", "),
+                        match returns.to_code().as_str() {
+                            "" => "".to_string(),
+                            s => format!(": {}", s),
+                        },
                         code.to_code()),
+            TypedValue::Kind(dt) => dt.to_code(),
             TypedValue::NamespaceValue(ns) => ns.get_full_name(),
             TypedValue::Null => "null".into(),
             TypedValue::Number(number) => number.unwrap_value(),
@@ -578,9 +582,12 @@ impl TypedValue {
             TypedValue::Structured(structure) => structure.to_json().to_string(),
             TypedValue::TableValue(rcv) => {
                 let columns = rcv.get_columns();
-                serde_json::json!(rcv.iter().map(|r|r.to_json_hash(columns))
+                serde_json::json!(rcv.iter().map(|r|r.to_hash_json_value(columns))
                     .collect::<Vec<_>>()).to_string()
             }
+            TypedValue::TupleValue(items) =>
+                format!("({})", items.iter().map(|i| i.to_code())
+                    .collect::<Vec<_>>().join(", ")),
             TypedValue::Undefined => "undefined".into(),
         }
     }
@@ -614,8 +621,15 @@ impl TypedValue {
     }
 
     pub fn pow(&self, rhs: &Self) -> Option<Self> {
-        let n = num_traits::pow(self.to_f64(), rhs.to_usize());
-        Some(Number(F64Value(n)))
+        match (self.clone(), rhs.clone()) {
+            (TupleValue(a), TupleValue(b)) => {
+                Some(TupleValue(pow_vec(a, b)))
+            }
+            (..) => {
+                let n = num_traits::pow(self.to_f64(), rhs.to_usize());
+                Some(Number(F64Value(n)))
+            }
+        }
     }
 
     pub fn range(&self, rhs: &Self) -> Option<Self> {
@@ -630,10 +644,10 @@ impl Add for TypedValue {
 
     fn add(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
-            (ArrayValue(a), b) => ArrayValue(Array::from(a.values().iter()
+            (ArrayValue(a), b) => ArrayValue(Array::from(a.get_values().iter()
                 .map(|i| i.clone() + b.clone())
                 .collect::<Vec<_>>())),
-            (b, ArrayValue(a)) => ArrayValue(Array::from(a.values().iter()
+            (b, ArrayValue(a)) => ArrayValue(Array::from(a.get_values().iter()
                 .map(|i| i.clone() + b.clone())
                 .collect::<Vec<_>>())),
             (Boolean(..), Number(Numbers::Ack)) => Boolean(true),
@@ -671,6 +685,7 @@ impl Add for TypedValue {
                     Ok(mrc) => TableValue(Model(mrc)),
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 },
+            (TupleValue(a), TupleValue(b)) => TupleValue(add_vec(a, b)),
             (a, b) => ErrorValue(TypeMismatch(UnsupportedType(a.get_type(), b.get_type())))
         }
     }
@@ -682,6 +697,7 @@ impl BitAnd for TypedValue {
     fn bitand(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Number(a), Number(b)) => Number(a & b),
+            (TupleValue(a), TupleValue(b)) => TupleValue(bitand_vec(a, b)),
             _ => Undefined
         }
     }
@@ -693,6 +709,7 @@ impl BitOr for TypedValue {
     fn bitor(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Number(a), Number(b)) => Number(a | b),
+            (TupleValue(a), TupleValue(b)) => TupleValue(bitor_vec(a, b)),
             _ => Undefined
         }
     }
@@ -704,6 +721,7 @@ impl BitXor for TypedValue {
     fn bitxor(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Number(a), Number(b)) => Number(a ^ b),
+            (TupleValue(a), TupleValue(b)) => TupleValue(bitxor_vec(a, b)),
             _ => Undefined
         }
     }
@@ -722,6 +740,7 @@ impl Div for TypedValue {
         match (self, rhs) {
             (Number(..), Number(b)) if b.is_effectively_zero() => Number(NaNValue),
             (Number(a), Number(b)) => Number(a / b),
+            (TupleValue(a), TupleValue(b)) => TupleValue(div_vec(a, b)),
             _ => Undefined
         }
     }
@@ -733,13 +752,14 @@ impl Index<usize> for TypedValue {
     fn index(&self, index: usize) -> &Self::Output {
         match self {
             ArrayValue(items) =>
-                if index < items.len() { &items[index] } else { &Undefined },
+                Box::leak(Box::new(idx_vec(&items.get_values(), index))),
             Null => &Null,
             TableValue(rcv) => {
                 let rc: Box<dyn RowCollection> = Box::from(rcv.to_owned());
                 Box::leak(Box::new(fetch(&rc, index)))
             }
-            Undefined => &Undefined,
+            TupleValue(items) =>
+                Box::leak(Box::new(idx_vec(items, index))),
             _ => &Undefined,
         }
     }
@@ -764,16 +784,17 @@ impl Mul for TypedValue {
     fn mul(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             // multiply each element of the array by the other value
-            (ArrayValue(a), b) => ArrayValue(Array::from(a.values().iter()
+            (ArrayValue(a), b) => ArrayValue(Array::from(a.get_values().iter()
                 .map(|i| i.clone() * b.clone())
                 .collect::<Vec<_>>())),
-            (b, ArrayValue(a)) => ArrayValue(Array::from(a.values().iter()
+            (b, ArrayValue(a)) => ArrayValue(Array::from(a.get_values().iter()
                 .map(|i| i.clone() * b.clone())
                 .collect::<Vec<_>>())),
             // multiply two numbers
             (Number(a), Number(b)) => Number(a * b),
             // repeat a string `n` times
             (StringValue(a), Number(n)) => StringValue(a.repeat(n.to_usize())),
+            (TupleValue(a), TupleValue(b)) => TupleValue(mul_vec(a, b)),
             // fallback for unsupported types
             _ => Undefined,
         }
@@ -784,14 +805,15 @@ impl Neg for TypedValue {
     type Output = TypedValue;
 
     fn neg(self) -> Self::Output {
-        let error: fn(String) -> TypedValue = |s| ErrorValue(Exact(format!("{} cannot be negated", s)));
+        let error: fn(String) -> TypedValue = |s| ErrorValue(TypeMismatch(CannotBeNegated(s)));
         match self {
             ArrayValue(v) => ArrayValue(v.map(|tv| tv.to_owned().neg())),
             Binary(..) => error("Binary".into()),
-            BLOB(tv) => BLOB(Box::from(tv.neg())),
+            ASCII(..) => error("ASCII".into()),
             Boolean(n) => Boolean(!n),
             ErrorValue(msg) => ErrorValue(msg),
             Function { .. } => error("Function".into()),
+            Kind(dt) => Kind(dt),
             NamespaceValue(ns) => error(format!("ns({})", ns.get_full_name())),
             Null => Null,
             Number(nv) => Number(nv.neg()),
@@ -800,6 +822,7 @@ impl Neg for TypedValue {
             StringValue(..) => error("String".into()),
             Structured(..) => error("Structure".into()),
             TableValue(..) => error("Table".into()),
+            TupleValue(a) => TupleValue(neg_vec(a)),
             Undefined => Undefined,
         }
     }
@@ -813,6 +836,7 @@ impl Not for TypedValue {
             ArrayValue(a) => ArrayValue(a.map(|i| i.to_owned().neg())),
             Boolean(v) => Boolean(!v),
             Number(a) => Number(-a),
+            TupleValue(a) => TupleValue(not_vec(a)),
             _ => Undefined
         }
     }
@@ -834,6 +858,7 @@ impl Rem for TypedValue {
     fn rem(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Number(a), Number(b)) => Number(a % b),
+            (TupleValue(a), TupleValue(b)) => TupleValue(rem_vec(a, b)),
             _ => Undefined
         }
     }
@@ -847,6 +872,7 @@ impl PartialOrd for TypedValue {
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
             (Number(a), Number(b)) => a.partial_cmp(b),
             (StringValue(a), StringValue(b)) => a.partial_cmp(b),
+            (TupleValue(a), TupleValue(b)) => a.partial_cmp(b),
             (Null, Null) => Some(Ordering::Equal),
             (Null, Undefined) => Some(Ordering::Greater),
             (Undefined, Null) => Some(Ordering::Less),
@@ -862,6 +888,7 @@ impl Shl for TypedValue {
     fn shl(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Number(a), Number(b)) => Number(a << b),
+            (TupleValue(a), TupleValue(b)) => TupleValue(shl_vec(a, b)),
             _ => Undefined
         }
     }
@@ -873,6 +900,7 @@ impl Shr for TypedValue {
     fn shr(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Number(a), Number(b)) => Number(a >> b),
+            (TupleValue(a), TupleValue(b)) => TupleValue(shr_vec(a, b)),
             _ => Undefined
         }
     }
@@ -885,6 +913,7 @@ impl Sub for TypedValue {
         match (self, rhs) {
             (Boolean(a), Boolean(b)) => Boolean(a & b),
             (Number(a), Number(b)) => Number(a - b),
+            (TupleValue(a), TupleValue(b)) => TupleValue(sub_vec(a, b)),
             (a, b) => ErrorValue(CannotSubtract(a.to_code(), b.to_code()))
         }
     }
@@ -965,10 +994,10 @@ mod tests {
 
     #[test]
     fn test_from_json() {
-        let structure = HardStructure::from_descriptors(&vec![
-            Descriptor::new("name", Some("String(4)".into()), Some("\"John\"".into())),
-            Descriptor::new("age", Some("i64".into()), Some("40".into()))
-        ]).unwrap();
+        let structure = HardStructure::from_parameters(&vec![
+            Parameter::with_default("name", StringType(4), StringValue("John".into())),
+            Parameter::with_default("age", NumberType(I64Kind), Number(I64Value(40)))
+        ]);
         let js_value0: Value = serde_json::from_str(r##"{"name":"John","age":40}"##).unwrap();
         let js_value1: Value = serde_json::from_str(structure.to_string().as_str()).unwrap();
         assert_eq!(js_value1, js_value0)

@@ -5,7 +5,7 @@
 
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
-use crate::descriptor::Descriptor;
+
 use crate::field::FieldMetadata;
 use crate::numbers::Numbers;
 use crate::parameter::Parameter;
@@ -42,14 +42,6 @@ impl ModelRowCollection {
             .map(|chunk| ByteCodeCompiler::decode_row(&columns, &chunk.to_vec()))
             .collect::<Vec<(Row, RowMetadata)>>();
         Self::with_rows(columns, row_data)
-    }
-
-    /// Creates a new [ModelRowCollection] from abstract columns
-    pub fn from_descriptors(columns: &Vec<Descriptor>) -> ModelRowCollection {
-        match Column::from_descriptors(columns) {
-            Ok(columns) => ModelRowCollection::with_rows(columns, Vec::new()),
-            Err(err) => panic!("{}", err.to_string())
-        }
     }
 
     /// Creates a new [ModelRowCollection] from abstract columns
@@ -133,6 +125,7 @@ impl RowCollection for ModelRowCollection {
         column_id: usize,
         new_value: TypedValue,
     ) -> TypedValue {
+        if id >= self.row_data.len() { return Null; }
         let (row, meta) = &self.row_data[id];
         let rows_affected = if meta.is_allocated {
             let old_values = row.get_values();
@@ -235,7 +228,7 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::U64Value;
     use crate::row_collection::RowCollection;
-    use crate::testdata::{make_quote, make_quote_descriptors};
+    use crate::testdata::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
     use std::ops::Deref;
 
@@ -280,8 +273,8 @@ mod tests {
     }
 
     fn create_data_set() -> (ModelRowCollection, Vec<Column>) {
-        let columns = make_quote_descriptors();
-        let phys_columns = Column::from_descriptors(&columns).unwrap();
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns);
         let mrc = ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),

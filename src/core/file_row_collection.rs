@@ -46,6 +46,21 @@ pub struct FileRowCollection {
 }
 
 impl FileRowCollection {
+    pub fn build(
+        columns: Vec<Column>,
+        path: &str,
+    ) -> std::io::Result<Self> {
+        let full_blob_path = format!("{}.blob", path);
+        let blobs = BLOBStore::open_file(full_blob_path.as_str(), true).unwrap();
+        Ok(Self {
+            record_size: Row::compute_record_size(&columns),
+            columns,
+            blobs,
+            file: Arc::from(File::open(path)?),
+            path: path.to_string(),
+        })
+    }
+
     /// Creates a new table within the specified namespace and having the specified columns
     pub fn create_table(ns: &Namespace, params: &Vec<Parameter>) -> std::io::Result<Self> {
         let path = ns.get_table_file_path();
@@ -101,15 +116,13 @@ impl FileRowCollection {
         Ok(Self::new(columns, Arc::new(file), path.as_str()))
     }
 
-    pub fn open_or_create(ns: &Namespace) -> std::io::Result<Self> {
+    pub fn open_or_create(ns: &Namespace, params: Vec<Parameter>) -> std::io::Result<Self> {
         match Self::table_file_open(&ns) {
             Ok(file) => Self::open_file(ns, file),
             Err(err) if err.to_string().starts_with("No such file") => {
                 match Self::table_file_create(&ns) {
                     Ok(file) => {
-                        let cfg = ObjectConfig::build_table(
-                            PlatformOps::get_oxide_history_parameters()
-                        );
+                        let cfg = ObjectConfig::build_table(params);
                         cfg.save(&ns)?;
                         Self::open_file(ns, file)
                     }

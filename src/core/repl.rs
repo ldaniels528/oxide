@@ -3,17 +3,18 @@
 // Oxide REPL module
 ////////////////////////////////////////////////////////////////////
 
-use crate::arrays::Array;
 use crate::columns::Column;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Model;
-use crate::descriptor::Descriptor;
+use crate::sequences::Array;
+
 use crate::expression::ACK;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
 use crate::oxide_server::SharedState;
+use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::repl;
 use crate::row_collection::RowCollection;
@@ -186,16 +187,16 @@ pub fn cleanup(raw: &str) -> String {
 /// Generates a less verbose hard structure signature
 /// ex: Table(String(128), String(128), String(128), Boolean)
 fn get_hard_type(hs: &HardStructure) -> String {
-    format!("Struct({})", get_parameter_string(&hs.get_descriptors()))
+    format!("Struct({})", get_parameter_string(&hs.get_parameters()))
 }
 
 /// Generates a less verbose hard structure signature
 /// ex: Table(String(128), String(128), String(128), Boolean)
 fn get_soft_type(ss: &SoftStructure) -> String {
-    format!("Struct({})", get_parameter_string(&ss.get_descriptors()))
+    format!("Struct({})", get_parameter_string(&ss.get_parameters()))
 }
 
-fn get_parameter_string(params: &Vec<Descriptor>) -> String {
+fn get_parameter_string(params: &Vec<Parameter>) -> String {
     params.iter()
         .map(|p| p.get_param_type().unwrap_or("Any".into()))
         .collect::<Vec<_>>()
@@ -206,7 +207,7 @@ fn get_parameter_string(params: &Vec<Descriptor>) -> String {
 /// ex: Table(String(128), String(128), String(128), Boolean)
 fn get_table_type(rc: &Dataframe) -> String {
     let param_types = rc.get_columns().iter()
-        .map(|c| c.get_data_type().to_type_declaration().unwrap_or("Any".into()))
+        .map(|c| c.get_data_type().to_code())
         .collect::<Vec<_>>()
         .join(", ");
     format!("Table({})", param_types)
@@ -333,8 +334,9 @@ fn update_history(
     input: &str,
     processing_time: f64,
 ) -> std::io::Result<TypedValue> {
-    let ns = PlatformOps::get_oxide_history_ns();
-    let mut frc = FileRowCollection::open_or_create(&ns)?;
+    let mut frc = FileRowCollection::open_or_create(
+        &PlatformOps::get_oxide_history_ns(),
+        PlatformOps::get_oxide_history_parameters())?;
     let result = frc.append_row(Row::new(0, vec![
         Number(I64Value(state.session_id)),
         Number(I64Value(state.user_id)),
@@ -509,9 +511,9 @@ mod tests {
     fn test_update_history() {
         let state = REPLState::new();
         let _ = update_history(&state, "oxide::help()", 3.5).unwrap();
-
-        let ns = PlatformOps::get_oxide_history_ns();
-        let mut frc = FileRowCollection::open_or_create(&ns).unwrap();
+        let mut frc = FileRowCollection::open_or_create(
+            &PlatformOps::get_oxide_history_ns(),
+            PlatformOps::get_oxide_history_parameters()).unwrap();
         let count = frc.len().unwrap() as i64;
         let last = max(count - 1, -1);
         let row_id = last as usize;

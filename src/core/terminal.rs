@@ -3,12 +3,12 @@
 // Oxide Terminal module
 ////////////////////////////////////////////////////////////////////
 
-use crate::arrays::Array;
 use crate::file_row_collection::FileRowCollection;
 use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
 use crate::platform::PlatformOps;
 use crate::repl::{build_output, cleanup, limit_width, read_until_blank, show_title};
 use crate::row_collection::RowCollection;
+use crate::sequences::Array;
 use crate::structures::Row;
 use crate::structures::Structure;
 use crate::typed_values::TypedValue;
@@ -35,11 +35,11 @@ pub struct TerminalState {
 
 impl TerminalState {
     /// default constructor
-    pub async fn connect(host: &str, port: u16) -> std::io::Result<TerminalState> {
+    pub async fn connect(host: &str, port: u16, path: &str) -> std::io::Result<TerminalState> {
         Ok(TerminalState {
             database: "oxide".into(),
             schema: "public".into(),
-            interpreter: OxideWebSocketClient::connect(host, port).await?,
+            interpreter: OxideWebSocketClient::connect(host, port, path).await?,
             session_id: Local::now().timestamp_millis(),
             user_id: users::get_current_uid().to_i64().unwrap_or(-1),
             user_name: users::get_current_username().iter()
@@ -155,8 +155,9 @@ fn update_history(
     input: &str,
     processing_time: f64,
 ) -> std::io::Result<TypedValue> {
-    let ns = PlatformOps::get_oxide_history_ns();
-    let mut frc = FileRowCollection::open_or_create(&ns)?;
+    let mut frc = FileRowCollection::open_or_create(
+        &PlatformOps::get_oxide_history_ns(),
+        PlatformOps::get_oxide_history_parameters())?;
     let result = frc.append_row(Row::new(0, vec![
         Number(I64Value(state.session_id)),
         Number(I64Value(state.user_id)),
@@ -172,12 +173,13 @@ mod tests {
     use super::*;
     use crate::oxide_server::start_http_server;
     use crate::repl::read_line_from;
+    use crate::testdata::start_test_server;
 
     #[actix::test]
     async fn test_do_terminal_input() {
         let port = 7701;
-        start_http_server(port);
-        let state = TerminalState::connect("localhost", port).await.unwrap();
+        start_test_server(port);
+        let state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
         let stdout = stdout();
         let reader = || read_line_from(vec![
             "import oxide".into(),
@@ -195,7 +197,7 @@ mod tests {
     async fn test_build_output() {
         let port = 7703;
         start_http_server(port);
-        let mut state = TerminalState::connect("localhost", port).await.unwrap();
+        let mut state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
         let result = state.interpreter.evaluate(r#"
             tools::describe(oxide::help())
         "#).await.unwrap();

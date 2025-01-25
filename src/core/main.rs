@@ -1,18 +1,17 @@
 #![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
-//      Oxide Server v0.3
+//      Oxide REST Server
 ////////////////////////////////////////////////////////////////////
 
-use shared_lib::cnv_error;
-use std::env;
-use std::string::ToString;
 use crate::oxide_server::start_http_server;
 use crate::repl::{read_line_from_stdin, REPLState};
 use crate::terminal::TerminalState;
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
+use shared_lib::cnv_error;
+use std::env;
+use std::string::ToString;
 
-mod arrays;
 mod blobs;
 mod byte_code_compiler;
 mod byte_row_collection;
@@ -22,7 +21,6 @@ mod cursor;
 mod dataframe;
 mod dataframe_actor;
 mod data_types;
-mod descriptor;
 mod errors;
 mod expression;
 mod field;
@@ -31,6 +29,7 @@ mod hash_table_row_collection;
 mod hybrid_row_collection;
 mod inferences;
 mod interpreter;
+mod journaling;
 mod machine;
 mod model_row_collection;
 mod namespaces;
@@ -45,6 +44,7 @@ mod readme;
 mod repl;
 mod row_collection;
 mod row_metadata;
+mod sequences;
 mod server;
 mod structures;
 mod table_renderer;
@@ -57,7 +57,7 @@ mod tokens;
 mod typed_values;
 mod websockets;
 
-const LOCAL_HOST: String = "0.0.0.0".to_string();
+const LOCAL_HOST: &str = "0.0.0.0";
 
 /// Represents an enumeration of Application Modes
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -74,7 +74,7 @@ impl ApplicationModes {
         match args.as_slice() {
             [_, port] if is_u16(port) =>
                 match parse_u16(port) {
-                    Ok(port) => ApplicationModes::RemoteSession(LOCAL_HOST, port),
+                    Ok(port) => ApplicationModes::RemoteSession(LOCAL_HOST.into(), port),
                     Err(err) => ApplicationModes::StartupFailure(err.to_string())
                 }
             [_, action, port] if action == "embedded" && is_u16(port) =>
@@ -105,7 +105,7 @@ async fn main() -> std::io::Result<()> {
         ApplicationModes::EmbeddedSession(port) => {
             println!("Starting embedded Oxide service on port {port}...");
             start_http_server(port);
-            start_online_session(LOCAL_HOST.as_str(), port).await?
+            start_online_session(LOCAL_HOST, port).await?
         }
         ApplicationModes::RemoteSession(host, port) => {
             println!("Connecting to remote Oxide service at {host}:{port}...");
@@ -142,7 +142,7 @@ fn start_offline_session() -> std::io::Result<()> {
 /// Starts a websockets-based Oxide Server
 async fn start_online_session(host: &str, port: u16) -> std::io::Result<()> {
     terminal::do_terminal(
-        TerminalState::connect(host, port).await?,
+        TerminalState::connect(host, port, "/ws").await?,
         env::args().collect(),
         || read_line_from_stdin(),
     ).await?;
@@ -191,7 +191,7 @@ mod tests {
         let args = ApplicationModes::parse(vec![
             "oxide".into(), "8754".into()
         ]);
-        assert_eq!(args, ApplicationModes::RemoteSession(LOCAL_HOST, 8754));
+        assert_eq!(args, ApplicationModes::RemoteSession(LOCAL_HOST.into(), 8754));
     }
 
     #[test]
@@ -201,5 +201,4 @@ mod tests {
         ]);
         assert_eq!(args, ApplicationModes::RemoteSession("roadrunner.acme.com".into(), 8754));
     }
-
 }

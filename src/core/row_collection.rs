@@ -3,7 +3,6 @@
 // RowCollection module
 ////////////////////////////////////////////////////////////////////
 
-use crate::arrays::Array;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
 use crate::data_types::DataType::*;
@@ -19,8 +18,10 @@ use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::U64Kind;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::{RowId, RowsAffected, U64Value};
+use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::row_metadata::RowMetadata;
+use crate::sequences::Array;
 use crate::structures::Row;
 use crate::structures::Structures::Hard;
 use crate::typed_values::TypedValue;
@@ -171,7 +172,7 @@ pub trait RowCollection: Debug {
         for column in self.get_columns() {
             mrc.append_row(Row::new(0, vec![
                 StringValue(column.get_name().to_string()),
-                StringValue(column.get_data_type().to_type_declaration().unwrap_or(String::new())),
+                StringValue(column.get_data_type().to_code()),
                 StringValue(column.get_default_value().unwrap_value()),
                 Boolean(true),
             ]));
@@ -451,6 +452,10 @@ pub trait RowCollection: Debug {
             ErrorValue(err) => fail(err.to_string()),
             _ => Ok(0..self.len()?)
         }
+    }
+
+    fn get_parameters(&self) -> Vec<Parameter> {
+        Parameter::from_columns(self.get_columns())
     }
 
     /// returns the record size of the device
@@ -772,6 +777,7 @@ pub trait RowCollection: Debug {
         }
         Number(RowsAffected(modified))
     }
+
 }
 
 impl dyn RowCollection {
@@ -810,13 +816,14 @@ mod tests {
     use super::*;
     use crate::byte_code_compiler::ByteCodeCompiler;
     use crate::dataframe::Dataframe;
-    use crate::descriptor::Descriptor;
     use crate::expression::Conditions::Equal;
     use crate::expression::Expression::{Literal, Variable};
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::hybrid_row_collection::HybridRowCollection;
+    use crate::journaling::JournaledRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
+    use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::{Ack, F64Value, RowId, RowsAffected};
     use crate::parameter::Parameter;
     use crate::table_renderer::TableRenderer;
@@ -848,7 +855,7 @@ mod tests {
     #[test]
     fn test_from_file() {
         let (path, file, columns, _) =
-            make_table_file("rows", "append_row", "stocks", make_quote_descriptors());
+            make_table_file("rows", "append_row", "stocks", make_quote_parameters());
         let mut rc = <dyn RowCollection>::from_file(columns.to_owned(), file, path.as_str());
         rc.overwrite_row(0, make_quote(0, "BEAM", "NYSE", 78.35));
 
@@ -1477,8 +1484,8 @@ mod tests {
     #[test]
     fn test_read_range() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_descriptors();
-            let phys_columns = Column::from_descriptors(&columns).unwrap();
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns);
             rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
             rc.append_row(make_quote(1, "TED", "OTC", 0.2456));
             rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
@@ -1588,8 +1595,8 @@ mod tests {
     #[test]
     fn test_reverse() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_descriptors();
-            let phys_columns = Column::from_descriptors(&columns).unwrap();
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns);
             rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
             rc.append_row(make_quote(1, "UNO", "OTC", 0.2456));
             rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
@@ -1617,8 +1624,8 @@ mod tests {
     #[test]
     fn test_scan_all_rows() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_descriptors();
-            let phys_columns = Column::from_descriptors(&columns).unwrap();
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns);
             assert_eq!(Number(RowsAffected(5)), rc.append_rows(vec![
                 make_quote(0, "ABC", "AMEX", 12.33),
                 make_quote(1, "TED", "OTC", 0.2456),
@@ -1656,8 +1663,8 @@ mod tests {
     #[test]
     fn test_scan_forward() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_descriptors();
-            let phys_columns = Column::from_descriptors(&columns).unwrap();
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns);
             assert_eq!(Number(RowsAffected(5)), rc.append_rows(vec![
                 make_quote(0, "TED", "OTC", 0.2456),
                 make_quote(1, "ABC", "AMEX", 12.33),
@@ -1840,22 +1847,22 @@ mod tests {
             mrc
         }
 
-        let mut mrc = ModelRowCollection::from_descriptors(&vec![
-            Descriptor::new("name", Some("String(64)".into()), None),
-            Descriptor::new("kind", Some("String(20)".into()), None),
-            Descriptor::new("processed", Some("u64".into()), None),
-            Descriptor::new("process_time_millis", Some("f64".into()), None),
-            Descriptor::new("rows_per_millis", Some("f64".into()), None),
+        let mut mrc = ModelRowCollection::from_parameters(&vec![
+            Parameter::new("name", StringType(64)),
+            Parameter::new("kind", StringType(20)),
+            Parameter::new("processed", NumberType(U64Kind)),
+            Parameter::new("process_time_millis", NumberType(F64Kind)),
+            Parameter::new("rows_per_millis", NumberType(F64Kind)),
         ]);
+        mrc = work(mrc, name, "Dataframe|Binary", &columns, verify_dataframe_binary_variant, test);
+        mrc = work(mrc, name, "Dataframe|Disk", &columns, verify_dataframe_file_variant, test);
+        mrc = work(mrc, name, "Dataframe|Model", &columns, verify_dataframe_model_variant, test);
         mrc = work(mrc, name, "Binary", &columns, verify_byte_array_variant, test);
+        mrc = work(mrc, name, "EventSource", &columns, verify_event_sourcing_variant, test);
         mrc = work(mrc, name, "File", &columns, verify_file_variant, test);
         mrc = work(mrc, name, "HashTable", &columns, verify_hash_table_variant, test);
         mrc = work(mrc, name, "Hybrid", &columns, verify_hybrid_table_variant, test);
         mrc = work(mrc, name, "Model", &columns, verify_model_variant, test);
-
-        mrc = work(mrc, name, "Proxy|Binary", &columns, verify_proxy_binary_variant, test);
-        mrc = work(mrc, name, "Proxy|Disk", &columns, verify_proxy_file_variant, test);
-        mrc = work(mrc, name, "Proxy|Model", &columns, verify_proxy_model_variant, test);
 
         let rc: Box<dyn RowCollection> = Box::new(mrc);
         for s in TableRenderer::from_table_with_ids(&rc).unwrap() {
@@ -1868,32 +1875,40 @@ mod tests {
         test_variant(kind, Box::new(brc), columns)
     }
 
-    fn verify_proxy_binary_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
+    fn verify_dataframe_binary_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
         let brc = Dataframe::Binary(ByteRowCollection::from_bytes(columns.to_owned(), Vec::new()));
         test_variant(kind, Box::new(brc), columns)
     }
 
-    fn verify_proxy_file_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let ns = Namespace::new("file_row_collection", name, "stocks");
+    fn verify_dataframe_file_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
+        let ns = Namespace::new("disk", name, "stocks");
         let params = Parameter::from_columns(&columns);
         let frc = Dataframe::Disk(FileRowCollection::create_table(&ns, &params).unwrap());
         test_variant(kind, Box::new(frc), columns.to_owned())
     }
 
-    fn verify_proxy_model_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
+    fn verify_dataframe_model_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
         let mrc = Dataframe::Model(ModelRowCollection::with_rows(columns.to_owned(), Vec::new()));
         test_variant(kind, Box::new(mrc), columns)
     }
 
+    fn verify_event_sourcing_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
+        let ns = Namespace::new("journaled", name, "stocks");
+        let params = Parameter::from_columns(&columns);
+        let mut jrc = JournaledRowCollection::new(&ns, &params).unwrap();
+        jrc.resize(0);
+        test_variant(kind, Box::new(jrc), columns.to_owned())
+    }
+
     fn verify_file_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let ns = Namespace::new("file_row_collection", name, "stocks");
+        let ns = Namespace::new("file", name, "stocks");
         let params = Parameter::from_columns(&columns);
         let frc = FileRowCollection::create_table(&ns, &params).unwrap();
         test_variant(kind, Box::new(frc), columns.to_owned())
     }
 
     fn verify_hash_table_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let ns = Namespace::new("hashing_row_collection", name, "stocks");
+        let ns = Namespace::new("hashing", name, "stocks");
         let params = Parameter::from_columns(&columns);
         let frc = FileRowCollection::create_table(&ns, &params).unwrap();
         let hrc = HashTableRowCollection::new(0, Box::new(frc)).unwrap();
@@ -1901,7 +1916,7 @@ mod tests {
     }
 
     fn verify_hybrid_table_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let ns = Namespace::new("hybrid_row_collection", name, "stocks");
+        let ns = Namespace::new("hybrid", name, "stocks");
         let params = Parameter::from_columns(&columns);
         let hrc = HybridRowCollection::new(&ns, &params, 100).unwrap();
         test_variant(kind, Box::new(hrc), columns.to_owned())

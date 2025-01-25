@@ -6,7 +6,7 @@
 use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::dataframe::Dataframe;
-use crate::descriptor::Descriptor;
+
 use crate::errors::Errors::Exact;
 use crate::expression::Expression::Literal;
 use crate::expression::*;
@@ -339,25 +339,6 @@ impl ByteCodeCompiler {
         result
     }
 
-    pub fn next_descriptor(&mut self) -> Descriptor {
-        let name = self.next_string();
-        let param_type = match self.next_string() {
-            s if s.is_empty() => None,
-            s => Some(s)
-        };
-        let default_value = self.next_string_opt();
-        Descriptor::new(name, param_type, default_value)
-    }
-
-    pub fn next_descriptors(&mut self) -> Vec<Descriptor> {
-        let length = self.next_u16();
-        let mut parameters = Vec::new();
-        for _ in 0..length {
-            parameters.push(self.next_descriptor());
-        }
-        parameters
-    }
-
     pub fn next_parameter(&mut self) -> Parameter {
         let name = self.next_string();
         let param_type = self.next_parameter_type();
@@ -504,18 +485,10 @@ impl ByteCodeCompiler {
         self
     }
 
-    pub fn put_column(&mut self, column: &Descriptor) -> &Self {
-        self.put_string(column.get_name());
-        self.put_string(column.get_param_type().unwrap_or(String::new()).as_str());
-        self.put_string_opt(column.get_default_value());
-        self
-    }
-
-    pub fn put_descriptors(&mut self, parameters: &Vec<Descriptor>) -> &Self {
-        self.put_u16(parameters.len() as u16);
-        for column in parameters {
-            self.put_column(&column);
-        }
+    pub fn put_column(&mut self, param: &Parameter) -> &Self {
+        self.put_string(param.get_name());
+        self.put_string(param.get_param_type().unwrap_or(String::new()).as_str());
+        self.put_string(param.get_default_value().to_code().as_str());
         self
     }
 
@@ -640,7 +613,6 @@ mod tests {
     use crate::expression::{DatabaseOps, Mutations, Queryables};
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::{F64Value, I64Value};
-    use crate::testdata::make_quote_descriptors;
     use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::{Number, StringValue, TableValue};
 
@@ -849,20 +821,6 @@ mod tests {
         let expected: Vec<u8> = vec![0xDE, 0xAD, 0xCA, 0xFE, 0xBE, 0xEF, 0xBA, 0xBE];
         let id = 0xDEAD_CAFE_BEEF_BABE;
         assert_eq!(ByteCodeCompiler::encode_row_id(id), expected)
-    }
-
-    #[test]
-    fn test_parameters() {
-        let mut buffer = ByteCodeCompiler::new(512);
-        buffer.put_descriptors(&make_quote_descriptors());
-        assert_eq!(buffer.position(), 118);
-
-        buffer.flip();
-        assert_eq!(buffer.next_descriptors(), vec![
-            Descriptor::new("symbol", Some("String(8)".into()), None),
-            Descriptor::new("exchange", Some("String(8)".into()), None),
-            Descriptor::new("last_sale", Some("f64".into()), None),
-        ])
     }
 
     #[test]

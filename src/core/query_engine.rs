@@ -12,16 +12,18 @@ use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::*;
 use crate::errors::throw;
 use crate::errors::Errors::*;
-use crate::errors::TypeMismatchErrors::{CollectionExpected, QueryableExpected, TableExpected, UnsupportedType};
+use crate::errors::TypeMismatchErrors::{CollectionExpected, FunctionArgsExpected, QueryableExpected, TableExpected, UnsupportedType};
 use crate::expression::Conditions::True;
-use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity};
 use crate::expression::DatabaseOps::Mutation;
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::expression::Mutations::Declare;
-use crate::expression::{Conditions, DatabaseOps, Expression, Mutations, Queryables};
+use crate::expression::TableOptions::Journaling;
+use crate::expression::{Conditions, DatabaseOps, Expression, Mutations, Queryables, TableOptions};
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
+use crate::journaling::{JournaledRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -30,6 +32,7 @@ use crate::numbers::Numbers::RowsAffected;
 use crate::object_config::{HashIndexConfig, ObjectConfig};
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
+use crate::sequences::Sequence;
 use crate::structures::Row;
 use crate::structures::Structure;
 use crate::structures::Structures::Soft;
@@ -55,17 +58,16 @@ pub fn evaluate(
 
 pub fn do_inquiry(
     ms: &Machine,
-    expression: &Queryables,
+    queryable: &Queryables,
 ) -> std::io::Result<(Machine, TypedValue)> {
-    use crate::expression::Queryables::*;
-    match expression {
-        Limit { from, limit } => {
+    match queryable {
+        Queryables::Limit { from, limit } => {
             let (ms, limit) = ms.evaluate(limit)?;
             do_table_or_view_query(&ms, from, &True, &limit)
         }
-        Select { fields, from, condition, group_by, having, order_by, limit } =>
+        Queryables::Select { fields, from, condition, group_by, having, order_by, limit } =>
             do_select(&ms, fields, from, condition, group_by, having, order_by, limit),
-        Where { from, condition } =>
+        Queryables::Where { from, condition } =>
             do_table_or_view_query(&ms, from, condition, &Undefined),
     }
 }
@@ -74,27 +76,36 @@ pub fn do_mutation(
     ms: &Machine,
     mutation: &Mutations,
 ) -> std::io::Result<(Machine, TypedValue)> {
-    use crate::expression::Mutations::*;
     match mutation {
-        Append { path, source } =>
+        Mutations::Append { path, source } =>
             do_table_row_append(&ms, path, source),
-        Create { path, entity: IndexEntity { columns } } =>
-            do_table_create_index(&ms, path, columns),
-        Create { path, entity: TableEntity { columns, from } } =>
-            do_table_create_table(&ms, path, columns, from),
-        Declare(IndexEntity { columns }) =>
-            do_table_declare_index(&ms, columns),
-        Declare(TableEntity { columns, from }) =>
-            do_table_declare_table(&ms, columns, from),
-        Delete { path, condition, limit } =>
+        Mutations::Create { path, entity } => match entity {
+            IndexEntity { columns } =>
+                do_table_create_index(&ms, path, columns),
+            TableEntity { columns, from, options } =>
+                do_table_create_table(&ms, path, columns, from, options),
+            TableFnEntity { fx } =>
+                do_table_create_table_fn(&ms, fx),
+        }
+        Mutations::Declare(entity) => match entity {
+            IndexEntity { columns } =>
+                do_table_declare_index(&ms, columns),
+            TableEntity { columns, from, options } =>
+                do_table_declare_table(&ms, columns, from, options),
+            TableFnEntity { fx } =>
+                do_table_declare_table_fn(&ms, fx),
+        }
+        Mutations::Delete { path, condition, limit } =>
             do_table_row_delete(&ms, path, condition, limit),
-        Drop(IndexTarget { path }) => do_table_drop(&ms, path),
-        Drop(TableTarget { path }) => do_table_drop(&ms, path),
-        IntoNs(source, target) =>
+        Mutations::Drop(target) => match target {
+            IndexTarget { path } => do_table_drop(&ms, path),
+            TableTarget { path } => do_table_drop(&ms, path),
+        }
+        Mutations::IntoNs(source, target) =>
             do_table_into(&ms, target, source),
-        Overwrite { path, source, condition, limit } =>
+        Mutations::Overwrite { path, source, condition, limit } =>
             do_table_row_overwrite(&ms, path, source, condition, limit),
-        Truncate { path, limit } =>
+        Mutations::Truncate { path, limit } =>
             match limit {
                 None => do_table_row_resize(&ms, path, Boolean(false)),
                 Some(limit) => {
@@ -102,9 +113,9 @@ pub fn do_mutation(
                     do_table_row_resize(&ms, path, limit)
                 }
             }
-        Undelete { path, condition, limit } =>
+        Mutations::Undelete { path, condition, limit } =>
             do_table_row_undelete(&ms, path, condition, limit),
-        Update { path, source, condition, limit } =>
+        Mutations::Update { path, source, condition, limit } =>
             do_table_row_update(&ms, path, source, condition, limit),
     }
 }
@@ -122,7 +133,7 @@ fn do_table_into(
         Literal(NamespaceValue(ns)) => {
             (machine, FileRowCollection::open(ns)?.read_active_rows()?)
         }
-        DatabaseOp(Mutation(Declare(TableEntity { columns, from }))) =>
+        DatabaseOp(Mutation(Declare(TableEntity { columns, from, options }))) =>
             do_rows_from_table_declaration(&machine, table, from, columns)?,
         source =>
             do_rows_from_query(&ms, source, table)?,
@@ -234,20 +245,14 @@ pub fn do_table_or_view_query(
     condition: &Conditions,
     limit: &TypedValue,
 ) -> std::io::Result<(Machine, TypedValue)> {
-    println!("do_table_or_view_query: src = {src:?}, condition = {condition:?}, limit = {limit:?}");
-    let (machine, table) = ms.evaluate(src)?;
+    //println!("do_table_or_view_query: src = {src:?}, condition = {condition:?}, limit = {limit:?}");
+    let (machine, df) = ms.evaluate_as_dataframe(src)?;
     let limit = limit.to_usize();
-    match table.to_table_value() {
-        ErrorValue(err) => Ok((machine, ErrorValue(err))),
-        TableValue(df) => {
-            let columns = df.get_columns().clone();
-            let mut cursor = Cursor::filter(Box::new(df), condition.to_owned());
-            let mrc = ModelRowCollection::from_columns_and_rows(&columns, &cursor.take(limit)?);
-            let table_value = TableValue(Model(mrc));
-            Ok((machine, table_value))
-        }
-        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
-    }
+    let columns = df.get_columns().clone();
+    let mut cursor = Cursor::filter(Box::new(df), condition.to_owned());
+    let mrc = ModelRowCollection::from_columns_and_rows(&columns, &cursor.take(limit)?);
+    let table_value = TableValue(Model(mrc));
+    Ok((machine, table_value))
 }
 
 fn do_table_row_undelete(
@@ -326,17 +331,45 @@ fn do_table_create_table(
     table: &Expression,
     columns: &Vec<Parameter>,
     from: &Option<Box<Expression>>,
+    options: &Vec<TableOptions>,
 ) -> std::io::Result<(Machine, TypedValue)> {
-    let (machine, result) = ms.evaluate(table)?;
+    let (ms, result) = ms.evaluate(table)?;
     match result.to_owned() {
-        Null | Undefined => Ok((machine, result)),
-        ErrorValue(err) => Ok((machine, ErrorValue(err))),
+        Null | Undefined => Ok((ms, result)),
+        ErrorValue(err) => Ok((ms, ErrorValue(err))),
         TableValue(_rcv) => throw(Exact("Memory collections do not 'create' keyword".to_string())),
         NamespaceValue(ns) => {
-            FileRowCollection::create_table(&ns, columns)?;
-            Ok((machine, Number(Ack)))
+            // determine the table kind
+            let rc =
+                if options.contains(&Journaling) {
+                    Journaled(JournaledRowCollection::new(&ns, columns)?)
+                } else {
+                    Disk(FileRowCollection::create_table(&ns, columns)?)
+                };
+            // append the rows of the "from" clause
+            Ok((populate_dataframe_opt(&ms, rc, from)?, Number(Ack)))
         }
         x => throw(TypeMismatch(CollectionExpected(x.to_code())))
+    }
+}
+
+fn do_table_create_table_fn(
+    ms: &Machine,
+    fx: &Box<Expression>,
+) -> std::io::Result<(Machine, TypedValue)> {
+    match fx.deref().clone() {
+        Literal(Function { params, body: code, returns }) => {
+            TableFunction::new(
+                params.clone(),
+                code.deref().clone(),
+                Model(ModelRowCollection::from_parameters(&params)),
+                Model(ModelRowCollection::from_parameters(&params)),
+                ms.clone(),
+            );
+            Ok((ms.clone(), Number(Ack)))
+        }
+        other =>
+            throw(TypeMismatch(FunctionArgsExpected(other.to_code())))
     }
 }
 
@@ -352,9 +385,23 @@ fn do_table_declare_table(
     ms: &Machine,
     columns: &Vec<Parameter>,
     from: &Option<Box<Expression>>,
+    options: &Vec<TableOptions>,
 ) -> std::io::Result<(Machine, TypedValue)> {
     let columns = Column::from_parameters(columns);
     Ok((ms.to_owned(), TableValue(Model(ModelRowCollection::with_rows(columns, Vec::new())))))
+}
+
+fn do_table_declare_table_fn(
+    ms: &Machine,
+    fx: &Box<Expression>,
+) -> std::io::Result<(Machine, TypedValue)> {
+    match fx.deref().clone() {
+        Literal(Function { params, body: code, returns }) => {
+            Ok(todo!())
+        }
+        other =>
+            throw(TypeMismatch(FunctionArgsExpected(other.to_code())))
+    }
 }
 
 fn do_table_drop(ms: &Machine, table: &Expression) -> std::io::Result<(Machine, TypedValue)> {
@@ -447,6 +494,26 @@ fn do_select_go(
 
     // return the table value
     (ms0, TableValue(rc5))
+}
+
+fn populate_dataframe(
+    ms: &Machine,
+    mut target: Dataframe,
+    from: &Expression,
+) -> std::io::Result<Machine> {
+    let (ms, source) = ms.evaluate_as_dataframe(from)?;
+    target.append_rows(source.read_active_rows()?);
+    Ok(ms)
+}
+
+fn populate_dataframe_opt(
+    ms: &Machine,
+    mut target: Dataframe,
+    from: &Option<Box<Expression>>,
+) -> std::io::Result<Machine> {
+    if let Some(source) = from {
+        populate_dataframe(ms, target, source)
+    } else { Ok(ms.clone()) }
 }
 
 fn step_1_determine_layout_and_limit(
@@ -580,13 +647,13 @@ fn expect_rows(
             let mut rows = Vec::new();
             for tuples in items.iter() {
                 if let Structured(structure) = tuples {
-                    rows.push(Row::from_tuples(0, columns, &structure.get_tuples()))
+                    rows.push(Row::from_tuples(0, columns, &structure.to_name_values()))
                 }
             }
             Ok(rows)
         }
         NamespaceValue(ns) => FileRowCollection::open(&ns)?.read_active_rows(),
-        Structured(s) => Ok(vec![Row::from_tuples(0, columns, &s.get_tuples())]),
+        Structured(s) => Ok(vec![Row::from_tuples(0, columns, &s.to_name_values())]),
         TableValue(rcv) => Ok(rcv.get_rows()),
         tv => throw(TypeMismatch(UnsupportedType(TableType(Parameter::from_columns(columns), 0), tv.get_type())))
     }
@@ -613,7 +680,7 @@ fn expect_via(
         if let Via(my_source) = source {
             if let (_, Structured(Soft(structure))) = ms.evaluate(&my_source)? {
                 let columns = writable.get_columns();
-                let row = Row::from_tuples(0, columns, &structure.get_tuples());
+                let row = Row::from_tuples(0, columns, &structure.to_name_values());
                 split(columns, &row)
             } else {
                 return throw(Exact("Expected a data object".to_string()));
@@ -639,7 +706,7 @@ fn transform_table(
         if row.matches(&ms, condition, columns) {
             match ms.evaluate_array(field_values) {
                 Ok((_ms, ArrayValue(array))) => {
-                    let new_row = Row::new(row.get_id(), array.values().clone());
+                    let new_row = Row::new(row.get_id(), array.get_values().clone());
                     rc1.overwrite_row(new_row.get_id(), new_row);
                 }
                 Ok((ms, z)) => return (ms, ErrorValue(Exact(z.to_code()))),
@@ -710,17 +777,260 @@ fn column_not_found(name: &str, columns: &Vec<Column>) -> String {
         .map(|c| c.get_name()).collect::<Vec<_>>().join(", "))
 }
 
-/// Unit tests
+/// SQL tests
 #[cfg(test)]
-mod tests {
+mod sql_tests {
     use crate::columns::Column;
+    use crate::dataframe::Dataframe::Model;
+    use crate::interpreter::Interpreter;
+    use crate::model_row_collection::ModelRowCollection;
+    use crate::numbers::Numbers::{Ack, RowsAffected};
     use crate::testdata::*;
+    use crate::typed_values::TypedValue::*;
+
+    #[test]
+    fn test_between() {
+        verify_exact_text("20 between 1 and 20", "true");
+        verify_exact_text("21 between 1 and 20", "false");
+    }
+
+    #[test]
+    fn test_betwixt() {
+        verify_exact_text("20 betwixt 1 and 20", "false");
+        verify_exact_text("19 betwixt 1 and 20", "true");
+    }
+
+    #[test]
+    fn test_like() {
+        verify_exact("'Hello' like 'H*o'", Boolean(true));
+        verify_exact("'Hello' like 'H.ll.'", Boolean(true));
+        verify_exact("'Hello' like 'H%ll%'", Boolean(false));
+    }
+
+    #[test]
+    fn test_table_create_ephemeral() {
+        verify_exact(r#"
+            table(
+                symbol: String(8),
+                exchange: String(8),
+                last_sale: f64
+            )"#, TableValue(Model(ModelRowCollection::with_rows(
+            make_quote_columns(), Vec::new(),
+        ))))
+    }
+
+    #[test]
+    fn test_table_create_durable() {
+        verify_exact(r#"
+                create table ns("interpreter.create.stocks") (
+                    symbol: String(8),
+                    exchange: String(8),
+                    last_sale: f64
+                )"#, Number(Ack))
+    }
+
+    #[test]
+    fn test_table_crud_in_namespace() {
+        let mut interpreter = Interpreter::new();
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns);
+
+        // set up the interpreter
+        assert_eq!(Number(Ack), interpreter.evaluate(r#"
+                stocks := ns("interpreter.crud.stocks")
+            "#).unwrap());
+
+        // create the table
+        assert_eq!(Number(RowsAffected(0)), interpreter.evaluate(r#"
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            "#).unwrap());
+
+        // append a row
+        assert_eq!(Number(RowsAffected(1)), interpreter.evaluate(r#"
+                append stocks from { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
+            "#).unwrap());
+
+        // write another row
+        assert_eq!(Number(RowsAffected(1)), interpreter.evaluate(r#"
+                { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 } ~> stocks
+            "#).unwrap());
+
+        // write some more rows
+        assert_eq!(Number(RowsAffected(2)), interpreter.evaluate(r#"
+                [{ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 }] ~> stocks
+            "#).unwrap());
+
+        // write even more rows
+        assert_eq!(Number(RowsAffected(2)), interpreter.evaluate(r#"
+                append stocks from [
+                    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 56.87 },
+                    { symbol: "TRX", exchange: "NASDAQ", last_sale: 7.9311 }
+                ]
+            "#).unwrap());
+
+        // remove some rows
+        assert_eq!(Number(RowsAffected(4)), interpreter.evaluate(r#"
+                delete from stocks where last_sale > 1.0
+            "#).unwrap());
+
+        // overwrite a row
+        assert_eq!(Number(RowsAffected(1)), interpreter.evaluate(r#"
+                overwrite stocks
+                via {symbol: "GOTO", exchange: "OTC", last_sale: 0.1421}
+                where symbol is "GOTO"
+            "#).unwrap());
+
+        // verify the remaining rows
+        assert_eq!(
+            interpreter.evaluate("from stocks").unwrap(),
+            TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(3, "GOTO", "OTC", 0.1421),
+            ])))
+        );
+
+        // restore the previously deleted rows
+        assert_eq!(Number(RowsAffected(4)), interpreter.evaluate(r#"
+                undelete from stocks where last_sale > 1.0
+            "#).unwrap());
+
+        // verify the existing rows
+        assert_eq!(
+            interpreter.evaluate("from stocks").unwrap(),
+            TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC", 0.1421),
+                make_quote(4, "BOOM", "NASDAQ", 56.87),
+                make_quote(5, "TRX", "NASDAQ", 7.9311),
+            ])))
+        );
+    }
+
+    #[test]
+    fn test_table_select_from_namespace() {
+        // create a table with test data
+        let columns = make_quote_parameters();
+        let phys_columns = Column::from_parameters(&columns);
+
+        // append some rows
+        let mut interpreter = Interpreter::new();
+        assert_eq!(Number(RowsAffected(5)), interpreter.evaluate(r#"
+                stocks := ns("interpreter.select1.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                append stocks from [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
+                    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }
+                ]
+            "#).unwrap());
+
+        // compile and execute the code
+        interpreter = verify_exact_table_where(interpreter, r#"
+                select symbol, last_sale from stocks
+                where last_sale < 1.0
+                order by symbol
+                limit 2
+            "#, vec![
+            "|-------------------------|",
+            "| id | symbol | last_sale |",
+            "|-------------------------|",
+            "| 1  | UNO    | 0.2456    |",
+            "| 3  | GOTO   | 0.1428    |",
+            "|-------------------------|"]);
+    }
+
+    #[test]
+    fn test_table_select_from_variable() {
+        // create a table with test data
+        let params = make_quote_parameters();
+        let columns = Column::from_parameters(&params);
+
+        // set up the interpreter
+        verify_exact_table_with_ids(r#"
+            [+] stocks := ns("interpreter.select.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+            [+] select symbol, exchange, last_sale
+                from stocks
+                where last_sale > 1.0
+                order by symbol
+                limit 5
+        "#, vec![
+            "|------------------------------------|",
+            "| id | symbol | exchange | last_sale |",
+            "|------------------------------------|",
+            "| 0  | ABC    | AMEX     | 11.77     |",
+            "| 2  | BIZ    | NYSE     | 23.66     |",
+            "|------------------------------------|"
+        ]);
+    }
+
+    #[test]
+    fn test_table_embedded_describe() {
+        verify_exact_table_with_ids(r#"
+                stocks := ns("interpreter.embedded_a.stocks")
+                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+                tools::describe(stocks)
+            "#, vec![
+            "|-------------------------------------------------------------------------------------------|",
+            "| id | name     | type                                        | default_value | is_nullable |",
+            "|-------------------------------------------------------------------------------------------|",
+            "| 0  | symbol   | String(8)                                   | null          | true        |",
+            "| 1  | exchange | String(8)                                   | null          | true        |",
+            "| 2  | history  | Table(last_sale: f64, processed_time: Date) | null          | true        |",
+            "|-------------------------------------------------------------------------------------------|"])
+    }
+
+    #[test]
+    fn test_table_embedded_empty() {
+        verify_exact_table_with_ids(r#"
+                stocks := ns("interpreter.embedded_b.stocks")
+                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+                rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+                rows ~> stocks
+                from stocks
+            "#, vec![
+            "|----------------------------------|",
+            "| id | symbol | exchange | history |",
+            "|----------------------------------|",
+            "| 0  | BIZ    | NYSE     | null    |",
+            "| 1  | GOTO   | OTC      | null    |",
+            "|----------------------------------|"])
+    }
+
+    #[test]
+    fn test_table_append_rows_with_embedded_table() {
+        verify_exact_table_with_ids(r#"
+                stocks := ns("interpreter.embedded_c.stocks")
+                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64)) ~> stocks
+                append stocks from [
+                    { symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66 } },
+                    { symbol: "GOTO", exchange: "OTC", history: [{ last_sale: 0.051 }, { last_sale: 0.048 }] }
+                ]
+                from stocks
+            "#, vec![
+            r#"|---------------------------------------------------------------------|"#,
+            r#"| id | symbol | exchange | history                                    |"#,
+            r#"|---------------------------------------------------------------------|"#,
+            r#"| 0  | BIZ    | NYSE     | {"last_sale":23.66}                        |"#,
+            r#"| 1  | GOTO   | OTC      | [{"last_sale":0.051}, {"last_sale":0.048}] |"#,
+            r#"|---------------------------------------------------------------------|"#]);
+    }
 
     #[test]
     fn test_select_from_where_order_by_limit() {
         // create a table with test data
-        let params = make_quote_descriptors();
-        let columns = Column::from_descriptors(&params).unwrap();
+        let params = make_quote_parameters();
+        let columns = Column::from_parameters(&params);
 
         // set up the interpreter
         verify_exact_table_with_ids(r#"

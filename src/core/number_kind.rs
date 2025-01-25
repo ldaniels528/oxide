@@ -7,8 +7,10 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::number_kind::NumberKind::{U128Kind, UUIDKind};
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::*;
+use chrono::Local;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 // Represents a numeric type or kind of value
 #[repr(u8)]
@@ -35,7 +37,7 @@ pub enum NumberKind {
 }
 
 impl NumberKind {
-    pub fn compute_max_physical_size(&self) -> usize {
+    pub fn compute_fixed_size(&self) -> usize {
         use NumberKind::*;
         match self {
             AckKind | RowIdKind | RowsAffectedKind => 2,
@@ -94,6 +96,29 @@ impl NumberKind {
             NumberKind::UUIDKind => UUIDValue(bcc.next_u128()),
         };
         Ok(result)
+    }
+
+    pub fn get_default_value(&self) -> Numbers {
+        match self {
+            NumberKind::AckKind => Ack,
+            NumberKind::RowIdKind => RowId(0),
+            NumberKind::RowsAffectedKind => RowsAffected(0),
+            NumberKind::DateKind => DateValue(Local::now().timestamp_millis()),
+            NumberKind::F32Kind => F32Value(0.),
+            NumberKind::F64Kind => F64Value(0.),
+            NumberKind::I8Kind => I8Value(0),
+            NumberKind::I16Kind => I16Value(0),
+            NumberKind::I32Kind => I32Value(0),
+            NumberKind::I64Kind => I64Value(0),
+            NumberKind::I128Kind => I128Value(0),
+            NumberKind::U8Kind => U8Value(0),
+            NumberKind::U16Kind => U16Value(0),
+            NumberKind::U32Kind => U32Value(0),
+            NumberKind::U64Kind => U64Value(0),
+            NumberKind::U128Kind => U128Value(0),
+            NumberKind::UUIDKind => UUIDValue(Uuid::new_v4().as_u128()),
+            NumberKind::NaNKind => NaNValue
+        }
     }
 
     pub fn get_type_name(&self) -> String {

@@ -5,10 +5,12 @@
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
+use crate::dataframe::Dataframe::Model;
 use crate::expression::{Conditions, Expression};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::hybrid_row_collection::HybridRowCollection;
+use crate::journaling::JournaledRowCollection;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -17,10 +19,12 @@ use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
+use crate::sequences::Sequence;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Number;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 /// DataFrame is a logical representation of table
@@ -29,6 +33,7 @@ pub enum Dataframe {
     Binary(ByteRowCollection),
     Disk(FileRowCollection),
     Hybrid(HybridRowCollection),
+    Journaled(JournaledRowCollection),
     Model(ModelRowCollection),
 }
 
@@ -82,7 +87,7 @@ impl Dataframe {
                     let (machine, my_fields) =
                         machine.with_row(df.get_columns(), &row).evaluate_as_atoms(fields)?;
                     if let (_, TypedValue::ArrayValue(my_values)) = machine.evaluate_array(values)? {
-                        let new_row = row.transform(df.get_columns(), &my_fields, my_values.values())?;
+                        let new_row = row.transform(df.get_columns(), &my_fields, &my_values.get_values())?;
                         overwritten += df.overwrite_row(row.get_id(), new_row).to_result(|v| v.to_i64())?;
                     }
                 }
@@ -117,6 +122,48 @@ impl Dataframe {
         Ok(Number(RowsAffected(restored)))
     }
 
+    /// Returns an aggregate collection of unique columns
+    pub fn get_combined_parameters(dataframes: &[Dataframe]) -> Vec<Parameter> {
+        let mut seen_names = HashSet::new();
+        let mut combined_params = Vec::new();
+
+        for df in dataframes {
+            for param in df.get_parameters() {
+                let name = param.get_name();
+                if seen_names.insert(name.to_string()) {
+                    combined_params.push(param);
+                }
+            }
+        }
+
+        combined_params
+    }
+
+    pub fn combine_tables(dataframes: Vec<Dataframe>) -> Dataframe {
+        /// Appends a source dataframe to a destination dataframe
+        fn merge(dest: &mut Dataframe, src: &Dataframe) {
+            let src_params = src.get_parameters();
+            let dst_params = dest.get_parameters();
+            for row in src.get_rows() {
+                let hash = row.to_hash_typed_value(&src_params);
+                let values = dst_params.iter().map(|param| {
+                    hash.get(param.get_name()).map(|v| v.clone())
+                        .unwrap_or(TypedValue::Null)
+                }).collect::<Vec<_>>();
+                dest.append_row(Row::new(0, values));
+            }
+        }
+
+        // determine the combine columns
+        let params = Self::get_combined_parameters(&dataframes);
+        let columns = Column::from_parameters(&params);
+
+        // create a new table with the combine columns
+        let mut mrc = Model(ModelRowCollection::new(columns));
+        for df in dataframes { merge(&mut mrc, &df); }
+        mrc
+    }
+
     /// updates rows that match the supplied criteria
     pub fn update_where(
         mut rc: Dataframe,
@@ -136,7 +183,7 @@ impl Dataframe {
                     let (ms, field_names) =
                         ms.with_row(&columns, &row).evaluate_as_atoms(fields)?;
                     if let (_, TypedValue::ArrayValue(field_values)) = ms.evaluate_array(values)? {
-                        let new_row = row.transform(&columns, &field_names, field_values.values())?;
+                        let new_row = row.transform(&columns, &field_names, &field_values.get_values())?;
                         let result = rc.overwrite_row(id, new_row);
                         if result.is_ok() { updated += 1 }
                     }
@@ -153,6 +200,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.get_columns(),
             Self::Disk(rc) => rc.get_columns(),
             Self::Hybrid(rc) => rc.get_columns(),
+            Self::Journaled(rc) => rc.get_columns(),
             Self::Model(rc) => rc.get_columns(),
         }
     }
@@ -162,6 +210,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.get_record_size(),
             Self::Disk(rc) => rc.get_record_size(),
             Self::Hybrid(rc) => rc.get_record_size(),
+            Self::Journaled(rc) => rc.get_record_size(),
             Self::Model(rc) => rc.get_record_size(),
         }
     }
@@ -171,6 +220,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.get_rows(),
             Self::Disk(rc) => rc.get_rows(),
             Self::Hybrid(rc) => rc.get_rows(),
+            Self::Journaled(rc) => rc.get_rows(),
             Self::Model(rc) => rc.get_rows(),
         }
     }
@@ -180,6 +230,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.len(),
             Self::Disk(rc) => rc.len(),
             Self::Hybrid(rc) => rc.len(),
+            Self::Journaled(rc) => rc.len(),
             Self::Model(rc) => rc.len(),
         }
     }
@@ -189,6 +240,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.overwrite_field(id, column_id, new_value),
             Self::Disk(rc) => rc.overwrite_field(id, column_id, new_value),
             Self::Hybrid(rc) => rc.overwrite_field(id, column_id, new_value),
+            Self::Journaled(rc) => rc.overwrite_field(id, column_id, new_value),
             Self::Model(rc) => rc.overwrite_field(id, column_id, new_value),
         }
     }
@@ -198,6 +250,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
             Self::Disk(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
             Self::Hybrid(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
+            Self::Journaled(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
             Self::Model(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
         }
     }
@@ -207,6 +260,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.overwrite_row(id, row),
             Self::Disk(rc) => rc.overwrite_row(id, row),
             Self::Hybrid(rc) => rc.overwrite_row(id, row),
+            Self::Journaled(rc) => rc.overwrite_row(id, row),
             Self::Model(rc) => rc.overwrite_row(id, row),
         }
     }
@@ -216,6 +270,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.overwrite_row_metadata(id, metadata),
             Self::Disk(rc) => rc.overwrite_row_metadata(id, metadata),
             Self::Hybrid(rc) => rc.overwrite_row_metadata(id, metadata),
+            Self::Journaled(rc) => rc.overwrite_row_metadata(id, metadata),
             Self::Model(rc) => rc.overwrite_row_metadata(id, metadata),
         }
     }
@@ -225,6 +280,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.read_field(id, column_id),
             Self::Disk(rc) => rc.read_field(id, column_id),
             Self::Hybrid(rc) => rc.read_field(id, column_id),
+            Self::Journaled(rc) => rc.read_field(id, column_id),
             Self::Model(rc) => rc.read_field(id, column_id),
         }
     }
@@ -234,6 +290,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.read_field_metadata(id, column_id),
             Self::Disk(rc) => rc.read_field_metadata(id, column_id),
             Self::Hybrid(rc) => rc.read_field_metadata(id, column_id),
+            Self::Journaled(rc) => rc.read_field_metadata(id, column_id),
             Self::Model(rc) => rc.read_field_metadata(id, column_id),
         }
     }
@@ -243,6 +300,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.read_row(id),
             Self::Disk(rc) => rc.read_row(id),
             Self::Hybrid(rc) => rc.read_row(id),
+            Self::Journaled(rc) => rc.read_row(id),
             Self::Model(rc) => rc.read_row(id),
         }
     }
@@ -252,6 +310,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.read_row_metadata(id),
             Self::Disk(rc) => rc.read_row_metadata(id),
             Self::Hybrid(rc) => rc.read_row_metadata(id),
+            Self::Journaled(rc) => rc.read_row_metadata(id),
             Self::Model(rc) => rc.read_row_metadata(id),
         }
     }
@@ -261,6 +320,7 @@ impl RowCollection for Dataframe {
             Self::Binary(rc) => rc.resize(new_size),
             Self::Disk(rc) => rc.resize(new_size),
             Self::Hybrid(rc) => rc.resize(new_size),
+            Self::Journaled(rc) => rc.resize(new_size),
             Self::Model(rc) => rc.resize(new_size),
         }
     }
@@ -270,9 +330,18 @@ impl RowCollection for Dataframe {
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
+    use crate::data_types::DataType::{NumberType, StringType};
     use crate::dataframe::Dataframe;
+    use crate::dataframe::Dataframe::Model;
+    use crate::model_row_collection::ModelRowCollection;
+    use crate::number_kind::NumberKind::F64Kind;
+    use crate::numbers::Numbers::F64Value;
+    use crate::parameter::Parameter;
     use crate::row_collection::RowCollection;
+    use crate::structures::Row;
+    use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote, make_quote_columns};
+    use crate::typed_values::TypedValue::{Null, Number, StringValue};
 
     #[test]
     fn test_to_model() {
@@ -280,6 +349,87 @@ mod tests {
         let mrc = df.clone().to_model();
         assert_eq!(mrc.get_columns(), df.get_columns());
         assert_eq!(mrc.get_rows(), df.get_rows());
+    }
+
+    #[test]
+    fn test_get_combined_parameters() {
+        let dfs = vec![
+            Model(ModelRowCollection::from_parameters(&vec![
+                Parameter::new("symbol", StringType(0)),
+                Parameter::new("exchange", StringType(0))
+            ])),
+            Model(ModelRowCollection::from_parameters(&vec![
+                Parameter::new("symbol", StringType(0)),
+                Parameter::new("exchange", StringType(0)),
+                Parameter::new("last_sale", NumberType(F64Kind))
+            ])),
+            Model(ModelRowCollection::from_parameters(&vec![
+                Parameter::new("symbol", StringType(0)),
+                Parameter::new("last_sale", NumberType(F64Kind)),
+                Parameter::new("beta", NumberType(F64Kind))
+            ])),
+        ];
+        assert_eq!(Dataframe::get_combined_parameters(&dfs), vec![
+            Parameter::new("symbol", StringType(0)),
+            Parameter::new("exchange", StringType(0)),
+            Parameter::new("last_sale", NumberType(F64Kind)),
+            Parameter::new("beta", NumberType(F64Kind))
+        ])
+    }
+
+    #[test]
+    fn test_combine_tables() {
+        let dfs = vec![
+            Model(ModelRowCollection::from_parameters_and_rows(&vec![
+                Parameter::new("symbol", StringType(0)),
+                Parameter::new("exchange", StringType(0))
+            ], &vec![
+                Row::new(0, vec![StringValue("ABC".into()), StringValue("AMEX".into())]),
+            ])),
+            Model(ModelRowCollection::from_parameters_and_rows(&vec![
+                Parameter::new("symbol", StringType(0)),
+                Parameter::new("exchange", StringType(0)),
+                Parameter::new("last_sale", NumberType(F64Kind))
+            ], &vec![
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+            ])),
+            Model(ModelRowCollection::from_parameters_and_rows(&vec![
+                Parameter::new("symbol", StringType(0)),
+                Parameter::new("market", StringType(0)),
+                Parameter::new("beta", NumberType(F64Kind))
+            ], &vec![
+                make_quote(3, "GOTO", "DSE", 0.1421),
+                make_quote(4, "BOOM", "TSX", 0.0087),
+                make_quote(5, "TRX", "ZTX", 0.9311),
+            ])),
+        ];
+        let params = Dataframe::get_combined_parameters(&dfs);
+        for (n, c) in params.iter().enumerate() {
+            println!("{}. {}: {}", n + 1, c.get_name(), c.get_data_type().to_code())
+        }
+        let df = Dataframe::combine_tables(dfs);
+        assert_eq!(df.get_parameters(), params);
+
+        // |-------------------------------------------------|
+        // | symbol | exchange | last_sale | market | beta   |
+        // |-------------------------------------------------|
+        // | ABC    | AMEX     | null      | null   | null   |
+        // | UNO    | OTC      | 0.2456    | null   | null   |
+        // | BIZ    | NYSE     | 23.66     | null   | null   |
+        // | GOTO   | null     | null      | DSE    | 0.1421 |
+        // | BOOM   | null     | null      | TSX    | 0.0087 |
+        // | TRX    | null     | null      | ZTX    | 0.9311 |
+        // |-------------------------------------------------|
+        for r in TableRenderer::from_dataframe(&df) { println!("{}", r) }
+        assert_eq!(df.get_rows(), vec![
+            Row::new(0, vec![StringValue("ABC".into()), StringValue("AMEX".into()), Null, Null, Null]),
+            Row::new(1, vec![StringValue("UNO".into()), StringValue("OTC".into()), Number(F64Value(0.2456)), Null, Null]),
+            Row::new(2, vec![StringValue("BIZ".into()), StringValue("NYSE".into()), Number(F64Value(23.66)), Null, Null]),
+            Row::new(3, vec![StringValue("GOTO".into()), Null, Null, StringValue("DSE".into()), Number(F64Value(0.1421))]),
+            Row::new(4, vec![StringValue("BOOM".into()), Null, Null, StringValue("TSX".into()), Number(F64Value(0.0087))]),
+            Row::new(5, vec![StringValue("TRX".into()), Null, Null, StringValue("ZTX".into()), Number(F64Value(0.9311))]),
+        ])
     }
 
     fn create_dataframe() -> Dataframe {

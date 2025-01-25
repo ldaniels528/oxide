@@ -22,16 +22,16 @@ use std::{env, fs, thread};
 use tokio::runtime::Runtime;
 use uuid::Uuid;
 
-use crate::arrays::Array;
 use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::cursor::Cursor;
 use crate::data_types::DataType;
 use crate::data_types::DataType::{ArrayType, FunctionType, StringType, StructureType, TableType, VaryingType};
+use crate::sequences::{Array, Sequence};
 
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, Model};
-use crate::descriptor::Descriptor;
+
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::{FunctionArgsExpected, OutcomeExpected, ParameterExpected, StructExpected, UnsupportedType};
 use crate::errors::{throw, Errors};
@@ -163,9 +163,10 @@ impl Machine {
             ExtractPostfix(a, b) => self.do_function_call_postfix(a, b),
             Factorial(a) => self.do_inline_1(a, |aa| aa.factorial()),
             Feature { title, scenarios } => self.do_feature(title, scenarios),
+            FnExpression { params, body, returns } =>
+                self.do_fn_expression(params, body, returns),
             ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
             From(src) => do_table_or_view_query(self, src, &True, &Undefined),
-            Tuple(args) => self.evaluate_array(args),
             FunctionCall { fx, args } =>
                 Ok(self.do_function_call(fx, args)),
             HTTP { method, url, body, headers, multipart } => {
@@ -204,6 +205,9 @@ impl Machine {
                 let (machine, value) = self.evaluate(expr)?;
                 Ok((machine.set(name, value), Number(Ack)))
             }
+            SetVariables(name, expr) =>
+                self.evaluate_set_variables(name, expr),
+            TupleExpression(args) => self.evaluate_tuple(args),
             Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
             Via(src) => do_table_or_view_query(self, src, &True, &Undefined),
             While { condition, code } =>
@@ -216,19 +220,19 @@ impl Machine {
         &self,
         ops: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, results) = ops.iter()
+        let (ms, results) = ops.iter()
             .fold((self.to_owned(), Vec::new()),
-                  |(machine, mut array), op| match machine.evaluate(op) {
-                      Ok((machine, tv)) => {
+                  |(ms, mut array), op| match ms.evaluate(op) {
+                      Ok((ms, tv)) => {
                           array.push(tv);
-                          (machine, array)
+                          (ms, array)
                       }
                       Err(err) => {
                           error!("{}", err.to_string());
-                          (machine, array)
+                          (ms, array)
                       }
                   });
-        Ok((machine, ArrayValue(Array::from(results))))
+        Ok((ms, ArrayValue(Array::from(results))))
     }
 
     /// evaluates the specified [Expression]; returning an array ([String]) result.
@@ -257,6 +261,19 @@ impl Machine {
                 .join("\n"))
         } else {
             Ok((machine, results))
+        }
+    }
+
+    /// evaluates the specified [Expression]; returning a [Dataframe] result.
+    pub fn evaluate_as_dataframe(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, Dataframe)> {
+        let (ms, value) = self.evaluate(expr)?;
+        match value.to_table_value() {
+            TableValue(df) => Ok((ms, df)),
+            ErrorValue(err) => throw(err),
+            other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
         }
     }
 
@@ -339,6 +356,68 @@ impl Machine {
                             Ok((m, tv)) => (m, tv),
                             Err(err) => (m, ErrorValue(Exact(err.to_string())))
                         })
+    }
+
+    fn evaluate_set_variables(
+        &self,
+        src: &Expression,
+        dest: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        fn get_variables_names(items: &Vec<Expression>) -> std::io::Result<Vec<String>> {
+            let mut variables = vec![];
+            for item in items {
+                match item {
+                    Variable(name) => variables.push(name.into()),
+                    other =>
+                        return throw(Exact(format!("Expected a variable near {}", other.to_code())))
+                }
+            }
+            Ok(variables)
+        }
+
+        fn set_variables(ms: Machine, names: Vec<String>, values: Vec<TypedValue>) -> std::io::Result<(Machine, TypedValue)> {
+            let ms = names.iter().zip(values.iter())
+                .fold(ms, |ms, (name, value)| ms.set(name, value.clone()));
+            Ok((ms, Number(Ack)))
+        }
+
+        let (ms, result) = self.evaluate(dest)?;
+        match src.clone() {
+            ArrayExpression(variables) =>
+                match result {
+                    ArrayValue(array) =>
+                        set_variables(ms, get_variables_names(&variables)?, array.get_values()),
+                    other => throw(Exact(format!("Expected an array near {}", other.to_code())))
+                }
+            TupleExpression(variables) =>
+                match result {
+                    TupleValue(tuple) =>
+                        set_variables(ms, get_variables_names(&variables)?, tuple),
+                    other => throw(Exact(format!("Expected a tuple near {}", other.to_code())))
+                }
+            Variable(name) => Ok((ms.set(name.as_str(), result), Number(Ack))),
+            other =>
+                throw(Exact(format!("Expected an array, tuple or variable near {}", other.to_code())))
+        }
+    }
+
+    fn evaluate_tuple(
+        &self,
+        ops: &Vec<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, results) = ops.iter()
+            .fold((self.to_owned(), Vec::new()),
+                  |(ms, mut tuple), op| match ms.evaluate(op) {
+                      Ok((ms, tv)) => {
+                          tuple.push(tv);
+                          (ms, tuple)
+                      }
+                      Err(err) => {
+                          error!("{}", err.to_string());
+                          (ms, tuple)
+                      }
+                  });
+        Ok((ms, TupleValue(results)))
     }
 
     fn do_contains(
@@ -515,6 +594,21 @@ impl Machine {
         Ok((ms, TableValue(Model(report))))
     }
 
+    /// Resolves a function expression
+    /// ex: fn(symbol: String(5))
+    fn do_fn_expression(
+        &self,
+        params: &Vec<Parameter>,
+        body: &Option<Box<Expression>>,
+        returns: &DataType,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        Ok((self.clone(), Function {
+            params: params.clone(),
+            body: body.clone().unwrap_or(Box::from(UNDEFINED)),
+            returns: returns.clone(),
+        }))
+    }
+
     /// foreach `name` in `items` { `block` }
     fn do_foreach(&self,
                   name: &str,
@@ -562,12 +656,12 @@ impl Machine {
         match self.evaluate_array(args) {
             Ok((ms, ArrayValue(args))) =>
                 match ms.evaluate(fx) {
-                    Ok((ms, Function { params, code })) =>
-                        match ms.do_function_arguments(params, args.values().clone()).evaluate(&code) {
+                    Ok((ms, Function { params, body: code, .. })) =>
+                        match ms.do_function_arguments(params, args.get_values().clone()).evaluate(&code) {
                             Ok((ms, result)) => (ms, result),
                             Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                         }
-                    Ok((ms, PlatformOp(pf))) => pf.evaluate(ms, args.values().clone()),
+                    Ok((ms, PlatformOp(pf))) => pf.evaluate(ms, args.get_values().clone()),
                     Ok((_, z)) => (ms, ErrorValue(Exact(format!("'{}' is not a function ({})", fx.to_code(), z)))),
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
@@ -610,7 +704,7 @@ impl Machine {
         let (ms, multipart) = ms.evaluate_optional_map(multipart)?;
 
         fn create_form(structure: Box<dyn Structure>) -> Form {
-            structure.get_tuples().iter().fold(Form::new(), |form, (name, value)| {
+            structure.to_name_values().iter().fold(Form::new(), |form, (name, value)| {
                 form.part(name.to_owned(), Part::text(value.unwrap_value()))
             })
         }
@@ -624,7 +718,7 @@ impl Machine {
 
         fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
             match value {
-                Structured(structure) => Ok(structure.get_tuples()),
+                Structured(structure) => Ok(structure.to_name_values()),
                 z => throw(TypeMismatch(UnsupportedType(StructureType(vec![]), z.get_type()))),
             }
         }
@@ -877,6 +971,10 @@ impl Machine {
                     None => Structured(Firm(Row::create(id, rcv.get_columns()), rcv.get_columns().to_owned()))
                 }
             }
+            TupleValue(values) => {
+                let idx = index.to_usize();
+                if idx < values.len() { values[idx].to_owned() } else { ErrorValue(IndexOutOfRange("Tuple element".to_string(), idx, values.len())) }
+            }
             other =>
                 ErrorValue(TypeMismatch(UnsupportedType(
                     VaryingType(vec![
@@ -1066,7 +1164,7 @@ impl Machine {
         match (a, b) {
             (ArrayValue(a), ArrayValue(b)) => {
                 let mut c = a.clone();
-                c.push_all(b.values().clone());
+                c.push_all(b.get_values().clone());
                 ArrayValue(c)
             }
             (a, b) =>
@@ -1385,6 +1483,7 @@ mod tests {
     #[cfg(test)]
     mod function_tests {
         use super::*;
+        use crate::data_types::DataType::Indeterminate;
 
         #[test]
         fn test_anonymous_function() {
@@ -1395,9 +1494,10 @@ mod tests {
                         params: vec![
                             Parameter::new("n", NumberType(I64Kind))
                         ],
-                        code: Box::new(Plus(
+                        body: Box::new(Plus(
                             Box::new(Variable("n".into())),
                             Box::new(Literal(Number(I64Value(5)))))),
+                        returns: NumberType(I64Kind),
                     })),
                 args: vec![
                     Literal(Number(I64Value(3)))
@@ -1410,7 +1510,7 @@ mod tests {
                 .evaluate(&model)
                 .unwrap();
             assert_eq!(result, Number(I64Value(8)));
-            assert_eq!(model.to_code(), "(fn(n: i64) => n + 5)(3)")
+            assert_eq!(model.to_code(), "(fn(n: i64): i64 => n + 5)(3)")
         }
 
         #[test]
@@ -1421,11 +1521,12 @@ mod tests {
                     Parameter::new("a", NumberType(I64Kind)),
                     Parameter::new("b", NumberType(I64Kind)),
                 ],
-                code: Box::new(Plus(Box::new(
+                body: Box::new(Plus(Box::new(
                     Variable("a".into())
                 ), Box::new(
                     Variable("b".into())
                 ))),
+                returns: Indeterminate,
             };
 
             // publish the function in scope: fn add(a, b) => a + b
@@ -1459,7 +1560,7 @@ mod tests {
                     Parameter::new("n", NumberType(I64Kind))
                 ],
                 // iff(n <= 1, 1, n * f(n - 1))
-                code: Box::new(If {
+                body: Box::new(If {
                     // n <= 1
                     condition: Box::new(Condition(LessOrEqual(
                         Box::new(Variable("n".into())),
@@ -1481,6 +1582,7 @@ mod tests {
                         }),
                     ))),
                 }),
+                returns: NumberType(I64Kind),
             };
             println!("f := {}", model.to_code());
 
@@ -1580,13 +1682,13 @@ mod tests {
         use crate::expression::Mutations::{Append, Create, Declare, Drop, Overwrite, Truncate, Update};
         use crate::expression::{DatabaseOps, Mutations};
         use crate::number_kind::NumberKind::F64Kind;
-        use crate::testdata::{make_quote, make_quote_columns, make_quote_descriptors};
+        use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
 
         #[test]
         fn test_from_where_limit_in_memory() {
             // create a table with test data
-            let columns = make_quote_descriptors();
-            let phys_columns = Column::from_descriptors(&columns).unwrap();
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns);
             let machine = Machine::empty()
                 .with_variable("stocks", TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                     make_quote(0, "ABC", "AMEX", 12.33),
@@ -1687,6 +1789,7 @@ mod tests {
                 entity: TableEntity {
                     columns: make_quote_parameters(),
                     from: None,
+                    options: vec![],
                 },
             }));
 
@@ -1718,6 +1821,7 @@ mod tests {
                 entity: TableEntity {
                     columns: make_quote_parameters(),
                     from: None,
+                    options: vec![],
                 },
             }))).unwrap();
             assert_eq!(result, Number(Ack));
@@ -1751,6 +1855,7 @@ mod tests {
                     Parameter::new("last_sale", NumberType(F64Kind)),
                 ],
                 from: None,
+                options: vec![],
             })));
 
             let machine = Machine::empty();

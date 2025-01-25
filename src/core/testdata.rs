@@ -3,8 +3,6 @@
 // test data module
 ////////////////////////////////////////////////////////////////////
 
-use std::fs::File;
-
 use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
@@ -12,7 +10,7 @@ use crate::data_types::DataType::{NumberType, StringType, VaryingType};
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Disk;
-use crate::descriptor::Descriptor;
+
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
 use crate::interpreter::Interpreter;
@@ -20,6 +18,7 @@ use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::{F64Kind, I64Kind};
 use crate::numbers::Numbers::{F64Value, U64Value};
 use crate::object_config::ObjectConfig;
+use crate::oxide_server::start_http_server;
 use crate::parameter::Parameter;
 use crate::structures::Row;
 use crate::table_renderer::TableRenderer;
@@ -31,6 +30,9 @@ use rand::prelude::ThreadRng;
 use rand::{thread_rng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fs::File;
+use std::thread;
+use std::time::Duration;
 
 pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
     make_dataframe_ns(Namespace::new(database, schema, name), columns)
@@ -57,14 +59,6 @@ pub fn make_quote(id: usize,
 
 pub fn make_quote_columns() -> Vec<Column> {
     Column::from_parameters(&make_quote_parameters())
-}
-
-pub fn make_quote_descriptors() -> Vec<Descriptor> {
-    vec![
-        Descriptor::new("symbol", Some("String(8)".into()), None),
-        Descriptor::new("exchange", Some("String(8)".into()), None),
-        Descriptor::new("last_sale", Some("f64".into()), None),
-    ]
 }
 
 pub fn make_quote_parameters() -> Vec<Parameter> {
@@ -95,13 +89,18 @@ pub fn make_table_file(
     database: &str,
     schema: &str,
     name: &str,
-    columns: Vec<Descriptor>,
+    columns: Vec<Parameter>,
 ) -> (String, File, Vec<Column>, usize) {
-    let table_columns = Column::from_descriptors(&columns).unwrap();
+    let table_columns = Column::from_parameters(&columns);
     let record_size = Row::compute_record_size(&table_columns);
     let ns = Namespace::new(database, schema, name);
     let file = FileRowCollection::table_file_create(&ns).unwrap();
     (ns.get_table_file_path(), file, table_columns, record_size)
+}
+
+pub fn start_test_server(port: u16) {
+    start_http_server(port);
+    thread::sleep(Duration::from_millis(100));
 }
 
 pub fn verify_data_type(code: &str, expected: DataType) {
@@ -258,20 +257,11 @@ mod tests {
     fn test_columns() {
         let columns = make_quote_columns();
         assert_eq!(columns, Column::from_parameters(&make_quote_parameters()));
-        assert_eq!(columns, Column::from_descriptors(&make_quote_descriptors()).unwrap());
-    }
-
-    #[test]
-    fn test_descriptors() {
-        let descriptors = make_quote_descriptors();
-        assert_eq!(descriptors, Descriptor::from_columns(&make_quote_columns()));
-        assert_eq!(descriptors, Descriptor::from_parameters(&make_quote_parameters()));
     }
 
     #[test]
     fn test_parameters() {
         let parameters = make_quote_parameters();
         assert_eq!(parameters, Parameter::from_columns(&make_quote_columns()));
-        assert_eq!(parameters, Parameter::from_descriptors(&make_quote_descriptors()).unwrap());
     }
 }

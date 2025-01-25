@@ -6,7 +6,7 @@
 use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::data_types::DataType::VaryingType;
-use crate::descriptor::Descriptor;
+
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Null;
 use serde::{Deserialize, Serialize};
@@ -38,22 +38,6 @@ impl Parameter {
 
     pub fn from_columns(columns: &Vec<Column>) -> Vec<Self> {
         columns.iter().map(Self::from_column).collect()
-    }
-
-    pub fn from_descriptor(descriptor: &Descriptor) -> std::io::Result<Parameter> {
-        Ok(Self::with_default(
-            descriptor.get_name(),
-            DataType::from_str(descriptor.get_param_type().unwrap_or(String::new()).as_str())?,
-            TypedValue::wrap_value_opt(&descriptor.get_default_value())?))
-    }
-
-    pub fn from_descriptors(descriptors: &Vec<Descriptor>) -> std::io::Result<Vec<Parameter>> {
-        let mut params: Vec<Parameter> = Vec::with_capacity(descriptors.len());
-        for descriptor in descriptors {
-            let param = Self::from_descriptor(&descriptor)?;
-            params.push(param);
-        }
-        Ok(params)
     }
 
     pub fn from_tuple(name: impl Into<String>, value: TypedValue) -> Self {
@@ -116,7 +100,7 @@ impl Parameter {
     }
 
     pub fn to_json(&self) -> serde_json::Value {
-        Descriptor::from_parameter(&self).to_json()
+        serde_json::json!(&self)
     }
 }
 
@@ -125,7 +109,7 @@ impl Parameter {
 mod tests {
     use super::*;
     use crate::data_types::DataType::{NumberType, StringType};
-    use crate::descriptor::Descriptor;
+
     use crate::number_kind::NumberKind::F64Kind;
     use crate::typed_values::TypedValue::{Null, StringValue};
 
@@ -145,34 +129,6 @@ mod tests {
     }
 
     #[test]
-    fn test_from_descriptor() {
-        let descr = Descriptor::new(
-            "symbol", Some("String(8)".into()), Some("\"N/A\"".into()),
-        );
-        let param = Parameter::with_default(
-            "symbol",
-            StringType(8),
-            StringValue("N/A".into()),
-        );
-        assert_eq!(Parameter::from_descriptor(&descr).unwrap(), param)
-    }
-
-    #[test]
-    fn test_from_descriptors() {
-        let descriptors = vec![
-            Descriptor::new("symbol", Some("String(8)".into()), None),
-            Descriptor::new("exchange", Some("String(8)".into()), None),
-            Descriptor::new("last_sale", Some("f64".into()), None),
-        ];
-        let parameters = vec![
-            Parameter::new("symbol", StringType(8)),
-            Parameter::new("exchange", StringType(8)),
-            Parameter::new("last_sale", NumberType(F64Kind)),
-        ];
-        assert_eq!(Parameter::from_descriptors(&descriptors).unwrap(), parameters)
-    }
-
-    #[test]
     fn test_to_code() {
         let param =
             Parameter::with_default("symbol", StringType(8), StringValue("N/A".into()));
@@ -182,6 +138,6 @@ mod tests {
     #[test]
     fn test_to_json() {
         let param = Parameter::new("symbol", StringType(8));
-        assert_eq!(param.to_json().to_string(), r#"{"default_value":null,"name":"symbol","param_type":"String(8)"}"#.to_string())
+        assert_eq!(param.to_json().to_string(), r#"{"data_type":{"StringType":8},"default_value":"Null","name":"symbol"}"#.to_string())
     }
 }

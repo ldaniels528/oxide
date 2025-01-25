@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::data_types::DataType;
-use crate::descriptor::Descriptor;
+
 use crate::errors::Errors::TypeMismatch;
 use crate::errors::TypeMismatchErrors::ArgumentsMismatched;
 use crate::numbers::Numbers;
@@ -38,24 +38,6 @@ impl Column {
             fixed_size,
             offset,
         }
-    }
-
-    pub fn from_descriptor(descriptor: &Descriptor, offset: usize) -> std::io::Result<Self> {
-        Ok(Self::new(
-            descriptor.get_name(),
-            DataType::from_str(descriptor.get_param_type().unwrap_or(String::new()).as_str())?,
-            TypedValue::wrap_value_opt(&descriptor.get_default_value())?, offset))
-    }
-
-    pub fn from_descriptors(descriptors: &Vec<Descriptor>) -> std::io::Result<Vec<Self>> {
-        let mut offset: usize = Row::overhead();
-        let mut columns: Vec<Column> = Vec::with_capacity(descriptors.len());
-        for descriptor in descriptors {
-            let column = Self::from_descriptor(&descriptor, offset)?;
-            offset += column.fixed_size;
-            columns.push(column);
-        }
-        Ok(columns)
     }
 
     pub fn from_parameter(parameter: &Parameter, offset: usize) -> Self {
@@ -96,16 +78,6 @@ impl Column {
         self.offset
     }
 
-    pub fn to_descriptor(&self) -> Descriptor {
-        Descriptor::new(
-            self.get_name(),
-            self.get_data_type().to_type_declaration(),
-            match self.get_default_value() {
-                TypedValue::Null | TypedValue::Undefined => None,
-                value => Some(value.to_code()),
-            })
-    }
-
     pub fn to_parameter(&self) -> Parameter {
         Parameter::with_default(
             self.get_name(),
@@ -129,7 +101,7 @@ mod tests {
     use crate::data_types::DataType::*;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::F64Value;
-    use crate::testdata::make_quote_descriptors;
+    use crate::testdata::make_quote_parameters;
     use crate::typed_values::TypedValue::*;
 
     use super::*;
@@ -145,13 +117,12 @@ mod tests {
 
     #[test]
     fn test_from_column() {
-        let column_desc = Descriptor::new("exchange", Some("String(10)".into()), Some("'N/A'".into()));
-        let column = Column::from_descriptor(&column_desc, 0)
-            .expect("Deserialization error");
+        let params = Parameter::with_default("exchange", StringType(10), StringValue("N/A".into()));
+        let column = Column::from_parameter(&params, 0);
         assert_eq!(column.name, "exchange");
         assert_eq!(column.data_type, StringType(10));
         assert_eq!(column.default_value, StringValue("N/A".into()));
-        assert_eq!(column.data_type.to_type_declaration(), column_desc.get_param_type());
+        assert_eq!(column.data_type.to_type_declaration(), params.get_param_type());
         assert_eq!(column.fixed_size, 19);
     }
 
@@ -172,7 +143,7 @@ mod tests {
 
     #[test]
     fn test_differences() {
-        let generated: Vec<Column> = Column::from_descriptors(&make_quote_descriptors()).unwrap();
+        let generated: Vec<Column> = Column::from_parameters(&make_quote_parameters());
         let natural: Vec<Column> = vec![
             Column::new("symbol", StringType(8), Null, 9),
             Column::new("exchange", StringType(8), Null, 26),

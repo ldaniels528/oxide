@@ -5,14 +5,16 @@
 
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
-use crate::descriptor::Descriptor;
-use crate::errors::Errors::Exact;
+
+use crate::data_types::DataType;
+use crate::data_types::DataType::StructureType;
 use crate::expression::Conditions;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::U64Value;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
+use crate::sequences::{Array, Tuple};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
@@ -21,12 +23,13 @@ use shared_lib::fail;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Index;
+use std::slice::Iter;
 
 /// Represents a JSON-like data structure
 pub trait Structure {
     /// Returns true, if the structure contains an attribute with the specified name
     fn contains(&self, name: &str) -> bool {
-        self.get_tuples().iter()
+        self.to_name_values().iter()
             .find(|(k, _)| *k == *name)
             .is_some()
     }
@@ -36,28 +39,33 @@ pub trait Structure {
 
     /// Retrieves a field by name
     fn get(&self, name: &str) -> TypedValue {
-        self.get_tuples().iter()
+        self.to_name_values().iter()
             .find(|(my_name, _)| *my_name == *name)
             .map(|(_, v)| v.to_owned())
             .unwrap_or(Undefined)
     }
 
-    /// Retrieves the structure's descriptors
-    fn get_descriptors(&self) -> Vec<Descriptor>;
-
     /// Retrieves the structure's parameters
     fn get_parameters(&self) -> Vec<Parameter>;
 
-    /// Retrieves the state of the structure as key-value pairs
-    fn get_tuples(&self) -> Vec<(String, TypedValue)>;
+    /// Returns the structure's type
+    fn get_type(&self) -> DataType;
 
     /// Retrieves the structure values
     fn get_values(&self) -> Vec<TypedValue>;
 
+    fn iter(&self) -> Iter<'_, TypedValue> {
+        Box::leak(Box::new(self.get_values())).iter()
+    }
+
+    fn len(&self) -> usize {
+        self.get_values().len()
+    }
+
     /// Writes the internal state to the [Machine]
     fn pollute(&self, ms0: Machine) -> Machine {
         // add all scope variables (includes functions)
-        let tuples = self.get_tuples();
+        let tuples = self.to_name_values();
         let ms1 = tuples.iter()
             .fold(ms0, |ms, (name, value)| {
                 ms.with_variable(name, value.to_owned())
@@ -66,19 +74,27 @@ pub trait Structure {
         ms1.with_variable("self", Structured(Structures::Soft(SoftStructure::from_tuples(tuples))))
     }
 
+    fn to_array(&self) -> Array {
+        Array::from(self.get_values())
+    }
+
     /// Decompiles the structure back to source code
     fn to_code(&self) -> String;
 
-    fn to_hash_map(&self) -> HashMap<String, Value> {
-        self.get_tuples().iter()
+    fn to_json(&self) -> Value;
+
+    /// Retrieves the state of the structure as name-value pairs
+    fn to_name_values(&self) -> Vec<(String, TypedValue)>;
+
+    /// Retrieves the state of the structure as name-value pairs
+    fn to_name_values_mapping(&self) -> HashMap<String, Value> {
+        self.to_name_values().iter()
             .map(|(name, value)| (name.to_string(), value.to_json()))
             .fold(HashMap::new(), |mut m, (name, value)| {
                 m.insert(name, value);
                 m
             })
     }
-
-    fn to_json(&self) -> Value;
 
     fn to_row(&self) -> Row {
         Row::new(0, self.get_values())
@@ -88,6 +104,10 @@ pub trait Structure {
         let row = self.to_row();
         let columns = Column::from_parameters(&self.get_parameters());
         ModelRowCollection::from_columns_and_rows(&columns, &vec![row])
+    }
+
+    fn to_tuple(&self) -> Tuple {
+        Tuple::new(self.get_values())
     }
 
     /// Sets the value of an attribute by name
@@ -119,14 +139,6 @@ impl Structure for Structures {
         ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
     }
 
-    fn get_descriptors(&self) -> Vec<Descriptor> {
-        match self {
-            Self::Firm(row, ..) => row.get_descriptors(),
-            Self::Hard(hs) => hs.get_descriptors(),
-            Self::Soft(ss) => ss.get_descriptors(),
-        }
-    }
-
     fn get_parameters(&self) -> Vec<Parameter> {
         match self {
             Self::Firm(row, ..) => row.get_parameters(),
@@ -135,11 +147,19 @@ impl Structure for Structures {
         }
     }
 
-    fn get_tuples(&self) -> Vec<(String, TypedValue)> {
+    fn to_name_values(&self) -> Vec<(String, TypedValue)> {
         match self {
             Self::Firm(row, columns) => row.get_named_tuples(columns),
-            Self::Hard(hs) => hs.get_tuples(),
-            Self::Soft(ss) => ss.get_tuples(),
+            Self::Hard(hs) => hs.to_name_values(),
+            Self::Soft(ss) => ss.to_name_values(),
+        }
+    }
+
+    fn get_type(&self) -> DataType {
+        match self {
+            Self::Firm(row, columns) => row.as_hard(columns).get_type(),
+            Self::Hard(hs) => hs.get_type(),
+            Self::Soft(ss) => ss.get_type(),
         }
     }
 
@@ -244,26 +264,6 @@ impl HardStructure {
         Self { fields: params, values: my_values }
     }
 
-    pub fn from_descriptors_and_values(
-        descriptors: &Vec<Descriptor>,
-        values: Vec<TypedValue>,
-    ) -> std::io::Result<HardStructure> {
-        Ok(Self::new(Column::from_descriptors(descriptors)?, values))
-    }
-
-    pub fn from_descriptors(
-        parameters: &Vec<Descriptor>
-    ) -> std::io::Result<HardStructure> {
-        let fields = Column::from_descriptors(parameters)?;
-        let values = parameters.iter().map(|c|
-            c.get_default_value().to_owned()
-                .map(|s| TypedValue::wrap_value(s.as_str())
-                    .unwrap_or_else(|err| ErrorValue(Exact(err.to_string()))))
-                .unwrap_or(Null)
-        ).collect();
-        Ok(Self::new(fields, values))
-    }
-
     pub fn from_parameters(
         parameters: &Vec<Parameter>
     ) -> HardStructure {
@@ -331,15 +331,11 @@ impl Structure for HardStructure {
         ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
     }
 
-    fn get_descriptors(&self) -> Vec<Descriptor> {
-        Descriptor::from_parameters(&self.fields)
-    }
-
     fn get_parameters(&self) -> Vec<Parameter> {
         self.fields.clone()
     }
 
-    fn get_tuples(&self) -> Vec<(String, TypedValue)> {
+    fn to_name_values(&self) -> Vec<(String, TypedValue)> {
         let mut tuples = Vec::new();
         tuples.extend(self.fields.iter().zip(self.values.iter())
             .map(|(c, v)| (c.get_name().to_string(), v.to_owned()))
@@ -350,6 +346,10 @@ impl Structure for HardStructure {
 
     fn get_values(&self) -> Vec<TypedValue> {
         self.values.to_owned()
+    }
+
+    fn get_type(&self) -> DataType {
+        StructureType(self.get_parameters())
     }
 
     /// Returns the structure as source code
@@ -464,20 +464,18 @@ impl Structure for SoftStructure {
         ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
     }
 
-    fn get_descriptors(&self) -> Vec<Descriptor> {
-        self.tuples.iter()
-            .map(|(k, v)| Descriptor::from_tuple(k, v.to_owned()))
-            .collect::<Vec<_>>()
-    }
-
     fn get_parameters(&self) -> Vec<Parameter> {
         self.tuples.iter()
             .map(|(f, v)| Parameter::with_default(f, v.get_type(), v.to_owned()))
             .collect()
     }
 
-    fn get_tuples(&self) -> Vec<(String, TypedValue)> {
+    fn to_name_values(&self) -> Vec<(String, TypedValue)> {
         self.tuples.clone()
+    }
+
+    fn get_type(&self) -> DataType {
+        StructureType(self.get_parameters())
     }
 
     fn get_values(&self) -> Vec<TypedValue> {
@@ -663,7 +661,7 @@ impl Row {
 
     pub fn rows_to_json(columns: &Vec<Column>, rows: &Vec<Row>) -> Vec<HashMap<String, Value>> {
         rows.iter().fold(Vec::new(), |mut vec, row| {
-            vec.push(row.to_json_hash(columns));
+            vec.push(row.to_hash_json_value(columns));
             vec
         })
     }
@@ -685,7 +683,16 @@ impl Row {
     }
 
     /// Transforms the row into JSON format
-    pub fn to_json_hash(&self, columns: &Vec<Column>) -> HashMap<String, Value> {
+    pub fn to_hash_typed_value(&self, columns: &Vec<Parameter>) -> HashMap<String, TypedValue> {
+        columns.iter().zip(self.get_values().iter())
+            .fold(HashMap::new(), |mut hm, (c, v)| {
+                hm.insert(c.get_name().to_string(), v.clone());
+                hm
+            })
+    }
+
+    /// Transforms the row into JSON format
+    pub fn to_hash_json_value(&self, columns: &Vec<Column>) -> HashMap<String, Value> {
         columns.iter().zip(self.get_values().iter())
             .fold(HashMap::new(), |mut hm, (c, v)| {
                 hm.insert(c.get_name().to_string(), v.to_json());
@@ -708,7 +715,7 @@ impl Row {
     pub fn to_json_string(&self, columns: &Vec<Column>) -> String {
         let inside = columns.iter().zip(self.values.iter())
             .map(|(k, v)|
-                format!(r#""{}":{}"#, k.get_name(), v.to_code()))
+                format!(r#""{}":{}"#, k.get_name(), v.to_json().to_string()))
             .collect::<Vec<_>>()
             .join(",");
         format!("{{{}}}", inside)
@@ -778,7 +785,7 @@ impl Row {
     pub fn with_variable(&self, name: &str, value: TypedValue) -> SoftStructure {
         let mut new_tuples = Vec::with_capacity(self.values.len() + 2);
         new_tuples.push(("_id".to_string(), Number(U64Value(self.id as u64))));
-        new_tuples.extend(self.get_tuples());
+        new_tuples.extend(self.to_name_values());
         new_tuples.push((name.to_string(), value));
         SoftStructure::from_tuples(new_tuples)
     }
@@ -804,19 +811,13 @@ impl Structure for Row {
         ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
     }
 
-    fn get_descriptors(&self) -> Vec<Descriptor> {
-        self.get_tuples().iter()
-            .map(|(k, v)| Descriptor::from_tuple(k, v.to_owned()))
-            .collect::<Vec<_>>()
-    }
-
     fn get_parameters(&self) -> Vec<Parameter> {
-        self.get_tuples().iter()
+        self.to_name_values().iter()
             .map(|(k, v)| Parameter::with_default(k, v.get_type(), v.to_owned()))
             .collect()
     }
 
-    fn get_tuples(&self) -> Vec<(String, TypedValue)> {
+    fn to_name_values(&self) -> Vec<(String, TypedValue)> {
         self.values.iter().enumerate()
             .fold(vec![], |mut list, (nth, item)| {
                 list.push((format!("{}", (nth as u8 + b'a') as char), item.clone()));
@@ -824,15 +825,19 @@ impl Structure for Row {
             })
     }
 
+    fn get_type(&self) -> DataType {
+        StructureType(self.get_parameters())
+    }
+
     fn get_values(&self) -> Vec<TypedValue> {
-        self.get_tuples().iter()
+        self.to_name_values().iter()
             .map(|(_, v)| v.to_owned())
             .collect()
     }
 
     /// Returns the structure as source code
     fn to_code(&self) -> String {
-        format!("{{{}}}", self.get_tuples().iter()
+        format!("{{{}}}", self.to_name_values().iter()
             .map(|(name, value)| (name.to_string(), value.to_code()))
             .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
@@ -841,7 +846,7 @@ impl Structure for Row {
 
     /// Returns the structure as a JSON object
     fn to_json(&self) -> Value {
-        let mapping = self.get_tuples().iter()
+        let mapping = self.to_name_values().iter()
             .map(|(name, value)| (name.to_string(), value.to_json()))
             .fold(Map::new(), |mut m, (name, value)| {
                 m.insert(name, value);
@@ -860,7 +865,318 @@ impl Structure for Row {
 mod tests {
     /// common unit tests
     #[cfg(test)]
-    mod common_tests {}
+    mod common_tests {
+        use crate::columns::Column;
+        use crate::dataframe::Dataframe::Model;
+        use crate::errors::Errors::Exact;
+        use crate::interpreter::Interpreter;
+        use crate::model_row_collection::ModelRowCollection;
+        use crate::numbers::Numbers::{F64Value, I64Value, NaNValue, U128Value};
+        use crate::sequences::Array;
+        use crate::structures::Structures::{Firm, Hard, Soft};
+        use crate::structures::*;
+        use crate::testdata::*;
+        use crate::typed_values::TypedValue::*;
+        use serde_json::json;
+
+        #[test]
+        fn test_array_of_soft_structures() {
+            verify_exact(r#"
+                [{ last_sale: 0.051 }, { last_sale: 0.048 }]
+            "#, ArrayValue(Array::from(vec![
+                Structured(Soft(SoftStructure::new(&vec![
+                    ("last_sale", Number(F64Value(0.051))),
+                ]))),
+                Structured(Soft(SoftStructure::new(&vec![
+                    ("last_sale", Number(F64Value(0.048))),
+                ])))
+            ])))
+        }
+
+        #[test]
+        fn test_firm_structure_from_table() {
+            verify_exact(r#"
+                [+] stocks := ns("interpreter.struct.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                stocks[0]
+        "#, Structured(Firm(Row::new(0, vec![
+                StringValue("ABC".into()),
+                StringValue("AMEX".into()),
+                Number(F64Value(11.11)),
+            ]), make_quote_columns())));
+        }
+
+        #[test]
+        fn test_hard_structure() {
+            let mut interpreter = Interpreter::new();
+            let result = interpreter.evaluate(r#"
+            Struct(symbol: String(8), exchange: String(8), last_sale: f64)
+        "#).unwrap();
+            let phys_columns = make_quote_columns();
+            assert_eq!(result, Structured(Hard(HardStructure::new(phys_columns.clone(), Vec::new()))));
+        }
+
+        #[test]
+        fn test_hard_structure_with_default_values() {
+            let mut interpreter = Interpreter::new();
+            let result = interpreter.evaluate(r#"
+            Struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+        "#).unwrap();
+            match result {
+                Structured(s) =>
+                    assert_eq!(s.get_values(), vec![
+                        StringValue("ABC".into()),
+                        StringValue("NYSE".into()),
+                        Number(F64Value(23.67)),
+                    ]),
+                x => assert_eq!(x, Undefined)
+            }
+        }
+
+        #[test]
+        fn test_hard_structure_field() {
+            verify_exact(r#"
+            stock := Struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+            stock::symbol
+        "#, StringValue("ABC".into()));
+        }
+
+        #[test]
+        fn test_hard_structure_field_assignment() {
+            verify_exact(r#"
+            stock := Struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+            stock::last_sale := 24.11
+            stock::last_sale
+        "#, Number(F64Value(24.11)));
+        }
+
+        #[test]
+        fn test_hard_structure_module_method() {
+            verify_exact(r#"
+            stock := Struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+            mod stock {
+                fn is_this_you(symbol) => symbol is self::symbol
+            }
+            stock::is_this_you('ABC')
+        "#, Boolean(true));
+        }
+
+        #[test]
+        fn test_hard_structure_import() {
+            let mut interpreter = Interpreter::new();
+            let result = interpreter.evaluate(r#"
+            stock := Struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+            import stock
+        "#).unwrap();
+            assert_eq!(interpreter.get("symbol"), Some(StringValue("ABC".into())));
+            assert_eq!(interpreter.get("exchange"), Some(StringValue("NYSE".into())));
+            assert_eq!(interpreter.get("last_sale"), Some(Number(F64Value(23.67))));
+        }
+
+        #[test]
+        fn test_soft_structure() {
+            let code = r#"
+            {
+                fields:[
+                    { name: "symbol", value: "ABC" },
+                    { name: "exchange", value: "AMEX" },
+                    { name: "last_sale", value: 11.77 }
+                ]
+            }"#;
+            let model = Structured(Soft(SoftStructure::new(&vec![
+                ("fields", ArrayValue(Array::from(vec![
+                    Structured(Soft(SoftStructure::new(&vec![
+                        ("name", StringValue("symbol".into())),
+                        ("value", StringValue("ABC".into()))
+                    ]))),
+                    Structured(Soft(SoftStructure::new(&vec![
+                        ("name", StringValue("exchange".into())),
+                        ("value", StringValue("AMEX".into()))
+                    ]))),
+                    Structured(Soft(SoftStructure::new(&vec![
+                        ("name", StringValue("last_sale".into())),
+                        ("value", Number(F64Value(11.77)))
+                    ]))),
+                ])))
+            ])));
+            verify_exact(code, model.clone());
+            assert_eq!(
+                model.to_code().chars().filter(|c| !c.is_whitespace())
+                    .collect::<String>(),
+                code.chars().filter(|c| !c.is_whitespace())
+                    .collect::<String>())
+        }
+
+        #[test]
+        fn test_soft_structure_field() {
+            verify_exact_text(r#"
+            stock := { symbol:"AAA", price:123.45 }
+            stock::symbol
+        "#, "\"AAA\"".into());
+        }
+
+        #[test]
+        fn test_soft_structure_field_assignment() {
+            verify_exact_text(r#"
+            stock := { symbol:"AAA", price:123.45 }
+            stock::price := 124.11
+            stock::price
+        "#, "124.11");
+        }
+
+        #[test]
+        fn test_soft_structure_method() {
+            verify_exact_text(r#"
+            stock := {
+                symbol:"ABC",
+                price:123.45,
+                last_sale: 23.67,
+                is_this_you: fn(symbol) => symbol == self::symbol
+            }
+            stock::is_this_you('ABC')
+        "#, "true");
+        }
+
+        #[test]
+        fn test_soft_structure_module_method() {
+            verify_exact_text(r#"
+            stock := {
+                symbol: "ABC",
+                exchange: "NYSE",
+                last_sale: 23.67
+            }
+            mod stock {
+                fn is_this_you(symbol) => symbol == self::symbol
+            }
+            stock::is_this_you('ABC')
+        "#, "true");
+        }
+
+        #[test]
+        fn test_soft_structure_import() {
+            let mut interpreter = Interpreter::new();
+            let result = interpreter.evaluate(r#"
+            quote := { symbol: "ABC", exchange: "AMEX" }
+            import quote
+        "#).unwrap();
+            let machine = interpreter;
+            assert_eq!(machine.get("symbol"), Some(StringValue("ABC".into())));
+            assert_eq!(machine.get("exchange"), Some(StringValue("AMEX".into())));
+        }
+
+        #[test]
+        fn test_soft_structure_json_literal_1() {
+            verify_exact_json(r#"
+            {
+              "columns": [{
+                  "name": "symbol",
+                  "param_type": "String(8)",
+                  "default_value": null
+                }, {
+                  "name": "exchange",
+                  "param_type": "String(8)",
+                  "default_value": null
+                }, {
+                  "name": "last_sale",
+                  "param_type": "f64",
+                  "default_value": null
+                }],
+              "indices": [],
+              "partitions": []
+            }
+        "#, json!({
+              "columns": [{
+                  "name": "symbol",
+                  "param_type": "String(8)",
+                  "default_value": null
+                }, {
+                  "name": "exchange",
+                  "param_type": "String(8)",
+                  "default_value": null
+                }, {
+                  "name": "last_sale",
+                  "param_type": "f64",
+                  "default_value": null
+                }],
+              "indices": [],
+              "partitions": []
+            }));
+        }
+
+        #[test]
+        fn test_soft_structure_json_literal_2() {
+            verify_exact(r#"
+            {
+              columns: [{
+                  name: "symbol",
+                  param_type: "String(8)",
+                  default_value: null
+                }, {
+                  name: "exchange",
+                  param_type: "String(8)",
+                  default_value: null
+                }, {
+                  name: "last_sale",
+                  param_type: "f64",
+                  default_value: null
+                }]
+            }
+        "#, Structured(Soft(SoftStructure::new(&vec![
+                ("columns", ArrayValue(Array::from(vec![
+                    Structured(Soft(SoftStructure::new(&vec![
+                        ("name", StringValue("symbol".into())),
+                        ("param_type", StringValue("String(8)".into())),
+                        ("default_value", Null),
+                    ]))),
+                    Structured(Soft(SoftStructure::new(&vec![
+                        ("name", StringValue("exchange".into())),
+                        ("param_type", StringValue("String(8)".into())),
+                        ("default_value", Null)
+                    ]))),
+                    Structured(Soft(SoftStructure::new(&vec![
+                        ("name", StringValue("last_sale".into())),
+                        ("param_type", StringValue("f64".into())),
+                        ("default_value", Null),
+                    ]))),
+                ])))
+            ]))));
+        }
+
+        #[test]
+        fn test_structure_module() {
+            verify_exact(r#"
+            mod abc {
+                fn hello(name) => str::format("hello {}", name)
+            }
+            abc::hello('world')
+        "#, StringValue("hello world".into()));
+        }
+    }
 
     /// firm structure unit tests
     #[cfg(test)]
@@ -997,13 +1313,13 @@ mod tests {
         use crate::parameter::Parameter;
         use crate::row_collection::RowCollection;
         use crate::structures::{HardStructure, Structure};
-        use crate::testdata::{make_quote, make_quote_columns, make_quote_descriptors, make_quote_parameters};
+        use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
         use crate::typed_values::TypedValue::*;
 
         #[test]
         fn test_encode_decode_nonempty() {
-            let columns = make_quote_descriptors();
-            let phys_columns = Column::from_descriptors(&columns).unwrap();
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns);
             let model = HardStructure::new(phys_columns, vec![
                 StringValue("EDF".to_string()),
                 StringValue("NYSE".to_string()),
@@ -1036,8 +1352,8 @@ mod tests {
 
         #[test]
         fn test_from_physical_columns_and_values() {
-            let columns = make_quote_descriptors();
-            let phys_columns = Column::from_descriptors(&columns).unwrap();
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns);
             let structure = HardStructure::new(phys_columns, vec![
                 StringValue("ABC".to_string()),
                 StringValue("NYSE".to_string()),
@@ -1056,8 +1372,8 @@ mod tests {
 
         #[test]
         fn test_from_row() {
-            let columns = make_quote_descriptors();
-            let phys_columns = Column::from_descriptors(&columns).unwrap();
+            let columns = make_quote_parameters();
+            let phys_columns = Column::from_parameters(&columns);
             let structure = HardStructure::from_columns_and_row(&phys_columns,
                                                                 &make_quote(0, "ABC", "AMEX", 11.77),
             );
@@ -1089,7 +1405,7 @@ mod tests {
 
         #[test]
         fn test_structure_from_columns() {
-            let structure = HardStructure::from_descriptors(&make_quote_descriptors()).unwrap();
+            let structure = HardStructure::from_parameters(&make_quote_parameters());
             assert_eq!(structure.get("symbol"), Null);
             assert_eq!(structure.get("exchange"), Null);
             assert_eq!(structure.get("last_sale"), Null);

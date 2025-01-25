@@ -3,15 +3,16 @@
 // Inferences class
 ////////////////////////////////////////////////////////////////////
 
-use crate::arrays::Array;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::expression::Expression::*;
 use crate::expression::{DatabaseOps, Expression, Mutations};
 use crate::number_kind::NumberKind;
 use crate::platform::PlatformOps;
+use crate::sequences::{Array, Sequence};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Function, PlatformOp};
+use std::convert::From;
 use std::ops::Deref;
 
 /// Type-Inference Detection
@@ -46,9 +47,14 @@ impl Inferences {
             ExtractPostfix(..) => VaryingType(vec![]),
             Factorial(a) => Inferences::infer(a),
             Feature { .. } => NumberType(NumberKind::AckKind),
+            FnExpression { params, returns, .. } =>
+                FunctionType(params.clone(), Box::from(returns.clone())),
             ForEach(..) => NumberType(NumberKind::AckKind),
             From(..) => TableType(vec![], 0),
-            Tuple(..) => FunctionType(vec![]),
+            TupleExpression(params) =>
+                TupleType(params.iter()
+                    .map(|p| Inferences::infer(p))
+                    .collect::<Vec<_>>()),
             FunctionCall { fx, .. } => Inferences::infer(fx),
             HTTP { .. } => VaryingType(vec![]),
             If { a: true_v, b: Some(false_v), .. } =>
@@ -57,7 +63,7 @@ impl Inferences {
             Import(..) => NumberType(NumberKind::AckKind),
             Include(..) => NumberType(NumberKind::AckKind),
             JSONExpression(..) => StructureType(Vec::new()), // TODO can we infer?
-            Literal(Function { code, .. }) => Inferences::infer(code),
+            Literal(Function { body: code, .. }) => Inferences::infer(code),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
             Minus(a, b) => Inferences::infer_a_or_b(a, b),
@@ -81,6 +87,7 @@ impl Inferences {
             Return(a) => Self::infer_all(a),
             Scenario { .. } => NumberType(NumberKind::AckKind),
             SetVariable(..) => NumberType(NumberKind::AckKind),
+            SetVariables(..) => NumberType(NumberKind::AckKind),
             Variable(..) => VaryingType(vec![]),
             Via(..) => TableType(vec![], 0),
             While { .. } => VaryingType(vec![]),
@@ -109,7 +116,7 @@ impl Inferences {
 
     /// provides type inference for the given [TypedValue]
     pub fn infer_array(array: &Array) -> DataType {
-        Self::infer_best_fit(array.values().iter()
+        Self::infer_best_fit(array.get_values().iter()
             .map(|v| v.get_type())
             .collect::<Vec<_>>())
     }

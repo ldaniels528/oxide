@@ -1,17 +1,16 @@
 #![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
-// Platform class
+// PlatformOps class
 ////////////////////////////////////////////////////////////////////
 
-use crate::arrays::Array;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
+use crate::sequences::{Array, Sequence};
 
 use crate::dataframe::Dataframe::{Disk, Model};
-use crate::descriptor::Descriptor;
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CollectionExpected, DateExpected, StringExpected, TableExpected, UnsupportedType};
 use crate::expression::Expression::{CodeBlock, Literal, Scenario};
@@ -53,7 +52,7 @@ pub struct PlatformFunction {
     pub name: String,
     pub description: String,
     pub example: String,
-    pub parameters: Vec<Descriptor>,
+    pub parameters: Vec<Parameter>,
     pub return_type: DataType,
     pub opcode: PlatformOps,
 }
@@ -88,6 +87,7 @@ pub enum PlatformOps {
     OsEnv,
     // oxide package
     OxideCompile,
+    OxideDebug,
     OxideEval,
     OxideHelp,
     OxideHistory,
@@ -143,7 +143,7 @@ pub enum PlatformOps {
     WwwURLEncode,
 }
 
-pub const PLATFORM_OPCODES: [PlatformOps; 71] = {
+pub const PLATFORM_OPCODES: [PlatformOps; 72] = {
     use PlatformOps::*;
     [
         // cal
@@ -156,7 +156,7 @@ pub const PLATFORM_OPCODES: [PlatformOps; 71] = {
         // os
         OsCall, OsClear, OsCurrentDir, OsEnv,
         // oxide
-        OxideCompile, OxideEval, OxideHelp, OxideHistory, OxideHome,
+        OxideCompile, OxideDebug, OxideEval, OxideHelp, OxideHistory, OxideHome,
         OxidePrintln, OxideReset, OxideUUID, OxideVersion,
         // str
         StrEndsWith, StrFormat, StrIndexOf, StrJoin, StrLeft, StrLen,
@@ -219,6 +219,7 @@ impl PlatformOps {
             PlatformOps::OsClear => self.adapter_fn0(ms, args, Self::do_os_clear_screen),
             PlatformOps::OsEnv => self.adapter_fn0(ms, args, Self::do_os_env),
             PlatformOps::OxideCompile => self.adapter_fn1(ms, args, Self::do_oxide_compile),
+            PlatformOps::OxideDebug => self.adapter_fn1(ms, args, Self::do_oxide_debug),
             PlatformOps::OxideEval => self.adapter_fn1(ms, args, Self::do_oxide_eval),
             PlatformOps::OxideHelp => self.adapter_fn0(ms, args, Self::do_oxide_help),
             PlatformOps::OxideHistory => Self::do_oxide_history(ms, args),
@@ -301,6 +302,7 @@ impl PlatformOps {
             PlatformOps::OsCurrentDir => "Returns the current directory",
             PlatformOps::OsEnv => "Returns a table of the OS environment variables",
             PlatformOps::OxideCompile => "Compiles source code from a string input",
+            PlatformOps::OxideDebug => "Compiles source code from a string input; returning a debug string",
             PlatformOps::OxidePrintln => "Print line function",
             PlatformOps::OxideEval => "Evaluates a string containing Oxide code",
             PlatformOps::OxideHelp => "Integrated help function",
@@ -455,6 +457,7 @@ impl PlatformOps {
                 code := oxide::compile("2 ** 4")
                 code()
             "#,
+            PlatformOps::OxideDebug => r#"oxide::debug("2 ** 4")"#,
             PlatformOps::OxidePrintln => r#"oxide::println("Hello World")"#,
             PlatformOps::OxideEval => r#"
                 a := 'Hello '
@@ -614,6 +617,7 @@ impl PlatformOps {
             PlatformOps::OsCurrentDir => "current_dir",
             PlatformOps::OsEnv => "env",
             PlatformOps::OxideCompile => "compile",
+            PlatformOps::OxideDebug => "debug",
             PlatformOps::OxideEval => "eval",
             PlatformOps::OxideHelp => "help",
             PlatformOps::OxideHistory => "history",
@@ -679,7 +683,7 @@ impl PlatformOps {
             // kung fu
             KungFuAssert | KungFuFeature | KungFuMatches | KungFuTypeOf => "kungfu",
             // oxide
-            OxideCompile | OxideEval | OxideHelp | OxideHistory |
+            OxideCompile | OxideDebug | OxideEval | OxideHelp | OxideHistory |
             OxideHome | OxidePrintln | OxideReset | OxideUUID | OxideVersion => "oxide",
             // os
             OsCall | OsClear | OsCurrentDir | OsEnv => "os",
@@ -725,7 +729,7 @@ impl PlatformOps {
             => vec![VaryingType(vec![])],
             // single-parameter (string)
             IoFileExists | IoFileReadText | IoStdErr | IoStdOut | OxidePrintln | OsCall |
-            OxideCompile | OxideEval | StrLen | WwwURLDecode | WwwURLEncode
+            OxideCompile | OxideDebug | OxideEval | StrLen | WwwURLDecode | WwwURLEncode
             => vec![StringType(0)],
             // single-parameter (table)
             ToolsCompact | ToolsDescribe | ToolsReverse | ToolsScan |
@@ -755,7 +759,7 @@ impl PlatformOps {
         }
     }
 
-    pub fn get_parameters(&self) -> Vec<Descriptor> {
+    pub fn get_parameters(&self) -> Vec<Parameter> {
         let names = match self.get_parameter_types().as_slice() {
             [BooleanType] => vec!['b'],
             [VaryingType(..)] => vec!['x'],
@@ -772,11 +776,7 @@ impl PlatformOps {
 
         names.iter().zip(self.get_parameter_types().iter()).enumerate()
             .map(|(n, (name, dt))|
-                Descriptor::new(
-                    name.to_string(),
-                    dt.to_type_declaration(),
-                    None,
-                ))
+                Parameter::new(name.to_string(), dt.clone()))
             .collect()
     }
 
@@ -795,7 +795,7 @@ impl PlatformOps {
             // f64
             OxideVersion => NumberType(F64Kind),
             // function
-            OxideCompile => FunctionType(vec![]),
+            OxideCompile | OxideDebug => FunctionType(vec![], Box::from(Indeterminate)),
             // number
             StrIndexOf | StrLen => NumberType(I64Kind),
             CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
@@ -839,7 +839,7 @@ impl PlatformOps {
         self.to_code_with_params(&self.get_parameters())
     }
 
-    pub fn to_code_with_params(&self, parameters: &Vec<Descriptor>) -> String {
+    pub fn to_code_with_params(&self, parameters: &Vec<Parameter>) -> String {
         let pkg = self.get_package_name();
         let name = self.get_name();
         let params = parameters.iter()
@@ -1035,8 +1035,8 @@ impl PlatformOps {
         // get the feature scenarios
         let scenarios = match body {
             Structured(Soft(ss)) => {
-                ss.get_tuples().iter().map(|(title, tv)| match tv {
-                    Function { code, .. } =>
+                ss.to_name_values().iter().map(|(title, tv)| match tv {
+                    Function { body: code, .. } =>
                         Scenario {
                             title: Box::new(Literal(StringValue(title.to_string()))),
                             verifications: match code.deref() {
@@ -1107,9 +1107,9 @@ impl PlatformOps {
 
     fn do_os_env(ms: Machine) -> (Machine, TypedValue) {
         use std::env;
-        let mut mrc = ModelRowCollection::from_descriptors(&vec![
-            Descriptor::new("key", Some("String(256)".into()), None),
-            Descriptor::new("value", Some("String(8192)".into()), None)
+        let mut mrc = ModelRowCollection::from_parameters(&vec![
+            Parameter::new("key", StringType(256)),
+            Parameter::new("value", StringType(8192))
         ]);
         for (key, value) in env::vars() {
             if let ErrorValue(err) = mrc.append_row(Row::new(0, vec![
@@ -1128,8 +1128,21 @@ impl PlatformOps {
                 match Compiler::build(source) {
                     Ok(code) => (ms, Function {
                         params: vec![],
-                        code: Box::new(code),
+                        body: Box::new(code),
+                        returns: Indeterminate,
                     }),
+                    Err(err) => (ms, ErrorValue(Exact(err.to_string()))),
+                }
+            }
+            z => (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), z.get_type()))))
+        }
+    }
+
+    fn do_oxide_debug(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        match value {
+            StringValue(source) => {
+                match Compiler::build(source) {
+                    Ok(code) => (ms, StringValue(format!("{:?}", code))),
                     Err(err) => (ms, ErrorValue(Exact(err.to_string()))),
                 }
             }
@@ -1158,7 +1171,7 @@ impl PlatformOps {
         for (module_name, module) in ms.get_variables().iter() {
             match module {
                 Structured(Hard(mod_struct)) =>
-                    for (name, func) in mod_struct.get_tuples() {
+                    for (name, func) in mod_struct.to_name_values() {
                         mrc.append_row(Row::new(0, vec![
                             // name
                             StringValue(name),
@@ -1173,7 +1186,7 @@ impl PlatformOps {
                             },
                             // returns
                             match func {
-                                PlatformOp(pf) => StringValue(pf.get_return_type().to_type_declaration().unwrap_or("".into())),
+                                PlatformOp(pf) => StringValue(pf.get_return_type().to_code()),
                                 _ => Null,
                             }
                         ]));
@@ -1187,7 +1200,9 @@ impl PlatformOps {
     fn do_oxide_history(ms: Machine, args: Vec<TypedValue>) -> (Machine, TypedValue) {
         // re-executes a saved command
         fn re_run(ms: Machine, pid: usize) -> std::io::Result<(Machine, TypedValue)> {
-            let frc = FileRowCollection::open_or_create(&PlatformOps::get_oxide_history_ns())?;
+            let frc = FileRowCollection::open_or_create(
+                &PlatformOps::get_oxide_history_ns(),
+                PlatformOps::get_oxide_history_parameters())?;
             let row_maybe = frc.read_one(pid)?;
             let code = row_maybe.map(|r| r.get_values().last()
                 .map(|v| v.unwrap_value()).unwrap_or(String::new())
@@ -1203,7 +1218,9 @@ impl PlatformOps {
         match args.as_slice() {
             // history()
             [] =>
-                match FileRowCollection::open_or_create(&Self::get_oxide_history_ns()) {
+                match FileRowCollection::open_or_create(
+                    &Self::get_oxide_history_ns(),
+                    PlatformOps::get_oxide_history_parameters()) {
                     Ok(frc) => (ms, TableValue(Disk(frc))),
                     Err(err) => (ms, ErrorValue(Exact(err.to_string())))
                 }
@@ -1498,7 +1515,7 @@ impl PlatformOps {
                 }
             }
             other =>
-                (ms, ErrorValue(TypeMismatch(TableExpected("[Table(), Struct()]".to_string(), other.to_code()))))
+                (ms, ErrorValue(TypeMismatch(TableExpected("[Table, Struct()]".to_string(), other.to_code()))))
         }
     }
 
@@ -1810,8 +1827,8 @@ mod tests {
             example: "str::left('Hello World', 5)".into(),
             package_name: "str".into(),
             parameters: vec![
-                Descriptor::new("s", Some("String(0)".into()), None),
-                Descriptor::new("n", Some("i64".into()), None),
+                Parameter::new("s", StringType(0)),
+                Parameter::new("n", NumberType(I64Kind)),
             ],
             return_type: StringType(0),
             opcode: StrLeft,
@@ -1826,9 +1843,9 @@ mod tests {
             example: "str::substring('Hello World', 0, 5)".into(),
             package_name: "str".into(),
             parameters: vec![
-                Descriptor::new("s", Some("String(0)".into()), None),
-                Descriptor::new("m", Some("i64".into()), None),
-                Descriptor::new("n", Some("i64".into()), None)
+                Parameter::new("s", StringType(0)),
+                Parameter::new("m", NumberType(I64Kind)),
+                Parameter::new("n", NumberType(I64Kind)),
             ],
             return_type: StringType(0),
             opcode: StrSubstring,
@@ -1879,52 +1896,52 @@ mod tests {
         assert_eq!(CalDateSecond.to_code(), "cal::second_of(n: Date)");
         assert_eq!(CalDateYear.to_code(), "cal::year_of(n: Date)");
         // io
-        assert_eq!(IoFileCreate.to_code(), "io::create_file(a: String(0), b: String(0))");
-        assert_eq!(IoFileExists.to_code(), "io::exists(s: String(0))");
-        assert_eq!(IoFileReadText.to_code(), "io::read_text_file(s: String(0))");
-        assert_eq!(IoStdErr.to_code(), "io::stderr(s: String(0))");
-        assert_eq!(IoStdOut.to_code(), "io::stdout(s: String(0))");
+        assert_eq!(IoFileCreate.to_code(), "io::create_file(a: String, b: String)");
+        assert_eq!(IoFileExists.to_code(), "io::exists(s: String)");
+        assert_eq!(IoFileReadText.to_code(), "io::read_text_file(s: String)");
+        assert_eq!(IoStdErr.to_code(), "io::stderr(s: String)");
+        assert_eq!(IoStdOut.to_code(), "io::stdout(s: String)");
         // kungfu
         assert_eq!(KungFuAssert.to_code(), "kungfu::assert(b: Boolean)");
-        assert_eq!(KungFuFeature.to_code(), "kungfu::feature(a: String(0), b: Struct())");
+        assert_eq!(KungFuFeature.to_code(), "kungfu::feature(a: String, b: Struct)");
         assert_eq!(KungFuMatches.to_code(), "kungfu::matches(a, b)");
         assert_eq!(KungFuTypeOf.to_code(), "kungfu::type_of(x)");
         // os
-        assert_eq!(OsCall.to_code(), "os::call(s: String(0))");
+        assert_eq!(OsCall.to_code(), "os::call(s: String)");
         assert_eq!(OsClear.to_code(), "os::clear()");
         assert_eq!(OsCurrentDir.to_code(), "os::current_dir()");
         assert_eq!(OsEnv.to_code(), "os::env()");
         // oxide
-        assert_eq!(OxideCompile.to_code(), "oxide::compile(s: String(0))");
-        assert_eq!(OxideEval.to_code(), "oxide::eval(s: String(0))");
+        assert_eq!(OxideCompile.to_code(), "oxide::compile(s: String)");
+        assert_eq!(OxideEval.to_code(), "oxide::eval(s: String)");
         assert_eq!(OxideHelp.to_code(), "oxide::help()");
         assert_eq!(OxideHistory.to_code(), "oxide::history()");
         assert_eq!(OxideHome.to_code(), "oxide::home()");
-        assert_eq!(OxidePrintln.to_code(), "oxide::println(s: String(0))");
+        assert_eq!(OxidePrintln.to_code(), "oxide::println(s: String)");
         assert_eq!(OxideReset.to_code(), "oxide::reset()");
         assert_eq!(OxideUUID.to_code(), "oxide::uuid()");
         assert_eq!(OxideVersion.to_code(), "oxide::version()");
         // str
-        assert_eq!(StrEndsWith.to_code(), "str::ends_with(a: String(0), b: String(0))");
-        assert_eq!(StrFormat.to_code(), "str::format(a: String(0), b: String(0))");
-        assert_eq!(StrIndexOf.to_code(), "str::index_of(s: String(0), n: i64)");
-        assert_eq!(StrJoin.to_code(), "str::join(a: Array(0), b: String(0))");
-        assert_eq!(StrLeft.to_code(), "str::left(s: String(0), n: i64)");
-        assert_eq!(StrLen.to_code(), "str::len(s: String(0))");
-        assert_eq!(StrRight.to_code(), "str::right(s: String(0), n: i64)");
-        assert_eq!(StrSplit.to_code(), "str::split(a: String(0), b: String(0))");
-        assert_eq!(StrStartsWith.to_code(), "str::starts_with(a: String(0), b: String(0))");
-        assert_eq!(StrSubstring.to_code(), "str::substring(s: String(0), m: i64, n: i64)");
+        assert_eq!(StrEndsWith.to_code(), "str::ends_with(a: String, b: String)");
+        assert_eq!(StrFormat.to_code(), "str::format(a: String, b: String)");
+        assert_eq!(StrIndexOf.to_code(), "str::index_of(s: String, n: i64)");
+        assert_eq!(StrJoin.to_code(), "str::join(a: Array, b: String)");
+        assert_eq!(StrLeft.to_code(), "str::left(s: String, n: i64)");
+        assert_eq!(StrLen.to_code(), "str::len(s: String)");
+        assert_eq!(StrRight.to_code(), "str::right(s: String, n: i64)");
+        assert_eq!(StrSplit.to_code(), "str::split(a: String, b: String)");
+        assert_eq!(StrStartsWith.to_code(), "str::starts_with(a: String, b: String)");
+        assert_eq!(StrSubstring.to_code(), "str::substring(s: String, m: i64, n: i64)");
         assert_eq!(StrToString.to_code(), "str::to_string(x)");
         // tools
-        assert_eq!(ToolsCompact.to_code(), "tools::compact(t: Table())");
-        assert_eq!(ToolsDescribe.to_code(), "tools::describe(t: Table())");
-        assert_eq!(ToolsFetch.to_code(), "tools::fetch(t: Table(), n: u64)");
-        assert_eq!(ToolsReverse.to_code(), "tools::reverse(t: Table())");
-        assert_eq!(ToolsScan.to_code(), "tools::scan(t: Table())");
-        assert_eq!(ToolsToArray.to_code(), "tools::to_array(t: Table())");
-        assert_eq!(ToolsToCSV.to_code(), "tools::to_csv(t: Table())");
-        assert_eq!(ToolsToJSON.to_code(), "tools::to_json(t: Table())");
+        assert_eq!(ToolsCompact.to_code(), "tools::compact(t: Table)");
+        assert_eq!(ToolsDescribe.to_code(), "tools::describe(t: Table)");
+        assert_eq!(ToolsFetch.to_code(), "tools::fetch(t: Table, n: u64)");
+        assert_eq!(ToolsReverse.to_code(), "tools::reverse(t: Table)");
+        assert_eq!(ToolsScan.to_code(), "tools::scan(t: Table)");
+        assert_eq!(ToolsToArray.to_code(), "tools::to_array(t: Table)");
+        assert_eq!(ToolsToCSV.to_code(), "tools::to_csv(t: Table)");
+        assert_eq!(ToolsToJSON.to_code(), "tools::to_json(t: Table)");
         assert_eq!(ToolsToTable.to_code(), "tools::to_table(x)");
         // util
         assert_eq!(UtilBase64.to_code(), "util::base64(x)");
@@ -1945,8 +1962,8 @@ mod tests {
         assert_eq!(UtilToU64.to_code(), "util::to_u64(x)");
         assert_eq!(UtilToU128.to_code(), "util::to_u128(x)");
         // www
-        assert_eq!(WwwURLDecode.to_code(), "www::url_decode(s: String(0))");
-        assert_eq!(WwwURLEncode.to_code(), "www::url_encode(s: String(0))");
+        assert_eq!(WwwURLDecode.to_code(), "www::url_decode(s: String)");
+        assert_eq!(WwwURLEncode.to_code(), "www::url_encode(s: String)");
         assert_eq!(WwwServe.to_code(), "www::serve(n: u32)");
     }
 
@@ -2244,7 +2261,7 @@ mod tests {
 
         #[test]
         fn test_kung_fu_type_of_namespace() {
-            verify_exact_text_q(r#"kungfu::type_of(ns("a.b.c"))"#, "Table()");
+            verify_exact_text_q(r#"kungfu::type_of(ns("a.b.c"))"#, "Table");
         }
 
         #[test]
@@ -2854,6 +2871,13 @@ mod tests {
         }
 
         #[test]
+        fn test_tools_to_array_with_tuples_qualified() {
+            verify_exact_text(r#"
+                 tools::to_array(("a", "b", "c"))
+            "#, r#"["a", "b", "c"]"#);
+        }
+
+        #[test]
         fn test_tools_to_array_with_strings_qualified() {
             verify_exact(r#"
                  tools::to_array("Hello")
@@ -2886,11 +2910,11 @@ mod tests {
                      { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
                  ]))
             "#).unwrap();
-            let columns = Column::from_descriptors(&vec![
-                Descriptor::new("symbol", Some("String(3)".into()), Some("\"BIZ\"".into())),
-                Descriptor::new("exchange", Some("String(4)".into()), Some("\"NYSE\"".into())),
-                Descriptor::new("last_sale", Some("f64".into()), Some("23.66".into())),
-            ]).unwrap();
+            let columns = Column::from_parameters(&vec![
+                Parameter::with_default("symbol", StringType(3), StringValue("BIZ".into())),
+                Parameter::with_default("exchange", StringType(4), StringValue("NYSE".into())),
+                Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.66))),
+            ]);
             assert_eq!(result, ArrayValue(Array::from(vec![
                 Structured(Hard(HardStructure::new(columns.clone(), vec![
                     StringValue("BIZ".into()), StringValue("NYSE".into()), Number(F64Value(23.66))
@@ -3144,10 +3168,10 @@ mod tests {
                 GET "http://localhost:8822/platform/www/quotes/1/4"
             "#).unwrap();
             assert_eq!(result.to_json(), json!([
-            {"symbol": "BOX", "exchange": "NYSE", "last_sale": 56.88},
-            {"symbol": "JET", "exchange": "NASDAQ", "last_sale": 32.12},
-            {"symbol": "ABC", "exchange": "AMEX", "last_sale": 12.49}
-        ]));
+                {"symbol": "BOX", "exchange": "NYSE", "last_sale": 56.88},
+                {"symbol": "JET", "exchange": "NASDAQ", "last_sale": 32.12},
+                {"symbol": "ABC", "exchange": "AMEX", "last_sale": 12.49}
+            ]));
         }
 
         #[test]

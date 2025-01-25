@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 pub enum TypeMismatchErrors {
     ArgumentsMismatched(usize, usize),
     BooleanExpected(String),
+    CannotBeNegated(String),
     CodeBlockExpected(String),
     CollectionExpected(String),
     ColumnExpected(String),
+    ConstantValueExpected(String),
     DateExpected(String),
     FunctionArgsExpected(String),
     IdentifierExpected(String),
@@ -26,51 +28,63 @@ pub enum TypeMismatchErrors {
     RowsAffectedExpected(String),
     StringExpected(String),
     StructExpected(String, String),
+    StructsOneOrMoreExpected,
     TableExpected(String, String),
+    UnexpectedResult(String),
+    UnrecognizedTypeName(String),
     UnsupportedType(DataType, DataType),
     VariableExpected(Token),
 }
 
 impl Display for TypeMismatchErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        use TypeMismatchErrors::*;
-        let header = "Type Mismatch: ";
-        match self {
-            ArgumentsMismatched(a, b) =>
-                write!(f, "{header}mismatched number of arguments: {a} vs. {b}"),
-            BooleanExpected(a) =>
-                write!(f, "{header}Boolean value expected near {a}"),
-            CodeBlockExpected(a) =>
-                write!(f, "{header}code block expected near {a}"),
-            CollectionExpected(a) =>
-                write!(f, "{header}Iterable expected near {a}"),
-            ColumnExpected(expr) =>
-                write!(f, "{header}Expected a column, got \"{expr}\" instead"),
-            DateExpected(expr) =>
-                write!(f, "Expected a timestamp, got \"{expr}\" instead"),
-            FunctionArgsExpected(other) =>
-                write!(f, "{header}Function arguments expected, but got {}", other),
-            IdentifierExpected(other) =>
-                write!(f, "{header}Identifier expected, but got {}", other),
-            OutcomeExpected(expr) =>
-                write!(f, "{header}Expected an outcome (Ack, RowId or RowsAffected) near {expr}"),
-            ParameterExpected(expr) =>
-                write!(f, "{header}Expected a parameter, got \"{expr}\" instead"),
-            QueryableExpected(expr) =>
-                write!(f, "{header}Expected a queryable near {expr}"),
-            RowsAffectedExpected(expr) =>
-                write!(f, "{header}Expected RowsAffected(..) near {expr}"),
-            StringExpected(expr) =>
-                write!(f, "{header}Expected a string near {expr}"),
-            StructExpected(name, expr) =>
-                write!(f, "{header}{name} is not a structure ({expr})"),
-            TableExpected(a, b) =>
-                write!(f, "{header}{a} is not a table ({b})"),
-            UnsupportedType(a, b) =>
-                write!(f, "{header}{a} is not convertible to {b}"),
-            VariableExpected(a) =>
-                write!(f, "{header}Variable identifier expected near {a}"),
-        }
+        let text = match self {
+            TypeMismatchErrors::ArgumentsMismatched(a, b) =>
+                format!("Mismatched number of arguments: {a} vs. {b}"),
+            TypeMismatchErrors::BooleanExpected(a) =>
+                format!("Boolean value expected near {a}"),
+            TypeMismatchErrors::CannotBeNegated(a) =>
+                format!("{a} cannot be negated"),
+            TypeMismatchErrors::CodeBlockExpected(a) =>
+                format!("Scope {{ ... }} expected near {a}"),
+            TypeMismatchErrors::CollectionExpected(a) =>
+                format!("Iterable expected near {a}"),
+            TypeMismatchErrors::ColumnExpected(expr) =>
+                format!("Expected a column, but found \"{expr}\" instead"),
+            TypeMismatchErrors::ConstantValueExpected(value) =>
+                format!("Expected a constant value, but found \"{value}\" instead"),
+            TypeMismatchErrors::DateExpected(expr) =>
+                format!("Expected a timestamp, but found \"{expr}\" instead"),
+            TypeMismatchErrors::FunctionArgsExpected(other) =>
+                format!("Function arguments expected, but found {}", other),
+            TypeMismatchErrors::IdentifierExpected(other) =>
+                format!("Identifier expected, but got {}", other),
+            TypeMismatchErrors::OutcomeExpected(expr) =>
+                format!("Expected an outcome (Ack, RowId or RowsAffected) near {expr}"),
+            TypeMismatchErrors::ParameterExpected(expr) =>
+                format!("Expected a parameter, got \"{expr}\" instead"),
+            TypeMismatchErrors::QueryableExpected(expr) =>
+                format!("Expected a queryable near {expr}"),
+            TypeMismatchErrors::RowsAffectedExpected(expr) =>
+                format!("Expected RowsAffected(..) near {expr}"),
+            TypeMismatchErrors::StringExpected(expr) =>
+                format!("Expected a String near {expr}"),
+            TypeMismatchErrors::StructExpected(name, expr) =>
+                format!("{name} is not a Struct ({expr})"),
+            TypeMismatchErrors::StructsOneOrMoreExpected =>
+                String::from("At least one Struct is required."),
+            TypeMismatchErrors::TableExpected(a, b) =>
+                format!("{a} is not a Table ({b})"),
+            TypeMismatchErrors::UnexpectedResult(result) =>
+                format!("Unexpected result near {result}"),
+            TypeMismatchErrors::UnrecognizedTypeName(name) =>
+                format!("Unrecognized type '{name}'"),
+            TypeMismatchErrors::UnsupportedType(a, b) =>
+                format!("{a} is not convertible to {b}"),
+            TypeMismatchErrors::VariableExpected(a) =>
+                format!("Variable identifier expected near {a}"),
+        };
+        write!(f, "Type Mismatch: {text}")
     }
 }
 
@@ -79,6 +93,7 @@ impl Display for TypeMismatchErrors {
 pub enum Errors {
     AssertionError(String, String),
     CannotSubtract(String, String),
+    Empty,
     Exact(String),
     ExactNear(String, Token),
     HashTableOverflow(usize, String),
@@ -99,49 +114,49 @@ pub enum Errors {
 
 impl Display for Errors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        use Errors::*;
-        match self {
-            AssertionError(a, b) =>
-                write!(f, "Assertion Error: {a} was not {b}"),
-            CannotSubtract(a, b) =>
-                write!(f, "Cannot subtract {b} from {a}"),
-            PlatformOpError(op) =>
-                write!(f, "Conversion error: \"{}\"", op.to_code()),
-            Exact(message) =>
-                write!(f, "{message}"),
-            ExactNear(message, token) =>
-                write!(f, "{message} on line {} column {}",
-                       token.get_line_number(), token.get_column_number()),
-            HashTableOverflow(rid, value) =>
-                write!(f, "Hash table overflow detected (rid: {rid}, key: {value})"),
-            IllegalExpression(expr) =>
-                write!(f, "Illegal expression: {expr}"),
-            IllegalOperator(token) =>
-                write!(f, "Illegal use of operator '{token}'"),
-            InvalidNamespace(expr) =>
-                write!(f, "Invalid namespace reference {expr}"),
-            NotImplemented(expr) =>
-                write!(f, "Not yet implemented - {expr}"),
-            PackageNotFound(name) =>
-                write!(f, "Package '{name}' not found"),
-            IndexOutOfRange(name, idx, len) =>
-                write!(f, "{name} index is out of range ({idx} >= {len})"),
-            Syntax(message) =>
-                write!(f, "Syntax error: {message}"),
-            TypeMismatch(mismatch) =>
-                write!(f, "{}", mismatch),
-            UnsupportedPlatformOps(pops) =>
-                write!(f, "Unsupported operation {}", pops.to_code()),
-            Multiple(errors) =>
-                write!(f, "Multiple errors detected:\n{}", errors.iter()
+        let text = match self {
+            Errors::AssertionError(a, b) =>
+                format!("Assertion Error: {a} was not {b}"),
+            Errors::CannotSubtract(a, b) =>
+                format!("Cannot subtract {b} from {a}"),
+            Errors::Empty => String::from("Doh."),
+            Errors::Exact(message) => format!("{message}"),
+            Errors::ExactNear(message, token) =>
+                format!("{message} on line {} column {}",
+                        token.get_line_number(), token.get_column_number()),
+            Errors::HashTableOverflow(rid, value) =>
+                format!("Hash table overflow detected (rid: {rid}, key: {value})"),
+            Errors::IndexOutOfRange(name, idx, len) =>
+                format!("{name} index is out of range ({idx} >= {len})"),
+            Errors::IllegalExpression(expr) =>
+                format!("Illegal expression: {expr}"),
+            Errors::IllegalOperator(token) =>
+                format!("Illegal use of operator '{token}'"),
+            Errors::InvalidNamespace(expr) =>
+                format!("Invalid namespace reference {expr}"),
+            Errors::Multiple(errors) =>
+                format!("Multiple errors detected:\n{}", errors.iter()
                     .map(|e| e.to_string())
                     .collect::<Vec<_>>()
                     .join("\n")),
+            Errors::NotImplemented(expr) =>
+                format!("Not yet implemented - {expr}"),
+            Errors::PackageNotFound(name) =>
+                format!("Package '{name}' not found"),
+            Errors::PlatformOpError(op) =>
+                format!("Conversion error: \"{}\"", op.to_code()),
+            Errors::Syntax(message) =>
+                format!("Syntax error: {message}"),
+            Errors::TypeMismatch(mismatch) =>
+                format!("{}", mismatch),
+            Errors::UnsupportedPlatformOps(pops) =>
+                format!("Unsupported operation {}", pops.to_code()),
             Errors::ViewsCannotBeResized =>
-                write!(f, "Views cannot be resized"),
+                String::from("Views cannot be resized"),
             Errors::WriteProtected =>
-                write!(f, "Write operations are not allowed"),
-        }
+                String::from("Write operations are not allowed"),
+        };
+        write!(f, "{text}")
     }
 }
 
@@ -194,19 +209,19 @@ mod tests {
     #[test]
     fn test_type_mismatch_errors() {
         verify(TypeMismatch(ArgumentsMismatched(2, 1)),
-               "Type Mismatch: mismatched number of arguments: 2 vs. 1");
+               "Type Mismatch: Mismatched number of arguments: 2 vs. 1");
         verify(TypeMismatch(BooleanExpected("457".into())),
                "Type Mismatch: Boolean value expected near 457");
         verify(TypeMismatch(CodeBlockExpected("[]".into())),
-               "Type Mismatch: code block expected near []");
+               "Type Mismatch: Scope { ... } expected near []");
         verify(TypeMismatch(CollectionExpected("1".into())),
                "Type Mismatch: Iterable expected near 1");
         verify(TypeMismatch(ColumnExpected("^".into())),
-               "Type Mismatch: Expected a column, got \"^\" instead");
+               "Type Mismatch: Expected a column, but found \"^\" instead");
         verify(TypeMismatch(DateExpected("Tom".into())),
-               "Expected a timestamp, got \"Tom\" instead");
+               r#"Type Mismatch: Expected a timestamp, but found "Tom" instead"#);
         verify(TypeMismatch(FunctionArgsExpected("Tom".into())),
-               "Type Mismatch: Function arguments expected, but got Tom");
+               "Type Mismatch: Function arguments expected, but found Tom");
         verify(TypeMismatch(OutcomeExpected("wth".into())),
                "Type Mismatch: Expected an outcome (Ack, RowId or RowsAffected) near wth");
         verify(TypeMismatch(ParameterExpected("@".into())),
@@ -216,13 +231,13 @@ mod tests {
         verify(TypeMismatch(RowsAffectedExpected("xyz".into())),
                "Type Mismatch: Expected RowsAffected(..) near xyz");
         verify(TypeMismatch(StringExpected("reset".into())),
-               "Type Mismatch: Expected a string near reset");
+               "Type Mismatch: Expected a String near reset");
         verify(TypeMismatch(StructExpected("count".into(), "i64".into())),
-               "Type Mismatch: count is not a structure (i64)");
+               "Type Mismatch: count is not a Struct (i64)");
         verify(TypeMismatch(TableExpected("stocks".into(), "Date".into())),
-               "Type Mismatch: stocks is not a table (Date)");
+               "Type Mismatch: stocks is not a Table (Date)");
         verify(TypeMismatch(UnsupportedType(StructureType(vec![]), NumberType(I128Kind))),
-               "Type Mismatch: Struct() is not convertible to i128");
+               "Type Mismatch: Struct is not convertible to i128");
         verify(
             Multiple(vec![ViewsCannotBeResized, WriteProtected]),
             "Multiple errors detected:\nViews cannot be resized\nWrite operations are not allowed");

@@ -7,9 +7,12 @@ use shared_lib::tabulate_cells;
 
 use crate::columns::Column;
 use crate::cursor::Cursor;
-use crate::descriptor::Descriptor;
+use crate::data_types::DataType::NumberType;
+use crate::dataframe::Dataframe;
 use crate::model_row_collection::ModelRowCollection;
+use crate::number_kind::NumberKind::U64Kind;
 use crate::numbers::Numbers::U64Value;
+use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::structures::Row;
 use crate::typed_values::TypedValue::Number;
@@ -26,6 +29,13 @@ impl TableRenderer {
         tabulate_cells(header_cells, body_cells)
     }
 
+    /// Transforms the [Dataframe] into a textual table
+    pub fn from_dataframe(df: &Dataframe) -> Vec<String> {
+        let columns = df.get_columns();
+        let rows = df.read_active_rows().unwrap_or(vec![]);
+        Self::from_rows(columns, &rows)
+    }
+
     /// Transforms the [Cursor] into a textual table
     pub fn from_cursor(cursor: &mut Cursor, columns: &Vec<Column>) -> Vec<String> {
         let header_cells = Self::tabulate_header_cells(columns);
@@ -36,6 +46,12 @@ impl TableRenderer {
     /// Transforms the [Vec<Row>] into a textual table
     pub fn from_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> Vec<String> {
         Self::from_collection(Box::new(ModelRowCollection::from_columns_and_rows(columns, rows)))
+    }
+
+    /// Transforms the [Vec<Row>] into a textual table
+    pub fn from_rows_with_ids(columns: &Vec<Column>, rows: &Vec<Row>) -> std::io::Result<Vec<String>> {
+        let rc: Box<dyn RowCollection> = Box::new(ModelRowCollection::from_columns_and_rows(columns, rows));
+        Self::from_table_with_ids(&rc)
     }
 
     /// Transforms the [RowCollection] into a textual table
@@ -49,9 +65,9 @@ impl TableRenderer {
     pub fn from_table_with_ids(rc: &Box<dyn RowCollection>) -> std::io::Result<Vec<String>> {
         // define columns by combining "id" column with those from the RowCollection
         let columns: Vec<Column> = {
-            let mut params = vec![Descriptor::new("id", Some("u64".into()), None)];
-            params.extend(rc.get_columns().iter().map(|c| c.to_descriptor()));
-            Column::from_descriptors(&params)?
+            let mut params = vec![Parameter::new("id", NumberType(U64Kind))];
+            params.extend(rc.get_columns().iter().map(|c| c.to_parameter()));
+            Column::from_parameters(&params)
         };
 
         // define rows by prepending ID values to each row's data

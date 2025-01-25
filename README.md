@@ -265,7 +265,7 @@ server response:
 cal::now()
 </pre>
 <pre>
-2025-01-11T22:39:59.811Z
+2025-01-25T07:01:04.075Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -276,7 +276,7 @@ now():::day_of()
 
 </pre>
 <pre>
-11
+24
 </pre>
 <hr>
 <h4>cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -287,7 +287,7 @@ now():::hour12()
 
 </pre>
 <pre>
-2
+11
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -298,7 +298,7 @@ now():::hour24()
 
 </pre>
 <pre>
-14
+23
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -309,7 +309,7 @@ now():::minute_of()
 
 </pre>
 <pre>
-39
+1
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -320,7 +320,7 @@ now():::month_of()
 
 </pre>
 <pre>
-59
+4
 </pre>
 <hr>
 <h4>cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
@@ -331,7 +331,7 @@ now():::second_of()
 
 </pre>
 <pre>
-59
+4
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -580,6 +580,14 @@ code()
 16
 </pre>
 <hr>
+<h4>oxide::debug &#8212; Compiles source code from a string input; returning a debug string</h4>
+<pre>
+oxide::debug("2 ** 4")
+</pre>
+<pre>
+Pow(Literal(Number(I64Value(2))), Literal(Number(I64Value(4))))
+</pre>
+<hr>
 <h4>oxide::eval &#8212; Evaluates a string containing Oxide code</h4>
 <pre>
 
@@ -597,13 +605,13 @@ Hello World
 from oxide::help() limit 3
 </pre>
 <pre>
-|------------------------------------------------------------------------------------------------------------------------------------------------|
-| id | name        | module | signature         | description                                     | returns                                      |
-|------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
-| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String(0)                                    |
-| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Ack                                          |
-|------------------------------------------------------------------------------------------------------------------------------------------------|
+|----------------------------------------------------------------------------|
+| id | name   | module | signature       | description             | returns |
+|----------------------------------------------------------------------------|
+| 0  | to_u8  | util   | util::to_u8(x)  | Converts a value to u8  | u8      |
+| 1  | to_u64 | util   | util::to_u64(x) | Converts a value to u64 | u64     |
+| 2  | to_u32 | util   | util::to_u32(x) | Converts a value to u32 | u32     |
+|----------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -614,9 +622,9 @@ from oxide::history() limit 3
 |-------------------------------------------------------------------|
 | id | session_id    | user_id | cpu_time_ms | input                |
 |-------------------------------------------------------------------|
-| 0  | 1736578263280 | 501     | 2.237       | import oxide; help() |
-| 1  | 1736603663752 | 501     | 2.283       | import oxide; help() |
-| 2  | 1736603786872 | 501     | 7.763       | import oxide; help() |
+| 0  | 1736823002231 | 501     | 2.081       | import oxide; help() |
+| 1  | 1736823002627 | 501     | 3.596       | import oxide; help() |
+| 2  | 1736827273725 | 501     | 0.971       | import oxide; help() |
 |-------------------------------------------------------------------|
 </pre>
 <hr>
@@ -649,7 +657,7 @@ Ack
 oxide::uuid()
 </pre>
 <pre>
-7f787745-c05c-419b-b0eb-e83a60019bde
+8106f242-32ba-42ed-9c45-4c14eaaaed1f
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>
@@ -1125,7 +1133,7 @@ GET "http://localhost:8822/platform/www/quotes/1/4"
 |------------------------------------|
 | 0  | NYSE     | BOX    | 56.88     |
 | 1  | NASDAQ   | JET    | 32.12     |
-| 2  | AMEX     | 12.49  | ABC       |
+| 2  | AMEX     | ABC    | 12.49     |
 |------------------------------------|
 </pre>
 

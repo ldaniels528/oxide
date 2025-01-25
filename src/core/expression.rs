@@ -3,15 +3,15 @@
 // Expression class
 ////////////////////////////////////////////////////////////////////
 
-use crate::arrays::Array;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::VaryingType;
-use crate::descriptor::Descriptor;
+use crate::sequences::{Array, Sequence};
+
 use crate::errors::throw;
-use crate::errors::Errors::{Exact, IllegalOperator, TypeMismatch};
-use crate::errors::TypeMismatchErrors::UnsupportedType;
-use crate::expression::Expression::*;
+use crate::errors::Errors::{IllegalOperator, TypeMismatch};
+use crate::errors::TypeMismatchErrors::{ConstantValueExpected, UnsupportedType};
+use crate::expression::Expression::{CodeBlock, Condition, FunctionCall, If, Literal, Return, Variable, While};
 use crate::inferences::Inferences;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::I64Value;
@@ -84,7 +84,16 @@ pub enum CreationEntity {
     TableEntity {
         columns: Vec<Parameter>,
         from: Option<Box<Expression>>,
+        options: Vec<TableOptions>,
     },
+    TableFnEntity {
+        fx: Box<Expression>,
+    },
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum TableOptions {
+    Journaling
 }
 
 /// Represents an import definition
@@ -181,13 +190,11 @@ pub enum Queryables {
 pub enum Expression {
     ArrayExpression(Vec<Expression>),
     AsValue(String, Box<Expression>),
-    // bitwise
     BitwiseAnd(Box<Expression>, Box<Expression>),
     BitwiseOr(Box<Expression>, Box<Expression>),
     BitwiseShiftLeft(Box<Expression>, Box<Expression>),
     BitwiseShiftRight(Box<Expression>, Box<Expression>),
     BitwiseXor(Box<Expression>, Box<Expression>),
-    //
     CodeBlock(Vec<Expression>),
     Condition(Conditions),
     DatabaseOp(DatabaseOps),
@@ -198,6 +205,11 @@ pub enum Expression {
     ExtractPostfix(Box<Expression>, Box<Expression>),
     Factorial(Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
+    FnExpression {
+        params: Vec<Parameter>,
+        body: Option<Box<Expression>>,
+        returns: DataType,
+    },
     ForEach(String, Box<Expression>, Box<Expression>),
     From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
@@ -234,7 +246,8 @@ pub enum Expression {
         verifications: Vec<Expression>,
     },
     SetVariable(String, Box<Expression>),
-    Tuple(Vec<Expression>),
+    SetVariables(Box<Expression>, Box<Expression>),
+    TupleExpression(Vec<Expression>),
     Variable(String),
     Via(Box<Expression>),
     While {
@@ -250,87 +263,97 @@ impl Expression {
     ////////////////////////////////////////////////////////////////
 
     pub fn decompile(expr: &Expression) -> String {
-        use crate::expression::Expression::*;
         match expr {
-            ArrayExpression(items) =>
+            Expression::ArrayExpression(items) =>
                 format!("[{}]", items.iter().map(|i| Self::decompile(i)).collect::<Vec<String>>().join(", ")),
-            AsValue(name, expr) =>
+            Expression::AsValue(name, expr) =>
                 format!("{}: {}", name, Self::decompile(expr)),
-            BitwiseAnd(a, b) =>
+            Expression::BitwiseAnd(a, b) =>
                 format!("{} & {}", Self::decompile(a), Self::decompile(b)),
-            BitwiseOr(a, b) =>
+            Expression::BitwiseOr(a, b) =>
                 format!("{} | {}", Self::decompile(a), Self::decompile(b)),
-            BitwiseXor(a, b) =>
+            Expression::BitwiseXor(a, b) =>
                 format!("{} ^ {}", Self::decompile(a), Self::decompile(b)),
-            BitwiseShiftLeft(a, b) =>
+            Expression::BitwiseShiftLeft(a, b) =>
                 format!("{} << {}", Self::decompile(a), Self::decompile(b)),
-            BitwiseShiftRight(a, b) =>
+            Expression::BitwiseShiftRight(a, b) =>
                 format!("{} >> {}", Self::decompile(a), Self::decompile(b)),
-            CodeBlock(items) => Self::decompile_code_blocks(items),
-            Condition(cond) => Self::decompile_cond(cond),
-            Directive(d) => Self::decompile_directives(d),
-            Divide(a, b) =>
+            Expression::CodeBlock(items) => Self::decompile_code_blocks(items),
+            Expression::Condition(cond) => Self::decompile_cond(cond),
+            Expression::Directive(d) => Self::decompile_directives(d),
+            Expression::Divide(a, b) =>
                 format!("{} / {}", Self::decompile(a), Self::decompile(b)),
-            ElementAt(a, b) =>
+            Expression::ElementAt(a, b) =>
                 format!("{}[{}]", Self::decompile(a), Self::decompile(b)),
-            Extraction(a, b) =>
+            Expression::Extraction(a, b) =>
                 format!("{}::{}", Self::decompile(a), Self::decompile(b)),
-            ExtractPostfix(a, b) =>
+            Expression::ExtractPostfix(a, b) =>
                 format!("{}:::{}", Self::decompile(a), Self::decompile(b)),
-            Factorial(a) => format!("{}¡", Self::decompile(a)),
-            Feature { title, scenarios } =>
+            Expression::Factorial(a) => format!("{}¡", Self::decompile(a)),
+            Expression::Feature { title, scenarios } =>
                 format!("feature {} {{\n{}\n}}", title.to_code(), scenarios.iter()
                     .map(|s| s.to_code())
                     .collect::<Vec<_>>()
                     .join("\n")),
-            ForEach(a, b, c) =>
+            Expression::FnExpression { params, body, returns } =>
+                format!("fn({}){}{}", Self::decompile_parameters(params),
+                        match returns.to_code() {
+                            type_name if !type_name.is_empty() => format!(": {}", type_name),
+                            _ => String::new()
+                        },
+                        match body {
+                            Some(my_body) => format!(" => {}", my_body.to_code()),
+                            None => String::new()
+                        }),
+            Expression::ForEach(a, b, c) =>
                 format!("foreach {} in {} {}", a, Self::decompile(b), Self::decompile(c)),
-            From(a) => format!("from {}", Self::decompile(a)),
-            Tuple(args) => format!("({})", Self::decompile_list(args)),
-            FunctionCall { fx, args } =>
+            Expression::From(a) => format!("from {}", Self::decompile(a)),
+            Expression::FunctionCall { fx, args } =>
                 format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
-            If { condition, a, b } =>
+            Expression::HTTP { method, url, body, headers, multipart } =>
+                format!("{} {}{}{}{}", method, Self::decompile(url), Self::decompile_opt(body), Self::decompile_opt(headers), Self::decompile_opt(multipart)),
+            Expression::If { condition, a, b } =>
                 format!("if {} {}{}", Self::decompile(condition), Self::decompile(a), b.to_owned()
                     .map(|x| format!(" else {}", Self::decompile(&x)))
                     .unwrap_or("".into())),
-            Import(args) =>
+            Expression::Import(args) =>
                 format!("import {}", args.iter().map(|a| a.to_code())
                     .collect::<Vec<_>>()
                     .join(", ")),
-            Include(path) => format!("include {}", Self::decompile(path)),
-            JSONExpression(items) =>
+            Expression::Include(path) => format!("include {}", Self::decompile(path)),
+            Expression::JSONExpression(items) =>
                 format!("{{{}}}", items.iter()
                     .map(|(k, v)| format!("{}: {}", k, v))
                     .collect::<Vec<String>>()
                     .join(", ")),
-            Literal(value) => value.to_code(),
-            Minus(a, b) =>
+            Expression::Literal(value) => value.to_code(),
+            Expression::Minus(a, b) =>
                 format!("{} - {}", Self::decompile(a), Self::decompile(b)),
-            Module(name, ops) =>
+            Expression::Module(name, ops) =>
                 format!("{} {}", name, Self::decompile_code_blocks(ops)),
-            Modulo(a, b) =>
+            Expression::Modulo(a, b) =>
                 format!("{} % {}", Self::decompile(a), Self::decompile(b)),
-            Multiply(a, b) =>
+            Expression::Multiply(a, b) =>
                 format!("{} * {}", Self::decompile(a), Self::decompile(b)),
-            Neg(a) => format!("-({})", Self::decompile(a)),
-            Ns(a) => format!("ns({})", Self::decompile(a)),
-            Parameters(parameters) => Self::decompile_parameters(parameters),
-            Plus(a, b) =>
+            Expression::Neg(a) => format!("-({})", Self::decompile(a)),
+            Expression::Ns(a) => format!("ns({})", Self::decompile(a)),
+            Expression::Parameters(parameters) => Self::decompile_parameters(parameters),
+            Expression::Plus(a, b) =>
                 format!("{} + {}", Self::decompile(a), Self::decompile(b)),
-            PlusPlus(a, b) =>
+            Expression::PlusPlus(a, b) =>
                 format!("{} ++ {}", Self::decompile(a), Self::decompile(b)),
-            Pow(a, b) =>
+            Expression::Pow(a, b) =>
                 format!("{} ** {}", Self::decompile(a), Self::decompile(b)),
-            DatabaseOp(job) =>
+            Expression::DatabaseOp(job) =>
                 match job {
                     DatabaseOps::Queryable(q) => Self::decompile_queryables(q),
                     DatabaseOps::Mutation(m) => Self::decompile_modifications(m),
                 },
-            Range(a, b) =>
+            Expression::Range(a, b) =>
                 format!("{}..{}", Self::decompile(a), Self::decompile(b)),
-            Return(items) =>
+            Expression::Return(items) =>
                 format!("return {}", Self::decompile_list(items)),
-            Scenario { title, verifications } => {
+            Expression::Scenario { title, verifications } => {
                 let title = title.to_code();
                 let verifications = verifications.iter()
                     .map(|s| s.to_code())
@@ -338,14 +361,15 @@ impl Expression {
                     .join("\n");
                 format!("scenario {title} {{\n{verifications}\n}}")
             }
-            SetVariable(name, value) =>
+            Expression::SetVariable(name, value) =>
                 format!("{} := {}", name, Self::decompile(value)),
-            Variable(name) => name.to_string(),
-            Via(expr) => format!("via {}", Self::decompile(expr)),
-            While { condition, code } =>
+            Expression::SetVariables(name, value) =>
+                format!("{} := {}", Self::decompile(name), Self::decompile(value)),
+            Expression::TupleExpression(args) => format!("({})", Self::decompile_list(args)),
+            Expression::Variable(name) => name.to_string(),
+            Expression::Via(expr) => format!("via {}", Self::decompile(expr)),
+            Expression::While { condition, code } =>
                 format!("while {} {}", Self::decompile(condition), Self::decompile(code)),
-            HTTP { method, url, body, headers, multipart } =>
-                format!("{} {}{}{}{}", method, Self::decompile(url), Self::decompile_opt(body), Self::decompile_opt(headers), Self::decompile_opt(multipart)),
         }
     }
 
@@ -356,42 +380,35 @@ impl Expression {
     }
 
     pub fn decompile_cond(cond: &Conditions) -> String {
-        use crate::expression::Conditions::*;
         match cond {
-            And(a, b) =>
+            Conditions::And(a, b) =>
                 format!("{} && {}", Self::decompile(a), Self::decompile(b)),
-            Between(a, b, c) =>
+            Conditions::Between(a, b, c) =>
                 format!("{} between {} and {}", Self::decompile(a), Self::decompile(b), Self::decompile(c)),
-            Betwixt(a, b, c) =>
+            Conditions::Betwixt(a, b, c) =>
                 format!("{} betwixt {} and {}", Self::decompile(a), Self::decompile(b), Self::decompile(c)),
-            Contains(a, b) =>
+            Conditions::Contains(a, b) =>
                 format!("{} contains {}", Self::decompile(a), Self::decompile(b)),
-            Equal(a, b) =>
+            Conditions::Equal(a, b) =>
                 format!("{} == {}", Self::decompile(a), Self::decompile(b)),
-            False => "false".to_string(),
-            GreaterThan(a, b) =>
+            Conditions::False => "false".to_string(),
+            Conditions::GreaterThan(a, b) =>
                 format!("{} > {}", Self::decompile(a), Self::decompile(b)),
-            GreaterOrEqual(a, b) =>
+            Conditions::GreaterOrEqual(a, b) =>
                 format!("{} >= {}", Self::decompile(a), Self::decompile(b)),
-            LessThan(a, b) =>
+            Conditions::LessThan(a, b) =>
                 format!("{} < {}", Self::decompile(a), Self::decompile(b)),
-            LessOrEqual(a, b) =>
+            Conditions::LessOrEqual(a, b) =>
                 format!("{} <= {}", Self::decompile(a), Self::decompile(b)),
-            Like(a, b) =>
+            Conditions::Like(a, b) =>
                 format!("{} like {}", Self::decompile(a), Self::decompile(b)),
-            Not(a) => format!("!{}", Self::decompile(a)),
-            NotEqual(a, b) =>
+            Conditions::Not(a) => format!("!{}", Self::decompile(a)),
+            Conditions::NotEqual(a, b) =>
                 format!("{} != {}", Self::decompile(a), Self::decompile(b)),
-            Or(a, b) =>
+            Conditions::Or(a, b) =>
                 format!("{} || {}", Self::decompile(a), Self::decompile(b)),
-            True => "true".to_string(),
+            Conditions::True => "true".to_string(),
         }
-    }
-
-    pub fn decompile_descriptors(params: &Vec<Descriptor>) -> String {
-        params.iter().map(|d| d.to_code())
-            .collect::<Vec<_>>()
-            .join(", ")
     }
 
     pub fn decompile_parameters(params: &Vec<Parameter>) -> String {
@@ -455,15 +472,19 @@ impl Expression {
                 match entity {
                     CreationEntity::IndexEntity { columns } =>
                         format!("create index {} [{}]", Self::decompile(path), Self::decompile_list(columns)),
-                    CreationEntity::TableEntity { columns, from } =>
+                    CreationEntity::TableEntity { columns, from, options } =>
                         format!("create table {} ({})", Self::decompile(path), Self::decompile_parameters(columns)),
+                    CreationEntity::TableFnEntity { fx } =>
+                        format!("create table {} fn({})", Self::decompile(path), Self::decompile(fx)),
                 }
             Mutations::Declare(entity) =>
                 match entity {
                     CreationEntity::IndexEntity { columns } =>
                         format!("index [{}]", Self::decompile_list(columns)),
-                    CreationEntity::TableEntity { columns, from } =>
+                    CreationEntity::TableEntity { columns, from, options } =>
                         format!("table({})", Self::decompile_parameters(columns)),
+                    CreationEntity::TableFnEntity { fx } =>
+                        format!("table fn({})", Self::decompile(fx)),
                 }
             Mutations::Drop(target) => {
                 let (kind, path) = match target {
@@ -548,72 +569,74 @@ impl Expression {
         Self::decompile(self)
     }
 
+    fn purify(items: &Vec<Expression>) -> std::io::Result<TypedValue> {
+        let mut new_items = Vec::new();
+        for item in items {
+            new_items.push(item.to_pure()?);
+        }
+        Ok(ArrayValue(Array::from(new_items)))
+    }
+
     /// Attempts to resolve the [Expression] as a [TypedValue]
     pub fn to_pure(&self) -> std::io::Result<TypedValue> {
         match self {
-            AsValue(_, expr) => expr.to_pure(),
-            ArrayExpression(items) => {
-                let mut new_items = Vec::new();
-                for item in items {
-                    new_items.push(item.to_pure()?);
-                }
-                Ok(ArrayValue(Array::from(new_items)))
-            }
-            BitwiseAnd(a, b) => Ok(a.to_pure()? & b.to_pure()?),
-            BitwiseOr(a, b) => Ok(a.to_pure()? | b.to_pure()?),
-            BitwiseXor(a, b) => Ok(a.to_pure()? ^ b.to_pure()?),
-            BitwiseShiftLeft(a, b) => Ok(a.to_pure()? << b.to_pure()?),
-            BitwiseShiftRight(a, b) => Ok(a.to_pure()? >> b.to_pure()?),
-            Condition(kind) => match kind {
+            Expression::AsValue(_, expr) => expr.to_pure(),
+            Expression::ArrayExpression(items) => Self::purify(items),
+            Expression::BitwiseAnd(a, b) => Ok(a.to_pure()? & b.to_pure()?),
+            Expression::BitwiseOr(a, b) => Ok(a.to_pure()? | b.to_pure()?),
+            Expression::BitwiseXor(a, b) => Ok(a.to_pure()? ^ b.to_pure()?),
+            Expression::BitwiseShiftLeft(a, b) => Ok(a.to_pure()? << b.to_pure()?),
+            Expression::BitwiseShiftRight(a, b) => Ok(a.to_pure()? >> b.to_pure()?),
+            Expression::Condition(kind) => match kind {
                 Conditions::And(a, b) =>
                     Ok(Boolean(a.to_pure()?.is_true() && b.to_pure()?.is_true())),
                 Conditions::False => Ok(Boolean(false)),
                 Conditions::Or(a, b) =>
                     Ok(Boolean(a.to_pure()?.is_true() || b.to_pure()?.is_true())),
                 Conditions::True => Ok(Boolean(true)),
-                z => throw(Exact(format!("Constant value required near {}", z.to_code())))
+                z => throw(TypeMismatch(ConstantValueExpected(z.to_code())))
             }
-            Divide(a, b) => Ok(a.to_pure()? / b.to_pure()?),
-            ElementAt(a, b) => {
+            Expression::Divide(a, b) => Ok(a.to_pure()? / b.to_pure()?),
+            Expression::ElementAt(a, b) => {
                 let index = b.to_pure()?.to_usize();
                 Ok(match a.to_pure()? {
-                    ArrayValue(arr) => arr.get_or_else(index, Undefined),
-                    ErrorValue(err) => ErrorValue(err),
+                    TypedValue::ArrayValue(arr) => arr.get_or_else(index, Undefined),
+                    TypedValue::ErrorValue(err) => ErrorValue(err),
                     TypedValue::Null => TypedValue::Null,
-                    Structured(s) => {
+                    TypedValue::Structured(s) => {
                         let items = s.get_values();
                         if index >= items.len() { Undefined } else { items[index].clone() }
                     }
                     TypedValue::TableValue(df) => df.read_one(index)?
                         .map(|row| Structured(Firm(row, df.get_columns().clone())))
                         .unwrap_or(Undefined),
-                    Undefined => Undefined,
+                    TypedValue::Undefined => Undefined,
                     z => ErrorValue(TypeMismatch(UnsupportedType(VaryingType(vec![]), z.get_type())))
                 })
             }
-            Factorial(expr) => expr.to_pure().map(|v| v.factorial()),
-            JSONExpression(items) => {
+            Expression::Factorial(expr) => expr.to_pure().map(|v| v.factorial()),
+            Expression::JSONExpression(items) => {
                 let mut new_items = Vec::new();
                 for (name, expr) in items {
                     new_items.push((name.to_string(), expr.to_pure()?))
                 }
                 Ok(Structured(Soft(SoftStructure::from_tuples(new_items))))
             }
-            Literal(value) => Ok(value.clone()),
-            Minus(a, b) => Ok(a.to_pure()? - b.to_pure()?),
-            Modulo(a, b) => Ok(a.to_pure()? % b.to_pure()?),
-            Multiply(a, b) => Ok(a.to_pure()? * b.to_pure()?),
-            Neg(expr) => expr.to_pure().map(|v| -v),
-            Plus(a, b) => Ok(a.to_pure()? + b.to_pure()?),
-            Pow(a, b) => Ok(a.to_pure()?.pow(&b.to_pure()?)
+            Expression::Literal(value) => Ok(value.clone()),
+            Expression::Minus(a, b) => Ok(a.to_pure()? - b.to_pure()?),
+            Expression::Modulo(a, b) => Ok(a.to_pure()? % b.to_pure()?),
+            Expression::Multiply(a, b) => Ok(a.to_pure()? * b.to_pure()?),
+            Expression::Neg(expr) => expr.to_pure().map(|v| -v),
+            Expression::Plus(a, b) => Ok(a.to_pure()? + b.to_pure()?),
+            Expression::Pow(a, b) => Ok(a.to_pure()?.pow(&b.to_pure()?)
                 .unwrap_or(Undefined)),
-            Range(a, b) =>
+            Expression::Range(a, b) =>
                 Ok(ArrayValue(Array::from(TypedValue::express_range(
                     a.to_pure()?,
                     b.to_pure()?,
                     Number(I64Value(1)),
                 )))),
-            z => throw(Exact(format!("Constant value required near {}", z.to_code())))
+            z => throw(TypeMismatch(ConstantValueExpected(z.to_code())))
         }
     }
 }
@@ -626,7 +649,7 @@ impl Display for Expression {
 
 fn to_ns(path: Expression) -> Expression {
     fn fx(name: &str, path: Expression) -> Expression {
-        FunctionCall {
+        Expression::FunctionCall {
             fx: Box::new(Variable(name.into())),
             args: vec![path],
         }
@@ -637,11 +660,11 @@ fn to_ns(path: Expression) -> Expression {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::data_types::DataType::{NumberType, StringType};
+    use crate::data_types::DataType::{Indeterminate, NumberType, StringType};
     use crate::expression::Conditions::*;
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
     use crate::expression::DatabaseOps::{Mutation, Queryable};
-    use crate::expression::Expression::{AsValue, Literal};
+    use crate::expression::Expression::{ArrayExpression, AsValue, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor, DatabaseOp, ElementAt, FnExpression, From, JSONExpression, Literal, Multiply, Ns, Plus, SetVariable, Via};
     use crate::expression::*;
     use crate::machine::Machine;
     use crate::number_kind::NumberKind::F64Kind;
@@ -649,7 +672,7 @@ mod tests {
     use crate::numbers::Numbers::*;
     use crate::tokenizer;
     use crate::typed_values::TypedValue::*;
-    use crate::typed_values::TypedValue::{Function, Number, StringValue};
+    use crate::typed_values::TypedValue::{Number, StringValue};
 
     use super::*;
 
@@ -767,6 +790,16 @@ mod tests {
         let (_, result) = machine.evaluate_cond(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "\"Hello\" == \"Hello\"")
+    }
+
+    #[test]
+    fn test_function_expression() {
+        let model = FnExpression {
+            params: vec![],
+            body: None,
+            returns: StringType(0),
+        };
+        assert_eq!(model.to_code(), "fn(): String")
     }
 
     #[test]
@@ -1022,36 +1055,38 @@ mod tests {
 
     #[test]
     fn test_define_anonymous_function() {
-        let model = Literal(Function {
+        let model = FnExpression {
             params: vec![
                 Parameter::build("a"),
                 Parameter::build("b"),
             ],
-            code: Box::new(Multiply(Box::new(
+            body: Some(Box::new(Multiply(Box::new(
                 Variable("a".into())
             ), Box::new(
                 Variable("b".into())
-            ))),
-        });
-        assert_eq!(Expression::decompile(&model), "(fn(a, b) => a * b)")
+            )))),
+            returns: Indeterminate,
+        };
+        assert_eq!(Expression::decompile(&model), "fn(a, b) => a * b")
     }
 
     #[test]
     fn test_define_named_function() {
         let model = SetVariable("add".into(), Box::new(
-            Literal(Function {
+            FnExpression {
                 params: vec![
                     Parameter::build("a"),
                     Parameter::build("b"),
                 ],
-                code: Box::new(Plus(Box::new(
+                body: Some(Box::new(Plus(Box::new(
                     Variable("a".into())
                 ), Box::new(
                     Variable("b".into())
-                ))),
-            })
-        ));
-        assert_eq!(Expression::decompile(&model), "add := (fn(a, b) => a + b)")
+                )))),
+                returns: Indeterminate,
+            }),
+        );
+        assert_eq!(Expression::decompile(&model), "add := fn(a, b) => a + b")
     }
 
     #[test]
@@ -1094,6 +1129,7 @@ mod tests {
                     Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.))),
                 ],
                 from: None,
+                options: vec![],
             },
         }));
         assert_eq!(
@@ -1110,6 +1146,7 @@ mod tests {
                 Parameter::new("last_sale", NumberType(F64Kind)),
             ],
             from: None,
+            options: vec![],
         })));
         assert_eq!(
             Expression::decompile(&model),
@@ -1119,9 +1156,9 @@ mod tests {
     /// Unit tests
     #[cfg(test)]
     mod pure_tests {
-        use crate::arrays::Array;
         use crate::compiler::Compiler;
         use crate::numbers::Numbers::{F64Value, I64Value, U128Value, U64Value};
+        use crate::sequences::Array;
         use crate::typed_values::TypedValue;
         use crate::typed_values::TypedValue::{ArrayValue, Boolean, Number};
 

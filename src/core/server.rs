@@ -3,8 +3,8 @@
 // server module
 ////////////////////////////////////////////////////////////////////
 
-use serde::{Deserialize, Serialize};
 use crate::platform::VERSION;
+use serde::{Deserialize, Serialize};
 
 // JSON representation of Oxide system information
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

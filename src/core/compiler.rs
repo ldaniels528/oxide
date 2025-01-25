@@ -5,12 +5,12 @@
 
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::VaryingType;
+use crate::data_types::DataType::{Indeterminate, VaryingType};
 use crate::errors::throw;
-use crate::errors::Errors::{Exact, ExactNear, Syntax, TypeMismatch};
-use crate::errors::TypeMismatchErrors::{CodeBlockExpected, VariableExpected};
+use crate::errors::Errors::{ExactNear, Syntax, TypeMismatch};
+use crate::errors::TypeMismatchErrors::{CodeBlockExpected, ParameterExpected, VariableExpected};
 use crate::expression::Conditions::*;
-use crate::expression::CreationEntity::{IndexEntity, TableEntity};
+use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity};
 use crate::expression::DatabaseOps::{Mutation, Queryable};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::TableTarget;
@@ -24,7 +24,7 @@ use crate::structures::Structures::Hard;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Function, Null, Number, StringValue, Structured};
+use crate::typed_values::TypedValue::{Null, Number, StringValue, Structured};
 use serde::{Deserialize, Serialize};
 use shared_lib::fail;
 use std::convert::From;
@@ -256,6 +256,24 @@ impl Compiler {
         }
     }
 
+    /// compiles the [TokenSlice] into a name-value parameter [Expression]
+    fn parse_expression_set(
+        &mut self,
+        ts: TokenSlice,
+        expr0: Expression,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (expr1, ts) = self.compile_next(ts)?;
+        match expr0 {
+            ArrayExpression(items) =>
+                Ok((SetVariables(Box::from(ArrayExpression(items)), Box::new(expr1)), ts)),
+            TupleExpression(items) =>
+                Ok((SetVariables(Box::from(TupleExpression(items)), Box::new(expr1)), ts)),
+            Variable(name) =>
+                Ok((SetVariable(name, Box::new(expr1)), ts)),
+            _ => throw(ExactNear("an identifier name was expected".into(), ts.current()))
+        }
+    }
+
     /// Parses an identifier.
     fn parse_identifier(
         &mut self,
@@ -371,7 +389,14 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         // create table `stocks` (name: String, ..)
         let (table, ts) = self.compile_next(ts)?;
-        if let (Parameters(columns), ts) = self.expect_parameters(ts.to_owned())? {
+        if ts.is("fn") {
+            let ts = ts.expect("fn")?;
+            let (fx, ts) = self.expect_function_parameters_and_body(None, ts)?;
+            Ok((DatabaseOp(Mutation(Create {
+                path: Box::new(table),
+                entity: TableFnEntity { fx: Box::from(fx) },
+            })), ts))
+        } else if let (Parameters(columns), ts) = self.expect_parameters(ts.to_owned())? {
             // from { symbol: "ABC", exchange: "NYSE", last_sale: 67.89 }
             let (from, ts) =
                 if ts.is("from") {
@@ -381,13 +406,46 @@ impl Compiler {
                 } else {
                     (None, ts)
                 };
+            let (options, ts) = self.parse_table_options(ts)?;
             Ok((DatabaseOp(Mutation(Create {
                 path: Box::new(table),
-                entity: TableEntity { columns, from },
+                entity: TableEntity { columns, from, options },
             })), ts))
         } else {
             throw(ExactNear("Expected column definitions".into(), ts.current()))
         }
+    }
+
+    /// Parses the table options
+    /// e.g: create table ns("a.b.c") (
+    ///     symbol: String(8), exchange: String(8), last_sale: f64
+    /// ) with journaling
+    fn parse_table_options(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Vec<TableOptions>, TokenSlice)> {
+        let mut options = vec![];
+        let mut ts = ts;
+        while ts.is("with") {
+            let (_, tts) = ts.next();
+            ts = tts;
+            println!("ts: {:?}", ts.next());
+            match ts.next() {
+                (Some(Atom { text, .. }), tts) =>
+                    match text.as_str() {
+                        "journaling" => {
+                            options.push(TableOptions::Journaling);
+                            ts = tts;
+                        }
+                        _ => return throw(ExactNear("Expected journaling".into(), tts.current()))
+                    }
+                (Some(tok), _ts) =>
+                    return throw(ExactNear("Expected journaling".into(), tok)),
+                (None, ts) =>
+                    return throw(ExactNear("Unexpected end of input".into(), ts.current())),
+            }
+        }
+        Ok((options, ts))
     }
 
     /// SQL Delete statement.
@@ -567,7 +625,6 @@ impl Compiler {
         let mut ops = Vec::new();
         let mut is_done = false;
         while !is_done {
-            let ts0 = ts.clone();
             let (expr, ts1) = self.compile_next(ts)?;
             ts = ts1;
             match expr {
@@ -692,6 +749,15 @@ impl Compiler {
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
+        // detect whether
+        let mut ts = ts;
+        let is_function = if ts.is("fn") {
+            let ats = ts.expect("fn")?;
+            ts = ats;
+            true
+        } else {
+            false
+        };
         if let (Parameters(params), ts) = self.expect_parameters(ts.to_owned())? {
             // from { symbol: "ABC", exchange: "NYSE", last_sale: 67.89 }
             let (from, ts) = if ts.is("from") {
@@ -701,7 +767,11 @@ impl Compiler {
             } else {
                 (None, ts)
             };
-            Ok((DatabaseOp(Mutation(Declare(TableEntity { columns: params, from }))), ts))
+            if is_function {
+                Ok((DatabaseOp(Mutation(Declare(TableEntity { columns: params, from, options: vec![] }))), ts))
+            } else {
+                Ok((DatabaseOp(Mutation(Declare(TableEntity { columns: params, from, options: vec![] }))), ts))
+            }
         } else {
             throw(ExactNear("Expected column definitions".into(), ts.current()))
         }
@@ -829,7 +899,7 @@ impl Compiler {
                         "++" => self.parse_expression_2a(ts, op0, PlusPlus),
                         "**" => self.parse_expression_2a(ts, op0, Pow),
                         ".." => self.parse_expression_2a(ts, op0, Range),
-                        ":=" => self.parse_expression_2nv(ts, op0, SetVariable),
+                        ":=" => self.parse_expression_set(ts, op0),
                         "<<" => self.parse_expression_2a(ts, op0, |a, b| BitwiseShiftLeft(a, b)),
                         ">>" => self.parse_expression_2a(ts, op0, |a, b| BitwiseShiftRight(a, b)),
                         unknown => fail(format!("Invalid operator '{}'", unknown))
@@ -930,6 +1000,8 @@ impl Compiler {
         }
     }
 
+    /// Expects a function call or variable
+    /// ex: f(2, 3) | abc
     fn expect_function_call_or_variable(
         &mut self,
         name: &str,
@@ -949,6 +1021,8 @@ impl Compiler {
         }
     }
 
+    /// Expects an "if" function
+    /// ex: iff(n < 0, 1, n)
     fn expect_function_call_iff(
         &mut self,
         args: Vec<Expression>,
@@ -965,6 +1039,8 @@ impl Compiler {
         }
     }
 
+    /// Expects function parameters and a body
+    /// ex: (a: i32, b: i32) => a + b
     fn expect_function_parameters_and_body(
         &mut self,
         name: Option<String>,
@@ -976,8 +1052,9 @@ impl Compiler {
             match ts.next() {
                 (Some(Operator { text: symbol, .. }), ts) if symbol == "=>" => {
                     let (body, ts) = self.compile_next(ts)?;
+                    let returns = DataType::Indeterminate; // TODO parse type
                     // build the model
-                    let func = Literal(Function { params, code: Box::new(body) });
+                    let func = FnExpression { params, body: Some(Box::new(body)), returns };
                     match name {
                         Some(name) => Ok((SetVariable(name, Box::new(func)), ts)),
                         None => Ok((func, ts))
@@ -987,7 +1064,7 @@ impl Compiler {
                 // ex: fn(symbol: String(8), exchange: String(8), last_sale: f64)
                 _ => match name {
                     Some(..) => throw(ExactNear("Symbol expected '=>'".into(), ts.current())),
-                    None => Ok((Literal(Function { params, code: Box::new(UNDEFINED) }), ts))
+                    None => Ok((FnExpression { params, body: None, returns: Indeterminate }, ts))
                 }
             }
         } else {
@@ -995,6 +1072,8 @@ impl Compiler {
         }
     }
 
+    /// Expects function parameters
+    /// ex: (a: i32, b: i32)
     pub fn expect_parameters(
         &mut self,
         ts: TokenSlice,
@@ -1014,6 +1093,8 @@ impl Compiler {
         Ok((Parameters(parameters), ts.expect(")")?))
     }
 
+    /// Expects a single function parameter
+    /// ex: a: i32
     fn expect_parameter(
         &mut self,
         ts: TokenSlice,
@@ -1042,6 +1123,8 @@ impl Compiler {
         }
     }
 
+    /// Expects a parameter type declaration
+    /// ex: String(8)
     pub fn expect_parameter_type_decl(
         &mut self,
         ts: TokenSlice,
@@ -1059,6 +1142,8 @@ impl Compiler {
         } else { Ok((None, ts)) }
     }
 
+    /// Expects an expression starting with an opening parenthesis
+    /// ex: (8 * n)
     fn expect_parentheses(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let mut items = vec![];
         let mut ts = ts;
@@ -1081,7 +1166,7 @@ impl Compiler {
             args if args.iter().find(|arg| matches!(arg, AsValue(..))).is_some() =>
                 Ok((Self::convert_to_parameters(args)?, ts)),
             [expr] => Ok((expr.clone(), ts)),
-            args => Ok((Tuple(args.to_vec()), ts))
+            args => Ok((TupleExpression(args.to_vec()), ts))
         }
     }
 
@@ -1094,7 +1179,7 @@ impl Compiler {
                 Variable(name) =>
                     params.push(Parameter::new(name, VaryingType(vec![]))),
                 expr =>
-                    return throw(Exact(format!("Parameter expected near {}", expr.to_code())))
+                    return throw(TypeMismatch(ParameterExpected(expr.to_code())))
             }
         }
         Ok(Parameters(params))
@@ -1222,7 +1307,7 @@ mod tests {
     mod core_tests {
         use crate::compiler::Compiler;
         use crate::expression::Conditions::True;
-        use crate::expression::Expression::{Condition, Feature, FunctionCall, Literal, Scenario, Variable};
+        use crate::expression::Expression::{Condition, Feature, FunctionCall, Literal, Scenario, SetVariables, TupleExpression, Variable};
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::token_slice::TokenSlice;
         use crate::typed_values::TypedValue::{Number, StringValue};
@@ -1297,6 +1382,26 @@ mod tests {
                         Literal(StringValue("LICENSE".into())),
                     ],
                 });
+        }
+
+        #[test]
+        fn test_tuple_assignment() {
+            let model = Compiler::build(r#"
+                (a, b, c) := (3, 5, 7)
+            "#).unwrap();
+            assert_eq!(model, SetVariables(
+                Box::from(TupleExpression(vec![
+                    Variable("a".into()),
+                    Variable("b".into()),
+                    Variable("c".into()),
+                ])),
+                Box::from(TupleExpression(vec![
+                    Literal(Number(I64Value(3))),
+                    Literal(Number(I64Value(5))),
+                    Literal(Number(I64Value(7))),
+                ])),
+            ));
+            assert_eq!(model.to_code(), "(a, b, c) := (3, 5, 7)")
         }
 
         #[test]
@@ -1379,10 +1484,11 @@ mod tests {
     #[cfg(test)]
     mod function_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Expression::{FunctionCall, Literal, Multiply, Plus, SetVariable, Variable};
+        use crate::data_types::DataType::Indeterminate;
+        use crate::expression::Expression::{FnExpression, FunctionCall, Literal, Multiply, Plus, SetVariable, Variable};
         use crate::numbers::Numbers::I64Value;
         use crate::parameter::Parameter;
-        use crate::typed_values::TypedValue::{Function, Number};
+        use crate::typed_values::TypedValue::Number;
 
         #[test]
         fn test_define_named_function() {
@@ -1393,17 +1499,18 @@ mod tests {
                 fn add(a, b) => a + b
             "#).unwrap();
             assert_eq!(code, SetVariable("add".to_string(), Box::new(
-                Literal(Function {
+                FnExpression {
                     params: vec![
                         Parameter::build("a"),
                         Parameter::build("b"),
                     ],
-                    code: Box::new(Plus(Box::new(
+                    body: Some(Box::new(Plus(Box::new(
                         Variable("a".into())
                     ), Box::new(
                         Variable("b".into())
-                    ))),
-                })
+                    )))),
+                    returns: Indeterminate
+                }
             ))
             )
         }
@@ -1416,18 +1523,18 @@ mod tests {
             let code = Compiler::build(r#"
                 fn (a, b) => a * b
             "#).unwrap();
-            assert_eq!(code, Literal(Function {
+            assert_eq!(code, FnExpression {
                 params: vec![
                     Parameter::build("a"),
                     Parameter::build("b"),
                 ],
-                code: Box::new(Multiply(Box::new(
+                body: Some(Box::new(Multiply(Box::new(
                     Variable("a".into())
                 ), Box::new(
                     Variable("b".into())
-                ))),
+                )))),
+                returns: Indeterminate
             })
-            )
         }
 
         #[test]
@@ -1943,7 +2050,7 @@ mod tests {
     mod parameter_and_tuple_tests {
         use crate::compiler::Compiler;
         use crate::data_types::DataType::{NumberType, VaryingType};
-        use crate::expression::Expression::{Parameters, Tuple, Variable};
+        use crate::expression::Expression::{Parameters, TupleExpression, Variable};
         use crate::number_kind::NumberKind::I64Kind;
         use crate::parameter::Parameter;
 
@@ -1976,7 +2083,7 @@ mod tests {
             let expr = Compiler::build(r#"
                 (a, b, c)
             "#).unwrap();
-            assert_eq!(expr, Tuple(vec![
+            assert_eq!(expr, TupleExpression(vec![
                 Variable("a".into()),
                 Variable("b".into()),
                 Variable("c".into()),
@@ -1995,6 +2102,7 @@ mod tests {
         use crate::expression::Expression::{ArrayExpression, Condition, DatabaseOp, From, JSONExpression, Literal, Ns, Variable, Via};
         use crate::expression::MutateTarget::TableTarget;
         use crate::expression::Mutations::{Create, Declare, Drop, IntoNs};
+        use crate::expression::TableOptions::Journaling;
         use crate::expression::{Mutations, Queryables};
         use crate::number_kind::NumberKind::F64Kind;
         use crate::numbers::Numbers::{F64Value, I64Value};
@@ -2118,8 +2226,43 @@ mod tests {
                         Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.54))),
                     ],
                     from: None,
+                    options: vec![],
                 },
             })));
+        }
+
+        #[test]
+        fn test_create_table_fn_in_namespace() {
+            let ns_path = "compiler.journal.stocks";
+            let model = Compiler::build(r#"
+                create table ns("compiler.journal.stocks") fn(
+                   symbol: String(8), exchange: String(8), last_sale: f64
+                ) => { symbol: symbol, market: exchange, last_sale: last_sale, process_time: time::cal() }
+            "#).unwrap();
+        }
+
+        #[test]
+        fn test_create_table_with_journaling_in_namespace() {
+            let ns_path = "compiler.journal.stocks";
+            let model = Compiler::build(r#"
+                create table ns("compiler.journal.stocks") (
+                   symbol: String(8), exchange: String(8), last_sale: f64
+                ) with journaling
+            "#).unwrap();
+            assert_eq!(model, DatabaseOp(Mutation(Create {
+                path: Box::new(Ns(Box::new(Literal(StringValue("compiler.journal.stocks".into()))))),
+                entity: TableEntity {
+                    columns: vec![
+                        Parameter::new("symbol", StringType(8)),
+                        Parameter::new("exchange", StringType(8)),
+                        Parameter::new("last_sale", NumberType(F64Kind)),
+                    ],
+                    from: None,
+                    options: vec![
+                        Journaling
+                    ],
+                }
+            })))
         }
 
         #[test]
@@ -2137,6 +2280,7 @@ mod tests {
                     Parameter::new("last_sale", NumberType(F64Kind)),
                 ],
                 from: None,
+                options: vec![],
             }))));
         }
 
