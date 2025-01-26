@@ -3,9 +3,9 @@
 // Dataframe class
 ////////////////////////////////////////////////////////////////////
 
+use std::collections::HashSet;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
-use crate::dataframe::Dataframe::Model;
 use crate::expression::{Conditions, Expression};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
@@ -24,8 +24,8 @@ use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Number;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 use std::sync::Arc;
+use crate::dataframe::Dataframe::Model;
 
 /// DataFrame is a logical representation of table
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

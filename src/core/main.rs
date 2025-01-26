@@ -56,6 +56,7 @@ mod tokenizer;
 mod tokens;
 mod typed_values;
 mod websockets;
+mod table_options;
 
 const LOCAL_HOST: &str = "0.0.0.0";
 

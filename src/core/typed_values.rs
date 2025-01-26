@@ -5,7 +5,7 @@
 
 use std::cmp::Ordering;
 use std::collections::Bound;
-use std::fmt::{format, Display};
+use std::fmt::Display;
 use std::hash::{DefaultHasher, Hasher};
 use std::i32;
 use std::ops::*;
@@ -28,7 +28,7 @@ use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, Model};
 
 use crate::errors::Errors::{CannotSubtract, Exact, Multiple, Syntax, TypeMismatch};
-use crate::errors::TypeMismatchErrors::{CannotBeNegated, StructsOneOrMoreExpected, UnsupportedType};
+use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CannotBeNegated, StructsOneOrMoreExpected, UnsupportedType};
 use crate::errors::{throw, Errors};
 use crate::expression::Expression;
 use crate::field::FieldMetadata;
@@ -70,11 +70,11 @@ pub enum TypedValue {
     Boolean(bool),
     ErrorValue(Errors),
     Function { params: Vec<Parameter>, body: Box<Expression>, returns: DataType },
-    Kind(DataType),
     NamespaceValue(Namespace),
     Null,
     Number(Numbers),
     PlatformOp(PlatformOps),
+    Sequenced(Sequences),
     StringValue(String),
     Structured(Structures),
     TableValue(Dataframe),
@@ -106,7 +106,7 @@ impl TypedValue {
             serde_json::Value::String(s) => StringValue(s.to_owned()),
             serde_json::Value::Array(a) => ArrayValue(Array::from(a.iter().map(Self::from_json).collect())),
             serde_json::Value::Object(args) => Structured(Hard(
-                HardStructure::from_parameters(&args.iter()
+                HardStructure::from_parameters(args.iter()
                     .map(|(name, value)| {
                         let tv = TypedValue::from_json(value);
                         Parameter::with_default(name, tv.get_type().clone(), tv)
@@ -164,6 +164,24 @@ impl TypedValue {
         Some(iso_date)
     }
 
+    pub fn parse_two_args(
+        args: Vec<TypedValue>
+    ) -> std::io::Result<(TypedValue, TypedValue)> {
+        match args.as_slice() {
+            [a, b] => Ok((a.clone(), b.clone())),
+            z => throw(TypeMismatch(ArgumentsMismatched(2, z.len())))
+        }
+    }
+
+    pub fn parse_three_args(
+        args: Vec<TypedValue>
+    ) -> std::io::Result<(TypedValue, TypedValue, TypedValue)> {
+        match args.as_slice() {
+            [a, b, c] => Ok((a.clone(), b.clone(), c.clone())),
+            z => throw(TypeMismatch(ArgumentsMismatched(3, z.len())))
+        }
+    }
+
     pub fn wrap_value(raw_value: &str) -> std::io::Result<Self> {
         let iso_date_regex = Regex::new(ISO_DATE_FORMAT).map_err(|e| cnv_error!(e))?;
         let uuid_regex = Regex::new(UUID_FORMAT).map_err(|e| cnv_error!(e))?;
@@ -207,6 +225,7 @@ impl TypedValue {
     pub fn contains(&self, value: &TypedValue) -> TypedValue {
         match &self {
             ArrayValue(items) => Boolean(items.contains(value)),
+            Sequenced(items) => Boolean(items.contains(value)),
             Structured(Hard(hard)) => match value {
                 StringValue(name) => Boolean(hard.contains(name)),
                 _ => Boolean(false)
@@ -257,11 +276,11 @@ impl TypedValue {
             ErrorValue(..) => ErrorType,
             Function { params, returns, .. } =>
                 FunctionType(params.clone(), Box::from(returns.clone())),
-            Kind(dt) => dt.clone(),
             NamespaceValue(..) => TableType(Vec::new(), 0),
             Null | Undefined => VaryingType(Vec::new()),
             Number(n) => NumberType(n.kind()),
             PlatformOp(op) => op.get_type(),
+            Sequenced(seq) => seq.get_type(),
             Structured(s) => StructureType(s.get_parameters()),
             StringValue(s) => StringType(s.len()),
             TableValue(tv) => TableType(Parameter::from_columns(tv.get_columns()), 0),
@@ -407,6 +426,17 @@ impl TypedValue {
         }
     }
 
+    pub fn to_dataframe(&self) -> std::io::Result<Dataframe> {
+        match self {
+            ArrayValue(items) => self.convert_array_to_table(&items.get_values()),
+            ErrorValue(err) => throw(err.to_owned()),
+            NamespaceValue(ns) => Ok(Disk(FileRowCollection::open(ns)?)),
+            Structured(s) => Ok(Model(s.to_table())),
+            TableValue(df) => Ok(df.to_owned()),
+            z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             ArrayValue(items) => serde_json::json!(items.iter()
@@ -421,7 +451,7 @@ impl TypedValue {
                     .map(|c| c.to_json()).collect());
                 serde_json::json!({ "params": my_params, "code": code.to_code(), "returns": returns.to_type_declaration() })
             }
-            Kind(dt) => serde_json::json!(dt),
+            Sequenced(seq) => serde_json::json!(seq),
             NamespaceValue(ns) => serde_json::json!(ns.get_full_name()),
             Null => serde_json::Value::Null,
             Number(nv) => nv.to_json(),
@@ -429,9 +459,9 @@ impl TypedValue {
             StringValue(s) => serde_json::json!(s),
             Structured(s) => s.to_json(),
             TableValue(df) => {
-                let columns = df.get_columns();
+                let parameters = df.get_parameters();
                 let rows = df.iter()
-                    .map(|r| r.to_hash_json_value(columns))
+                    .map(|r| r.to_hash_json_value(&parameters))
                     .collect::<Vec<_>>();
                 serde_json::json!(rows)
             }
@@ -440,6 +470,16 @@ impl TypedValue {
                     .map(|v|v.to_json())
                     .collect::<Vec<_>>()),
             Undefined => serde_json::Value::Null,
+        }
+    }
+
+    pub fn to_sequence(&self) -> std::io::Result<Sequences> {
+        match self {
+            ArrayValue(array) => Ok(Sequences::TheArray(array.clone())),
+            NamespaceValue(ns) => Ok(Sequences::TheDataframe(Disk(FileRowCollection::open(ns)?))),
+            TableValue(df) => Ok(Sequences::TheDataframe(df.clone())),
+            TupleValue(t) => Ok(Sequences::TheTuple(t.to_vec())),
+            z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
         }
     }
 
@@ -453,7 +493,11 @@ impl TypedValue {
 
     pub fn to_table_value(&self) -> TypedValue {
         match self {
-            ArrayValue(items) => self.convert_array_to_table(&items.get_values()),
+            ArrayValue(items) =>
+                match self.convert_array_to_table(&items.get_values()) {
+                    Ok(df) => TableValue(df),
+                    Err(error) => ErrorValue(Exact(error.to_string())),
+                }
             ErrorValue(err) => ErrorValue(err.to_owned()),
             NamespaceValue(ns) =>
                 match ObjectConfig::load(ns) {
@@ -464,13 +508,13 @@ impl TypedValue {
                         },
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 }
-            Structured(s) => TableValue(Model(s.to_table())),
+            Structured(s) => TableValue(s.to_dataframe()),
             TableValue(df) => TableValue(df.to_owned()),
             z => z.to_owned()
         }
     }
 
-    fn convert_array_to_table(&self, items: &Vec<TypedValue>) -> TypedValue {
+    fn convert_array_to_table(&self, items: &Vec<TypedValue>) -> std::io::Result<Dataframe> {
         // gather each struct in the array as a table
         fn value_parameters(value: &TypedValue) -> Vec<Parameter> {
             vec![Parameter::new("value", value.get_type().clone())]
@@ -495,9 +539,9 @@ impl TypedValue {
 
         // process the dataframes
         match dataframes.as_slice() {
-            [] => ErrorValue(TypeMismatch(StructsOneOrMoreExpected)),
-            [df] => TableValue(df.to_owned()),
-            dfs => TableValue(Dataframe::combine_tables(dfs.to_vec()))
+            [] => throw(TypeMismatch(StructsOneOrMoreExpected)),
+            [df] => Ok(df.to_owned()),
+            dfs => Ok(Dataframe::combine_tables(dfs.to_vec()))
         }
     }
 
@@ -573,16 +617,16 @@ impl TypedValue {
                             s => format!(": {}", s),
                         },
                         code.to_code()),
-            TypedValue::Kind(dt) => dt.to_code(),
             TypedValue::NamespaceValue(ns) => ns.get_full_name(),
             TypedValue::Null => "null".into(),
             TypedValue::Number(number) => number.unwrap_value(),
             TypedValue::PlatformOp(nf) => nf.to_code(),
+            TypedValue::Sequenced(seq) => seq.unwrap_value(),
             TypedValue::StringValue(string) => string.into(),
             TypedValue::Structured(structure) => structure.to_json().to_string(),
             TypedValue::TableValue(rcv) => {
-                let columns = rcv.get_columns();
-                serde_json::json!(rcv.iter().map(|r|r.to_hash_json_value(columns))
+                let params = rcv.get_parameters();
+                serde_json::json!(rcv.iter().map(|r| r.to_hash_json_value(&params))
                     .collect::<Vec<_>>()).to_string()
             }
             TypedValue::TupleValue(items) =>
@@ -766,12 +810,13 @@ impl Index<usize> for TypedValue {
 }
 
 fn fetch(mrc: &Box<dyn RowCollection>, index: usize) -> TypedValue {
+    let parameters = mrc.get_parameters();
     let columns = mrc.get_columns();
     match mrc.read_row(index) {
         Ok((row, meta)) => {
             Structured(match meta.is_allocated {
-                true => Firm(row, columns.to_owned()),
-                false => Firm(Row::create(row.get_id(), columns), columns.to_owned()),
+                true => Firm(row, parameters.to_owned()),
+                false => Firm(Row::create(row.get_id(), &columns), parameters),
             })
         }
         Err(err) => ErrorValue(Exact(err.to_string())),
@@ -813,12 +858,11 @@ impl Neg for TypedValue {
             Boolean(n) => Boolean(!n),
             ErrorValue(msg) => ErrorValue(msg),
             Function { .. } => error("Function".into()),
-            Kind(dt) => Kind(dt),
             NamespaceValue(ns) => error(format!("ns({})", ns.get_full_name())),
             Null => Null,
             Number(nv) => Number(nv.neg()),
-            Number(oc) => Number(I64Value(-oc.to_i64())),
             PlatformOp(..) => error("PlatformFunction".into()),
+            Sequenced(seq) => Sequenced(seq),
             StringValue(..) => error("String".into()),
             Structured(..) => error("Structure".into()),
             TableValue(..) => error("Table".into()),
@@ -922,7 +966,7 @@ impl Sub for TypedValue {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
     use serde_json::{json, Value};
 
     use super::*;
@@ -994,7 +1038,7 @@ mod tests {
 
     #[test]
     fn test_from_json() {
-        let structure = HardStructure::from_parameters(&vec![
+        let structure = HardStructure::from_parameters(vec![
             Parameter::with_default("name", StringType(4), StringValue("John".into())),
             Parameter::with_default("age", NumberType(I64Kind), Number(I64Value(40)))
         ]);
@@ -1005,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_hard_structure_contains_key() {
-        let structure = Structured(Hard(HardStructure::new(make_quote_columns(), vec![
+        let structure = Structured(Hard(HardStructure::new(make_quote_parameters(), vec![
             StringValue("PEW".into()),
             StringValue("NASDAQ".into()),
             Number(F64Value(304.69)),
@@ -1034,7 +1078,7 @@ mod tests {
             make_quote(4, "BOOM", "NASDAQ", 56.87),
             make_quote(5, "TRX", "NASDAQ", 7.9311),
         ])));
-        let hs = Structured(Hard(HardStructure::new(make_quote_columns(), vec![
+        let hs = Structured(Hard(HardStructure::new(make_quote_parameters(), vec![
             StringValue("GOTO".into()),
             StringValue("OTC".into()),
             Number(F64Value(0.1421)),
@@ -1063,8 +1107,8 @@ mod tests {
 
     #[test]
     fn test_table_index() {
-        let phys_columns = make_quote_columns();
-        let mrc = ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
+        let params = make_quote_parameters();
+        let mrc = ModelRowCollection::from_parameters_and_rows(&params, &vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "BIZ", "NYSE", 23.66),
@@ -1078,7 +1122,7 @@ mod tests {
                     StringValue("AMEX".into()),
                     Number(F64Value(11.77)),
                 ],
-            ), phys_columns)))
+            ), params)))
     }
 
     #[test]

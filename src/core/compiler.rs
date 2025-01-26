@@ -470,7 +470,7 @@ impl Compiler {
         let (code, ts) = self.expect_curly_brackets(ts)?;
         let scenarios = match code {
             CodeBlock(scenarios) => scenarios,
-            JSONExpression(tuples) => tuples.iter()
+            StructureExpression(tuples) => tuples.iter()
                 .map(|(name, expression)| Scenario {
                     title: Box::new(Literal(StringValue(name.to_owned()))),
                     verifications: match expression.to_owned() {
@@ -633,7 +633,7 @@ impl Compiler {
                 // import vm
                 Variable(pkg) => ops.push(ImportOps::Everything(pkg)),
                 // import www::serve | oxide::[eval, serve, version]
-                Extraction(a, b) => {
+                ColonColon(a, b) => {
                     match (*a, *b) {
                         // import www::serve
                         (Variable(pkg), Variable(func)) =>
@@ -737,7 +737,7 @@ impl Compiler {
     /// ex: Struct(symbol: String(8) = "TRX", exchange: String(8) = "AMEX", last_sale: f64 = 17.69)
     fn parse_keyword_struct(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Parameters(fields), ts) = self.expect_parameters(ts.to_owned())? {
-            Ok((Literal(Structured(Hard(HardStructure::from_parameters(&fields)))), ts))
+            Ok((Literal(Structured(Hard(HardStructure::from_parameters(fields)))), ts))
         } else {
             throw(ExactNear("Expected column definitions".into(), ts.current()))
         }
@@ -883,8 +883,8 @@ impl Compiler {
                         "^" => self.parse_expression_2a(ts, op0, |a, b| BitwiseXor(a, b)),
                         "÷" | "/" => self.parse_expression_2a(ts, op0, Divide),
                         "==" => self.parse_conditional_2a(ts, op0, Equal),
-                        "::" => self.parse_expression_2a(ts, op0, Extraction),
-                        ":::" => self.parse_expression_2a(ts, op0, ExtractPostfix),
+                        "::" => self.parse_expression_2a(ts, op0, ColonColon),
+                        ":::" => self.parse_expression_2a(ts, op0, ColonColonColon),
                         ">" => self.parse_conditional_2a(ts, op0, GreaterThan),
                         ">=" => self.parse_conditional_2a(ts, op0, GreaterOrEqual),
                         "<" => self.parse_conditional_2a(ts, op0, LessThan),
@@ -994,7 +994,7 @@ impl Compiler {
         // if all expressions are key-value pairs, it's a JSON literal,
         // otherwise it's a code block
         if !key_values.is_empty() && key_values.len() == expressions.len() {
-            Ok((JSONExpression(key_values), ts))
+            Ok((StructureExpression(key_values), ts))
         } else {
             Ok((CodeBlock(expressions), ts))
         }
@@ -1556,7 +1556,7 @@ mod tests {
     #[cfg(test)]
     mod http_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Expression::{JSONExpression, Literal, HTTP};
+        use crate::expression::Expression::{StructureExpression, Literal, HTTP};
         use crate::typed_values::TypedValue::StringValue;
 
         #[test]
@@ -1657,7 +1657,7 @@ mod tests {
                 url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
                 body: None,
                 headers: None,
-                multipart: Some(Box::new(JSONExpression(vec![
+                multipart: Some(Box::new(StructureExpression(vec![
                     ("file".to_string(), Literal(StringValue("./demoes/language/include_file.ox".to_string()))),
                 ]))),
             });
@@ -1682,7 +1682,7 @@ mod tests {
     #[cfg(test)]
     mod import_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Expression::{Extraction, Import, Variable};
+        use crate::expression::Expression::{ColonColon, Import, Variable};
         use crate::expression::ImportOps;
 
         #[test]
@@ -1692,9 +1692,9 @@ mod tests {
             "#).unwrap();
             assert_eq!(
                 code,
-                Extraction(
+                ColonColon(
                     Box::from(Variable("oxide".to_string())),
-                    Box::from(Extraction(Box::from(Variable("tools".to_string())),
+                    Box::from(ColonColon(Box::from(Variable("tools".to_string())),
                                          Box::from(Variable("compact".to_string()))
                     ))
                 ));
@@ -1731,7 +1731,7 @@ mod tests {
     #[cfg(test)]
     mod literal_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Expression::{ArrayExpression, AsValue, ElementAt, JSONExpression, Literal};
+        use crate::expression::Expression::{ArrayExpression, AsValue, ElementAt, StructureExpression, Literal};
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::token_slice::TokenSlice;
         use crate::typed_values::TypedValue::{Number, StringValue};
@@ -1776,7 +1776,7 @@ mod tests {
             "#).unwrap();
             assert_eq!(
                 code,
-                JSONExpression(vec![
+                StructureExpression(vec![
                     ("symbol".to_string(), Literal(StringValue("ABC".into()))),
                     ("exchange".to_string(), Literal(StringValue("NYSE".into()))),
                     ("last_sale".to_string(), Literal(Number(F64Value(16.79)))),
@@ -1790,7 +1790,7 @@ mod tests {
             let mut compiler = Compiler::new();
             let (result, _) = compiler.maybe_curly_brackets(ts).unwrap();
             let result = result.unwrap();
-            assert_eq!(result, JSONExpression(vec![
+            assert_eq!(result, StructureExpression(vec![
                 ("w".to_string(), Literal(StringValue("abc".into()))),
                 ("x".to_string(), Literal(Number(F64Value(1.)))),
                 ("y".to_string(), Literal(Number(I64Value(2)))),
@@ -2099,7 +2099,7 @@ mod tests {
         use crate::expression::Conditions::{Between, Betwixt, Equal, GreaterOrEqual, LessOrEqual, LessThan, Like};
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
         use crate::expression::DatabaseOps::{Mutation, Queryable};
-        use crate::expression::Expression::{ArrayExpression, Condition, DatabaseOp, From, JSONExpression, Literal, Ns, Variable, Via};
+        use crate::expression::Expression::{ArrayExpression, Condition, DatabaseOp, From, StructureExpression, Literal, Ns, Variable, Via};
         use crate::expression::MutateTarget::TableTarget;
         use crate::expression::Mutations::{Create, Declare, Drop, IntoNs};
         use crate::expression::TableOptions::Journaling;
@@ -2117,7 +2117,7 @@ mod tests {
             "#).unwrap();
             assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append2.stocks".to_string()))))),
-                source: Box::new(From(Box::new(JSONExpression(vec![
+                source: Box::new(From(Box::new(StructureExpression(vec![
                     ("symbol".into(), Literal(StringValue("ABC".into()))),
                     ("exchange".into(), Literal(StringValue("NYSE".into()))),
                     ("last_sale".into(), Literal(Number(F64Value(0.1008)))),
@@ -2139,17 +2139,17 @@ mod tests {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
                 source: Box::new(From(Box::new(
                     ArrayExpression(vec![
-                        JSONExpression(vec![
+                        StructureExpression(vec![
                             ("symbol".into(), Literal(StringValue("CAT".into()))),
                             ("exchange".into(), Literal(StringValue("NYSE".into()))),
                             ("last_sale".into(), Literal(Number(F64Value(11.1234)))),
                         ]),
-                        JSONExpression(vec![
+                        StructureExpression(vec![
                             ("symbol".into(), Literal(StringValue("DOG".into()))),
                             ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
                             ("last_sale".into(), Literal(Number(F64Value(0.1008)))),
                         ]),
-                        JSONExpression(vec![
+                        StructureExpression(vec![
                             ("symbol".into(), Literal(StringValue("SHARK".into()))),
                             ("exchange".into(), Literal(StringValue("AMEX".into()))),
                             ("last_sale".into(), Literal(Number(F64Value(52.08)))),
@@ -2380,7 +2380,7 @@ mod tests {
             "#).unwrap();
             assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Overwrite {
                 path: Box::new(Variable("stocks".into())),
-                source: Box::new(Via(Box::new(JSONExpression(vec![
+                source: Box::new(Via(Box::new(StructureExpression(vec![
                     ("symbol".into(), Literal(StringValue("ABC".into()))),
                     ("exchange".into(), Literal(StringValue("NYSE".into()))),
                     ("last_sale".into(), Literal(Number(F64Value(0.2308)))),
@@ -2512,7 +2512,7 @@ mod tests {
                 "#).unwrap();
             assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Update {
                 path: Box::new(Variable("stocks".into())),
-                source: Box::new(Via(Box::new(JSONExpression(vec![
+                source: Box::new(Via(Box::new(StructureExpression(vec![
                     ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
                 ])))),
                 condition: Some(Equal(
@@ -2533,17 +2533,17 @@ mod tests {
                 "#).unwrap();
             assert_eq!(opcodes, DatabaseOp(Mutation(IntoNs(
                 Box::new(ArrayExpression(vec![
-                    JSONExpression(vec![
+                    StructureExpression(vec![
                         ("symbol".into(), Literal(StringValue("ABC".into()))),
                         ("exchange".into(), Literal(StringValue("AMEX".into()))),
                         ("last_sale".into(), Literal(Number(F64Value(12.49)))),
                     ]),
-                    JSONExpression(vec![
+                    StructureExpression(vec![
                         ("symbol".into(), Literal(StringValue("BOOM".into()))),
                         ("exchange".into(), Literal(StringValue("NYSE".into()))),
                         ("last_sale".into(), Literal(Number(F64Value(56.88)))),
                     ]),
-                    JSONExpression(vec![
+                    StructureExpression(vec![
                         ("symbol".into(), Literal(StringValue("JET".into()))),
                         ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
                         ("last_sale".into(), Literal(Number(F64Value(32.12)))),

@@ -4,15 +4,15 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::byte_code_compiler::ByteCodeCompiler;
-use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
-use crate::sequences::{Array, Sequence};
+use crate::sequences::{Array, Sequence, Sequences};
 
 use crate::dataframe::Dataframe::{Disk, Model};
+use crate::errors::throw;
 use crate::errors::Errors::*;
-use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CollectionExpected, DateExpected, StringExpected, TableExpected, UnsupportedType};
+use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CollectionExpected, DateExpected, StringExpected, StructExpected, TableExpected, UnsupportedType};
 use crate::expression::Expression::{CodeBlock, Literal, Scenario};
 use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
@@ -112,6 +112,8 @@ pub enum PlatformOps {
     ToolsCompact,
     ToolsDescribe,
     ToolsFetch,
+    ToolsPop,
+    ToolsPush,
     ToolsReverse,
     ToolsScan,
     ToolsToArray,
@@ -143,7 +145,7 @@ pub enum PlatformOps {
     WwwURLEncode,
 }
 
-pub const PLATFORM_OPCODES: [PlatformOps; 72] = {
+pub const PLATFORM_OPCODES: [PlatformOps; 74] = {
     use PlatformOps::*;
     [
         // cal
@@ -162,7 +164,7 @@ pub const PLATFORM_OPCODES: [PlatformOps; 72] = {
         StrEndsWith, StrFormat, StrIndexOf, StrJoin, StrLeft, StrLen,
         StrRight, StrSplit, StrStartsWith, StrSubstring, StrToString,
         // tools
-        ToolsCompact, ToolsDescribe, ToolsFetch, ToolsReverse, ToolsScan,
+        ToolsCompact, ToolsDescribe, ToolsFetch, ToolsPop, ToolsPush, ToolsReverse, ToolsScan,
         ToolsToArray, ToolsToCSV, ToolsToJSON, ToolsToTable,
         // util
         UtilBase64, UtilBinary, UtilHex, UtilMD5, UtilToASCII, UtilToDate,
@@ -195,80 +197,82 @@ impl PlatformOps {
     }
 
     /// Evaluates the platform function
-    pub fn evaluate(&self, ms: Machine, args: Vec<TypedValue>) -> (Machine, TypedValue) {
+    pub fn evaluate(&self, ms: Machine, args: Vec<TypedValue>) -> std::io::Result<(Machine, TypedValue)> {
         match self {
-            PlatformOps::CalDate => Self::do_cal_date(ms, args),
-            PlatformOps::CalDateDay => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateHour24 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateHour12 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateMinute => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateMonth => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateSecond => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateYear => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::IoFileCreate => self.adapter_fn2(ms, args, Self::do_io_create_file),
-            PlatformOps::IoFileExists => self.adapter_fn1(ms, args, Self::do_io_exists),
-            PlatformOps::IoFileReadText => self.adapter_fn1(ms, args, Self::do_io_read_text_file),
-            PlatformOps::IoStdErr => self.adapter_fn1(ms, args, Self::do_io_stderr),
-            PlatformOps::IoStdOut => self.adapter_fn1(ms, args, Self::do_io_stdout),
-            PlatformOps::KungFuAssert => self.adapter_fn1(ms, args, Self::do_kung_fu_assert),
-            PlatformOps::KungFuFeature => self.adapter_fn2(ms, args, Self::do_kung_fu_feature),
-            PlatformOps::KungFuMatches => self.adapter_fn2(ms, args, Self::do_kung_fu_matches),
-            PlatformOps::KungFuTypeOf => self.adapter_fn1(ms, args, Self::do_kung_fu_type_of),
-            PlatformOps::OsCall => Self::do_os_call(ms, args),
-            PlatformOps::OsCurrentDir => self.adapter_fn0(ms, args, Self::do_os_current_dir),
-            PlatformOps::OsClear => self.adapter_fn0(ms, args, Self::do_os_clear_screen),
-            PlatformOps::OsEnv => self.adapter_fn0(ms, args, Self::do_os_env),
-            PlatformOps::OxideCompile => self.adapter_fn1(ms, args, Self::do_oxide_compile),
-            PlatformOps::OxideDebug => self.adapter_fn1(ms, args, Self::do_oxide_debug),
-            PlatformOps::OxideEval => self.adapter_fn1(ms, args, Self::do_oxide_eval),
-            PlatformOps::OxideHelp => self.adapter_fn0(ms, args, Self::do_oxide_help),
-            PlatformOps::OxideHistory => Self::do_oxide_history(ms, args),
-            PlatformOps::OxideHome => self.adapter_fn0(ms, args, Self::do_oxide_home),
-            PlatformOps::OxidePrintln => self.adapter_fn1(ms, args, Self::do_io_stdout),
-            PlatformOps::OxideReset => self.adapter_fn0(ms, args, Self::do_oxide_reset),
-            PlatformOps::OxideUUID => Self::do_util_uuid(ms, args),
-            PlatformOps::OxideVersion => self.adapter_fn0(ms, args, Self::do_oxide_version),
-            PlatformOps::StrEndsWith => self.adapter_fn2(ms, args, Self::do_str_ends_with),
-            PlatformOps::StrFormat => Self::do_str_format(ms, args),
-            PlatformOps::StrIndexOf => self.adapter_fn2(ms, args, Self::do_str_index_of),
-            PlatformOps::StrJoin => self.adapter_fn2(ms, args, Self::do_str_join),
-            PlatformOps::StrLeft => self.adapter_fn2(ms, args, Self::do_str_left),
-            PlatformOps::StrLen => self.adapter_fn1(ms, args, Self::do_str_len),
-            PlatformOps::StrRight => self.adapter_fn2(ms, args, Self::do_str_right),
-            PlatformOps::StrSplit => self.adapter_fn2(ms, args, Self::do_str_split),
-            PlatformOps::StrStartsWith => self.adapter_fn2(ms, args, Self::do_str_start_with),
-            PlatformOps::StrSubstring => self.adapter_fn3(ms, args, Self::do_str_substring),
-            PlatformOps::StrToString => self.adapter_fn1(ms, args, Self::do_str_to_string),
-            PlatformOps::ToolsCompact => self.adapter_fn1(ms, args, Self::do_tools_compact),
-            PlatformOps::ToolsDescribe => self.adapter_fn1(ms, args, Self::do_tools_describe),
-            PlatformOps::ToolsFetch => self.adapter_fn2(ms, args, Self::do_tools_fetch),
-            PlatformOps::ToolsReverse => self.adapter_fn1(ms, args, Self::do_tools_reverse),
-            PlatformOps::ToolsScan => self.adapter_fn1(ms, args, Self::do_tools_scan),
-            PlatformOps::ToolsToArray => self.adapter_fn1(ms, args, Self::do_tools_to_array),
-            PlatformOps::ToolsToCSV => self.adapter_fn1(ms, args, Self::do_tools_to_csv),
-            PlatformOps::ToolsToJSON => self.adapter_fn1(ms, args, Self::do_tools_to_json),
-            PlatformOps::ToolsToTable => self.adapter_fn1(ms, args, Self::do_tools_to_table),
-            PlatformOps::UtilBase64 => self.adapter_fn1(ms, args, Self::do_util_base64),
-            PlatformOps::UtilBinary => self.adapter_fn1(ms, args, Self::do_util_binary),
-            PlatformOps::UtilMD5 => self.adapter_fn1(ms, args, Self::do_util_md5),
-            PlatformOps::UtilToASCII => self.adapter_fn1(ms, args, Self::do_util_to_ascii),
-            PlatformOps::UtilHex => self.adapter_fn1(ms, args, Self::do_util_to_hex),
-            PlatformOps::UtilToDate => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToF32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToF64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI8 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI16 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI128 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU8 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU16 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU128 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::WwwURLDecode => self.adapter_fn1(ms, args, Self::do_www_url_decode),
-            PlatformOps::WwwURLEncode => self.adapter_fn1(ms, args, Self::do_www_url_encode),
-            PlatformOps::WwwServe => self.adapter_fn1(ms, args, Self::do_www_serve),
+            PlatformOps::CalDate => Ok(Self::do_cal_date(ms, args)),
+            PlatformOps::CalDateDay => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
+            PlatformOps::CalDateHour24 => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
+            PlatformOps::CalDateHour12 => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
+            PlatformOps::CalDateMinute => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
+            PlatformOps::CalDateMonth => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
+            PlatformOps::CalDateSecond => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
+            PlatformOps::CalDateYear => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
+            PlatformOps::IoFileCreate => Ok(self.adapter_fn2(ms, args, Self::do_io_create_file)),
+            PlatformOps::IoFileExists => Ok(self.adapter_fn1(ms, args, Self::do_io_exists)),
+            PlatformOps::IoFileReadText => Ok(self.adapter_fn1(ms, args, Self::do_io_read_text_file)),
+            PlatformOps::IoStdErr => Ok(self.adapter_fn1(ms, args, Self::do_io_stderr)),
+            PlatformOps::IoStdOut => Ok(self.adapter_fn1(ms, args, Self::do_io_stdout)),
+            PlatformOps::KungFuAssert => Ok(self.adapter_fn1(ms, args, Self::do_kung_fu_assert)),
+            PlatformOps::KungFuFeature => Ok(self.adapter_fn2(ms, args, Self::do_kung_fu_feature)),
+            PlatformOps::KungFuMatches => Ok(self.adapter_fn2(ms, args, Self::do_kung_fu_matches)),
+            PlatformOps::KungFuTypeOf => Ok(self.adapter_fn1(ms, args, Self::do_kung_fu_type_of)),
+            PlatformOps::OsCall => Ok(Self::do_os_call(ms, args)),
+            PlatformOps::OsCurrentDir => Ok(self.adapter_fn0(ms, args, Self::do_os_current_dir)),
+            PlatformOps::OsClear => Ok(self.adapter_fn0(ms, args, Self::do_os_clear_screen)),
+            PlatformOps::OsEnv => Ok(self.adapter_fn0(ms, args, Self::do_os_env)),
+            PlatformOps::OxideCompile => Ok(self.adapter_fn1(ms, args, Self::do_oxide_compile)),
+            PlatformOps::OxideDebug => Ok(self.adapter_fn1(ms, args, Self::do_oxide_debug)),
+            PlatformOps::OxideEval => Ok(self.adapter_fn1(ms, args, Self::do_oxide_eval)),
+            PlatformOps::OxideHelp => Ok(self.adapter_fn0(ms, args, Self::do_oxide_help)),
+            PlatformOps::OxideHistory => Ok(Self::do_oxide_history(ms, args)),
+            PlatformOps::OxideHome => Ok(self.adapter_fn0(ms, args, Self::do_oxide_home)),
+            PlatformOps::OxidePrintln => Ok(self.adapter_fn1(ms, args, Self::do_io_stdout)),
+            PlatformOps::OxideReset => Ok(self.adapter_fn0(ms, args, Self::do_oxide_reset)),
+            PlatformOps::OxideUUID => Ok(Self::do_util_uuid(ms, args)),
+            PlatformOps::OxideVersion => Ok(self.adapter_fn0(ms, args, Self::do_oxide_version)),
+            PlatformOps::StrEndsWith => Ok(self.adapter_fn2(ms, args, Self::do_str_ends_with)),
+            PlatformOps::StrFormat => Ok(Self::do_str_format(ms, args)),
+            PlatformOps::StrIndexOf => Ok(self.adapter_fn2(ms, args, Self::do_str_index_of)),
+            PlatformOps::StrJoin => Ok(self.adapter_fn2(ms, args, Self::do_str_join)),
+            PlatformOps::StrLeft => Ok(self.adapter_fn2(ms, args, Self::do_str_left)),
+            PlatformOps::StrLen => Ok(self.adapter_fn1(ms, args, Self::do_str_len)),
+            PlatformOps::StrRight => Ok(self.adapter_fn2(ms, args, Self::do_str_right)),
+            PlatformOps::StrSplit => Ok(self.adapter_fn2(ms, args, Self::do_str_split)),
+            PlatformOps::StrStartsWith => Ok(self.adapter_fn2(ms, args, Self::do_str_start_with)),
+            PlatformOps::StrSubstring => Ok(self.adapter_fn3(ms, args, Self::do_str_substring)),
+            PlatformOps::StrToString => Ok(self.adapter_fn1(ms, args, Self::do_str_to_string)),
+            PlatformOps::ToolsCompact => Ok(self.adapter_fn1(ms, args, Self::do_tools_compact)),
+            PlatformOps::ToolsDescribe => Ok(self.adapter_fn1(ms, args, Self::do_tools_describe)),
+            PlatformOps::ToolsFetch => Ok(self.adapter_fn2(ms, args, Self::do_tools_fetch)),
+            PlatformOps::ToolsPop => Ok(self.adapter_fn1(ms, args, Self::do_tools_pop)),
+            PlatformOps::ToolsPush => Self::do_tools_push(ms, args),
+            PlatformOps::ToolsReverse => Ok(self.adapter_fn1(ms, args, Self::do_tools_reverse)),
+            PlatformOps::ToolsScan => Ok(self.adapter_fn1(ms, args, Self::do_tools_scan)),
+            PlatformOps::ToolsToArray => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_array)),
+            PlatformOps::ToolsToCSV => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_csv)),
+            PlatformOps::ToolsToJSON => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_json)),
+            PlatformOps::ToolsToTable => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_table)),
+            PlatformOps::UtilBase64 => Ok(self.adapter_fn1(ms, args, Self::do_util_base64)),
+            PlatformOps::UtilBinary => Ok(self.adapter_fn1(ms, args, Self::do_util_binary)),
+            PlatformOps::UtilMD5 => Ok(self.adapter_fn1(ms, args, Self::do_util_md5)),
+            PlatformOps::UtilToASCII => Ok(self.adapter_fn1(ms, args, Self::do_util_to_ascii)),
+            PlatformOps::UtilHex => Ok(self.adapter_fn1(ms, args, Self::do_util_to_hex)),
+            PlatformOps::UtilToDate => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToF32 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToF64 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToI8 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToI16 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToI32 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToI64 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToI128 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToU8 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToU16 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToU32 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToU64 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::UtilToU128 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
+            PlatformOps::WwwURLDecode => Ok(self.adapter_fn1(ms, args, Self::do_www_url_decode)),
+            PlatformOps::WwwURLEncode => Ok(self.adapter_fn1(ms, args, Self::do_www_url_encode)),
+            PlatformOps::WwwServe => Ok(self.adapter_fn1(ms, args, Self::do_www_serve)),
         }
     }
 
@@ -325,6 +329,8 @@ impl PlatformOps {
             PlatformOps::ToolsCompact => "Shrinks a table by removing deleted rows",
             PlatformOps::ToolsDescribe => "Describes a table or structure",
             PlatformOps::ToolsFetch => "Retrieves a raw structure from a table",
+            PlatformOps::ToolsPop => "Removes and returns a value or object from a Sequence",
+            PlatformOps::ToolsPush => "Appends a value or object to a Sequence",
             PlatformOps::ToolsReverse => "Returns a reverse copy of a table, string or array",
             PlatformOps::ToolsScan => "Returns existence metadata for a table",
             PlatformOps::ToolsToArray => "Converts a collection into an array",
@@ -505,6 +511,25 @@ impl PlatformOps {
                      { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                 [+] tools::fetch(stocks, 2)
             "#,
+            PlatformOps::ToolsPop => r#"
+                import tools
+                [+] stocks := ns("platform.pop.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] stocks::pop(stocks)
+            "#,
+            PlatformOps::ToolsPush => r#"
+                import tools
+                [+] stocks := ns("platform.push.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] stocks::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
+                [+] stocks
+            "#,
             PlatformOps::ToolsReverse => r#"
                 import tools
                 to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
@@ -641,6 +666,8 @@ impl PlatformOps {
             PlatformOps::ToolsCompact => "compact",
             PlatformOps::ToolsDescribe => "describe",
             PlatformOps::ToolsFetch => "fetch",
+            PlatformOps::ToolsPop => "pop",
+            PlatformOps::ToolsPush => "push",
             PlatformOps::ToolsReverse => "reverse",
             PlatformOps::ToolsScan => "scan",
             PlatformOps::ToolsToArray => "to_array",
@@ -692,8 +719,9 @@ impl PlatformOps {
             StrLeft | StrLen | StrRight | StrSplit |
             StrStartsWith | StrSubstring | StrToString => "str",
             // tools
-            ToolsCompact | ToolsDescribe | ToolsFetch | ToolsReverse | ToolsScan |
-            ToolsToArray | ToolsToCSV | ToolsToJSON | ToolsToTable => "tools",
+            ToolsCompact | ToolsDescribe | ToolsFetch | ToolsPop | ToolsPush |
+            ToolsReverse | ToolsScan | ToolsToArray | ToolsToCSV | ToolsToJSON |
+            ToolsToTable => "tools",
             // util
             UtilBase64 | UtilBinary | UtilHex | UtilMD5 | UtilToASCII | UtilToDate |
             UtilToF32 | UtilToF64 |
@@ -723,20 +751,20 @@ impl PlatformOps {
             UtilToASCII | WwwServe
             => vec![NumberType(U32Kind)],
             // single-parameter (lazy)
-            KungFuTypeOf | StrToString | UtilBase64 | UtilBinary | UtilHex | UtilMD5 | UtilToDate |
+            KungFuTypeOf | StrToString | ToolsToTable | UtilBase64 | UtilBinary | UtilHex | UtilMD5 | UtilToDate |
             UtilToF32 | UtilToF64 | UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 | UtilToI128 |
-            ToolsToTable | UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128
+            UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128
             => vec![VaryingType(vec![])],
             // single-parameter (string)
             IoFileExists | IoFileReadText | IoStdErr | IoStdOut | OxidePrintln | OsCall |
             OxideCompile | OxideDebug | OxideEval | StrLen | WwwURLDecode | WwwURLEncode
             => vec![StringType(0)],
             // single-parameter (table)
-            ToolsCompact | ToolsDescribe | ToolsReverse | ToolsScan |
+            ToolsCompact | ToolsDescribe | ToolsPop | ToolsReverse | ToolsScan |
             ToolsToArray | ToolsToCSV | ToolsToJSON
             => vec![TableType(Vec::new(), 0)],
             // two-parameter (lazy, lazy)
-            KungFuMatches
+            KungFuMatches | ToolsPush
             => vec![VaryingType(vec![]), VaryingType(vec![])],
             // two-parameter (string, string)
             IoFileCreate | StrEndsWith | StrFormat | StrSplit | StrStartsWith
@@ -813,13 +841,15 @@ impl PlatformOps {
             UtilToU64 => NumberType(U64Kind),
             UtilToU128 | OxideUUID => NumberType(U128Kind),
             // outcome
-            IoFileCreate | KungFuAssert | OxidePrintln |
-            OsClear | OxideReset | WwwServe => NumberType(AckKind),
+            IoFileCreate | KungFuAssert | OsClear | OxidePrintln | OxideReset |
+            ToolsPush | WwwServe => NumberType(AckKind),
             // string
             IoStdErr | IoStdOut | KungFuTypeOf | OsCall | OsCurrentDir |
             OxideEval | OxideHome | StrFormat | StrJoin | StrLeft | StrRight |
             StrSubstring | StrToString | UtilBase64 | UtilBinary | UtilToASCII | UtilHex |
             WwwURLDecode | WwwURLEncode => StringType(0),
+            // row|structure
+            ToolsPop => StructureType(vec![]),
             // table
             KungFuFeature => TableType(Self::get_kung_fu_feature_parameters(), 0),
             OsEnv => TableType(Self::get_os_env_parameters(), 0),
@@ -1519,6 +1549,66 @@ impl PlatformOps {
         }
     }
 
+    fn do_tools_pop(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        match value.to_sequence() {
+            Ok(seq) => {
+                let result = match seq {
+                    Sequences::TheDataframe(mut df) => df.pop_row(df.get_parameters()).to_table_value(),
+                    Sequences::TheArray(arr) => ErrorValue(Exact("Array::pop() is unimplemented".into())),
+                    Sequences::TheTuple(tp) => ErrorValue(Exact("Tuple::pop() is unimplemented".into())),
+                };
+                (ms, result)
+            }
+            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+        }
+    }
+
+    fn do_tools_push(
+        ms: Machine,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let (seq_like, row_like) = TypedValue::parse_two_args(args)?;
+        match row_like {
+            TupleValue(vv) => {
+                let seq = seq_like.to_sequence()?;
+                let result = match seq {
+                    Sequences::TheDataframe(mut df) => df.push_row(Row::new(0, vv)),
+                    Sequences::TheArray(mut arr) => arr.push(TupleValue(vv)),
+                    Sequences::TheTuple(mut tpl) => {
+                        tpl.push(TupleValue(vv));
+                        TupleValue(tpl)
+                    }
+                };
+                Ok((ms, result))
+            }
+            Sequenced(source) => {
+                let seq = seq_like.to_sequence()?;
+                let result = match seq {
+                    Sequences::TheDataframe(mut df) => df.push_row(Row::new(0, source.get_values())),
+                    Sequences::TheArray(mut arr) => arr.push(Sequenced(source)),
+                    Sequences::TheTuple(mut tpl) => {
+                        tpl.push(Sequenced(source));
+                        TupleValue(tpl)
+                    }
+                };
+                Ok((ms, result))
+            }
+            Structured(structure) => {
+                let seq = seq_like.to_sequence()?;
+                let result = match seq {
+                    Sequences::TheDataframe(mut df) => df.push_row(structure.to_row()),
+                    Sequences::TheArray(mut arr) => arr.push(Structured(structure)),
+                    Sequences::TheTuple(mut tpl) => {
+                        tpl.push(Structured(structure));
+                        TupleValue(tpl)
+                    }
+                };
+                Ok((ms, result))
+            }
+            z => throw(TypeMismatch(StructExpected(z.get_type_name(), z.to_code())))
+        }
+    }
+
     fn do_tools_reverse(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
         match value {
             ArrayValue(a) => (ms, ArrayValue(a.rev())),
@@ -1779,7 +1869,6 @@ impl PlatformOps {
 mod tests {
     use super::*;
     use super::*;
-    use crate::columns::Column;
     use crate::interpreter::Interpreter;
     use crate::platform::{PlatformOps, PLATFORM_OPCODES};
     use crate::structures::{HardStructure, SoftStructure};
@@ -1913,6 +2002,7 @@ mod tests {
         assert_eq!(OsEnv.to_code(), "os::env()");
         // oxide
         assert_eq!(OxideCompile.to_code(), "oxide::compile(s: String)");
+        assert_eq!(OxideDebug.to_code(), "oxide::debug(s: String)");
         assert_eq!(OxideEval.to_code(), "oxide::eval(s: String)");
         assert_eq!(OxideHelp.to_code(), "oxide::help()");
         assert_eq!(OxideHistory.to_code(), "oxide::history()");
@@ -1937,6 +2027,8 @@ mod tests {
         assert_eq!(ToolsCompact.to_code(), "tools::compact(t: Table)");
         assert_eq!(ToolsDescribe.to_code(), "tools::describe(t: Table)");
         assert_eq!(ToolsFetch.to_code(), "tools::fetch(t: Table, n: u64)");
+        assert_eq!(ToolsPop.to_code(), "tools::pop(t: Table)");
+        assert_eq!(ToolsPush.to_code(), "tools::push(a, b)");
         assert_eq!(ToolsReverse.to_code(), "tools::reverse(t: Table)");
         assert_eq!(ToolsScan.to_code(), "tools::scan(t: Table)");
         assert_eq!(ToolsToArray.to_code(), "tools::to_array(t: Table)");
@@ -1945,6 +2037,7 @@ mod tests {
         assert_eq!(ToolsToTable.to_code(), "tools::to_table(x)");
         // util
         assert_eq!(UtilBase64.to_code(), "util::base64(x)");
+        assert_eq!(UtilBinary.to_code(), "util::to_binary(x)");
         assert_eq!(UtilHex.to_code(), "util::hex(x)");
         assert_eq!(UtilMD5.to_code(), "util::md5(x)");
         assert_eq!(UtilToASCII.to_code(), "util::to_ascii(n: u32)");
@@ -2661,7 +2754,7 @@ mod tests {
     #[cfg(test)]
     mod tools_tests {
         use super::*;
-        use crate::columns::Column;
+        use crate::expression::Expression::{ColonColon, FunctionCall, StructureExpression, Variable};
         use crate::interpreter::Interpreter;
         use crate::platform::PlatformOps;
         use crate::structures::HardStructure;
@@ -2774,6 +2867,110 @@ mod tests {
                 "|------------------------------------|",
                 "| 1  | BOOM   | NYSE     | 56.88     |",
                 "|------------------------------------|"
+            ]);
+        }
+
+        #[test]
+        fn test_tools_pop() {
+            verify_exact_table_with_ids(r#"
+                [+] stocks := ns("platform.pop.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] tools::pop(stocks)
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 2  | JET    | NASDAQ   | 32.12     |",
+                "|------------------------------------|"
+            ]);
+        }
+
+        #[test]
+        fn test_tools_push_compile() {
+            let code = Compiler::build(r#"
+                tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
+            "#).unwrap();
+            assert_eq!(code, ColonColon(
+                Box::from(Variable("tools".into())),
+                Box::from(FunctionCall {
+                    fx: Box::from(Variable("push".into())),
+                    args: vec![
+                        Variable("stocks".into()),
+                        StructureExpression(vec![
+                            ("symbol".to_string(), Literal(StringValue("DEX".into()))),
+                            ("exchange".to_string(), Literal(StringValue("OTC_BB".to_string()))),
+                            ("last_sale".to_string(), Literal(Number(F64Value(0.0086))))
+                        ])
+                    ]
+                })))
+        }
+
+        #[test]
+        fn test_tools_push_array_evaluate() {
+            verify_exact_table_with_ids(r#"
+                [+] stocks := [
+                        { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                        { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                        { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                    ]
+                [+] stocks := tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
+                [+] from stocks
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | ABC    | AMEX     | 12.49     |",
+                "| 1  | BOOM   | NYSE     | 56.88     |",
+                "| 2  | JET    | NASDAQ   | 32.12     |",
+                "| 3  | DEX    | OTC_BB   | 0.0086    |",
+                "|------------------------------------|"
+            ]);
+        }
+
+        #[test]
+        fn test_tools_push_table_evaluate() {
+            verify_exact_table_with_ids(r#"
+                [+] stocks := ns("platform.push.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
+                [+] from stocks
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | ABC    | AMEX     | 12.49     |",
+                "| 1  | BOOM   | NYSE     | 56.88     |",
+                "| 2  | JET    | NASDAQ   | 32.12     |",
+                "| 3  | DEX    | OTC_BB   | 0.0086    |",
+                "|------------------------------------|"
+            ]);
+        }
+
+        #[test]
+        fn test_tools_push_tuple_evaluate() {
+            verify_exact_table_with_ids(r#"
+                [+] stocks := [
+                        ("ABC", "AMEX", 12.49),
+                        ("BOOM", "NYSE", 56.88),
+                        ("JET", "NASDAQ", 32.12)
+                    ]
+                [+] stocks := tools::push(stocks, ("DEX", "OTC_BB", 0.0086))
+                [+] from tools::to_table(stocks)
+            "#, vec![
+                r#"|--------------------------------|"#,
+                r#"| id | value                     |"#,
+                r#"|--------------------------------|"#,
+                r#"| 0  | ("ABC", "AMEX", 12.49)    |"#,
+                r#"| 1  | ("BOOM", "NYSE", 56.88)   |"#,
+                r#"| 2  | ("JET", "NASDAQ", 32.12)  |"#,
+                r#"| 3  | ("DEX", "OTC_BB", 0.0086) |"#,
+                r#"|--------------------------------|"#
             ]);
         }
 
@@ -2910,16 +3107,16 @@ mod tests {
                      { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
                  ]))
             "#).unwrap();
-            let columns = Column::from_parameters(&vec![
+            let params = vec![
                 Parameter::with_default("symbol", StringType(3), StringValue("BIZ".into())),
                 Parameter::with_default("exchange", StringType(4), StringValue("NYSE".into())),
                 Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.66))),
-            ]);
+            ];
             assert_eq!(result, ArrayValue(Array::from(vec![
-                Structured(Hard(HardStructure::new(columns.clone(), vec![
+                Structured(Hard(HardStructure::new(params.clone(), vec![
                     StringValue("BIZ".into()), StringValue("NYSE".into()), Number(F64Value(23.66))
                 ]))),
-                Structured(Hard(HardStructure::new(columns.clone(), vec![
+                Structured(Hard(HardStructure::new(params.clone(), vec![
                     StringValue("DMX".into()), StringValue("OTC_BB".into()), Number(F64Value(1.17))
                 ])))
             ])));
@@ -3168,10 +3365,10 @@ mod tests {
                 GET "http://localhost:8822/platform/www/quotes/1/4"
             "#).unwrap();
             assert_eq!(result.to_json(), json!([
-                {"symbol": "BOX", "exchange": "NYSE", "last_sale": 56.88},
-                {"symbol": "JET", "exchange": "NASDAQ", "last_sale": 32.12},
-                {"symbol": "ABC", "exchange": "AMEX", "last_sale": 12.49}
-            ]));
+            {"symbol": "BOX", "exchange": "NYSE", "last_sale": 56.88},
+            {"symbol": "JET", "exchange": "NASDAQ", "last_sale": 32.12},
+            {"symbol": "ABC", "exchange": "AMEX", "last_sale": 12.49}
+        ]));
         }
 
         #[test]

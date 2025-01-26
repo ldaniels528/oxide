@@ -41,6 +41,7 @@ use tokio::runtime::Runtime;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use crate::parameter::Parameter;
 
 #[macro_export]
 macro_rules! web_routes {
@@ -175,7 +176,7 @@ pub async fn handle_row_get(
     path: web::Path<(String, String, String, usize)>,
 ) -> impl Responder {
     match get_row_by_id(req, path).await {
-        Ok((columns, Some(row))) => HttpResponse::Ok().json(row.to_hash_json_value(&columns)),
+        Ok((columns, Some(row))) => HttpResponse::Ok().json(row.to_hash_json_value(&Parameter::from_columns(&columns))),
         Ok((_, None)) => HttpResponse::Ok().json(serde_json::json!({})),
         Err(err) => {
             error!("error {}", err.to_string());
@@ -255,7 +256,7 @@ pub async fn handle_row_range_get(
 ) -> impl Responder {
     match get_range_by_id(req, path).await {
         Ok((columns, rows)) =>
-            HttpResponse::Ok().json(Row::rows_to_json(&columns, &rows)),
+            HttpResponse::Ok().json(Row::rows_to_json(&Parameter::from_columns(&columns), &rows)),
         Err(err) => {
             error!("error {}", err.to_string());
             HttpResponse::InternalServerError().finish()

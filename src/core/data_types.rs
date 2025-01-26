@@ -185,7 +185,7 @@ impl DataType {
             NumberType(kind) => Number(kind.decode(buffer, offset)),
             PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
             StringType(size) => StringValue(ByteCodeCompiler::decode_string(buffer, offset, *size).to_string()),
-            StructureType(params) => Structured(Hard(HardStructure::from_parameters(params))),
+            StructureType(params) => Structured(Hard(HardStructure::from_parameters(params.to_vec()))),
             TableType(columns, ..) => TableValue(Model(ModelRowCollection::from_parameters(columns))),
             _ => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec())
         }
@@ -211,7 +211,7 @@ impl DataType {
             NumberType(kind) => Number(kind.decode_buffer(bcc)?),
             PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
             StringType(..) => StringValue(bcc.next_string()),
-            StructureType(params) => Structured(Hard(bcc.next_struct_with_parameters(params)?)),
+            StructureType(params) => Structured(Hard(bcc.next_struct_with_parameters(params.to_vec())?)),
             TableType(columns, ..) => TableValue(Model(bcc.next_table_with_columns(columns)?)),
             TupleType(..) => TupleValue(bcc.next_array()?),
             VaryingType(..) => bcc.next_value()?,
@@ -341,7 +341,7 @@ impl DataType {
             PlatformOpsType(kind) => PlatformOp(kind.clone()),
             StringType(..) => StringValue(String::new()),
             StructureType(params) =>
-                Structured(Hard(HardStructure::from_parameters(params))),
+                Structured(Hard(HardStructure::from_parameters(params.to_vec()))),
             TableType(params, _) =>
                 TableValue(Model(ModelRowCollection::from_parameters(params))),
             TupleType(dts) => TupleValue(dts.iter()

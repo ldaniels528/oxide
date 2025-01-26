@@ -7,14 +7,17 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::TupleType;
 use crate::data_types::DataType::{ArrayType, Indeterminate, TableType, VaryingType};
 use crate::dataframe::Dataframe;
-use crate::errors::Errors::Exact;
+use crate::errors::Errors::{Exact, TypeMismatch};
+use crate::errors::TypeMismatchErrors::StructExpected;
+use crate::numbers::Numbers::Ack;
 use crate::row_collection::RowCollection;
 use crate::structures::Structures::{Firm, Hard};
 use crate::structures::{Structure, Structures};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Structured, TupleValue, Undefined};
+use crate::typed_values::TypedValue::{ArrayValue, ErrorValue, Number, Structured, TupleValue, Undefined};
 use log::error;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::cmp::Ordering;
 use std::ops::Index;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Rem, Shl, Shr, Sub};
@@ -45,9 +48,15 @@ pub trait Sequence {
 
     //fn rev(&self) -> Self;
 
+    fn pop(&mut self) -> Option<TypedValue>;
+
+    fn push(&mut self, value: TypedValue) -> TypedValue;
+
     fn to_array(&self) -> Array;
 
     fn to_tuple(&self) -> Tuple;
+
+    fn unwrap_value(&self) -> String;
 }
 
 /// Represents a linear sequence of [TypedValue]s
@@ -55,8 +64,7 @@ pub trait Sequence {
 pub enum Sequences {
     TheArray(Array),
     TheDataframe(Dataframe),
-    TheStructure(Structures),
-    TheTuple(Tuple),
+    TheTuple(Vec<TypedValue>),
 }
 
 impl Sequences {}
@@ -68,11 +76,6 @@ impl Sequence for Sequences {
             Sequences::TheDataframe(df) =>
                 match item {
                     TypedValue::Structured(s) => df.contains(&s.to_row()).is_true(),
-                    _ => false
-                }
-            Sequences::TheStructure(s) =>
-                match item {
-                    TypedValue::StringValue(name) => s.contains(name),
                     _ => false
                 }
             Sequences::TheTuple(tuple) => tuple.contains(item),
@@ -91,8 +94,7 @@ impl Sequence for Sequences {
                         None
                     }
                 }
-            Sequences::TheStructure(s) => idx_vec_opt(&s.get_values(), index),
-            Sequences::TheTuple(tuple) => tuple.get(index),
+            Sequences::TheTuple(tuple) => tuple.get(index).map(|v| v.clone()),
         }
     }
 
@@ -102,11 +104,10 @@ impl Sequence for Sequences {
             Sequences::TheDataframe(df) =>
                 match df.read_one(index) {
                     Ok(None) => TypedValue::Null,
-                    Ok(Some(row)) => Structured(Firm(row, df.get_columns().clone())),
+                    Ok(Some(row)) => Structured(Firm(row, df.get_parameters())),
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 }
-            Sequences::TheStructure(s) => idx_vec(&s.get_values(), index),
-            Sequences::TheTuple(tuple) => tuple.get_or_else(index, default),
+            Sequences::TheTuple(tuple) => tuple.get(index).map(|v| v.clone()).unwrap_or(default),
         }
     }
 
@@ -114,8 +115,7 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.get_type(),
             Sequences::TheDataframe(df) => TableType(df.get_parameters(), 0),
-            Sequences::TheStructure(s) => s.get_type(),
-            Sequences::TheTuple(tuple) => tuple.get_type(),
+            Sequences::TheTuple(tuple) => TupleType(tuple.iter().map(|v| v.get_type()).collect()),
         }
     }
 
@@ -123,8 +123,7 @@ impl Sequence for Sequences {
         match self.clone() {
             Sequences::TheArray(array) => array.get_values(),
             Sequences::TheDataframe(df) => df.to_array().get_values(),
-            Sequences::TheStructure(s) => s.get_values(),
-            Sequences::TheTuple(tuple) => tuple.get_values(),
+            Sequences::TheTuple(tuple) => tuple,
         }
     }
 
@@ -134,10 +133,9 @@ impl Sequence for Sequences {
             Sequences::TheDataframe(df) =>
                 Box::leak(Box::new(
                     df.iter()
-                        .map(|row| Structured(Firm(row, df.get_columns().clone())))
+                        .map(|row| Structured(Firm(row, df.get_parameters())))
                         .collect::<Vec<_>>()
                 )).iter(),
-            Sequences::TheStructure(s) => s.iter(),
             Sequences::TheTuple(tuple) => tuple.iter(),
         }
     }
@@ -146,8 +144,37 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.len(),
             Sequences::TheDataframe(df) => df.len().unwrap_or(0),
-            Sequences::TheStructure(s) => s.len(),
             Sequences::TheTuple(tuple) => tuple.len(),
+        }
+    }
+
+    fn pop(&mut self) -> Option<TypedValue> {
+        match self {
+            Sequences::TheArray(array) => array.pop(),
+            Sequences::TheDataframe(df) =>
+                match df.pop_row(df.get_parameters()) {
+                    Undefined => None,
+                    other => Some(other)
+                }
+            Sequences::TheTuple(tuple) => tuple.pop(),
+        }
+    }
+
+    fn push(&mut self, value: TypedValue) -> TypedValue {
+        match self {
+            Sequences::TheArray(array) => {
+                array.push(value);
+                Number(Ack)
+            }
+            Sequences::TheDataframe(df) =>
+                match value {
+                    Structured(s) => df.push_row(s.to_row()),
+                    other => ErrorValue(TypeMismatch(StructExpected("Struct".into(), other.to_code())))
+                }
+            Sequences::TheTuple(tuple) => {
+                tuple.push(value);
+                Number(Ack)
+            }
         }
     }
 
@@ -155,8 +182,7 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.to_array(),
             Sequences::TheDataframe(df) => df.to_array(),
-            Sequences::TheStructure(s) => s.to_array(),
-            Sequences::TheTuple(tuple) => tuple.to_array(),
+            Sequences::TheTuple(tuple) => Array::from(tuple.to_vec()),
         }
     }
 
@@ -164,8 +190,17 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.to_tuple(),
             Sequences::TheDataframe(df) => df.to_array().to_tuple(),
-            Sequences::TheStructure(s) => s.to_tuple(),
-            Sequences::TheTuple(tuple) => tuple.to_tuple(),
+            Sequences::TheTuple(tuple) => Tuple::new(tuple.to_vec()),
+        }
+    }
+
+    fn unwrap_value(&self) -> String {
+        match self {
+            Sequences::TheArray(array) => array.unwrap_value(),
+            Sequences::TheDataframe(df) => df.to_array().unwrap_value(),
+            Sequences::TheTuple(tuple) =>
+                format!("[{}]", tuple.iter().map(|v| v.unwrap_value())
+                    .collect::<Vec<_>>().join(", "))
         }
     }
 }
@@ -177,7 +212,7 @@ impl Sequence for Sequences {
 /// Represents an elastic array of values
 #[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize)]
 pub struct Array {
-    items: Vec<TypedValue>,
+    the_array: Vec<TypedValue>,
 }
 
 impl Array {
@@ -191,14 +226,14 @@ impl Array {
         items: Vec<TypedValue>,
     ) -> Array {
         Self {
-            items,
+            the_array: items,
         }
     }
 
     /// Creates a new empty [Array]
     pub fn new() -> Array {
         Self {
-            items: Vec::new(),
+            the_array: Vec::new(),
         }
     }
 
@@ -208,12 +243,12 @@ impl Array {
 
     /// Removes all elements from the [Array]
     pub fn clear(&mut self) {
-        self.items.clear()
+        self.the_array.clear()
     }
 
     /// Returns the component type; the resolved internal type
     pub fn get_component_type(&self) -> DataType {
-        let kinds = self.items.iter()
+        let kinds = self.the_array.iter()
             .map(|item| item.get_type())
             .fold(Vec::new(), |mut kinds, kind| {
                 if !kinds.contains(&kind) {
@@ -232,27 +267,19 @@ impl Array {
 
     /// Returns true, if the [Array] is empty
     pub fn is_empty(&self) -> bool {
-        self.items.is_empty()
+        self.the_array.is_empty()
     }
 
     pub fn map(&self, f: fn(&TypedValue) -> TypedValue) -> Self {
-        Array::from(self.items.iter().map(f).collect::<Vec<_>>())
-    }
-
-    pub fn push(&mut self, value: TypedValue) {
-        self.items.push(value)
+        Array::from(self.the_array.iter().map(f).collect::<Vec<_>>())
     }
 
     pub fn push_all(&mut self, values: Vec<TypedValue>) {
-        self.items.extend(values)
-    }
-
-    pub fn pop(&mut self) -> Option<TypedValue> {
-        self.items.pop()
+        self.the_array.extend(values)
     }
 
     pub fn rev(&self) -> Self {
-        Array::from(self.items.iter().rev()
+        Array::from(self.the_array.iter().rev()
             .map(|i| i.clone())
             .collect::<Vec<_>>())
     }
@@ -262,7 +289,7 @@ impl Index<usize> for Array {
     type Output = TypedValue;
 
     fn index(&self, index: usize) -> &Self::Output {
-        if index < self.items.len() { &self.items[index] } else { &Undefined }
+        if index < self.the_array.len() { &self.the_array[index] } else { &Undefined }
     }
 }
 
@@ -275,12 +302,12 @@ impl PartialOrd for Array {
 impl Sequence for Array {
     /// Returns true, if the [Array] contains the specified item
     fn contains(&self, item: &TypedValue) -> bool {
-        self.items.contains(item)
+        self.the_array.contains(item)
     }
 
     /// Returns the [Option] of a [TypedValue] from specified index
     fn get(&self, index: usize) -> Option<TypedValue> {
-        idx_vec_opt(&self.items, index)
+        idx_vec_opt(&self.the_array, index)
     }
 
     /// Returns the [Option] of a [TypedValue] from specified index or the
@@ -291,27 +318,41 @@ impl Sequence for Array {
 
     /// Returns the type
     fn get_type(&self) -> DataType {
-        ArrayType(self.items.len())
+        ArrayType(self.the_array.len())
     }
 
     fn get_values(&self) -> Vec<TypedValue> {
-        self.items.clone()
+        self.the_array.clone()
     }
 
     fn iter(&self) -> Iter<'_, TypedValue> {
-        self.items.iter()
+        self.the_array.iter()
     }
 
     fn len(&self) -> usize {
-        self.items.len()
+        self.the_array.len()
+    }
+
+    fn push(&mut self, value: TypedValue) -> TypedValue {
+        self.the_array.push(value);
+        ArrayValue(self.clone())
+    }
+
+    fn pop(&mut self) -> Option<TypedValue> {
+        self.the_array.pop()
     }
 
     fn to_array(&self) -> Array {
-        Array::from(self.items.clone())
+        Array::from(self.the_array.clone())
     }
 
     fn to_tuple(&self) -> Tuple {
-        Tuple::new(self.items.clone())
+        Tuple::new(self.the_array.clone())
+    }
+
+    fn unwrap_value(&self) -> String {
+        format!("[{}]", self.the_array.iter().map(|i| i.unwrap_value())
+            .collect::<Vec<_>>().join(", "))
     }
 }
 
@@ -322,7 +363,7 @@ impl Sequence for Array {
 /// Represents a linear sequence of values
 #[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize)]
 pub struct Tuple {
-    items: Vec<TypedValue>,
+    the_tuple: Vec<TypedValue>,
 }
 
 impl Tuple {
@@ -335,7 +376,7 @@ impl Tuple {
     pub fn new(
         items: Vec<TypedValue>,
     ) -> Self {
-        Self { items }
+        Self { the_tuple: items }
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -343,13 +384,18 @@ impl Tuple {
     ////////////////////////////////////////////////////////////////////
 
     pub fn map(&self, f: fn(&TypedValue) -> TypedValue) -> Self {
-        Self::new(self.items.iter().map(f).collect::<Vec<_>>())
+        Self::new(self.the_tuple.iter().map(f).collect::<Vec<_>>())
     }
 
     pub fn rev(&self) -> Self {
-        Self::new(self.items.iter().rev()
+        Self::new(self.the_tuple.iter().rev()
             .map(|i| i.clone())
             .collect::<Vec<_>>())
+    }
+
+    pub fn unwrap_value(&self) -> String {
+        format!("({})", self.the_tuple.iter().map(|i| i.unwrap_value())
+            .collect::<Vec<_>>().join(", "))
     }
 }
 
@@ -357,7 +403,7 @@ impl Index<usize> for Tuple {
     type Output = TypedValue;
 
     fn index(&self, index: usize) -> &Self::Output {
-        if index < self.items.len() { &self.items[index] } else { &Undefined }
+        if index < self.the_tuple.len() { &self.the_tuple[index] } else { &Undefined }
     }
 }
 
@@ -370,12 +416,12 @@ impl PartialOrd for Tuple {
 impl Sequence for Tuple {
     /// Returns true, if the [Array] contains the specified item
     fn contains(&self, item: &TypedValue) -> bool {
-        self.items.contains(item)
+        self.the_tuple.contains(item)
     }
 
     /// Returns the [Option] of a [TypedValue] from specified index
     fn get(&self, index: usize) -> Option<TypedValue> {
-        idx_vec_opt(&self.items, index)
+        idx_vec_opt(&self.the_tuple, index)
     }
 
     /// Returns the [Option] of a [TypedValue] from specified index or the
@@ -386,27 +432,41 @@ impl Sequence for Tuple {
 
     /// Returns the type
     fn get_type(&self) -> DataType {
-        TupleType(self.items.iter().map(|v| v.get_type()).collect())
+        TupleType(self.the_tuple.iter().map(|v| v.get_type()).collect())
     }
 
     fn get_values(&self) -> Vec<TypedValue> {
-        self.items.clone()
+        self.the_tuple.clone()
     }
 
     fn iter(&self) -> Iter<'_, TypedValue> {
-        self.items.iter()
+        self.the_tuple.iter()
     }
 
     fn len(&self) -> usize {
-        self.items.len()
+        self.the_tuple.len()
+    }
+
+    fn push(&mut self, value: TypedValue) -> TypedValue {
+        self.the_tuple.push(value);
+        TupleValue(self.the_tuple.clone())
+    }
+
+    fn pop(&mut self) -> Option<TypedValue> {
+        self.the_tuple.pop()
     }
 
     fn to_array(&self) -> Array {
-        Array::from(self.items.clone())
+        Array::from(self.the_tuple.clone())
     }
 
     fn to_tuple(&self) -> Tuple {
-        Tuple::new(self.items.clone())
+        Tuple::new(self.the_tuple.clone())
+    }
+
+    fn unwrap_value(&self) -> String {
+        format!("({})", self.the_tuple.iter().map(|i| i.unwrap_value())
+            .collect::<Vec<_>>().join(", "))
     }
 }
 

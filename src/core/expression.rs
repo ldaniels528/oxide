@@ -196,13 +196,13 @@ pub enum Expression {
     BitwiseShiftRight(Box<Expression>, Box<Expression>),
     BitwiseXor(Box<Expression>, Box<Expression>),
     CodeBlock(Vec<Expression>),
+    ColonColon(Box<Expression>, Box<Expression>),
+    ColonColonColon(Box<Expression>, Box<Expression>),
     Condition(Conditions),
     DatabaseOp(DatabaseOps),
     Directive(Directives),
     Divide(Box<Expression>, Box<Expression>),
     ElementAt(Box<Expression>, Box<Expression>),
-    Extraction(Box<Expression>, Box<Expression>),
-    ExtractPostfix(Box<Expression>, Box<Expression>),
     Factorial(Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
     FnExpression {
@@ -227,7 +227,7 @@ pub enum Expression {
     },
     Import(Vec<ImportOps>),
     Include(Box<Expression>),
-    JSONExpression(Vec<(String, Expression)>),
+    StructureExpression(Vec<(String, Expression)>),
     Literal(TypedValue),
     Minus(Box<Expression>, Box<Expression>),
     Module(String, Vec<Expression>),
@@ -285,9 +285,9 @@ impl Expression {
                 format!("{} / {}", Self::decompile(a), Self::decompile(b)),
             Expression::ElementAt(a, b) =>
                 format!("{}[{}]", Self::decompile(a), Self::decompile(b)),
-            Expression::Extraction(a, b) =>
+            Expression::ColonColon(a, b) =>
                 format!("{}::{}", Self::decompile(a), Self::decompile(b)),
-            Expression::ExtractPostfix(a, b) =>
+            Expression::ColonColonColon(a, b) =>
                 format!("{}:::{}", Self::decompile(a), Self::decompile(b)),
             Expression::Factorial(a) => format!("{}¡", Self::decompile(a)),
             Expression::Feature { title, scenarios } =>
@@ -321,7 +321,7 @@ impl Expression {
                     .collect::<Vec<_>>()
                     .join(", ")),
             Expression::Include(path) => format!("include {}", Self::decompile(path)),
-            Expression::JSONExpression(items) =>
+            Expression::StructureExpression(items) =>
                 format!("{{{}}}", items.iter()
                     .map(|(k, v)| format!("{}: {}", k, v))
                     .collect::<Vec<String>>()
@@ -608,14 +608,14 @@ impl Expression {
                         if index >= items.len() { Undefined } else { items[index].clone() }
                     }
                     TypedValue::TableValue(df) => df.read_one(index)?
-                        .map(|row| Structured(Firm(row, df.get_columns().clone())))
+                        .map(|row| Structured(Firm(row, df.get_parameters())))
                         .unwrap_or(Undefined),
                     TypedValue::Undefined => Undefined,
                     z => ErrorValue(TypeMismatch(UnsupportedType(VaryingType(vec![]), z.get_type())))
                 })
             }
             Expression::Factorial(expr) => expr.to_pure().map(|v| v.factorial()),
-            Expression::JSONExpression(items) => {
+            Expression::StructureExpression(items) => {
                 let mut new_items = Vec::new();
                 for (name, expr) in items {
                     new_items.push((name.to_string(), expr.to_pure()?))
@@ -664,7 +664,7 @@ mod tests {
     use crate::expression::Conditions::*;
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
     use crate::expression::DatabaseOps::{Mutation, Queryable};
-    use crate::expression::Expression::{ArrayExpression, AsValue, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor, DatabaseOp, ElementAt, FnExpression, From, JSONExpression, Literal, Multiply, Ns, Plus, SetVariable, Via};
+    use crate::expression::Expression::{ArrayExpression, AsValue, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor, DatabaseOp, ElementAt, FnExpression, From, StructureExpression, Literal, Multiply, Ns, Plus, SetVariable, Via};
     use crate::expression::*;
     use crate::machine::Machine;
     use crate::number_kind::NumberKind::F64Kind;
@@ -943,7 +943,7 @@ mod tests {
     fn test_overwrite() {
         let model = DatabaseOp(Mutation(Mutations::Overwrite {
             path: Box::new(Variable("stocks".into())),
-            source: Box::new(Via(Box::new(JSONExpression(vec![
+            source: Box::new(Via(Box::new(StructureExpression(vec![
                 ("symbol".into(), Literal(StringValue("BOX".into()))),
                 ("exchange".into(), Literal(StringValue("NYSE".into()))),
                 ("last_sale".into(), Literal(Number(F64Value(21.77)))),

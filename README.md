@@ -265,7 +265,7 @@ server response:
 cal::now()
 </pre>
 <pre>
-2025-01-25T07:01:04.075Z
+2025-01-25T08:11:50.493Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -276,7 +276,7 @@ now():::day_of()
 
 </pre>
 <pre>
-24
+25
 </pre>
 <hr>
 <h4>cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -287,7 +287,7 @@ now():::hour12()
 
 </pre>
 <pre>
-11
+12
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -298,7 +298,7 @@ now():::hour24()
 
 </pre>
 <pre>
-23
+0
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -309,7 +309,7 @@ now():::minute_of()
 
 </pre>
 <pre>
-1
+11
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -320,7 +320,7 @@ now():::month_of()
 
 </pre>
 <pre>
-4
+50
 </pre>
 <hr>
 <h4>cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
@@ -331,7 +331,7 @@ now():::second_of()
 
 </pre>
 <pre>
-4
+50
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -605,13 +605,13 @@ Hello World
 from oxide::help() limit 3
 </pre>
 <pre>
-|----------------------------------------------------------------------------|
-| id | name   | module | signature       | description             | returns |
-|----------------------------------------------------------------------------|
-| 0  | to_u8  | util   | util::to_u8(x)  | Converts a value to u8  | u8      |
-| 1  | to_u64 | util   | util::to_u64(x) | Converts a value to u64 | u64     |
-| 2  | to_u32 | util   | util::to_u32(x) | Converts a value to u32 | u32     |
-|----------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------|
+| id | name       | module | signature                  | description                  | returns |
+|------------------------------------------------------------------------------------------------|
+| 0  | url_encode | www    | www::url_encode(s: String) | Encodes a URL string         | String  |
+| 1  | url_decode | www    | www::url_decode(s: String) | Decodes a URL-encoded string | String  |
+| 2  | serve      | www    | www::serve(n: u32)         | Starts a local HTTP service  | Ack     |
+|------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -657,7 +657,7 @@ Ack
 oxide::uuid()
 </pre>
 <pre>
-8106f242-32ba-42ed-9c45-4c14eaaaed1f
+4c0ef86d-1828-4ce9-ac9f-f7a9338f8267
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>
@@ -819,6 +819,45 @@ tools::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
 |------------------------------------|
 | id | symbol | exchange | last_sale |
 |------------------------------------|
+| 2  | JET    | NASDAQ   | 32.12     |
+|------------------------------------|
+</pre>
+<hr>
+<h4>tools::pop &#8212; Removes and returns a value or object from a Sequence</h4>
+<pre>
+
+import tools
+[+] stocks := ns("platform.pop.stocks")
+[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+{ symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+[+] stocks::pop(stocks)
+
+</pre>
+<pre>
+Illegal structure platform.pop.stocks
+</pre>
+<hr>
+<h4>tools::push &#8212; Appends a value or object to a Sequence</h4>
+<pre>
+
+import tools
+[+] stocks := ns("platform.push.stocks")
+[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+{ symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+[+] stocks::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
+[+] stocks
+
+</pre>
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 0  | ABC    | AMEX     | 12.49     |
+| 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
 </pre>
@@ -1129,11 +1168,11 @@ GET "http://localhost:8822/platform/www/quotes/1/4"
 </pre>
 <pre>
 |------------------------------------|
-| id | exchange | symbol | last_sale |
+| id | symbol | exchange | last_sale |
 |------------------------------------|
-| 0  | NYSE     | BOX    | 56.88     |
-| 1  | NASDAQ   | JET    | 32.12     |
-| 2  | AMEX     | ABC    | 12.49     |
+| 0  | BOX    | NYSE     | 56.88     |
+| 1  | JET    | NASDAQ   | 32.12     |
+| 2  | ABC    | AMEX     | 12.49     |
 |------------------------------------|
 </pre>
 

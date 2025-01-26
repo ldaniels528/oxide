@@ -33,6 +33,7 @@ use serde_json::Value;
 use std::fs::File;
 use std::thread;
 use std::time::Duration;
+use actix::fut::result;
 
 pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
     make_dataframe_ns(Namespace::new(database, schema, name), columns)
@@ -170,7 +171,8 @@ pub fn verify_outcome(
 
 pub fn verify_when(code: &str, f: fn(TypedValue) -> bool) {
     let mut interpreter = Interpreter::new();
-    let actual = interpreter.evaluate(code).unwrap();
+    let actual = TypedValue::from_result(interpreter.evaluate(code));
+    println!("when {} -> {}", code, actual);
     assert!(f(actual));
 }
 

@@ -63,14 +63,14 @@ impl ByteCodeCompiler {
     }
 
     /// Decodes the supplied buffer returning a row and its metadata
-    pub fn decode_row(columns: &Vec<Column>, buffer: &Vec<u8>) -> (Row, RowMetadata) {
+    pub fn decode_row(params: &Vec<Column>, buffer: &Vec<u8>) -> (Row, RowMetadata) {
         // if the buffer is empty, just return an empty row
         if buffer.len() == 0 {
-            return (Row::create(0, columns), RowMetadata::new(false));
+            return (Row::create(0, params), RowMetadata::new(false));
         }
         let metadata = RowMetadata::from_bytes(buffer, 0);
         let id = ByteCodeCompiler::decode_row_id(buffer, 1);
-        let values = columns.iter().map(|column| {
+        let values = params.iter().map(|column| {
             let data_type = column.get_data_type();
             data_type.decode_field_value(&buffer, column.get_offset())
         }).collect();
@@ -113,7 +113,7 @@ impl ByteCodeCompiler {
 
     /// Returns the binary-encoded equivalent of the row.
     pub fn encode_row(row: &Row, phys_columns: &Vec<Column>) -> Vec<u8> {
-        let capacity = Row::compute_record_size(phys_columns);
+        let capacity = Row::compute_record_size(&phys_columns);
         let mut fixed_buf = Vec::with_capacity(capacity);
         // include the field metadata and row ID
         fixed_buf.push(RowMetadata::new(true).encode());
@@ -385,9 +385,8 @@ impl ByteCodeCompiler {
 
     pub fn next_rows_with_columns(
         &mut self,
-        parameters: &Vec<Parameter>,
+        columns: &Vec<Column>,
     ) -> std::io::Result<Vec<Row>> {
-        let columns = Column::from_parameters(parameters);
         let n_rows = self.next_u64();
         let mut rows = Vec::new();
         for _ in 0..n_rows {
@@ -415,10 +414,9 @@ impl ByteCodeCompiler {
 
     pub fn next_struct_with_parameters(
         &mut self,
-        parameters: &Vec<Parameter>,
+        parameters: Vec<Parameter>,
     ) -> std::io::Result<HardStructure> {
-        let fields = Column::from_parameters(parameters);
-        Ok(HardStructure::new(fields, self.next_array()?))
+        Ok(HardStructure::new(parameters, self.next_array()?))
     }
 
     pub fn next_table_with_columns(
@@ -426,7 +424,7 @@ impl ByteCodeCompiler {
         parameters: &Vec<Parameter>,
     ) -> std::io::Result<ModelRowCollection> {
         let phys_columns = Column::from_parameters(&parameters);
-        let rows = self.next_rows_with_columns(parameters)?;
+        let rows = self.next_rows_with_columns(&phys_columns)?;
         Ok(ModelRowCollection::from_columns_and_rows(&phys_columns, &rows))
     }
 
@@ -609,7 +607,7 @@ mod tests {
     use super::*;
     use crate::dataframe::Dataframe::Model;
     use crate::expression::Conditions::{Equal, GreaterThan, LessOrEqual};
-    use crate::expression::Expression::{Condition, DatabaseOp, If, JSONExpression, Literal, Multiply, Plus, Variable, Via};
+    use crate::expression::Expression::{Condition, DatabaseOp, If, StructureExpression, Literal, Multiply, Plus, Variable, Via};
     use crate::expression::{DatabaseOps, Mutations, Queryables};
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::{F64Value, I64Value};
@@ -710,7 +708,7 @@ mod tests {
     fn test_update() {
         let model = DatabaseOp(DatabaseOps::Mutation(Mutations::Update {
             path: Box::new(Variable("stocks".into())),
-            source: Box::new(Via(Box::new(JSONExpression(vec![
+            source: Box::new(Via(Box::new(StructureExpression(vec![
                 ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
             ])))),
             condition: Some(Equal(
@@ -726,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_json_literal() {
-        let model = JSONExpression(vec![
+        let model = StructureExpression(vec![
             ("symbol".to_string(), Literal(StringValue("TRX".into()))),
             ("exchange".to_string(), Literal(StringValue("NYSE".into()))),
             ("last_sale".to_string(), Literal(Number(F64Value(11.1111)))),

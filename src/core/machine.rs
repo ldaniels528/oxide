@@ -159,16 +159,15 @@ impl Machine {
             Divide(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.do_index_of_collection(a, b),
-            Extraction(a, b) => self.do_extraction(a, b),
-            ExtractPostfix(a, b) => self.do_function_call_postfix(a, b),
+            ColonColon(a, b) => self.do_extraction(a, b),
+            ColonColonColon(a, b) => self.do_function_call_postfix(a, b),
             Factorial(a) => self.do_inline_1(a, |aa| aa.factorial()),
             Feature { title, scenarios } => self.do_feature(title, scenarios),
             FnExpression { params, body, returns } =>
                 self.do_fn_expression(params, body, returns),
             ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
             From(src) => do_table_or_view_query(self, src, &True, &Undefined),
-            FunctionCall { fx, args } =>
-                Ok(self.do_function_call(fx, args)),
+            FunctionCall { fx, args } => self.do_function_call(fx, args),
             HTTP { method, url, body, headers, multipart } => {
                 self.do_http(method, url, body, headers, multipart)
             }
@@ -176,7 +175,7 @@ impl Machine {
                 self.do_if_then_else(condition, a, b),
             Import(ops) => Ok(self.do_imports(ops)),
             Include(path) => self.do_include(path),
-            JSONExpression(items) => self.do_structure_soft(items),
+            StructureExpression(items) => self.do_structure_soft(items),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
             Minus(a, b) =>
                 self.do_inline_2(a, b, |aa, bb| aa - bb),
@@ -518,8 +517,7 @@ impl Machine {
         let ms = self.clone();
         match field {
             // math::compute(5, 8)
-            FunctionCall { fx, args } =>
-                Ok(structure.pollute(ms).do_function_call(fx, args)),
+            FunctionCall { fx, args } => structure.pollute(ms).do_function_call(fx, args),
             // stock::last_sale := 24.11
             SetVariable(name, expr) => {
                 let (ms, value) = ms.evaluate(expr)?;
@@ -651,22 +649,21 @@ impl Machine {
     fn do_function_call(&self,
                         fx: &Expression,
                         args: &Vec<Expression>,
-    ) -> (Self, TypedValue) {
-        let ms = self.to_owned();
+    ) -> std::io::Result<(Self, TypedValue)> {
         match self.evaluate_array(args) {
             Ok((ms, ArrayValue(args))) =>
                 match ms.evaluate(fx) {
-                    Ok((ms, Function { params, body: code, .. })) =>
+                    Ok((ms, Function { params, body: code, returns })) =>
                         match ms.do_function_arguments(params, args.get_values().clone()).evaluate(&code) {
-                            Ok((ms, result)) => (ms, result),
-                            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+                            Ok((ms, result)) => Ok((ms, result)),
+                            Err(err) => throw(Exact(err.to_string()))
                         }
                     Ok((ms, PlatformOp(pf))) => pf.evaluate(ms, args.get_values().clone()),
-                    Ok((_, z)) => (ms, ErrorValue(Exact(format!("'{}' is not a function ({})", fx.to_code(), z)))),
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+                    Ok((_, z)) => throw(Exact(format!("'{}' is not a function ({})", fx.to_code(), z))),
+                    Err(err) => throw(Exact(err.to_string()))
                 }
-            Ok((ms, other)) => (ms, ErrorValue(TypeMismatch(FunctionArgsExpected(other.to_code())))),
-            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+            Ok((_, other)) => throw(TypeMismatch(FunctionArgsExpected(other.to_code()))),
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 
@@ -683,7 +680,7 @@ impl Machine {
                 let mut enriched_args = Vec::new();
                 enriched_args.push(object.to_owned());
                 enriched_args.extend(args.to_owned());
-                Ok(self.do_function_call(fx, &enriched_args))
+                self.do_function_call(fx, &enriched_args)
             }
             z => fail(format!("{} is not a function call", z.to_code()))
         }
@@ -951,8 +948,8 @@ impl Machine {
                 let id = index.to_usize();
                 let frc = FileRowCollection::open(&ns)?;
                 match frc.read_one(id)? {
-                    Some(row) => Structured(Firm(row, frc.get_columns().clone())),
-                    None => Structured(Firm(Row::create(id, frc.get_columns()), frc.get_columns().to_owned()))
+                    Some(row) => Structured(Firm(row, frc.get_parameters())),
+                    None => Structured(Firm(Row::create(id, frc.get_columns()), frc.get_parameters()))
                 }
             }
             StringValue(string) => {
@@ -967,8 +964,8 @@ impl Machine {
             TableValue(rcv) => {
                 let id = index.to_usize();
                 match rcv.read_one(id)? {
-                    Some(row) => Structured(Firm(row, rcv.get_columns().clone())),
-                    None => Structured(Firm(Row::create(id, rcv.get_columns()), rcv.get_columns().to_owned()))
+                    Some(row) => Structured(Firm(row, rcv.get_parameters())),
+                    None => Structured(Firm(Row::create(id, rcv.get_columns()), rcv.get_parameters()))
                 }
             }
             TupleValue(values) => {
@@ -1750,12 +1747,13 @@ mod tests {
             let (_, result) = Machine::empty().evaluate(&model).unwrap();
             assert_eq!(result, Structured(Firm(
                 make_quote(2, "BIZ", "NYSE", 23.66),
-                columns
+                params
             )))
         }
 
         #[test]
         fn test_index_of_table_in_variable() {
+            let params = make_quote_parameters();
             let phys_columns = make_quote_columns();
             let my_table = ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
                 make_quote(0, "ABC", "AMEX", 12.33),
@@ -1778,7 +1776,7 @@ mod tests {
             let (_, result) = machine.evaluate(&model).unwrap();
             assert_eq!(result, Structured(Firm(
                 make_quote(4, "VAPOR", "NYSE", 0.0289),
-                phys_columns
+                params
             )))
         }
 
@@ -1953,7 +1951,7 @@ mod tests {
             let machine = Machine::empty();
             let (_, result) = machine.evaluate(&DatabaseOp(Mutation(Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
-                source: Box::new(From(Box::new(JSONExpression(vec![
+                source: Box::new(From(Box::new(StructureExpression(vec![
                     ("symbol".into(), Literal(StringValue("REX".into()))),
                     ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
                     ("last_sale".into(), Literal(Number(F64Value(16.99)))),
@@ -1978,7 +1976,7 @@ mod tests {
             let ns_path = "machine.overwrite.stocks";
             let model = DatabaseOp(Mutation(Overwrite {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
-                source: Box::new(Via(Box::new(JSONExpression(vec![
+                source: Box::new(Via(Box::new(StructureExpression(vec![
                     ("symbol".into(), Literal(StringValue("BOOM".into()))),
                     ("exchange".into(), Literal(StringValue("NYSE".into()))),
                     ("last_sale".into(), Literal(Number(F64Value(56.99)))),
@@ -2078,7 +2076,7 @@ mod tests {
             // build the update model
             let model = DatabaseOp(Mutation(Update {
                 path: Box::new(Variable("stocks".into())),
-                source: Box::new(Via(Box::new(JSONExpression(vec![
+                source: Box::new(Via(Box::new(StructureExpression(vec![
                     ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
                 ])))),
                 condition: Some(Equal(
@@ -2116,7 +2114,7 @@ mod tests {
             // create the instruction model
             let model = DatabaseOp(Mutation(Update {
                 path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.to_string()))))),
-                source: Box::new(Via(Box::new(JSONExpression(vec![
+                source: Box::new(Via(Box::new(StructureExpression(vec![
                     ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
                 ])))),
                 condition: Some(Equal(

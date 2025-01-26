@@ -23,7 +23,7 @@ use crate::platform::PlatformOps;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::Array;
 use crate::structures::Row;
-use crate::structures::Structures::Hard;
+use crate::structures::Structures::{Firm, Hard};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use shared_lib::fail;
@@ -530,17 +530,17 @@ pub trait RowCollection: Debug {
                 }
                 Number(RowsAffected(affected_count))
             }
-            Err(err) => return ErrorValue(Errors::Exact(err.to_string())),
+            Err(err) => ErrorValue(Errors::Exact(err.to_string())),
         }
     }
 
     /// Retrieves the last row in the table; deleting the row from the table
     /// during the process.
-    fn pop_row(&mut self) -> TypedValue {
+    fn pop_row(&mut self, parameters: Vec<Parameter>) -> TypedValue {
         match self.find_last_active_row() {
             Ok(Some(row)) => {
                 let _ = self.delete_row(row.get_id());
-                Structured(Hard(row.as_hard(self.get_columns())))
+                Structured(Firm(row, parameters))
             }
             Ok(None) => Undefined,
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
@@ -690,8 +690,8 @@ pub trait RowCollection: Debug {
     }
 
     fn to_array(&self) -> Array {
-        let columns = self.get_columns();
-        Array::from(self.iter().map(|row| Structured(Hard(row.as_hard(columns)))).collect())
+        let columns = self.get_parameters();
+        Array::from(self.iter().map(|row| Structured(Hard(row.as_hard(&columns)))).collect())
     }
 
     /// Restores a deleted row by ID to an active state within the table
@@ -833,6 +833,7 @@ mod tests {
     use rand::{thread_rng, Rng, RngCore};
     use shared_lib::{cnv_error, compute_time_millis};
     use std::time::{SystemTime, UNIX_EPOCH};
+    use crate::structures::Structures::Firm;
 
     #[test]
     fn test_from_bytes() {
@@ -1463,16 +1464,17 @@ mod tests {
     #[test]
     fn test_push_pop() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+            let params = make_quote_parameters();
             let phys_columns = make_quote_columns();
             assert_eq!(Number(RowId(0)), rc.push_row(make_quote(0, "BILL", "AMEX", 12.33)));
             assert_eq!(Number(RowId(1)), rc.push_row(make_quote(1, "TED", "NYSE", 56.2456)));
             assert_eq!(
-                rc.pop_row(),
-                Structured(Hard(make_quote(1, "TED", "NYSE", 56.2456).as_hard(&phys_columns))));
+                rc.pop_row(params.clone()),
+                Structured(Firm(make_quote(1, "TED", "NYSE", 56.2456), params.clone())));
             assert_eq!(
-                rc.pop_row(),
-                Structured(Hard(make_quote(0, "BILL", "AMEX", 12.33).as_hard(&phys_columns))));
-            assert_eq!(rc.pop_row(), Undefined);
+                rc.pop_row(params.clone()),
+                Structured(Firm(make_quote(0, "BILL", "AMEX", 12.33), params.clone())));
+            assert_eq!(rc.pop_row(params.clone()), Undefined);
 
             rc.len().unwrap() as u64
         }

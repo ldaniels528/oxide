@@ -34,7 +34,7 @@ impl Inferences {
             Directive(..) => NumberType(NumberKind::AckKind),
             Divide(a, b) => Inferences::infer_a_or_b(a, b),
             ElementAt(..) => VaryingType(vec![]),
-            Extraction(a, b) => match (a.deref(), b.deref()) {
+            ColonColon(a, b) => match (a.deref(), b.deref()) {
                 (Variable(pkg), FunctionCall { fx, .. }) => match fx.deref() {
                     Variable(name) =>
                         PlatformOps::find_function(pkg, name)
@@ -44,7 +44,7 @@ impl Inferences {
                 }
                 _ => VaryingType(vec![])
             }
-            ExtractPostfix(..) => VaryingType(vec![]),
+            ColonColonColon(..) => VaryingType(vec![]),
             Factorial(a) => Inferences::infer(a),
             Feature { .. } => NumberType(NumberKind::AckKind),
             FnExpression { params, returns, .. } =>
@@ -62,7 +62,7 @@ impl Inferences {
             If { a: true_v, .. } => Inferences::infer(true_v),
             Import(..) => NumberType(NumberKind::AckKind),
             Include(..) => NumberType(NumberKind::AckKind),
-            JSONExpression(..) => StructureType(Vec::new()), // TODO can we infer?
+            StructureExpression(..) => StructureType(Vec::new()), // TODO can we infer?
             Literal(Function { body: code, .. }) => Inferences::infer(code),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),

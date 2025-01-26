@@ -8,6 +8,8 @@ use crate::columns::Column;
 
 use crate::data_types::DataType;
 use crate::data_types::DataType::StructureType;
+use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::Model;
 use crate::expression::Conditions;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
@@ -122,9 +124,18 @@ pub trait Structure {
 /// or a [Row] with [Column]s.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Structures {
-    Firm(Row, Vec<Column>),
+    Firm(Row, Vec<Parameter>),
     Hard(HardStructure),
     Soft(SoftStructure),
+}
+
+impl Structures {
+    pub fn to_dataframe(&self) -> Dataframe {
+        match self {
+            Self::Firm(row, params) => row.to_dataframe(params),
+            s => Model(ModelRowCollection::from_parameters_and_rows(&s.get_parameters(), &vec![s.to_row()])),
+        }
+    }
 }
 
 impl Display for Structures {
@@ -141,7 +152,7 @@ impl Structure for Structures {
 
     fn get_parameters(&self) -> Vec<Parameter> {
         match self {
-            Self::Firm(row, ..) => row.get_parameters(),
+            Self::Firm(_, params) => params.clone(),
             Self::Hard(hs) => hs.get_parameters(),
             Self::Soft(ss) => ss.get_parameters(),
         }
@@ -192,7 +203,7 @@ impl Structure for Structures {
 
     fn to_table(&self) -> ModelRowCollection {
         match self {
-            Self::Firm(row, ..) => row.to_table(),
+            Self::Firm(row, params) => row.to_table(),
             Self::Hard(hs) => hs.to_table(),
             Self::Soft(ss) => ss.to_table(),
         }
@@ -200,7 +211,7 @@ impl Structure for Structures {
 
     fn update_by_name(&self, name: &str, value: TypedValue) -> Structures {
         match self {
-            Self::Firm(row, columns) => row.with_named_value(columns, name, value),
+            Self::Firm(row, params) => row.with_named_value(params, name, value),
             Self::Hard(hs) => hs.update_by_name(name, value),
             Self::Soft(ss) => ss.update_by_name(name, value),
         }
@@ -225,11 +236,23 @@ impl HardStructure {
     ////////////////////////////////////////////////////////////////////
 
     pub fn empty() -> Self {
-        Self::from_columns_and_values(Vec::new(), Vec::new())
+        Self::new(Vec::new(), Vec::new())
     }
 
-    pub fn new(fields: Vec<Column>, values: Vec<TypedValue>) -> Self {
-        Self::from_columns_and_values(fields, values)
+    pub fn new(fields: Vec<Parameter>, values: Vec<TypedValue>) -> Self {
+        let my_values = match (fields.len(), values.len()) {
+            // more fields than values?
+            (f, v) if f > v => {
+                let mut my_values = values;
+                for n in v..f { my_values.push(fields[n].get_default_value()) }
+                my_values
+            }
+            // more values than fields?
+            (f, v) if f < v => values[0..f].to_vec(),
+            // same length
+            (..) => values
+        };
+        Self { fields, values: my_values }
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -241,43 +264,29 @@ impl HardStructure {
     }
 
     pub fn from_columns_and_row(columns: &Vec<Column>, row: &Row) -> HardStructure {
-        Self::new(columns.to_owned(), row.get_values())
+        Self::new(Parameter::from_columns(columns), row.get_values())
     }
 
     pub fn from_columns_and_values(
         columns: Vec<Column>,
         values: Vec<TypedValue>,
     ) -> Self {
-        let params = Parameter::from_columns(&columns);
-        let my_values = match (params.len(), values.len()) {
-            // more fields than values?
-            (f, v) if f > v => {
-                let mut my_values = values;
-                for n in v..f { my_values.push(columns[n].get_default_value()) }
-                my_values
-            }
-            // more values than fields?
-            (f, v) if f < v => values[0..f].to_vec(),
-            // same length
-            (..) => values
-        };
-        Self { fields: params, values: my_values }
+        Self::new(Parameter::from_columns(&columns), values)
     }
 
     pub fn from_parameters(
-        parameters: &Vec<Parameter>
+        fields: Vec<Parameter>
     ) -> HardStructure {
-        let fields = Column::from_parameters(parameters);
-        let values = parameters.iter()
+        let values = fields.iter()
             .map(|c| c.get_default_value()).collect();
         Self::new(fields, values)
     }
 
     pub fn from_parameters_and_values(
-        parameters: &Vec<Parameter>,
+        parameters: Vec<Parameter>,
         values: Vec<TypedValue>,
     ) -> HardStructure {
-        Self::new(Column::from_parameters(parameters), values)
+        Self::new(parameters, values)
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -310,7 +319,7 @@ impl HardStructure {
                 fields.push(Parameter::with_default(name, value.get_type(), value.to_owned()));
                 let mut values = self.values.clone();
                 values.push(value);
-                HardStructure::from_parameters_and_values(&fields, values)
+                HardStructure::from_parameters_and_values(fields, values)
             }
         }
     }
@@ -523,8 +532,8 @@ impl Row {
     ////////////////////////////////////////////////////////////////////
 
     /// Computes the total record size (in bytes)
-    pub fn compute_record_size(columns: &Vec<Column>) -> usize {
-        Row::overhead() + columns.iter()
+    pub fn compute_record_size(params: &Vec<Column>) -> usize {
+        Row::overhead() + params.iter()
             .map(|c| c.get_fixed_size()).sum::<usize>()
     }
 
@@ -540,7 +549,7 @@ impl Row {
         // if the buffer is empty, just return an empty row
         let size = buffer.next_u64();
         if size == 0 {
-            return Ok((Self::create(0, columns), RowMetadata::new(false)));
+            return Ok((Self::create(0, &columns), RowMetadata::new(false)));
         }
         let metadata = RowMetadata::decode(buffer.next_u8());
         let id = buffer.next_row_id();
@@ -589,12 +598,12 @@ impl Row {
     //      Instance Methods
     ////////////////////////////////////////////////////////////////////
 
-    pub fn as_hard(&self, columns: &Vec<Column>) -> HardStructure {
-        HardStructure::new(columns.to_owned(), self.values.to_owned())
+    pub fn as_hard(&self, params: &Vec<Parameter>) -> HardStructure {
+        HardStructure::new(params.to_owned(), self.values.to_owned())
     }
 
-    pub fn as_soft(&self, columns: &Vec<Column>) -> SoftStructure {
-        SoftStructure::from_tuples(self.get_named_tuples(columns))
+    pub fn as_soft(&self, params: &Vec<Parameter>) -> SoftStructure {
+        SoftStructure::from_tuples(self.get_named_tuples(params))
     }
 
     pub fn get(&self, index: usize) -> TypedValue {
@@ -602,7 +611,7 @@ impl Row {
         if index < value_len { self.values[index].to_owned() } else { Undefined }
     }
 
-    fn get_named_tuples(&self, columns: &Vec<Column>) -> Vec<(String, TypedValue)> {
+    fn get_named_tuples(&self, columns: &Vec<Parameter>) -> Vec<(String, TypedValue)> {
         columns.iter().zip(self.values.iter())
             .fold(vec![], |mut list, (column, value)| {
                 list.push((column.get_name().to_string(), value.clone()));
@@ -659,16 +668,16 @@ impl Row {
             }).collect())
     }
 
-    pub fn rows_to_json(columns: &Vec<Column>, rows: &Vec<Row>) -> Vec<HashMap<String, Value>> {
+    pub fn rows_to_json(params: &Vec<Parameter>, rows: &Vec<Row>) -> Vec<HashMap<String, Value>> {
         rows.iter().fold(Vec::new(), |mut vec, row| {
-            vec.push(row.to_hash_json_value(columns));
+            vec.push(row.to_hash_json_value(params));
             vec
         })
     }
 
     /// Returns the structure as source code
-    pub fn to_code_with_keys(&self, columns: &Vec<Column>) -> String {
-        format!("{{{}}}", self.get_named_tuples(columns).iter()
+    pub fn to_code_with_keys(&self, params: &Vec<Parameter>) -> String {
+        format!("{{{}}}", self.get_named_tuples(params).iter()
             .map(|(name, value)| (name.to_string(), value.to_code()))
             .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
@@ -682,9 +691,13 @@ impl Row {
             .collect::<Vec<_>>().join(",")
     }
 
+    pub fn to_dataframe(&self, params: &Vec<Parameter>) -> Dataframe {
+        Model(ModelRowCollection::from_parameters_and_rows(params, &vec![self.clone()]))
+    }
+
     /// Transforms the row into JSON format
-    pub fn to_hash_typed_value(&self, columns: &Vec<Parameter>) -> HashMap<String, TypedValue> {
-        columns.iter().zip(self.get_values().iter())
+    pub fn to_hash_typed_value(&self, params: &Vec<Parameter>) -> HashMap<String, TypedValue> {
+        params.iter().zip(self.get_values().iter())
             .fold(HashMap::new(), |mut hm, (c, v)| {
                 hm.insert(c.get_name().to_string(), v.clone());
                 hm
@@ -692,8 +705,8 @@ impl Row {
     }
 
     /// Transforms the row into JSON format
-    pub fn to_hash_json_value(&self, columns: &Vec<Column>) -> HashMap<String, Value> {
-        columns.iter().zip(self.get_values().iter())
+    pub fn to_hash_json_value(&self, params: &Vec<Parameter>) -> HashMap<String, Value> {
+        params.iter().zip(self.get_values().iter())
             .fold(HashMap::new(), |mut hm, (c, v)| {
                 hm.insert(c.get_name().to_string(), v.to_json());
                 hm
@@ -701,8 +714,8 @@ impl Row {
     }
 
     /// Returns the structure as a JSON object
-    pub fn to_json_object(&self, columns: &Vec<Column>) -> Value {
-        let mapping = self.get_named_tuples(columns).iter()
+    pub fn to_json_object(&self, params: &Vec<Parameter>) -> Value {
+        let mapping = self.get_named_tuples(params).iter()
             .map(|(name, value)| (name.to_string(), value.to_json()))
             .fold(Map::new(), |mut m, (name, value)| {
                 m.insert(name, value);
@@ -766,11 +779,11 @@ impl Row {
 
     pub fn with_named_value(
         &self,
-        columns: &Vec<Column>,
+        params: &Vec<Parameter>,
         name: &str,
         value: TypedValue,
     ) -> Structures {
-        SoftStructure::from_tuples(self.get_named_tuples(columns))
+        SoftStructure::from_tuples(self.get_named_tuples(params))
             .update_by_name(name, value)
     }
 
@@ -908,7 +921,7 @@ mod tests {
                 StringValue("ABC".into()),
                 StringValue("AMEX".into()),
                 Number(F64Value(11.11)),
-            ]), make_quote_columns())));
+            ]), make_quote_parameters())));
         }
 
         #[test]
@@ -917,8 +930,11 @@ mod tests {
             let result = interpreter.evaluate(r#"
             Struct(symbol: String(8), exchange: String(8), last_sale: f64)
         "#).unwrap();
-            let phys_columns = make_quote_columns();
-            assert_eq!(result, Structured(Hard(HardStructure::new(phys_columns.clone(), Vec::new()))));
+            assert_eq!(result, Structured(Hard(
+                HardStructure::new(make_quote_parameters(), vec![
+                    Null, Null, Null
+                ])
+            )));
         }
 
         #[test]
@@ -1184,7 +1200,7 @@ mod tests {
         use crate::byte_code_compiler::ByteCodeCompiler;
         use crate::numbers::Numbers::*;
         use crate::structures::Row;
-        use crate::testdata::{make_quote, make_quote_columns};
+        use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
         use crate::typed_values::TypedValue::*;
 
         #[test]
@@ -1236,8 +1252,7 @@ mod tests {
 
         #[test]
         fn test_empty() {
-            let columns = make_quote_columns();
-            let row_a = Row::create(0, &columns);
+            let row_a = Row::create(0, &make_quote_columns());
             let row_b = Row::new(0, vec![Null, Null, Null]);
             assert_eq!(row_a, row_b);
         }
@@ -1264,11 +1279,11 @@ mod tests {
 
         #[test]
         fn test_to_row_offset() {
-            let phys_columns = make_quote_columns();
+            let columns = make_quote_columns();
             let row = Row::new(111, vec![
                 StringValue("GE".into()), StringValue("NYSE".into()), Number(F64Value(48.88)),
             ]);
-            assert_eq!(row.get_row_offset(&phys_columns, 2), 2 * Row::compute_record_size(&phys_columns) as u64);
+            assert_eq!(row.get_row_offset(&columns, 2), 2 * Row::compute_record_size(&columns) as u64);
         }
 
         #[test]
@@ -1297,7 +1312,7 @@ mod tests {
         fn test_as_struct_with_variable() {
             let obj =
                 make_quote(100, "ABC", "NYSE", 19.88)
-                    .as_hard(&make_quote_columns())
+                    .as_hard(&make_quote_parameters())
                     .with_variable("last_sale", Number(F64Value(19.87)));
             assert_eq!(obj.to_string(), r#"{"symbol":"ABC","exchange":"NYSE","last_sale":19.87}"#);
         }
@@ -1318,9 +1333,8 @@ mod tests {
 
         #[test]
         fn test_encode_decode_nonempty() {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns);
-            let model = HardStructure::new(phys_columns, vec![
+            let params = make_quote_parameters();
+            let model = HardStructure::new(params, vec![
                 StringValue("EDF".to_string()),
                 StringValue("NYSE".to_string()),
                 Number(F64Value(11.11)),
@@ -1333,8 +1347,8 @@ mod tests {
 
         #[test]
         fn test_from_logical_columns_and_values() {
-            let columns = make_quote_columns();
-            let structure = HardStructure::new(columns, vec![
+            let params = make_quote_parameters();
+            let structure = HardStructure::new(params, vec![
                 StringValue("ABC".to_string()),
                 StringValue("NYSE".to_string()),
                 Number(F64Value(11.11)),
@@ -1352,9 +1366,8 @@ mod tests {
 
         #[test]
         fn test_from_physical_columns_and_values() {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns);
-            let structure = HardStructure::new(phys_columns, vec![
+            let params = make_quote_parameters();
+            let structure = HardStructure::new(params, vec![
                 StringValue("ABC".to_string()),
                 StringValue("NYSE".to_string()),
                 Number(F64Value(11.11)),
@@ -1372,10 +1385,10 @@ mod tests {
 
         #[test]
         fn test_from_row() {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns);
-            let structure = HardStructure::from_columns_and_row(&phys_columns,
-                                                                &make_quote(0, "ABC", "AMEX", 11.77),
+            let parameters = make_quote_parameters();
+            let structure = HardStructure::from_parameters_and_values(
+                parameters,
+                make_quote(0, "ABC", "AMEX", 11.77).values,
             );
             assert_eq!(structure.get("symbol"), StringValue("ABC".to_string()));
             assert_eq!(structure.get("exchange"), StringValue("AMEX".to_string()));
@@ -1390,12 +1403,13 @@ mod tests {
 
         #[test]
         fn test_new() {
-            let structure = HardStructure::new(make_quote_columns(), Vec::new());
+            let structure = HardStructure::new(make_quote_parameters(), Vec::new());
             assert_eq!(structure.get_fields(), vec![
                 Parameter::new("symbol", StringType(8)),
                 Parameter::new("exchange", StringType(8)),
                 Parameter::new("last_sale", NumberType(F64Kind)),
             ]);
+            println!("structure {}", structure);
             assert_eq!(structure.get("symbol"), Null);
             assert_eq!(structure.get("exchange"), Null);
             assert_eq!(structure.get("last_sale"), Null);
@@ -1405,7 +1419,7 @@ mod tests {
 
         #[test]
         fn test_structure_from_columns() {
-            let structure = HardStructure::from_parameters(&make_quote_parameters());
+            let structure = HardStructure::from_parameters(make_quote_parameters());
             assert_eq!(structure.get("symbol"), Null);
             assert_eq!(structure.get("exchange"), Null);
             assert_eq!(structure.get("last_sale"), Null);
@@ -1423,7 +1437,7 @@ mod tests {
 
         #[test]
         fn test_to_code_2() {
-            let structure = HardStructure::new(make_quote_columns(), vec![
+            let structure = HardStructure::new(make_quote_parameters(), vec![
                 StringValue("ZZY".into()),
                 StringValue("NYSE".into()),
                 Number(F64Value(77.66)),
@@ -1435,7 +1449,7 @@ mod tests {
 
         #[test]
         fn test_to_json() {
-            let structure = HardStructure::new(make_quote_columns(), vec![
+            let structure = HardStructure::new(make_quote_parameters(), vec![
                 StringValue("WSKY".into()),
                 StringValue("NASDAQ".into()),
                 Number(F64Value(17.76)),
@@ -1445,7 +1459,7 @@ mod tests {
 
         #[test]
         fn test_to_row() {
-            let structure = HardStructure::new(make_quote_columns(), vec![
+            let structure = HardStructure::new(make_quote_parameters(), vec![
                 StringValue("ZZY".into()),
                 StringValue("NYSE".into()),
                 Number(F64Value(77.66)),
@@ -1460,8 +1474,8 @@ mod tests {
 
         #[test]
         fn test_to_table() {
-            let phys_columns = make_quote_columns();
-            let structure = HardStructure::new(phys_columns.clone(), vec![
+            let params = make_quote_parameters();
+            let structure = HardStructure::new(params.clone(), vec![
                 StringValue("ABB".into()),
                 StringValue("NYSE".into()),
                 Number(F64Value(37.25)),
@@ -1481,7 +1495,7 @@ mod tests {
 
         #[test]
         fn test_with_variable() {
-            let structure = HardStructure::new(make_quote_columns(), vec![
+            let structure = HardStructure::new(make_quote_parameters(), vec![
                 StringValue("ICE".to_string()),
                 StringValue("NASDAQ".to_string()),
                 Number(F64Value(22.11)),
