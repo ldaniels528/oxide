@@ -102,7 +102,7 @@ pub fn do_mutation(
             TableTarget { path } => do_table_drop(&ms, path),
         }
         Mutations::IntoNs(source, target) =>
-            do_table_into(&ms, target, source),
+            do_into_ns(&ms, target, source),
         Mutations::Overwrite { path, source, condition, limit } =>
             do_table_row_overwrite(&ms, path, source, condition, limit),
         Mutations::Truncate { path, limit } =>
@@ -120,23 +120,20 @@ pub fn do_mutation(
     }
 }
 
-fn do_table_into(
+fn do_into_ns(
     ms: &Machine,
     table: &Expression,
     source: &Expression,
 ) -> std::io::Result<(Machine, TypedValue)> {
-    let machine = ms.to_owned();
+    let m0 = ms.to_owned();
     let (machine, rows) = match source {
-        From(source) =>
-            do_rows_from_query(&ms, source, table)?,
-        Literal(TableValue(rc)) => (machine, rc.get_rows()),
-        Literal(NamespaceValue(ns)) => {
-            (machine, FileRowCollection::open(ns)?.read_active_rows()?)
-        }
-        DatabaseOp(Mutation(Declare(TableEntity { columns, from, options }))) =>
-            do_rows_from_table_declaration(&machine, table, from, columns)?,
-        source =>
-            do_rows_from_query(&ms, source, table)?,
+        From(source) => do_rows_from_query(&ms, source, table)?,
+        Literal(Kind(TableType(_params, _size))) => (m0, vec![]),
+        Literal(NamespaceValue(ns)) => (m0, FileRowCollection::open(ns)?.read_active_rows()?),
+        Literal(TableValue(rc)) => (m0, rc.get_rows()),
+        DatabaseOp(Mutation(Declare(TableEntity { columns, from, options: _ }))) =>
+            do_rows_from_table_declaration(&m0, table, from, columns)?,
+        source => do_rows_from_query(&ms, source, table)?,
     };
 
     // write the rows to the target

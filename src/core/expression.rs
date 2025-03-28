@@ -213,13 +213,7 @@ pub enum Expression {
     ForEach(String, Box<Expression>, Box<Expression>),
     From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
-    HTTP {
-        method: Box<Expression>,
-        url: Box<Expression>,
-        body: Option<Box<Expression>>,
-        headers: Option<Box<Expression>>,
-        multipart: Option<Box<Expression>>,
-    },
+    HTTP { method: String, url_or_object: Box<Expression> },
     If {
         condition: Box<Expression>,
         a: Box<Expression>,
@@ -310,8 +304,8 @@ impl Expression {
             Expression::From(a) => format!("from {}", Self::decompile(a)),
             Expression::FunctionCall { fx, args } =>
                 format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
-            Expression::HTTP { method, url, body, headers, multipart } =>
-                format!("{} {}{}{}{}", method, Self::decompile(url), Self::decompile_opt(body), Self::decompile_opt(headers), Self::decompile_opt(multipart)),
+            Expression::HTTP { method, url_or_object } =>
+                format!("{} {}", method, Self::decompile(url_or_object)),
             Expression::If { condition, a, b } =>
                 format!("if {} {}{}", Self::decompile(condition), Self::decompile(a), b.to_owned()
                     .map(|x| format!(" else {}", Self::decompile(&x)))
@@ -542,6 +536,7 @@ impl Expression {
             Token::Numeric { text, .. } => Literal(Number(Numbers::from_string(text))),
             Token::Operator { .. } => Literal(ErrorValue(IllegalOperator(token))),
             Token::SingleQuoted { text, .. } => Literal(StringValue(text)),
+            Token::URL { text, .. } => Literal(StringValue(text)),
         }
     }
 

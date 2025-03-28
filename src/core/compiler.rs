@@ -46,8 +46,7 @@ impl Compiler {
     /// compiles the source code into a [Vec<Expression>]; a graph representing
     /// the program's executable code
     pub fn build(source_code: &str) -> std::io::Result<Expression> {
-        let (code, _) = Self::new()
-            .compile(TokenSlice::from_string(source_code))?;
+        let (code, _) = Self::new().compile(TokenSlice::from_string(source_code))?;
         Ok(code)
     }
 
@@ -114,6 +113,8 @@ impl Compiler {
                 Ok((Literal(StringValue(text.into())), ts)),
             (Some(Numeric { text, .. }), ts) =>
                 Ok((Literal(TypedValue::from_numeric(text.as_str())?), ts)),
+            (Some(URL { text, .. }), ts) =>
+                Ok((Literal(StringValue(text.into())), ts)),
             (None, ts) => throw(ExactNear("Unexpected end of input".into(), ts.current()))
         }?;
 
@@ -544,56 +545,40 @@ impl Compiler {
         }
     }
 
-    /// Parses an HTTP expression
-    /// ex: HTTP GET "http://localhost:9000/quotes/AAPL/NYSE"
-    /// ex: POST "http://localhost:8080/machine/append/stocks" FROM stocks HEADERS {
-    ///         `Content-Type`: "application/json"
-    ///     }
+    /// Parses an HTTP expression.
+    /// ## Examples
+    /// ### URL-Based Request
+    /// ```http
+    /// GET http://localhost:9000/quotes/AAPL/NYSE
+    /// ```
+    /// ### Structured Request
+    /// ```http
+    /// POST {
+    ///     url: http://localhost:8080/machine/append/stocks
+    ///     body: stocks
+    ///     headers: { "Content-Type": "application/json" }
+    /// }
+    /// ```
+    /// ### Hybrid Request
+    /// ```http
+    /// POST http://localhost:8080/machine/append/stocks
+    ///   <~ { body: stocks, headers: {"Content-Type": "application/json"}}
+    /// ```
+    /// # Errors
+    /// Returns an `std::io::Result` in case of parsing failures.
+    /// # Parameters
+    /// - `ts`: A slice of tokens representing the HTTP expression.
+    /// # Returns
+    /// - A tuple containing the parsed `Expression` and the remaining `TokenSlice`.
     fn parse_keyword_http(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(Atom { text: method, .. }), ts) = ts.next() {
-            // get the HTTP URL
-            let (url, ts) = self.compile_next(ts)?;
-
-            // is there a "FROM" clause?
-            // ex: PUT "http://localhost:9000/quotes" FROM stocks
-            let (body, ts) =
-                self.parse_keyword_http_clause("FROM", ts)?;
-
-            // is there a "HEADERS" clause?
-            // ex: POST "http://localhost:9000/quotes" HEADERS {
-            //         `Content-Type`: "application/json"
-            //     }
-            let (headers, ts) =
-                self.parse_keyword_http_clause("HEADERS", ts)?;
-
-            // is there a "MULTIPART" clause?
-            // ex: POST "http://localhost:9000/quotes" MULTIPART {
-            //         file: "./stocks.csv"
-            //     }
-            let (multipart, ts) =
-                self.parse_keyword_http_clause("MULTIPART", ts)?;
-
-            // return the HTTP expression
-            let method = Box::new(Literal(StringValue(method.to_ascii_uppercase())));
-            let url = Box::new(url);
-            Ok((HTTP { method, url, body, headers, multipart }, ts))
+            let (expr, ts) = self.compile_next(ts.clone())?;
+            Ok((HTTP {
+                method,
+                url_or_object: Box::new(expr),
+            }, ts))
         } else {
             throw(ExactNear("HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT".into(), ts.current()))
-        }
-    }
-
-    /// Parses an optional HTTP clause
-    fn parse_keyword_http_clause(
-        &mut self,
-        keyword: &str,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Option<Box<Expression>>, TokenSlice)> {
-        match ts.next() {
-            (Some(Atom { text: s, .. }), ts) if s == keyword => {
-                let (expr, ts) = self.compile_next(ts)?;
-                Ok((Some(Box::new(expr)), ts))
-            }
-            _ => Ok((None, ts))
         }
     }
 
@@ -1001,7 +986,7 @@ impl Compiler {
     }
 
     /// Expects a function call or variable
-    /// ex: f(2, 3) | abc
+    /// ex: String(32) | f(2, 3) | abc
     fn expect_function_call_or_variable(
         &mut self,
         name: &str,
@@ -1386,9 +1371,8 @@ mod tests {
 
         #[test]
         fn test_tuple_assignment() {
-            let model = Compiler::build(r#"
-                (a, b, c) := (3, 5, 7)
-            "#).unwrap();
+            let input = "(a, b, c) := (3, 5, 7)";
+            let model = Compiler::build(input).unwrap();
             assert_eq!(model, SetVariables(
                 Box::from(TupleExpression(vec![
                     Variable("a".into()),
@@ -1401,7 +1385,7 @@ mod tests {
                     Literal(Number(I64Value(7))),
                 ])),
             ));
-            assert_eq!(model.to_code(), "(a, b, c) := (3, 5, 7)")
+            assert_eq!(model.to_code(), input)
         }
 
         #[test]
@@ -1556,7 +1540,7 @@ mod tests {
     #[cfg(test)]
     mod http_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Expression::{StructureExpression, Literal, HTTP};
+        use crate::expression::Expression::{Literal, StructureExpression, HTTP};
         use crate::typed_values::TypedValue::StringValue;
 
         #[test]
@@ -1565,11 +1549,8 @@ mod tests {
                 DELETE "http://localhost:9000/comments?id=675af"
             "#).unwrap();
             assert_eq!(model, HTTP {
-                method: Box::new(Literal(StringValue("DELETE".to_string()))),
-                url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
-                body: None,
-                headers: None,
-                multipart: None,
+                method: "DELETE".to_string(),
+                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
             });
         }
 
@@ -1579,11 +1560,8 @@ mod tests {
                 GET "http://localhost:9000/comments?id=675af"
             "#).unwrap();
             assert_eq!(model, HTTP {
-                method: Box::new(Literal(StringValue("GET".to_string()))),
-                url: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
-                body: None,
-                headers: None,
-                multipart: None,
+                method: "GET".to_string(),
+                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
             });
         }
 
@@ -1593,11 +1571,8 @@ mod tests {
                 HEAD "http://localhost:9000/quotes/AMD/NYSE"
             "#).unwrap();
             assert_eq!(model, HTTP {
-                method: Box::new(Literal(StringValue("HEAD".to_string()))),
-                url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".to_string()))),
-                body: None,
-                headers: None,
-                multipart: None,
+                method: "HEAD".to_string(),
+                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".to_string()))),
             });
         }
 
@@ -1607,11 +1582,8 @@ mod tests {
                 PATCH "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE"
             "#).unwrap();
             assert_eq!(model, HTTP {
-                method: Box::new(Literal(StringValue("PATCH".to_string()))),
-                url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".to_string()))),
-                body: None,
-                headers: None,
-                multipart: None,
+                method: "PATCH".to_string(),
+                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".to_string()))),
             });
         }
 
@@ -1621,45 +1593,42 @@ mod tests {
                 POST "http://localhost:9000/quotes/AMD/NASDAQ"
             "#).unwrap();
             assert_eq!(model, HTTP {
-                method: Box::new(Literal(StringValue("POST".to_string()))),
-                url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
-                body: None,
-                headers: None,
-                multipart: None,
+                method: "POST".to_string(),
+                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
             });
         }
 
         #[test]
         fn test_http_post_with_body() {
             let model = Compiler::build(r#"
-                POST "http://localhost:8080/machine/www/stocks" FROM (
-                    "Hello World"
-                )
+                POST {
+                    url: http://localhost:8080/machine/www/stocks
+                    body: "Hello World"
+                }
             "#).unwrap();
             assert_eq!(model, HTTP {
-                method: Box::new(Literal(StringValue("POST".to_string()))),
-                url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
-                body: Some(Box::new(Literal(StringValue("Hello World".to_string())))),
-                headers: None,
-                multipart: None,
+                method: "POST".to_string(),
+                url_or_object: Box::new(StructureExpression(vec![
+                    ("url".to_string(), Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
+                    ("body".to_string(), Literal(StringValue("Hello World".to_string()))),
+                ]))
             });
         }
 
         #[test]
         fn test_http_post_with_multipart() {
             let model = Compiler::build(r#"
-                POST "http://localhost:8080/machine/www/stocks" MULTIPART ({
-                    file: "./demoes/language/include_file.ox"
-                })
+                POST {
+                    url: http://localhost:8080/machine/www/stocks
+                    body: file://./demoes/language/include_file.ox
+                }
             "#).unwrap();
             assert_eq!(model, HTTP {
-                method: Box::new(Literal(StringValue("POST".to_string()))),
-                url: Box::new(Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
-                body: None,
-                headers: None,
-                multipart: Some(Box::new(StructureExpression(vec![
-                    ("file".to_string(), Literal(StringValue("./demoes/language/include_file.ox".to_string()))),
-                ]))),
+                method: "POST".to_string(),
+                url_or_object: Box::new(StructureExpression(vec![
+                    ("url".to_string(), Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
+                    ("body".to_string(), Literal(StringValue("file://./demoes/language/include_file.ox".to_string()))),
+                ]))
             });
         }
 
@@ -1669,11 +1638,10 @@ mod tests {
             PUT "http://localhost:9000/quotes/AMD/NASDAQ"
         "#).unwrap();
             assert_eq!(model, HTTP {
-                method: Box::new(Literal(StringValue("PUT".to_string()))),
-                url: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
-                body: None,
-                headers: None,
-                multipart: None,
+                method: "PUT".to_string(),
+                url_or_object: Box::new(Literal(
+                    StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string())
+                )),
             });
         }
     }
@@ -1731,7 +1699,7 @@ mod tests {
     #[cfg(test)]
     mod literal_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Expression::{ArrayExpression, AsValue, ElementAt, StructureExpression, Literal};
+        use crate::expression::Expression::{ArrayExpression, AsValue, ElementAt, Literal, StructureExpression};
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::token_slice::TokenSlice;
         use crate::typed_values::TypedValue::{Number, StringValue};
@@ -2099,7 +2067,7 @@ mod tests {
         use crate::expression::Conditions::{Between, Betwixt, Equal, GreaterOrEqual, LessOrEqual, LessThan, Like};
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
         use crate::expression::DatabaseOps::{Mutation, Queryable};
-        use crate::expression::Expression::{ArrayExpression, Condition, DatabaseOp, From, StructureExpression, Literal, Ns, Variable, Via};
+        use crate::expression::Expression::{ArrayExpression, Condition, DatabaseOp, From, Literal, Ns, StructureExpression, Variable, Via};
         use crate::expression::MutateTarget::TableTarget;
         use crate::expression::Mutations::{Create, Declare, Drop, IntoNs};
         use crate::expression::TableOptions::Journaling;

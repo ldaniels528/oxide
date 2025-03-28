@@ -17,6 +17,7 @@ pub enum Token {
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize, is_postfix: bool, is_barrier: bool },
     SingleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
+    URL { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
 }
 
 impl Token {
@@ -60,6 +61,11 @@ impl Token {
         SingleQuoted { text, start, end, line_number, column_number }
     }
 
+    /// creates a new numeric token
+    pub fn url(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
+        URL { text, start, end, line_number, column_number }
+    }
+
     pub fn determine_precedence(symbol: impl Into<String>) -> usize {
         match symbol.into().as_str() {
             "¡" | "**" | "²" | "³" => 3,
@@ -80,37 +86,40 @@ impl Token {
 
     /// Returns the column number of the [Token]
     pub fn get_column_number(&self) -> usize {
-        match &self {
+        match self {
             Atom { column_number, .. }
             | Backticks { column_number, .. }
             | DoubleQuoted { column_number, .. }
             | Numeric { column_number, .. }
             | Operator { column_number, .. }
-            | SingleQuoted { column_number, .. } => *column_number
+            | SingleQuoted { column_number, .. }
+            | URL { column_number, .. } => *column_number
         }
     }
 
     /// Returns the line number of the [Token]
     pub fn get_line_number(&self) -> usize {
-        match &self {
+        match self {
             Atom { line_number, .. }
             | Backticks { line_number, .. }
             | DoubleQuoted { line_number, .. }
             | Numeric { line_number, .. }
             | Operator { line_number, .. }
-            | SingleQuoted { line_number, .. } => *line_number
+            | SingleQuoted { line_number, .. }
+            | URL { line_number, .. } => *line_number
         }
     }
 
     /// Returns the "raw" value of the [Token]
     pub fn get_raw_value(&self) -> String {
-        (match &self {
+        (match self {
             Atom { text, .. }
             | Backticks { text, .. }
             | DoubleQuoted { text, .. }
             | Numeric { text, .. }
             | Operator { text, .. }
-            | SingleQuoted { text, .. } => text
+            | SingleQuoted { text, .. }
+            | URL { text, .. } => text
         }).to_string()
     }
 
@@ -175,12 +184,13 @@ impl Token {
 
     pub fn is_type(&self, variant: &str) -> bool {
         match (self, variant) {
-            (Atom { .. }, "AlphaNumeric")
+            (Atom { .. }, "Atom")
             | (Backticks { .. }, "BackticksQuoted")
             | (DoubleQuoted { .. }, "DoubleQuoted")
             | (Numeric { .. }, "Numeric")
             | (Operator { .. }, "Operator")
-            | (SingleQuoted { .. }, "SingleQuoted") => true,
+            | (SingleQuoted { .. }, "SingleQuoted")
+            | (URL { .. }, "URL") => true,
             _ => false,
         }
     }
@@ -234,7 +244,7 @@ mod tests {
 
     #[test]
     fn test_is_type() {
-        assert!(Token::atom("World".into(), 11, 16, 1, 13).is_type("AlphaNumeric"));
+        assert!(Token::atom("World".into(), 11, 16, 1, 13).is_type("Atom"));
         assert!(Token::backticks("`World`".into(), 11, 16, 1, 13).is_type("BackticksQuoted"));
         assert!(Token::double_quoted("\"World\"".into(), 11, 16, 1, 13).is_type("DoubleQuoted"));
         assert!(Token::numeric("123".into(), 0, 3, 1, 2).is_type("Numeric"));

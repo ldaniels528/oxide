@@ -70,6 +70,7 @@ pub enum TypedValue {
     Boolean(bool),
     ErrorValue(Errors),
     Function { params: Vec<Parameter>, body: Box<Expression>, returns: DataType },
+    Kind(DataType),
     NamespaceValue(Namespace),
     Null,
     Number(Numbers),
@@ -147,6 +148,7 @@ impl TypedValue {
             Token::Numeric { text, .. } => Self::from_numeric(text),
             Token::Operator { .. } => throw(Syntax("literal expected".to_string())),
             Token::SingleQuoted { text, .. } => Ok(StringValue(text.to_string())),
+            Token::URL { text, .. } => Ok(StringValue(text.to_string())),
         }
     }
 
@@ -276,6 +278,7 @@ impl TypedValue {
             ErrorValue(..) => ErrorType,
             Function { params, returns, .. } =>
                 FunctionType(params.clone(), Box::from(returns.clone())),
+            Kind(data_type) => data_type.clone(),
             NamespaceValue(..) => TableType(Vec::new(), 0),
             Null | Undefined => VaryingType(Vec::new()),
             Number(n) => NumberType(n.kind()),
@@ -451,11 +454,12 @@ impl TypedValue {
                     .map(|c| c.to_json()).collect());
                 serde_json::json!({ "params": my_params, "code": code.to_code(), "returns": returns.to_type_declaration() })
             }
-            Sequenced(seq) => serde_json::json!(seq),
+            Kind(data_type) => serde_json::json!(data_type.to_code()),
             NamespaceValue(ns) => serde_json::json!(ns.get_full_name()),
             Null => serde_json::Value::Null,
             Number(nv) => nv.to_json(),
             PlatformOp(nf) => serde_json::json!(nf),
+            Sequenced(seq) => serde_json::json!(seq),
             StringValue(s) => serde_json::json!(s),
             Structured(s) => s.to_json(),
             TableValue(df) => {
@@ -617,6 +621,7 @@ impl TypedValue {
                             s => format!(": {}", s),
                         },
                         code.to_code()),
+            TypedValue::Kind(data_type) => data_type.to_code(),
             TypedValue::NamespaceValue(ns) => ns.get_full_name(),
             TypedValue::Null => "null".into(),
             TypedValue::Number(number) => number.unwrap_value(),
@@ -858,6 +863,7 @@ impl Neg for TypedValue {
             Boolean(n) => Boolean(!n),
             ErrorValue(msg) => ErrorValue(msg),
             Function { .. } => error("Function".into()),
+            Kind(data_type) => error(data_type.to_code()),
             NamespaceValue(ns) => error(format!("ns({})", ns.get_full_name())),
             Null => Null,
             Number(nv) => Number(nv.neg()),

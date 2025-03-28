@@ -408,11 +408,11 @@ impl PlatformOps {
             PlatformOps::IoStdErr => r#"io::stderr("Goodbye Cruel World")"#,
             PlatformOps::IoStdOut => r#"io::stdout("Hello World")"#,
             PlatformOps::KungFuAssert => r#"
-                import kungfu
+                import testing
                 assert(matches([ 1 "a" "b" "c" ], [ 1 "a" "b" "c" ]))
             "#,
             PlatformOps::KungFuFeature => r#"
-            import kungfu
+            import testing
             feature("Matches function", {
                 "Compare Array contents: Equal": fn(ctx) => {
                     assert(matches(
@@ -436,12 +436,12 @@ impl PlatformOps {
                 }
             })"#,
             PlatformOps::KungFuMatches => r#"
-                import kungfu::matches
+                import testing::matches
                 a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
                 b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
                 matches(a, b)
             "#,
-            PlatformOps::KungFuTypeOf => "kungfu::type_of([12, 76, 444])",
+            PlatformOps::KungFuTypeOf => "testing::type_of([12, 76, 444])",
             PlatformOps::OsCall => r#"
                 create table ns("platform.os.call") (
                     symbol: String(8),
@@ -573,7 +573,7 @@ impl PlatformOps {
                 tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
             "#,
             PlatformOps::UtilBase64 => "util::base64('Hello World')",
-            PlatformOps::UtilBinary => "(0b1011 & 0b1101):::to_binary()",
+            PlatformOps::UtilBinary => "util::to_binary(0b1011 & 0b1101)",
             PlatformOps::UtilHex => "util::hex('Hello World')",
             PlatformOps::UtilMD5 => "util::md5('Hello World')",
             PlatformOps::UtilToASCII => "util::to_ascii(177)",
@@ -599,7 +599,7 @@ impl PlatformOps {
                      { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
                      { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                      { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
-                GET "http://localhost:8822/platform/www/quotes/1/4"
+                GET http://localhost:8822/platform/www/quotes/1/4
             "#,
             PlatformOps::WwwURLDecode => "www::url_decode('http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998')",
             PlatformOps::WwwURLEncode => "www::url_encode('http://shocktrade.com?name=the hero&t=9998')",
@@ -708,7 +708,7 @@ impl PlatformOps {
             // io
             IoFileCreate | IoFileExists | IoFileReadText | IoStdErr | IoStdOut => "io",
             // kung fu
-            KungFuAssert | KungFuFeature | KungFuMatches | KungFuTypeOf => "kungfu",
+            KungFuAssert | KungFuFeature | KungFuMatches | KungFuTypeOf => "testing",
             // oxide
             OxideCompile | OxideDebug | OxideEval | OxideHelp | OxideHistory |
             OxideHome | OxidePrintln | OxideReset | OxideUUID | OxideVersion => "oxide",
@@ -1891,7 +1891,6 @@ mod tests {
     fn test_include_expect_failure() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"include 123"#);
-        println!("result => {:?}", result);
         assert!(matches!(result, Err(..)))
     }
 
@@ -1990,11 +1989,11 @@ mod tests {
         assert_eq!(IoFileReadText.to_code(), "io::read_text_file(s: String)");
         assert_eq!(IoStdErr.to_code(), "io::stderr(s: String)");
         assert_eq!(IoStdOut.to_code(), "io::stdout(s: String)");
-        // kungfu
-        assert_eq!(KungFuAssert.to_code(), "kungfu::assert(b: Boolean)");
-        assert_eq!(KungFuFeature.to_code(), "kungfu::feature(a: String, b: Struct)");
-        assert_eq!(KungFuMatches.to_code(), "kungfu::matches(a, b)");
-        assert_eq!(KungFuTypeOf.to_code(), "kungfu::type_of(x)");
+        // testing
+        assert_eq!(KungFuAssert.to_code(), "testing::assert(b: Boolean)");
+        assert_eq!(KungFuFeature.to_code(), "testing::feature(a: String, b: Struct)");
+        assert_eq!(KungFuMatches.to_code(), "testing::matches(a, b)");
+        assert_eq!(KungFuTypeOf.to_code(), "testing::type_of(x)");
         // os
         assert_eq!(OsCall.to_code(), "os::call(s: String)");
         assert_eq!(OsClear.to_code(), "os::clear()");
@@ -2207,7 +2206,7 @@ mod tests {
         #[test]
         fn test_kung_fu_feature() {
             verify_exact_table_with_ids(r#"
-            import kungfu
+            import testing
             feature("Matches function", {
                 "Compare Array contents: Equal": fn(ctx) => {
                     assert(matches(
@@ -2252,7 +2251,7 @@ mod tests {
             verify_exact(r#"
                 a := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
                 b := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
-                kungfu::matches(a, b)
+                testing::matches(a, b)
             "#, Boolean(true));
         }
 
@@ -2260,7 +2259,7 @@ mod tests {
         fn test_kung_fu_matches_unordered() {
             // test an unordered match
             verify_exact(r#"
-                import kungfu::matches
+                import testing::matches
                 a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
                 b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
                 matches(a, b)
@@ -2271,7 +2270,7 @@ mod tests {
         fn test_kung_fu_matches_not_match_1() {
             // test when things do not match 1
             verify_exact(r#"
-                import kungfu
+                import testing
                 a := { first: "Tom", last: "Lane" }
                 b := { first: "Jerry", last: "Lane" }
                 a:::matches(b)
@@ -2284,103 +2283,103 @@ mod tests {
             verify_exact(r#"
                 a := { key: "123", values: [1, 74, 88] }
                 b := { key: "123", values: [1, 74, 88, 0] }
-                kungfu::matches(a, b)
+                testing::matches(a, b)
             "#, Boolean(false));
         }
 
         #[test]
         fn test_kung_fu_type_of_array_bool() {
-            verify_exact_text_q("kungfu::type_of([true, false])", "Array(2)");
+            verify_exact_text_q("testing::type_of([true, false])", "Array(2)");
         }
 
         #[test]
         fn test_kung_fu_type_of_array_i64() {
-            verify_exact_text_q("kungfu::type_of([12, 76, 444])", "Array(3)");
+            verify_exact_text_q("testing::type_of([12, 76, 444])", "Array(3)");
         }
 
         #[test]
         fn test_kung_fu_type_of_array_str() {
-            verify_exact_text_q("kungfu::type_of(['ciao', 'hello', 'world'])", "Array(3)");
+            verify_exact_text_q("testing::type_of(['ciao', 'hello', 'world'])", "Array(3)");
         }
 
         #[test]
         fn test_kung_fu_type_of_array_f64() {
-            verify_exact_text_q("kungfu::type_of([12, 'hello', 76.78])", "Array(3)");
+            verify_exact_text_q("testing::type_of([12, 'hello', 76.78])", "Array(3)");
         }
 
         #[test]
         fn test_kung_fu_type_of_bool() {
-            verify_exact_text_q("kungfu::type_of(false)", "Boolean");
-            verify_exact_text_q("kungfu::type_of(true)", "Boolean");
+            verify_exact_text_q("testing::type_of(false)", "Boolean");
+            verify_exact_text_q("testing::type_of(true)", "Boolean");
         }
 
         #[test]
         fn test_kung_fu_type_of_date() {
-            verify_exact_text_q("kungfu::type_of(cal::now())", "Date");
+            verify_exact_text_q("testing::type_of(cal::now())", "Date");
         }
 
         #[test]
         fn test_kung_fu_type_of_fn() {
-            verify_exact_text_q("kungfu::type_of(fn(a, b) => a + b)", "fn(a, b)");
+            verify_exact_text_q("testing::type_of(fn(a, b) => a + b)", "fn(a, b)");
         }
 
         #[test]
         fn test_kung_fu_type_of_i64() {
-            verify_exact_text_q("kungfu::type_of(1234)", "i64");
+            verify_exact_text_q("testing::type_of(1234)", "i64");
         }
 
         #[test]
         fn test_kung_fu_type_of_f64() {
-            verify_exact_text_q("kungfu::type_of(12.394)", "f64");
+            verify_exact_text_q("testing::type_of(12.394)", "f64");
         }
 
         #[test]
         fn test_kung_fu_type_of_string() {
-            verify_exact_text_q("kungfu::type_of('1234')", "String(4)");
-            verify_exact_text_q(r#"kungfu::type_of("abcde")"#, "String(5)");
+            verify_exact_text_q("testing::type_of('1234')", "String(4)");
+            verify_exact_text_q(r#"testing::type_of("abcde")"#, "String(5)");
         }
 
         #[test]
         fn test_kung_fu_type_of_structure_hard() {
-            verify_exact_text_q(r#"kungfu::type_of(Struct(symbol: String(3) = "ABC"))"#,
+            verify_exact_text_q(r#"testing::type_of(Struct(symbol: String(3) = "ABC"))"#,
                                 r#"Struct(symbol: String(3) := "ABC")"#);
         }
 
         #[test]
         fn test_kung_fu_type_of_structure_soft() {
-            verify_exact_text_q(r#"kungfu::type_of({symbol:"ABC"})"#,
+            verify_exact_text_q(r#"testing::type_of({symbol:"ABC"})"#,
                                 r#"Struct(symbol: String(3) := "ABC")"#);
         }
 
         #[test]
         fn test_kung_fu_type_of_namespace() {
-            verify_exact_text_q(r#"kungfu::type_of(ns("a.b.c"))"#, "Table");
+            verify_exact_text_q(r#"testing::type_of(ns("a.b.c"))"#, "Table");
         }
 
         #[test]
         fn test_kung_fu_type_of_table() {
-            verify_exact_text_q(r#"kungfu::type_of(table(symbol: String(8), exchange: String(8), last_sale: f64))"#,
+            verify_exact_text_q(r#"testing::type_of(table(symbol: String(8), exchange: String(8), last_sale: f64))"#,
                                 "Table(symbol: String(8), exchange: String(8), last_sale: f64)");
         }
 
         #[test]
         fn test_kung_fu_type_of_uuid() {
-            verify_exact_text_q("kungfu::type_of(oxide::uuid())", "UUID");
+            verify_exact_text_q("testing::type_of(oxide::uuid())", "UUID");
         }
 
         #[test]
         fn test_kung_fu_type_of_variable() {
-            verify_exact_text_q("kungfu::type_of(my_var)", "");
+            verify_exact_text_q("testing::type_of(my_var)", "");
         }
 
         #[test]
         fn test_kung_fu_type_of_null() {
-            verify_exact_text_q("kungfu::type_of(null)", "");
+            verify_exact_text_q("testing::type_of(null)", "");
         }
 
         #[test]
         fn test_kung_fu_type_of_undefined() {
-            verify_exact_text_q("kungfu::type_of(undefined)", "");
+            verify_exact_text_q("testing::type_of(undefined)", "");
         }
 
         fn verify_exact_text_q(code: &str, expected: &str) {
@@ -2535,7 +2534,7 @@ mod tests {
         use PlatformOps::*;
 
         #[test]
-        fn test_str_ends_with_postfix() {
+        fn test_str_ends_with_postfix_true() {
             verify_exact(r#"
                 import str
                 'Hello World':::ends_with('World')
@@ -2543,11 +2542,22 @@ mod tests {
         }
 
         #[test]
-        fn test_str_ends_with_qualified() {
+        fn test_str_ends_with_postfix_false() {
+            verify_exact(r#"
+                import str
+                'Hello World':::ends_with('Hello')
+            "#, Boolean(false));
+        }
+
+        #[test]
+        fn test_str_ends_with_qualified_true() {
             verify_exact(r#"
                 str::ends_with('Hello World', 'World')
             "#, Boolean(true));
+        }
 
+        #[test]
+        fn test_str_ends_with_qualified_false() {
             verify_exact(r#"
                 str::ends_with('Hello World', 'Hello')
             "#, Boolean(false))
@@ -2577,11 +2587,14 @@ mod tests {
         }
 
         #[test]
-        fn test_str_index_of() {
+        fn test_str_index_of_qualified() {
             verify_exact(r#"
                 str::index_of('The little brown fox', 'brown')
             "#, Number(I64Value(11)));
+        }
 
+        #[test]
+        fn test_str_index_of_postfix() {
             verify_exact(r#"
                 import str
                 'The little brown fox':::index_of('brown')
@@ -2596,23 +2609,29 @@ mod tests {
         }
 
         #[test]
-        fn test_str_left_qualified() {
+        fn test_str_left_qualified_positive() {
             verify_exact(r#"
                 str::left('Hello World', 5)
             "#, StringValue("Hello".into()));
+        }
 
+        #[test]
+        fn test_str_left_qualified_negative() {
             verify_exact(r#"
                 str::left('Hello World', -5)
             "#, StringValue("World".into()));
         }
 
         #[test]
-        fn test_str_left_postfix() {
+        fn test_str_left_postfix_valid() {
             verify_exact(r#"
                 import str, util
                 'Hello World':::left(5)
             "#, StringValue("Hello".into()));
+        }
 
+        #[test]
+        fn test_str_left_postfix_invalid() {
             // postfix - invalid case
             verify_exact(r#"
                 import str, util
@@ -2629,13 +2648,14 @@ mod tests {
         }
 
         #[test]
-        fn test_str_len() {
-            // fully-qualified
+        fn test_str_len_qualified() {
             verify_exact(r#"
                 str::len('The little brown fox')
             "#, Number(I64Value(20)));
+        }
 
-            // postfix
+        #[test]
+        fn test_str_len_postfix() {
             verify_exact(r#"
                 import str
                 'The little brown fox':::len()
@@ -2643,24 +2663,28 @@ mod tests {
         }
 
         #[test]
-        fn test_str_right_qualified() {
+        fn test_str_right_qualified_string_positive() {
             verify_exact(r#"
                 str::right('Hello World', 5)
             "#, StringValue("World".into()));
+        }
 
-            // fully-qualified (inverse)
+        #[test]
+        fn test_str_right_qualified_string_negative() {
             verify_exact(r#"
                 str::right('Hello World', -5)
             "#, StringValue("Hello".into()));
         }
 
         #[test]
-        fn test_str_right_qualified_negative_cases() {
+        fn test_str_right_qualified_not_string_is_undefined() {
             verify_exact(r#"
                 str::right(7779311, 5)
             "#, Undefined);
+        }
 
-            // postfix (inverse)
+        #[test]
+        fn test_str_right_postfix_string_negative() {
             verify_exact(r#"
                 import str, util
                 'Hello World':::right(-5)
@@ -2704,31 +2728,37 @@ mod tests {
         }
 
         #[test]
-        fn test_str_starts_with() {
-            // postfix
+        fn test_str_starts_with_postfix_true() {
             verify_exact(r#"
                 import str
                 'Hello World':::starts_with('Hello')
             "#, Boolean(true));
+        }
 
-            // fully-qualified
+        #[test]
+        fn test_str_starts_with_qualified_true() {
             verify_exact(r#"
                 str::starts_with('Hello World', 'Hello')
             "#, Boolean(true));
+        }
 
-            // fully-qualified (negative case)
+        #[test]
+        fn test_str_starts_with_qualified_false() {
             verify_exact(r#"
                 str::starts_with('Hello World', 'World')
             "#, Boolean(false))
         }
 
         #[test]
-        fn test_str_substring() {
+        fn test_str_substring_defined() {
             // fully-qualified
             verify_exact(r#"
                 str::substring('Hello World', 0, 5)
             "#, StringValue("Hello".into()));
+        }
 
+        #[test]
+        fn test_str_substring_undefined() {
             // fully-qualified (negative case)
             verify_exact(r#"
                 str::substring(8888, 0, 5)
@@ -2736,13 +2766,14 @@ mod tests {
         }
 
         #[test]
-        fn test_str_to_string() {
-            // fully-qualified
+        fn test_str_to_string_qualified() {
             verify_exact(r#"
                 str::to_string(125.75)
             "#, StringValue("125.75".into()));
+        }
 
-            // postfix
+        #[test]
+        fn test_str_to_string_postfix() {
             verify_exact(r#"
                 import str::to_string
                 123:::to_string()
@@ -2873,17 +2904,28 @@ mod tests {
         #[test]
         fn test_tools_pop() {
             verify_exact_table_with_ids(r#"
+                [+] import tools
                 [+] stocks := ns("platform.pop.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                      { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                      { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] tools::pop(stocks)
+                [+] stocks:::pop()
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
                 "|------------------------------------|",
                 "| 2  | JET    | NASDAQ   | 32.12     |",
+                "|------------------------------------|"
+            ]);
+            verify_exact_table_with_ids(r#"
+                [+] stocks := ns("platform.pop.stocks")
+                [+] tools::pop(stocks)
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 1  | BOOM   | NYSE     | 56.88     |",
                 "|------------------------------------|"
             ]);
         }
@@ -3362,13 +3404,13 @@ mod tests {
                      { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
                      { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                      { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
-                GET "http://localhost:8822/platform/www/quotes/1/4"
+                GET http://localhost:8822/platform/www/quotes/1/4
             "#).unwrap();
             assert_eq!(result.to_json(), json!([
-            {"symbol": "BOX", "exchange": "NYSE", "last_sale": 56.88},
-            {"symbol": "JET", "exchange": "NASDAQ", "last_sale": 32.12},
-            {"symbol": "ABC", "exchange": "AMEX", "last_sale": 12.49}
-        ]));
+                {"symbol": "BOX", "exchange": "NYSE", "last_sale": 56.88},
+                {"symbol": "JET", "exchange": "NASDAQ", "last_sale": 32.12},
+                {"symbol": "ABC", "exchange": "AMEX", "last_sale": 12.49}
+            ]));
         }
 
         #[test]
@@ -3393,68 +3435,91 @@ mod tests {
 
             // append a new row
             let row_id = interpreter.evaluate(r#"
-                POST "http://localhost:8833/platform/www/stocks/0" FROM {
-                    symbol: "ABC", exchange: "AMEX", last_sale: 11.77
+                POST {
+                    url: http://localhost:8833/platform/www/stocks/0
+                    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
                 }
             "#).unwrap();
             assert!(matches!(row_id, Number(I64Value(..))));
 
             // fetch the previously created row
             let row = interpreter.evaluate(format!(r#"
-                GET "http://localhost:8833/platform/www/stocks/{row_id}"
+                GET http://localhost:8833/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(row.to_json(), json!({"exchange":"AMEX","symbol":"ABC","last_sale":11.77}));
 
             // replace the previously created row
-            let result = interpreter.evaluate(r#"
-                PUT "http://localhost:8833/platform/www/stocks/:id" FROM {
-                    symbol: "ABC", exchange: "AMEX", last_sale: 11.79
-                }
-            "#
-                .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
-                .as_str()).unwrap();
+            let result = interpreter.evaluate(format!(r#"
+                PUT {{
+                    url: http://localhost:8833/platform/www/stocks/{row_id}
+                    body: {{ symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }}
+                }}
+            "#).as_str()).unwrap();
             assert_eq!(result, Number(I64Value(1)));
 
             // re-fetch the previously updated row
             let row = interpreter.evaluate(format!(r#"
-                GET "http://localhost:8833/platform/www/stocks/{row_id}"
+                GET http://localhost:8833/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(row.to_json(), json!({"symbol":"ABC","exchange":"AMEX","last_sale":11.79}));
 
             // update the previously created row
-            let result = interpreter.evaluate(r#"
-                PATCH "http://localhost:8833/platform/www/stocks/:id" FROM {
-                    last_sale: 11.81
-                }
-            "#
-                .replace("/:id", format!("/{}", row_id.unwrap_value()).as_str())
-                .as_str()).unwrap();
+            let result = interpreter.evaluate(format!(r#"
+                PATCH {{
+                    url: http://localhost:8833/platform/www/stocks/{row_id}
+                    body: {{ last_sale: 11.81 }}
+                }}
+            "#).as_str()).unwrap();
             assert_eq!(result, Number(I64Value(1)));
 
             // re-fetch the previously updated row
             let row = interpreter.evaluate(format!(r#"
-                GET "http://localhost:8833/platform/www/stocks/{row_id}"
+                GET http://localhost:8833/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(row.to_json(), json!({"last_sale":11.81,"symbol":"ABC","exchange":"AMEX"}));
 
             // fetch the headers for the previously updated row
             let result = interpreter.evaluate(format!(r#"
-                HEAD "http://localhost:8833/platform/www/stocks/{row_id}"
+                HEAD http://localhost:8833/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             println!("HEAD: {}", result.to_string());
             assert!(matches!(result, Structured(Soft(..))));
 
             // delete the previously updated row
             let result = interpreter.evaluate(format!(r#"
-                DELETE "http://localhost:8833/platform/www/stocks/{row_id}"
+                DELETE http://localhost:8833/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(result, Number(I64Value(1)));
 
             // verify the deleted row is empty
             let row = interpreter.evaluate(format!(r#"
-                GET "http://localhost:8833/platform/www/stocks/{row_id}"
+                GET http://localhost:8833/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(row, Structured(Soft(SoftStructure::empty())));
+        }
+
+        #[test]
+        fn test_www_serve_workflow_script() {
+            let mut interpreter = Interpreter::new();
+
+            // create the table
+            let result = interpreter.evaluate(r#"
+                // setup a listener on port 8838
+                www::serve(8838)
+
+                // create the table
+                table(symbol: String(8), exchange: String(8), last_sale: f64)
+                    ~> ns("platform.http_workflow.stocks")
+
+                import testing
+                row_id := POST {
+                    url: http://localhost:8838/platform/http_workflow/stocks/0
+                    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
+                }
+                assert(matches(row_id, 0))
+                GET http://localhost:8838/platform/http_workflow/stocks/0
+            "#).unwrap();
+            assert_eq!(result.to_code(), r#"{exchange: "AMEX", last_sale: 11.77, symbol: "ABC"}"#);
         }
     }
 }

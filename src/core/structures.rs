@@ -41,10 +41,14 @@ pub trait Structure {
 
     /// Retrieves a field by name
     fn get(&self, name: &str) -> TypedValue {
+        self.get_opt(name).unwrap_or(Undefined)
+    }
+
+    /// Retrieves a field by name
+    fn get_opt(&self, name: &str) -> Option<TypedValue> {
         self.to_name_values().iter()
             .find(|(my_name, _)| *my_name == *name)
             .map(|(_, v)| v.to_owned())
-            .unwrap_or(Undefined)
     }
 
     /// Retrieves the structure's parameters
@@ -105,6 +109,12 @@ pub trait Structure {
     fn to_table(&self) -> ModelRowCollection {
         let row = self.to_row();
         let columns = Column::from_parameters(&self.get_parameters());
+        ModelRowCollection::from_columns_and_rows(&columns, &vec![row])
+    }
+
+    fn to_table_with_params(&self, params: &Vec<Parameter>) -> ModelRowCollection {
+        let row = self.to_row();
+        let columns = Column::from_parameters(params);
         ModelRowCollection::from_columns_and_rows(&columns, &vec![row])
     }
 
@@ -203,7 +213,7 @@ impl Structure for Structures {
 
     fn to_table(&self) -> ModelRowCollection {
         match self {
-            Self::Firm(row, params) => row.to_table(),
+            Self::Firm(row, params) => row.to_table_with_params(&params),
             Self::Hard(hs) => hs.to_table(),
             Self::Soft(ss) => ss.to_table(),
         }
@@ -436,6 +446,12 @@ impl SoftStructure {
         let tuples = tuples.iter()
             .map(|(k, v)| (k.to_string(), v.to_owned()))
             .collect::<Vec<_>>();
+       Self::from_tuples(tuples)
+    }
+
+    pub fn ordered(src_tuples: Vec<(String, TypedValue)>) -> Self {
+        let mut tuples = src_tuples.clone();
+        tuples.sort_by(|a, b| a.0.cmp(&b.0));
         Self { tuples }
     }
 
@@ -495,7 +511,9 @@ impl Structure for SoftStructure {
 
     /// Returns the structure as source code
     fn to_code(&self) -> String {
-        format!("{{{}}}", self.tuples.iter()
+        let mut my_tuples = self.tuples.clone();
+        my_tuples.sort_by(|a, b| a.0.cmp(&b.0));
+        format!("{{{}}}", my_tuples.iter()
             .map(|(name, value)| (name.to_string(), value.to_code()))
             .map(|(k, v)| format!("{k}: {v}"))
             .collect::<Vec<_>>()
@@ -668,7 +686,7 @@ impl Row {
             }).collect())
     }
 
-    pub fn rows_to_json(params: &Vec<Parameter>, rows: &Vec<Row>) -> Vec<HashMap<String, Value>> {
+    pub fn rows_to_json(params: &Vec<Parameter>, rows: &Vec<Row>) -> Vec<Map<String, Value>> {
         rows.iter().fold(Vec::new(), |mut vec, row| {
             vec.push(row.to_hash_json_value(params));
             vec
@@ -705,9 +723,9 @@ impl Row {
     }
 
     /// Transforms the row into JSON format
-    pub fn to_hash_json_value(&self, params: &Vec<Parameter>) -> HashMap<String, Value> {
+    pub fn to_hash_json_value(&self, params: &Vec<Parameter>) -> Map<String, Value> {
         params.iter().zip(self.get_values().iter())
-            .fold(HashMap::new(), |mut hm, (c, v)| {
+            .fold(Map::new(), |mut hm, (c, v)| {
                 hm.insert(c.get_name().to_string(), v.to_json());
                 hm
             })
@@ -1548,7 +1566,7 @@ mod tests {
 
             assert_eq!(
                 model.to_code(),
-                r#"{first_name: "Thomas", last_name: "Brady", age: 41}"#.to_string());
+                r#"{age: 41, first_name: "Thomas", last_name: "Brady"}"#.to_string());
 
             assert_eq!(
                 model.to_json().to_string(),

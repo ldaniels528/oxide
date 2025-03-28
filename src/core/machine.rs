@@ -8,8 +8,8 @@ use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
 use log::{error, info};
 use regex::Error;
+use reqwest::blocking::{multipart, Client, RequestBuilder, Response};
 use reqwest::multipart::{Form, Part};
-use reqwest::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::{From, Into};
@@ -34,7 +34,7 @@ use crate::dataframe::Dataframe::{Disk, Model};
 
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::{FunctionArgsExpected, OutcomeExpected, ParameterExpected, StructExpected, UnsupportedType};
-use crate::errors::{throw, Errors};
+use crate::errors::{throw, Errors, TypeMismatchErrors};
 use crate::expression::Conditions::{False, True};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
@@ -59,7 +59,7 @@ use crate::table_renderer::TableRenderer;
 use crate::testdata::verify_exact_table_where;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use shared_lib::fail;
+use shared_lib::{cnv_error, fail};
 
 /// Represents the state of the machine.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -142,63 +142,43 @@ impl Machine {
                 let (machine, tv) = self.evaluate(expr)?;
                 Ok((machine.with_variable(name, tv.to_owned()), tv))
             }
-            BitwiseAnd(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa & bb),
-            BitwiseOr(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa | bb),
-            BitwiseShiftLeft(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa << bb),
-            BitwiseShiftRight(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa >> bb),
-            BitwiseXor(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa ^ bb),
+            BitwiseAnd(a, b) => self.do_inline_2(a, b, |aa, bb| aa & bb),
+            BitwiseOr(a, b) => self.do_inline_2(a, b, |aa, bb| aa | bb),
+            BitwiseShiftLeft(a, b) => self.do_inline_2(a, b, |aa, bb| aa << bb),
+            BitwiseShiftRight(a, b) => self.do_inline_2(a, b, |aa, bb| aa >> bb),
+            BitwiseXor(a, b) => self.do_inline_2(a, b, |aa, bb| aa ^ bb),
             CodeBlock(ops) => Ok(self.evaluate_scope(ops)),
             Condition(condition) => self.evaluate_cond(condition),
             DatabaseOp(op) => query_engine::evaluate(self, op),
             Directive(d) => self.do_directive(d),
-            Divide(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa / bb),
+            Divide(a, b) => self.do_inline_2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.do_index_of_collection(a, b),
             ColonColon(a, b) => self.do_extraction(a, b),
             ColonColonColon(a, b) => self.do_function_call_postfix(a, b),
             Factorial(a) => self.do_inline_1(a, |aa| aa.factorial()),
             Feature { title, scenarios } => self.do_feature(title, scenarios),
-            FnExpression { params, body, returns } =>
-                self.do_fn_expression(params, body, returns),
+            FnExpression { params, body, returns } => self.do_fn_expression(params, body, returns),
             ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
             From(src) => do_table_or_view_query(self, src, &True, &Undefined),
             FunctionCall { fx, args } => self.do_function_call(fx, args),
-            HTTP { method, url, body, headers, multipart } => {
-                self.do_http(method, url, body, headers, multipart)
-            }
-            If { condition, a, b } =>
-                self.do_if_then_else(condition, a, b),
+            HTTP { method, url_or_object } => self.do_http(method, url_or_object),
+            If { condition, a, b } => self.do_if_then_else(condition, a, b),
             Import(ops) => Ok(self.do_imports(ops)),
             Include(path) => self.do_include(path),
             StructureExpression(items) => self.do_structure_soft(items),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
-            Minus(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa - bb),
+            Minus(a, b) => self.do_inline_2(a, b, |aa, bb| aa - bb),
             Module(name, ops) => Ok(self.do_structure_module(name, ops)),
-            Modulo(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa % bb),
-            Multiply(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa * bb),
+            Modulo(a, b) => self.do_inline_2(a, b, |aa, bb| aa % bb),
+            Multiply(a, b) => self.do_inline_2(a, b, |aa, bb| aa * bb),
             Neg(a) => Ok(self.do_negate(a)),
             Ns(a) => do_eval_ns(self, a),
             Parameters(params) => Ok(self.evaluate_parameters(params)),
-            Plus(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa + bb),
-            PlusPlus(a, b) =>
-                self.do_inline_2(a, b, Self::do_plus_plus),
-            Pow(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
-            Range(a, b) =>
-                self.do_inline_2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
-            Return(a) => {
-                let (machine, result) = self.evaluate_array(a)?;
-                Ok((machine, result))
-            }
+            Plus(a, b) => self.do_inline_2(a, b, |aa, bb| aa + bb),
+            PlusPlus(a, b) => self.do_inline_2(a, b, Self::do_plus_plus),
+            Pow(a, b) => self.do_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
+            Range(a, b) => self.do_inline_2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
+            Return(a) => self.evaluate_array(a),
             Scenario { .. } => Ok((self.to_owned(), ErrorValue(Exact("Scenario should not be called directly".to_string())))),
             SetVariable(name, expr) => {
                 let (machine, value) = self.evaluate(expr)?;
@@ -419,6 +399,7 @@ impl Machine {
         Ok((ms, TupleValue(results)))
     }
 
+    /// returns [True] if `a` contains `b`
     fn do_contains(
         &self,
         a: &Expression,
@@ -494,15 +475,11 @@ impl Machine {
             Variable(var_name) =>
                 match ms.get(var_name) {
                     None => fail(format!("Variable '{}' was not found", var_name)),
-                    Some(object_v) =>
-                        match object_v {
-                            ErrorValue(err) => Ok((ms, ErrorValue(err))),
-                            Null => fail(format!("Cannot evaluate {}::{}", Null, field.to_code())),
-                            Structured(structure) =>
-                                self.do_extraction_structure(var_name, Box::from(structure), field),
-                            Undefined => fail(format!("Cannot evaluate {}::{}", Undefined, field.to_code())),
-                            z => fail(format!("Illegal structure {}", z.to_code()))
-                        }
+                    Some(ErrorValue(err)) => Ok((ms, ErrorValue(err))),
+                    Some(Null) => fail(format!("Cannot evaluate {}::{}", Null, field.to_code())),
+                    Some(Structured(structure)) => self.do_extraction_structure(var_name, Box::from(structure), field),
+                    Some(Undefined) => fail(format!("Cannot evaluate {}::{}", Undefined, field.to_code())),
+                    Some(z) => fail(format!("Illegal structure {}", z.to_code()))
                 }
             z => throw(Syntax(z.to_code()))
         }
@@ -688,18 +665,9 @@ impl Machine {
 
     fn do_http(
         &self,
-        method: &Expression,
-        url: &Expression,
-        body: &Option<Box<Expression>>,
-        headers: &Option<Box<Expression>>,
-        multipart: &Option<Box<Expression>>,
+        method: &str,
+        url_or_object: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, method) = self.evaluate(method)?;
-        let (ms, url) = ms.evaluate(url)?;
-        let (ms, body) = ms.evaluate_optional_map(body)?;
-        let (ms, headers) = ms.evaluate_optional_map(headers)?;
-        let (ms, multipart) = ms.evaluate_optional_map(multipart)?;
-
         fn create_form(structure: Box<dyn Structure>) -> Form {
             structure.to_name_values().iter().fold(Form::new(), |form, (name, value)| {
                 form.part(name.to_owned(), Part::text(value.unwrap_value()))
@@ -720,58 +688,60 @@ impl Machine {
             }
         }
 
-        ms.do_http_method_call(
-            method.unwrap_value(),
-            url.unwrap_value(),
-            body.map(|tv| tv.to_json().to_string()),
-            match headers {
-                Some(v) => extract_string_tuples(v)?,
-                None => Vec::new()
-            },
-            match multipart {
-                Some(Structured(structure)) => Some(create_form(Box::new(structure))),
-                Some(z) => return Ok((ms, ErrorValue(TypeMismatch(UnsupportedType(
-                    VaryingType(vec![
-                        ArrayType(0),
-                        StringType(0),
-                        StructureType(vec![]),
-                        TableType(vec![], 0),
-                    ]),
-                    z.get_type(),
-                ))))),
-                None => None
-            },
-        )
+        // evaluate the URL or object
+        match self.evaluate(url_or_object)? {
+            // ex: GET http://localhost:9000/quotes/AAPL/NYSE
+            (ms, StringValue(url)) =>
+                ms.do_http_method_call(method.to_string(), url.to_string(), None, Vec::new(), None),
+            // POST {
+            //     url: http://localhost:8080/machine/append/stocks
+            //     body: stocks
+            //     headers: { "Content-Type": "application/json" }
+            // }
+            (ms, Structured(Soft(ss))) => {
+                let url = ss.get("url");
+                let maybe_body = ss.get_opt("body")
+                    .map(|body| body.unwrap_value());
+                let headers = match ss.get_opt("headers") {
+                    None => Vec::new(),
+                    Some(headers) => extract_string_tuples(headers)?
+                };
+                ms.do_http_method_call(method.to_string(), url.unwrap_value(), maybe_body, headers, None)
+            }
+            // unsupported expression
+            (_ms, other) =>
+                throw(TypeMismatch(StructExpected(other.to_code(), other.to_code())))
+        }
     }
 
-    async fn do_http_delete(
+    fn do_http_delete(
         &self,
         url: &str,
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let req = Client::new().delete(url);
-        Ok((self.to_owned(), self.do_http_rest_call(req, headers, body_opt, false).await))
+        Ok((self.to_owned(), self.do_http_rest_call(req, headers, body_opt, false)))
     }
 
-    async fn do_http_get(
+    fn do_http_get(
         &self,
         url: &str,
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let req = Client::new().get(url);
-        Ok((self.to_owned(), self.do_http_rest_call(req, headers, body_opt, false).await))
+        Ok((self.to_owned(), self.do_http_rest_call(req, headers, body_opt, false)))
     }
 
-    async fn do_http_head(
+    fn do_http_head(
         &self,
         url: &str,
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let req = Client::new().head(url);
-        let value = self.do_http_rest_call(req, headers, body_opt, true).await;
+        let value = self.do_http_rest_call(req, headers, body_opt, true);
         Ok((self.to_owned(), value))
     }
 
@@ -781,64 +751,52 @@ impl Machine {
         url: String,
         body: Option<String>,
         headers: Vec<(String, String)>,
-        multipart: Option<Form>,
+        multipart: Option<multipart::Form>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        async fn www(
-            ms: Machine,
-            method: String,
-            url: String,
-            body: Option<String>,
-            headers: Vec<(String, String)>,
-            multipart: Option<Form>,
-        ) -> std::io::Result<(Machine, TypedValue)> {
-            match method.to_ascii_uppercase().as_str() {
-                "DELETE" => ms.do_http_delete(url.as_str(), headers, body).await,
-                "GET" => ms.do_http_get(url.as_str(), headers, body).await,
-                "HEAD" => ms.do_http_head(url.as_str(), headers, body).await,
-                "PATCH" => ms.do_http_patch(url.as_str(), headers, body).await,
-                "POST" => ms.do_http_post(url.as_str(), headers, body, multipart).await,
-                "PUT" => ms.do_http_put(url.as_str(), headers, body).await,
-                method => Ok((ms.to_owned(), ErrorValue(Exact(format!("Invalid HTTP method '{method}'")))))
-            }
+        match method.to_ascii_uppercase().as_str() {
+            "DELETE" => self.do_http_delete(url.as_str(), headers, body),
+            "GET" => self.do_http_get(url.as_str(), headers, body),
+            "HEAD" => self.do_http_head(url.as_str(), headers, body),
+            "PATCH" => self.do_http_patch(url.as_str(), headers, body),
+            "POST" => self.do_http_post(url.as_str(), headers, body, multipart),
+            "PUT" => self.do_http_put(url.as_str(), headers, body),
+            method => Ok((self.to_owned(), ErrorValue(Exact(format!("Invalid HTTP method '{method}'")))))
         }
-
-        let rt = Runtime::new()?;
-        rt.block_on(www(self.to_owned(), method, url, body, headers, multipart))
     }
 
-    async fn do_http_patch(
+    fn do_http_patch(
         &self,
         url: &str,
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), self.do_http_rest_call(Client::new().patch(url), headers, body_opt, false).await))
+        Ok((self.to_owned(), self.do_http_rest_call(Client::new().patch(url), headers, body_opt, false)))
     }
 
-    async fn do_http_post(
+    fn do_http_post(
         &self,
         url: &str,
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
-        form_opt: Option<Form>,
+        form_opt: Option<multipart::Form>,
     ) -> std::io::Result<(Self, TypedValue)> {
         let request = match form_opt {
             Some(form) => Client::new().post(url).multipart(form),
             None => Client::new().post(url),
         };
-        Ok((self.to_owned(), self.do_http_rest_call(request, headers, body_opt, false).await))
+        Ok((self.to_owned(), self.do_http_rest_call(request, headers, body_opt, false)))
     }
 
-    async fn do_http_put(
+    fn do_http_put(
         &self,
         url: &str,
         headers: Vec<(String, String)>,
         body_opt: Option<String>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), self.do_http_rest_call(Client::new().put(url), headers, body_opt, false).await))
+        Ok((self.to_owned(), self.do_http_rest_call(Client::new().put(url), headers, body_opt, false)))
     }
 
-    async fn do_http_rest_call(
+    fn do_http_rest_call(
         &self,
         request: RequestBuilder,
         headers: Vec<(String, String)>,
@@ -849,8 +807,8 @@ impl Machine {
         let request = headers.iter().fold(request, |request, (k, v)| {
             request.header(k, v)
         });
-        match request.send().await {
-            Ok(response) => self.convert_http_response(response, is_header_only).await,
+        match request.send() {
+            Ok(response) => self.convert_http_response(response, is_header_only),
             Err(err) => ErrorValue(Exact(format!("Error making request: {}", err))),
         }
     }
@@ -1195,7 +1153,7 @@ impl Machine {
     }
 
     /// converts a [Response] to a [TypedValue]
-    pub async fn convert_http_response(
+    pub fn convert_http_response(
         &self,
         response: Response,
         is_header_only: bool,
@@ -1210,11 +1168,11 @@ impl Machine {
                         Ok(s) => TypedValue::wrap_value(s).unwrap_or(Undefined),
                         Err(e) => ErrorValue(Exact(e.to_string()))
                     }).collect::<Vec<_>>();
-                Structured(Soft(SoftStructure::from_tuples(header_keys.iter().zip(header_values.iter())
+                Structured(Soft(SoftStructure::ordered(header_keys.iter().zip(header_values.iter())
                     .map(|(k, v)| (k.to_owned(), v.to_owned()))
                     .collect::<Vec<_>>())))
             } else {
-                match response.text().await {
+                match response.text() {
                     Ok(body) =>
                         match Compiler::build(body.as_str()) {
                             Ok(expr) => {
@@ -1424,7 +1382,7 @@ mod tests {
         };
 
         let machine = Machine::new_platform()
-            .import_module_by_name("kungfu");
+            .import_module_by_name("testing");
         let (_, result) = machine.evaluate(&model).unwrap();
         let table = result.to_table().unwrap();
         let columns = table.get_columns();

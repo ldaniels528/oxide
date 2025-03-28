@@ -265,7 +265,7 @@ server response:
 cal::now()
 </pre>
 <pre>
-2025-01-25T08:11:50.493Z
+2025-03-28T03:15:55.942Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -276,7 +276,7 @@ now():::day_of()
 
 </pre>
 <pre>
-25
+27
 </pre>
 <hr>
 <h4>cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -287,7 +287,7 @@ now():::hour12()
 
 </pre>
 <pre>
-12
+8
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -298,7 +298,7 @@ now():::hour24()
 
 </pre>
 <pre>
-0
+20
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -309,7 +309,7 @@ now():::minute_of()
 
 </pre>
 <pre>
-11
+15
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -320,7 +320,7 @@ now():::month_of()
 
 </pre>
 <pre>
-50
+55
 </pre>
 <hr>
 <h4>cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
@@ -331,7 +331,7 @@ now():::second_of()
 
 </pre>
 <pre>
-50
+55
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -394,10 +394,10 @@ io::stdout("Hello World")
 Ack
 </pre>
 <hr>
-<h4>kungfu::assert &#8212; Evaluates an assertion returning Ack or an error</h4>
+<h4>testing::assert &#8212; Evaluates an assertion returning Ack or an error</h4>
 <pre>
 
-import kungfu
+import testing
 assert(matches([ 1 "a" "b" "c" ], [ 1 "a" "b" "c" ]))
 
 </pre>
@@ -405,10 +405,10 @@ assert(matches([ 1 "a" "b" "c" ], [ 1 "a" "b" "c" ]))
 true
 </pre>
 <hr>
-<h4>kungfu::feature &#8212; Creates a new test feature</h4>
+<h4>testing::feature &#8212; Creates a new test feature</h4>
 <pre>
 
-import kungfu
+import testing
 feature("Matches function", {
 "Compare Array contents: Equal": fn(ctx) => {
 assert(matches(
@@ -448,10 +448,10 @@ assert(matches(
 |--------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
-<h4>kungfu::matches &#8212; Compares two values</h4>
+<h4>testing::matches &#8212; Compares two values</h4>
 <pre>
 
-import kungfu::matches
+import testing::matches
 a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
 b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
 matches(a, b)
@@ -461,9 +461,9 @@ matches(a, b)
 true
 </pre>
 <hr>
-<h4>kungfu::type_of &#8212; Returns the type of a value</h4>
+<h4>testing::type_of &#8212; Returns the type of a value</h4>
 <pre>
-kungfu::type_of([12, 76, 444])
+testing::type_of([12, 76, 444])
 </pre>
 <pre>
 Array(3)
@@ -517,56 +517,58 @@ include path_str
 os::env()
 </pre>
 <pre>
-|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| id | key                        | value                                                                                                                                                                                                                                                                                                                                                                                                         |
-|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | CARGO                      | /Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo                                                                                                                                                                                                                                                                                                                                      |
-| 1  | CARGO_HOME                 | /Users/ldaniels/.cargo                                                                                                                                                                                                                                                                                                                                                                                        |
-| 2  | CARGO_MANIFEST_DIR         | /Users/ldaniels/GitHub/oxide/src/core                                                                                                                                                                                                                                                                                                                                                                         |
-| 3  | CARGO_PKG_AUTHORS          |                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 4  | CARGO_PKG_DESCRIPTION      |                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 5  | CARGO_PKG_HOMEPAGE         |                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 6  | CARGO_PKG_LICENSE          |                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 7  | CARGO_PKG_LICENSE_FILE     |                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 8  | CARGO_PKG_NAME             | core                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 9  | CARGO_PKG_README           |                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 10 | CARGO_PKG_REPOSITORY       |                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 11 | CARGO_PKG_RUST_VERSION     |                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 12 | CARGO_PKG_VERSION          | 0.1.0                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 13 | CARGO_PKG_VERSION_MAJOR    | 0                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 14 | CARGO_PKG_VERSION_MINOR    | 1                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 15 | CARGO_PKG_VERSION_PATCH    | 0                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 16 | CARGO_PKG_VERSION_PRE      |                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 17 | COMMAND_MODE               | unix2003                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 18 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-8327af3d7ec62fa6/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib                     |
-| 19 | HOME                       | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                               |
-| 20 | IDEA_INITIAL_DIRECTORY     | /                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 21 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                               |
-| 22 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 23 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 24 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 25 | PATH                       | /Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:. |
-| 26 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                  |
-| 27 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                              |
-| 28 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 29 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                       |
-| 30 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                   |
-| 31 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 32 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 33 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                       |
-| 34 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                            |
-| 35 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                       |
-| 36 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 37 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 38 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.7o9VuADAti/Listeners                                                                                                                                                                                                                                                                                                                                                           |
-| 39 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 40 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                             |
-| 41 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 42 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 43 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.58851138                                                                                                                                                                                                                                                                                                                                                            |
-| 44 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                        |
-| 45 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                 |
-|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | key                        | value                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | BUN_INSTALL                | /Users/ldaniels/.bun                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 1  | CARGO                      | /Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo                                                                                                                                                                                                                                                                                                                                                               |
+| 2  | CARGO_HOME                 | /Users/ldaniels/.cargo                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 3  | CARGO_MANIFEST_DIR         | /Users/ldaniels/GitHub/oxide/src/core                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 4  | CARGO_MANIFEST_PATH        | /Users/ldaniels/GitHub/oxide/src/core/Cargo.toml                                                                                                                                                                                                                                                                                                                                                                                       |
+| 5  | CARGO_PKG_AUTHORS          |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 6  | CARGO_PKG_DESCRIPTION      |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 7  | CARGO_PKG_HOMEPAGE         |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 8  | CARGO_PKG_LICENSE          |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 9  | CARGO_PKG_LICENSE_FILE     |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 10 | CARGO_PKG_NAME             | core                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 11 | CARGO_PKG_README           |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 12 | CARGO_PKG_REPOSITORY       |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 13 | CARGO_PKG_RUST_VERSION     |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 14 | CARGO_PKG_VERSION          | 0.1.0                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 15 | CARGO_PKG_VERSION_MAJOR    | 0                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 16 | CARGO_PKG_VERSION_MINOR    | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 17 | CARGO_PKG_VERSION_PATCH    | 0                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 18 | CARGO_PKG_VERSION_PRE      |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 19 | COMMAND_MODE               | unix2003                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 20 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-3c7e39002162ae64/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib                                              |
+| 21 | HOME                       | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 22 | IDEA_INITIAL_DIRECTORY     | /                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 23 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                        |
+| 24 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 25 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 26 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 27 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:. |
+| 28 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 29 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 30 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 31 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 32 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 33 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 34 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 35 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 36 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 37 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 38 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 39 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 40 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.s3Detqy0KH/Listeners                                                                                                                                                                                                                                                                                                                                                                                    |
+| 41 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 42 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                      |
+| 43 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 44 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 45 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.58851138                                                                                                                                                                                                                                                                                                                                                                                     |
+| 46 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 47 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                          |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::compile &#8212; Compiles source code from a string input</h4>
@@ -605,13 +607,13 @@ Hello World
 from oxide::help() limit 3
 </pre>
 <pre>
-|------------------------------------------------------------------------------------------------|
-| id | name       | module | signature                  | description                  | returns |
-|------------------------------------------------------------------------------------------------|
-| 0  | url_encode | www    | www::url_encode(s: String) | Encodes a URL string         | String  |
-| 1  | url_decode | www    | www::url_decode(s: String) | Decodes a URL-encoded string | String  |
-| 2  | serve      | www    | www::serve(n: u32)         | Starts a local HTTP service  | Ack     |
-|------------------------------------------------------------------------------------------------|
+|-------------------------------------------------------------------------------------------------------------------------------------|
+| id | name        | module | signature                                 | description                                       | returns |
+|-------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | to_string   | str    | str::to_string(x)                         | Converts a value to its text-based representation | String  |
+| 1  | substring   | str    | str::substring(s: String, m: i64, n: i64) | Returns a substring of string `s` from `m` to `n` | String  |
+| 2  | starts_with | str    | str::starts_with(a: String, b: String)    | Returns true if string `a` starts with string `b` | Boolean |
+|-------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -657,7 +659,7 @@ Ack
 oxide::uuid()
 </pre>
 <pre>
-4c0ef86d-1828-4ce9-ac9f-f7a9338f8267
+0a5749e5-1795-484b-9e6d-a8c5e66b85b6
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>
@@ -1002,10 +1004,10 @@ SGVsbG8gV29ybGQ=
 <hr>
 <h4>util::to_binary &#8212; Translates a numeric value into binary</h4>
 <pre>
-(0b1011 & 0b1101):::to_binary()
+util::to_binary(0b1011 & 0b1101)
 </pre>
 <pre>
-'to_binary' is not a function (undefined)
+1001
 </pre>
 <hr>
 <h4>util::hex &#8212; Translates bytes into hexadecimal</h4>
@@ -1163,16 +1165,16 @@ http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998
 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
 { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
-GET "http://localhost:8822/platform/www/quotes/1/4"
+GET http://localhost:8822/platform/www/quotes/1/4
 
 </pre>
 <pre>
 |------------------------------------|
-| id | symbol | exchange | last_sale |
+| id | exchange | last_sale | symbol |
 |------------------------------------|
-| 0  | BOX    | NYSE     | 56.88     |
-| 1  | JET    | NASDAQ   | 32.12     |
-| 2  | ABC    | AMEX     | 12.49     |
+| 0  | NYSE     | 56.88     | BOX    |
+| 1  | NASDAQ   | 32.12     | JET    |
+| 2  | AMEX     | 12.49     | ABC    |
 |------------------------------------|
 </pre>
 

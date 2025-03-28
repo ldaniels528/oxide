@@ -6,20 +6,22 @@
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::errors::throw;
 use crate::errors::Errors::{Exact, TypeMismatch};
+use crate::errors::TypeMismatchErrors::UnexpectedResult;
 use crate::expression::Expression;
 use crate::interpreter::Interpreter;
+use crate::numbers::Numbers::Ack;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, StringValue, Undefined};
+use crate::typed_values::TypedValue::{ErrorValue, Number, StringValue, Undefined};
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
 use actix_web_actors::ws::WebsocketContext;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
+use log::{error, warn};
 use shared_lib::cnv_error;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-use crate::errors::TypeMismatchErrors::UnexpectedResult;
 
 /// Oxide WebSocket Client
 pub struct OxideWebSocketClient {
@@ -97,7 +99,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for OxideWebSocketSer
         fn transmit(ctx: &mut WebsocketContext<OxideWebSocketServer>, value: &TypedValue) {
             let bytes = ByteCodeCompiler::encode_value(&value)
                 .unwrap_or_else(|err| {
-                    eprintln!("ERROR: {}", err);
+                    error!("ERROR: {}", err);
                     vec![]
                 });
             ctx.binary(bytes);
@@ -105,13 +107,6 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for OxideWebSocketSer
 
         match msg {
             Err(err) => transmit(ctx, &ErrorValue(Exact(err.to_string()))),
-            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
-            Ok(ws::Message::Pong(msg)) => ctx.ping(&msg),
-            Ok(ws::Message::Text(text)) => {
-                let value = self.interpreter.evaluate(text.trim_ascii())
-                    .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())));
-                transmit(ctx, &value)
-            }
             Ok(ws::Message::Binary(bytes)) => {
                 let model = ByteCodeCompiler::decode(&bytes.into());
                 let value = self.interpreter.invoke(&model)
@@ -119,9 +114,20 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for OxideWebSocketSer
                 transmit(ctx, &value)
             }
             Ok(ws::Message::Close(reason)) => {
-                println!("Close! [{:?}]", reason);
+                let message = reason.and_then(|r| r.description).unwrap_or_default();
+                let value = if message.is_empty() { Number(Ack) } else { ErrorValue(Exact(message)) };
+                transmit(ctx, &value)
             }
-            _ => {}
+            Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),
+            Ok(ws::Message::Pong(msg)) => ctx.ping(&msg),
+            Ok(ws::Message::Text(text)) => {
+                let value = self.interpreter.evaluate(text.trim())
+                    .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())));
+                transmit(ctx, &value)
+            }
+            Ok(other) => {
+                warn!("Unhandled WebSocket message type ({:?}).", other);
+            }
         }
     }
 }

@@ -5,27 +5,27 @@
 
 use crate::tokens::Token;
 
-const COMPOUND_3_OPERATORS: [&str; 1] = [
-    ":::"
+const OPERATORS_1: [char; 39] = [
+    '!', '¡', '@', '#', '$', '%', '^', '&', '×', '*', '÷', '/', '+', '-', '=',
+    '(', ')', '<', '>', '{', '}', '[', ']', ',', ';', '?', '\\', '|', '~',
+    '⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹',
 ];
 
-const COMPOUND_OPERATORS: [&str; 24] = [
+const OPERATORS_2: [&str; 25] = [
     "++", "&&", "**", "||", "::", "..", "==", ">>", "<<",
     "->", "<-", ">=", "<=", "=>",
     "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
-    "~>",
+    "~>", "<~",
+];
+
+const OPERATORS_3: [&str; 3] = [
+    ":::", "~>>", "<<~",
 ];
 
 const PSEUDO_NUMERICAL: [&str; 3] = ["0x", "0b", "0o"];
 
-const COMPOUND_SYMBOLS: [&str; 6] = [
+const SYMBOLS_3: [&str; 6] = [
     "[^]", "[!]", "[+]", "[-]", "[~]", "[_]",
-];
-
-const SIMPLE_OPERATORS: [char; 39] = [
-    '!', '¡', '@', '#', '$', '%', '^', '&', '×', '*', '÷', '/', '+', '-', '=',
-    '(', ')', '<', '>', '{', '}', '[', ']', ',', ';', '?', '\\', '|', '~',
-    '⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹',
 ];
 
 type NewToken = fn(String, usize, usize, usize, usize) -> Token;
@@ -67,7 +67,7 @@ fn generate_token(inputs: &Vec<char>,
                   end: usize,
                   make_token: NewToken) -> Option<Token> {
     let (line_no, column_no) = determine_code_position(&inputs, start);
-    return Some(make_token(inputs[start..end].iter().collect(), start, end, line_no, column_no));
+    Some(make_token(inputs[start..end].iter().collect(), start, end, line_no, column_no))
 }
 
 fn has_at_least(inputs: &Vec<char>, pos: &mut usize, n_chars: usize) -> bool {
@@ -86,7 +86,7 @@ fn has_next(inputs: &Vec<char>, pos: &mut usize) -> bool {
 }
 
 fn is_operator(inputs: &Vec<char>, pos: usize) -> bool {
-    SIMPLE_OPERATORS.contains(&inputs[pos])
+    OPERATORS_1.contains(&inputs[pos])
 }
 
 fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
@@ -97,12 +97,13 @@ fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
 fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
         skip_comments,
-        next_compound3_operator_token,
+        next_compound_3_operator_token,
         next_compound_symbol_token,
-        next_compound_operator_token,
+        next_compound_2_operator_token,
         next_operator_token,
         next_pseudo_numeric_token,
         next_numeric_token,
+        next_url_token,
         next_atom_token,
         next_backticks_quoted_token,
         next_double_quoted_token,
@@ -111,7 +112,7 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     ];
 
     // find and return the token
-    parsers.iter().find_map(|&p| p(inputs, pos))
+    parsers.iter().find_map(|parser| parser(inputs, pos))
 }
 
 fn next_atom_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
@@ -242,22 +243,23 @@ fn is_same(a: &[char], b: &str) -> bool {
     aa == bb
 }
 
-fn next_compound3_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
-    let symbol_len = 3;
-    let start = *pos;
-    if has_at_least(inputs, pos, symbol_len) &&
-        COMPOUND_3_OPERATORS.iter().any(|gl| is_same(&inputs[start..(start + symbol_len)], gl)) {
-        *pos += symbol_len;
-        let end = *pos;
-        generate_token(&inputs, start, end, Token::operator)
-    } else { None }
+fn next_compound_2_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    next_compound_operator_token(inputs, pos, OPERATORS_2.as_slice(), 2)
 }
 
-fn next_compound_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
-    let symbol_len = 2;
+fn next_compound_3_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    next_compound_operator_token(inputs, pos, OPERATORS_3.as_slice(), 3)
+}
+
+fn next_compound_operator_token(
+    inputs: &Vec<char>,
+    pos: &mut usize,
+    operators: &[&str],
+    symbol_len: usize,
+) -> Option<Token> {
     let start = *pos;
     if has_at_least(inputs, pos, symbol_len) &&
-        COMPOUND_OPERATORS.iter().any(|gl| is_same(&inputs[start..(start + symbol_len)], gl)) {
+        operators.iter().any(|gl| is_same(&inputs[start..(start + symbol_len)], gl)) {
         *pos += symbol_len;
         let end = *pos;
         generate_token(&inputs, start, end, Token::operator)
@@ -268,7 +270,7 @@ fn next_compound_symbol_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Tok
     let symbol_len = 3;
     let start = *pos;
     if has_at_least(inputs, pos, symbol_len) &&
-        COMPOUND_SYMBOLS.iter().any(|gl| is_same(&inputs[start..(start + symbol_len)], gl)) {
+        SYMBOLS_3.iter().any(|gl| is_same(&inputs[start..(start + symbol_len)], gl)) {
         *pos += symbol_len;
         let end = *pos;
         generate_token(&inputs, start, end, Token::atom)
@@ -278,7 +280,7 @@ fn next_compound_symbol_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Tok
 fn next_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_glyph_token(inputs, pos, Token::operator,
                      |inputs, pos| {
-                         has_more(inputs, pos) && SIMPLE_OPERATORS.contains(&inputs[*pos])
+                         has_more(inputs, pos) && OPERATORS_1.contains(&inputs[*pos])
                      })
 }
 
@@ -290,10 +292,40 @@ fn next_symbol_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_glyph_token(inputs, pos, Token::operator, has_more)
 }
 
+fn next_url_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    fn is_eligible(c: char) -> bool {
+        c.is_alphanumeric() || matches!(c,
+            '?' | '%' | '/' | '$' | '_' | '.' | '=' | '#' | '+' | '-' | '*' |
+            '!' | '&' | '|' | '^' | '<' | '>' | '~' | ':'
+        )
+    }
+
+    fn parse_url(prefix: &str, inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+        let start = *pos;
+        if has_at_least(inputs, pos, prefix.len()) &&
+            is_same(&inputs[start..(start + prefix.len())], prefix) {
+            *pos += prefix.len();
+            while has_more(inputs, pos) && is_eligible(inputs[*pos]) { *pos += 1 }
+            let end = *pos;
+            generate_token(&inputs, start, end, Token::url)
+        } else {
+            None
+        }
+    }
+
+    let prefixes = vec![
+        "file://", "http://", "https://", "ws://", "wss://",
+    ];
+    prefixes.iter().fold(None, |maybe_token, prefix| {
+        if maybe_token.is_some() { maybe_token } else { parse_url(prefix, inputs, pos) }
+    })
+}
+
 fn skip_comments(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let symbol1 = "//";
     let start = *pos;
-    if has_at_least(inputs, pos, symbol1.len()) && is_same(&inputs[start..(start + symbol1.len())], symbol1) {
+    if has_at_least(inputs, pos, symbol1.len()) &&
+        is_same(&inputs[start..(start + symbol1.len())], symbol1) {
         *pos += symbol1.len();
         while has_more(inputs, pos) && inputs[*pos] != '\n' { *pos += 1 }
         *pos += 1;
@@ -311,9 +343,19 @@ mod tests {
 
     #[test]
     fn test_compound_operators() {
-        for op in COMPOUND_OPERATORS {
-            assert_eq!(parse_fully(op), vec![
-                Token::operator(op.to_string(), 0, op.len(), 1, op.len())
+        fn stringify(values: &[&str]) -> Vec<String> {
+            values.iter().map(|s| s.to_string()).collect()
+        }
+
+        let mut compound_operators = vec![];
+        compound_operators.extend(stringify(OPERATORS_2.as_slice()));
+        compound_operators.extend(stringify(OPERATORS_3.as_slice()));
+
+        for operator in compound_operators {
+            let tokens = parse_fully(operator.as_str());
+            println!("tokens {:?}", tokens);
+            assert_eq!(tokens, vec![
+                Token::operator(operator.clone(), 0, operator.len(), 1, operator.len().min(2))
             ])
         }
 
@@ -401,6 +443,18 @@ mod tests {
             one
             "#), vec![
             Token::atom("one".into(), 46, 49, 3, 14)
+        ])
+    }
+
+    #[test]
+    fn test_url() {
+        assert_eq!(parse_fully(r#"
+            https://api.example.com/products?category=electronics abc
+            "#), vec![
+            Token::url("https://api.example.com/products?category=electronics".into(),
+                       13, 66, 2, 14),
+            Token::atom("abc".into(),
+                        67, 70, 2, 68)
         ])
     }
 }

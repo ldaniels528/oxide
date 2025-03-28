@@ -96,7 +96,7 @@ mod tests {
     #[test]
     fn test_feature_with_scenarios() {
         verify_exact_table_with_ids(r#"
-            import kungfu
+            import testing
             Feature "Matches function" {
                 Scenario "Compare Array contents: Equal" {
                     assert(matches(
@@ -152,6 +152,11 @@ mod tests {
                     oxide::println(item)
                }
             "#, Number(Ack));
+            // 1
+            // 5
+            // 6
+            // 11
+            // 17
         }
 
         #[test]
@@ -161,6 +166,10 @@ mod tests {
                     oxide::println(row)
                }
             "#, Number(Ack));
+            // {"value":"apple"}
+            // {"value":"berry"}
+            // {"value":"kiwi"}
+            // {"value":"lime"}
         }
 
         #[test]
@@ -275,25 +284,25 @@ mod tests {
         #[test]
         fn test_function_lambda() {
             let mut interpreter = Interpreter::new();
-            assert_eq!(Number(Ack), interpreter.evaluate(r#"
+            assert_eq!(interpreter.evaluate(r#"
                 product := fn (a, b) => a * b
-            "#).unwrap());
+            "#).unwrap(), Number(Ack));
 
-            assert_eq!(Number(I64Value(10)), interpreter.evaluate(r#"
+            assert_eq!(interpreter.evaluate(r#"
                 product(2, 5)
-            "#).unwrap())
+            "#).unwrap(), Number(I64Value(10)))
         }
 
         #[test]
         fn test_function_named() {
             let mut interpreter = Interpreter::new();
-            assert_eq!(Number(Ack), interpreter.evaluate(r#"
+            assert_eq!(interpreter.evaluate(r#"
                 fn product(a, b) => a * b
-            "#).unwrap());
+            "#).unwrap(), Number(Ack));
 
-            assert_eq!(Number(I64Value(10)), interpreter.evaluate(r#"
-                product(2, 5)
-            "#).unwrap())
+            assert_eq!(interpreter.evaluate(r#"
+                product(3, 7)
+            "#).unwrap(), Number(I64Value(21)))
         }
 
         #[test]
@@ -312,5 +321,4 @@ mod tests {
             "#, Number(I64Value(720)))
         }
     }
-
 }
