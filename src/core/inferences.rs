@@ -23,17 +23,13 @@ impl Inferences {
     pub fn infer(expr: &Expression) -> DataType {
         match expr {
             ArrayExpression(items) => ArrayType(items.len()),
-            AsValue(_, e) => Inferences::infer(e),
-            BitwiseAnd(a, b) => Inferences::infer_a_or_b(a, b),
-            BitwiseOr(a, b) => Inferences::infer_a_or_b(a, b),
-            BitwiseShiftLeft(a, b) => Inferences::infer_a_or_b(a, b),
-            BitwiseShiftRight(a, b) => Inferences::infer_a_or_b(a, b),
-            BitwiseXor(a, b) => Inferences::infer_a_or_b(a, b),
-            CodeBlock(ops) => ops.last().map(Inferences::infer).unwrap_or(VaryingType(vec![])),
-            Condition(..) => BooleanType,
-            Directive(..) => NumberType(NumberKind::AckKind),
-            Divide(a, b) => Inferences::infer_a_or_b(a, b),
-            ElementAt(..) => VaryingType(vec![]),
+            AsValue(_, e) => Self::infer(e),
+            BitwiseAnd(a, b) => Self::infer_a_or_b(a, b),
+            BitwiseOr(a, b) => Self::infer_a_or_b(a, b),
+            BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b),
+            BitwiseShiftRight(a, b) => Self::infer_a_or_b(a, b),
+            BitwiseXor(a, b) => Self::infer_a_or_b(a, b),
+            CodeBlock(ops) => ops.last().map(Self::infer).unwrap_or(VaryingType(vec![])),
             ColonColon(a, b) => match (a.deref(), b.deref()) {
                 (Variable(pkg), FunctionCall { fx, .. }) => match fx.deref() {
                     Variable(name) =>
@@ -45,37 +41,9 @@ impl Inferences {
                 _ => VaryingType(vec![])
             }
             ColonColonColon(..) => VaryingType(vec![]),
-            Factorial(a) => Inferences::infer(a),
-            Feature { .. } => NumberType(NumberKind::AckKind),
-            FnExpression { params, returns, .. } =>
-                FunctionType(params.clone(), Box::from(returns.clone())),
-            ForEach(..) => NumberType(NumberKind::AckKind),
-            From(..) => TableType(vec![], 0),
-            TupleExpression(params) =>
-                TupleType(params.iter()
-                    .map(|p| Inferences::infer(p))
-                    .collect::<Vec<_>>()),
-            FunctionCall { fx, .. } => Inferences::infer(fx),
-            HTTP { .. } => VaryingType(vec![]),
-            If { a: true_v, b: Some(false_v), .. } =>
-                Inferences::infer_alles(vec![true_v, false_v]),
-            If { a: true_v, .. } => Inferences::infer(true_v),
-            Import(..) => NumberType(NumberKind::AckKind),
-            Include(..) => NumberType(NumberKind::AckKind),
-            StructureExpression(..) => StructureType(Vec::new()), // TODO can we infer?
-            Literal(Function { body: code, .. }) => Inferences::infer(code),
-            Literal(PlatformOp(pf)) => pf.get_return_type(),
-            Literal(v) => v.get_type(),
-            Minus(a, b) => Inferences::infer_a_or_b(a, b),
-            Module(..) => NumberType(NumberKind::AckKind),
-            Modulo(a, b) => Inferences::infer_a_or_b(a, b),
-            Multiply(a, b) => Inferences::infer_a_or_b(a, b),
-            Neg(a) => Inferences::infer(a),
-            Ns(..) => NumberType(NumberKind::AckKind),
-            Parameters(params) => ArrayType(params.len()),
-            Plus(a, b) => Inferences::infer_a_or_b(a, b),
-            PlusPlus(a, b) => Inferences::infer_a_or_b(a, b),
-            Pow(a, b) => Inferences::infer_a_or_b(a, b),
+            Condition(..) => BooleanType,
+            CurvyArrowLeft(..) => StructureType(vec![]),
+            CurvyArrowRight(..) => NumberType(NumberKind::AckKind),
             DatabaseOp(a) => match a {
                 DatabaseOps::Queryable(_) => NumberType(NumberKind::AckKind),
                 DatabaseOps::Mutation(m) => match m {
@@ -83,11 +51,47 @@ impl Inferences {
                     _ => NumberType(NumberKind::RowsAffectedKind),
                 }
             }
-            Range(a, b) => Inferences::infer_a_or_b(a, b),
+            Directive(..) => NumberType(NumberKind::AckKind),
+            Divide(a, b) => Self::infer_a_or_b(a, b),
+            ElementAt(..) => VaryingType(vec![]),
+            Factorial(a) => Self::infer(a),
+            Feature { .. } => NumberType(NumberKind::AckKind),
+            FnExpression { params, returns, .. } =>
+                FunctionType(params.clone(), Box::from(returns.clone())),
+            ForEach(..) => NumberType(NumberKind::AckKind),
+            From(..) => TableType(vec![], 0),
+            FunctionCall { fx, .. } => Self::infer(fx),
+            HTTP { .. } => VaryingType(vec![]),
+            If { a: true_v, b: Some(false_v), .. } =>
+                Self::infer_alles(vec![true_v, false_v]),
+            If { a: true_v, .. } => Self::infer(true_v),
+            Import(..) => NumberType(NumberKind::AckKind),
+            Include(..) => NumberType(NumberKind::AckKind),
+            Literal(Function { body: code, .. }) => Self::infer(code),
+            Literal(PlatformOp(pf)) => pf.get_return_type(),
+            Literal(v) => v.get_type(),
+            Minus(a, b) => Self::infer_a_or_b(a, b),
+            Module(..) => NumberType(NumberKind::AckKind),
+            Modulo(a, b) => Self::infer_a_or_b(a, b),
+            Multiply(a, b) => Self::infer_a_or_b(a, b),
+            Neg(a) => Self::infer(a),
+            New(a) => Self::infer(a),
+            Ns(..) => NumberType(NumberKind::AckKind),
+            Parameters(params) => ArrayType(params.len()),
+            Plus(a, b) => Self::infer_a_or_b(a, b),
+            PlusPlus(a, b) => Self::infer_a_or_b(a, b),
+            Pow(a, b) => Self::infer_a_or_b(a, b),
+            Range(a, b) => Self::infer_a_or_b(a, b),
             Return(a) => Self::infer_all(a),
             Scenario { .. } => NumberType(NumberKind::AckKind),
             SetVariable(..) => NumberType(NumberKind::AckKind),
             SetVariables(..) => NumberType(NumberKind::AckKind),
+            StructureExpression(..) => StructureType(Vec::new()), // TODO can we infer?
+            TupleExpression(params) =>
+                TupleType(params.iter()
+                    .map(|p| Self::infer(p))
+                    .collect::<Vec<_>>()),
+            TypeDecl(expr) => Self::infer(expr),
             Variable(..) => VaryingType(vec![]),
             Via(..) => TableType(vec![], 0),
             While { .. } => VaryingType(vec![]),
@@ -102,7 +106,7 @@ impl Inferences {
     /// provides type inference for the given [Expression]s
     fn infer_all(items: &Vec<Expression>) -> DataType {
         Self::infer_best_fit(items.iter()
-            .map(Inferences::infer)
+            .map(Self::infer)
             .collect::<Vec<_>>())
     }
 
@@ -110,7 +114,7 @@ impl Inferences {
     fn infer_alles(items: Vec<&Expression>) -> DataType {
         Self::infer_best_fit(items.iter()
             .map(|e| *e)
-            .map(Inferences::infer)
+            .map(Self::infer)
             .collect::<Vec<_>>())
     }
 

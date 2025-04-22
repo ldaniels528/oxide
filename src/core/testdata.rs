@@ -33,7 +33,7 @@ use serde_json::Value;
 use std::fs::File;
 use std::thread;
 use std::time::Duration;
-use actix::fut::result;
+use crate::errors::Errors;
 
 pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
     make_dataframe_ns(Namespace::new(database, schema, name), columns)
@@ -122,8 +122,10 @@ pub fn verify_math_operator(op: &str) {
 
 pub fn verify_exact(code: &str, expected: TypedValue) {
     let mut interpreter = Interpreter::new();
-    let actual = interpreter.evaluate(code).unwrap();
-    assert_eq!(actual, expected);
+    match interpreter.evaluate(code) {
+        Ok(actual) => assert_eq!(actual, expected),
+        Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected),
+    }
 }
 
 pub fn verify_exact_text(code: &str, expected: &str) {
@@ -188,8 +190,10 @@ pub fn verify_whence(
 }
 
 pub fn verify_where(mut interpreter: Interpreter, code: &str, expected: TypedValue) -> Interpreter {
-    let actual = interpreter.evaluate(code).unwrap();
-    assert_eq!(actual, expected);
+    match interpreter.evaluate(code) {
+        Ok(actual) => assert_eq!(actual, expected),
+        Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected)
+    }
     interpreter
 }
 

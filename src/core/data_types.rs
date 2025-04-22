@@ -10,8 +10,8 @@ use crate::dataframe::Dataframe::Model;
 use crate::errors::Errors::{Exact, Syntax, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, UnrecognizedTypeName, UnsupportedType};
 use crate::errors::{throw, Errors};
-use crate::expression::Expression;
 use crate::expression::Expression::{ArrayExpression, AsValue, FnExpression, FunctionCall, Literal, SetVariable, TupleExpression, Variable};
+use crate::expression::{Expression, UNDEFINED};
 use crate::field::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind;
@@ -80,7 +80,7 @@ impl DataType {
                     AsValue(name, model) => Parameter::new(name, decode_model(model)?),
                     SetVariable(name, expr) => Parameter::from_tuple(name, expr.to_pure()?),
                     Variable(name) => Parameter::build(name),
-                    other => return throw(Syntax(other.to_code()))
+                    other => return throw(Exact(format!("Parameter expected near {}", other.to_code())))
                 };
                 params.push(param);
             }
@@ -96,7 +96,10 @@ impl DataType {
             }
             Ok(ArrayType(kinds.len()))
         }
-        fn decode_model_function_call(fx: &Expression, args: &Vec<Expression>) -> std::io::Result<DataType> {
+        fn decode_model_function_call(
+            fx: &Expression,
+            args: &Vec<Expression>,
+        ) -> std::io::Result<DataType> {
             match fx {
                 Variable(name) =>
                     match name.as_str() {
@@ -108,6 +111,7 @@ impl DataType {
                         "String" => expect_size(args, |size| StringType(size)),
                         "Struct" => expect_params(args, |params| StructureType(params)),
                         "Table" => expect_params(args, |params| TableType(params, 0)),
+                        type_name if args.is_empty() => decode_model_variable(type_name),
                         type_name => throw(Syntax(type_name.into()))
                     }
                 other => throw(Syntax(other.to_code()))
@@ -143,6 +147,7 @@ impl DataType {
                 "String" => Ok(StringType(0)),
                 "Struct" => Ok(StructureType(vec![])),
                 "Table" => Ok(TableType(vec![], 0)),
+                "UUID" => Ok(NumberType(UUIDKind)),
                 "u8" => Ok(NumberType(U8Kind)),
                 "u16" => Ok(NumberType(U16Kind)),
                 "u32" => Ok(NumberType(U32Kind)),
@@ -159,8 +164,7 @@ impl DataType {
                 FnExpression { params, returns, .. } =>
                     Ok(FunctionType(params.clone(), Box::from(returns.clone()))),
                 // e.g. String(80)
-                FunctionCall { fx, args } =>
-                    decode_model_function_call(fx, args),
+                FunctionCall { fx, args } => decode_model_function_call(fx, args),
                 // e.g. Ack
                 Literal(Number(Numbers::Ack)) => Ok(NumberType(AckKind)),
                 // e.g. Structure(symbol: String, exchange: String, last_sale: f64)
@@ -349,6 +353,37 @@ impl DataType {
             VaryingType(dts) => dts.first()
                 .map(|dt| dt.get_default_value())
                 .unwrap_or(TypedValue::Null),
+        }
+    }
+
+    pub fn instantiate(&self) -> std::io::Result<TypedValue> {
+        match self {
+            ArrayType(_) => Ok(ArrayValue(Array::new())),
+            ASCIIType(_) => Ok(ASCII(vec![])),
+            BinaryType(_) => Ok(Binary(vec![])),
+            BooleanType => Ok(Boolean(false)),
+            EnumType(_) => throw(Exact("Instantiation error".into())),
+            ErrorType => throw(Exact("Instantiation error".into())),
+            FunctionType(params, kind) =>
+                Ok(Function {
+                    params: params.clone(),
+                    body: Box::new(UNDEFINED),
+                    returns: kind.deref().clone(),
+                }),
+            Indeterminate => throw(Exact("Instantiation error".into())),
+            NumberType(kind) => Ok(Number(kind.get_default_value())),
+            PlatformOpsType(_) => throw(Exact("Instantiation error".into())),
+            StringType(..) => Ok(StringValue(String::new())),
+            StructureType(params) =>
+                Ok(Structured(Hard(HardStructure::from_parameters(params.to_vec())))),
+            TableType(params, _len) =>
+                Ok(TableValue(Model(ModelRowCollection::from_parameters(params)))),
+            TupleType(types) => {
+                let mut values = vec![];
+                for a_type in types { values.push(a_type.get_default_value()) }
+                Ok(TupleValue(values))
+            }
+            VaryingType(_) => throw(Exact("Instantiation error".into())),
         }
     }
 
@@ -708,6 +743,58 @@ mod tests {
             assert_eq!(dt, data_type);
             assert_eq!(data_type.to_code(), type_decl);
             assert_eq!(format!("{}", data_type), type_decl.to_string())
+        }
+    }
+
+    /// Instantiation tests
+    #[cfg(test)]
+    mod instantiation_tests {
+        use crate::dataframe::Dataframe::Model;
+        use crate::model_row_collection::ModelRowCollection;
+        use crate::numbers::Numbers::*;
+        use crate::testdata::{make_quote_columns, verify_exact, verify_when};
+        use crate::typed_values::TypedValue::{Number, StringValue, TableValue};
+
+        #[test]
+        fn test_date() {
+            verify_when(r#"
+                new Date()
+            "#, |v| matches!(v, Number(DateValue(..))));
+        }
+
+        #[test]
+        fn test_f64() {
+            verify_exact(r#"
+                new f64()
+            "#, Number(F64Value(0.)));
+        }
+
+        #[test]
+        fn test_i64() {
+            verify_exact(r#"
+                new i64()
+            "#, Number(I64Value(0)));
+        }
+
+        #[test]
+        fn test_string() {
+            verify_exact(r#"
+                new String(80)
+            "#, StringValue(String::new()));
+        }
+
+        #[test]
+        fn test_table() {
+            verify_exact(r#"
+                new Table(symbol: String(8), exchange: String(8), last_sale: f64)
+            "#, TableValue(Model(ModelRowCollection::new(make_quote_columns()))));
+        }
+
+        #[test]
+        fn test_uuid() {
+            verify_when(r#"
+                new UUID()
+            "#, |v| matches!(v, Number(UUIDValue(..))));
         }
     }
 }

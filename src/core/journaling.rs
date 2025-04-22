@@ -317,7 +317,7 @@ impl TableFunction {
             fx: Function {
                 params: params.clone(),
                 body: Box::from(code),
-                returns: TableType(params, 0)
+                returns: TableType(params, 0),
             },
             ms0,
         }
@@ -678,5 +678,4 @@ mod tests {
             for s in lines { println!("{}", s) }
         }
     }
-
 }

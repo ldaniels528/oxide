@@ -24,8 +24,10 @@ use crate::row_metadata::RowMetadata;
 use crate::sequences::Array;
 use crate::structures::Row;
 use crate::structures::Structures::{Firm, Hard};
+use crate::table_scan::{TableScanPlan, TableScanTypes};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use serde::{Deserialize, Serialize};
 use shared_lib::fail;
 use std::fmt::Debug;
 use std::fs::File;
@@ -442,6 +444,11 @@ pub trait RowCollection: Debug {
     /// returns the columns that represent device
     fn get_columns(&self) -> &Vec<Column>;
 
+    fn get_eof(&self) -> std::io::Result<usize> {
+        let len = self.len()?;
+        Ok(if len > 0 { len - 1 } else { len })
+    }
+
     fn get_indices(&self) -> std::io::Result<Range<usize>> {
         self.get_indices_with_limit(Null)
     }
@@ -561,6 +568,27 @@ pub trait RowCollection: Debug {
         Ok(rows)
     }
 
+    fn read_column_slice(
+        &self,
+        column_id: usize,
+    ) -> std::io::Result<Vec<TypedValue>> {
+        self.read_column_slice_range(column_id, 0..self.len()?)
+    }
+
+    fn read_column_slice_range(
+        &self,
+        column_id: usize,
+        index: std::ops::Range<usize>,
+    ) -> std::io::Result<Vec<TypedValue>> {
+        let mut values = vec![];
+        let mut row_id = index.start;
+        while row_id < index.end {
+            values.push(self.read_field(row_id, column_id));
+            row_id += 1
+        }
+        Ok(values)
+    }
+
     /// reads a field by column position from an active row by ID
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue;
 
@@ -623,70 +651,100 @@ pub trait RowCollection: Debug {
         })
     }
 
-    /// Returns an option of the first row that matches the given search_column_value
-    /// for a given search_column_index.
+    /// Returns an option of the first row that matches the given [TableScanPlan]
     fn scan_first(
         &self,
-        search_column_index: usize,
-        search_column_value: &TypedValue,
+        plan: TableScanPlan,
     ) -> std::io::Result<Option<Row>> {
-        self.scan_next(search_column_index, search_column_value, 0)
+        match plan.get_scan_type() {
+            TableScanTypes::ColumnScan { column_index, column_value } =>
+                self.scan_next(TableScanPlan::column_scan(column_index, column_value)),
+            TableScanTypes::ConditionScan { machine, condition } =>
+                self.scan_next(TableScanPlan::condition_scan(machine, condition)),
+            TableScanTypes::CompleteScan =>
+                self.scan_next(TableScanPlan::complete_scan())
+        }
     }
 
-    /// Returns an option of the last row that matches the given search_column_value
-    /// for a given search_column_index.
+    /// Returns an option of the last row that matches the given [TableScanPlan]
     fn scan_last(
         &self,
-        search_column_index: usize,
-        search_column_value: &TypedValue,
+        plan: TableScanPlan,
     ) -> std::io::Result<Option<Row>> {
-        let eof = self.len()?;
-        let (mut is_done, mut row_id) = (false, eof);
-        while !is_done {
-            if let Some(row) = self.read_one(row_id)? {
-                let value = &row[search_column_index];
-                if search_column_value == value {
-                    return Ok(Some(row));
-                }
-            }
-            is_done = row_id == 0;
-            if !is_done { row_id -= 1; }
+        let eof = self.get_eof()?;
+        match plan.get_scan_type() {
+            TableScanTypes::ColumnScan { column_index, column_value } =>
+                self.scan_next(TableScanPlan::new(eof, false, TableScanTypes::ColumnScan {
+                    column_index,
+                    column_value,
+                })),
+            TableScanTypes::ConditionScan { machine, condition } =>
+                self.scan_next(TableScanPlan::new(eof, false, TableScanTypes::ConditionScan {
+                    machine,
+                    condition,
+                })),
+            TableScanTypes::CompleteScan =>
+                self.scan_next(TableScanPlan::new(eof, false, TableScanTypes::CompleteScan))
         }
-        Ok(None)
     }
 
-    /// Returns an option of the next row that matches the given search_column_value
-    /// for a given search_column_index starting with the initial_row_id.
+    /// Returns an option of the next row that matches the given [TableScanPlan]
     fn scan_next(
         &self,
-        search_column_index: usize,
-        search_column_value: &TypedValue,
-        initial_row_id: usize,
+        plan: TableScanPlan,
     ) -> std::io::Result<Option<Row>> {
-        for row_id in initial_row_id..self.len()? {
+        let eof = self.get_eof()?;
+        let mut row_id = plan.get_position();
+        let is_forward = plan.is_forward();
+
+        // determine the matching function for the search method
+        let is_match: Box<dyn Fn(&Row) -> bool> = match plan.get_scan_type() {
+            TableScanTypes::ColumnScan { column_index, column_value } =>
+                Box::new(move |row: &Row| column_value == row[column_index]),
+            TableScanTypes::ConditionScan { machine, condition } =>
+                Box::new(move |row: &Row| matches!(
+                        machine.with_row(self.get_columns(), row).evaluate_cond(&condition),
+                        Ok((_ms, Boolean(true)))
+                    )),
+            TableScanTypes::CompleteScan => Box::new(|_row: &Row| true)
+        };
+
+        // attempt to find the next match
+        while (is_forward && row_id < eof) || (!is_forward && row_id as isize >= 0) {
             if let Some(row) = self.read_one(row_id)? {
-                let value = &row[search_column_index];
-                if *search_column_value == *value { return Ok(Some(row)); }
+                if is_match(&row) { return Ok(Some(row)); }
             }
+            row_id = if is_forward { row_id + 1 } else { row_id.wrapping_sub(1) };
         }
+
         Ok(None)
     }
 
-    /// Returns an option of the previous row that matches the given search_column_value
-    /// for a given search_column_index starting with the initial_row_id.
+    /// Returns an option of the previous row that matches the given [TableScanPlan]
     fn scan_previous(
         &self,
-        search_column_index: usize,
-        search_column_value: &TypedValue,
-        initial_row_id: usize,
+        plan: TableScanPlan,
     ) -> std::io::Result<Option<Row>> {
-        for row_id in (initial_row_id..self.len()?).rev() {
-            if let Some(row) = self.read_one(row_id)? {
-                let value = &row[search_column_index];
-                if search_column_value == value { return Ok(Some(row)); }
-            }
+        match plan.get_scan_type() {
+            TableScanTypes::ColumnScan { column_index, column_value } =>
+                self.scan_next(TableScanPlan::new(
+                    plan.get_position(),
+                    !plan.is_forward(),
+                    TableScanTypes::ColumnScan { column_index, column_value },
+                )),
+            TableScanTypes::ConditionScan { machine, condition } =>
+                self.scan_next(TableScanPlan::new(
+                    plan.get_position(),
+                    !plan.is_forward(),
+                    TableScanTypes::ConditionScan { machine, condition },
+                )),
+            TableScanTypes::CompleteScan =>
+                self.scan_next(TableScanPlan::new(
+                    plan.get_position(),
+                    !plan.is_forward(),
+                    TableScanTypes::CompleteScan,
+                )),
         }
-        Ok(None)
     }
 
     fn to_array(&self) -> Array {
@@ -777,7 +835,6 @@ pub trait RowCollection: Debug {
         }
         Number(RowsAffected(modified))
     }
-
 }
 
 impl dyn RowCollection {
@@ -826,14 +883,15 @@ mod tests {
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::{Ack, F64Value, RowId, RowsAffected};
     use crate::parameter::Parameter;
+    use crate::structures::Structures::Firm;
     use crate::table_renderer::TableRenderer;
+    use crate::table_scan::TableScanTypes::ColumnScan;
     use crate::testdata::*;
     use chrono::Local;
     use num_traits::ToPrimitive;
     use rand::{thread_rng, Rng, RngCore};
     use shared_lib::{cnv_error, compute_time_millis};
     use std::time::{SystemTime, UNIX_EPOCH};
-    use crate::structures::Structures::Firm;
 
     #[test]
     fn test_from_bytes() {
@@ -1190,7 +1248,10 @@ mod tests {
                 StringValue("NASDAQ".to_string()),
                 Number(F64Value(33.33)),
             ];
-            let actual = rc.scan_first(0, &StringValue("XMT".into())).unwrap()
+            let actual = rc.scan_first(TableScanPlan::new(0, true, ColumnScan {
+                column_index: 0,
+                column_value: StringValue("XMT".into()),
+            })).unwrap()
                 .map(|row| row.get_values())
                 .unwrap();
             assert_eq!(actual, expected);
@@ -1465,7 +1526,6 @@ mod tests {
     fn test_push_pop() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             let params = make_quote_parameters();
-            let phys_columns = make_quote_columns();
             assert_eq!(Number(RowId(0)), rc.push_row(make_quote(0, "BILL", "AMEX", 12.33)));
             assert_eq!(Number(RowId(1)), rc.push_row(make_quote(1, "TED", "NYSE", 56.2456)));
             assert_eq!(
@@ -1484,10 +1544,33 @@ mod tests {
     }
 
     #[test]
+    fn test_read_column_slice() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+            rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
+            rc.append_row(make_quote(1, "TED", "OTC", 0.2456));
+            rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
+            rc.append_row(make_quote(3, "GOTO", "OTC", 0.1442));
+            rc.append_row(make_quote(4, "XYZ", "NASDAQ", 0.0289));
+
+            // produce the scan
+            let values = rc.read_column_slice(0).unwrap();
+            assert_eq!(values, vec![
+                StringValue("ABC".into()),
+                StringValue("TED".into()),
+                StringValue("BIZ".into()),
+                StringValue("GOTO".into()),
+                StringValue("XYZ".into()),
+            ]);
+            rc.len().unwrap() as u64
+        }
+
+        // test the variants
+        verify_variants("read_column_slice", make_quote_columns(), test_variant);
+    }
+
+    #[test]
     fn test_read_range() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns);
             rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
             rc.append_row(make_quote(1, "TED", "OTC", 0.2456));
             rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
@@ -1597,8 +1680,6 @@ mod tests {
     #[test]
     fn test_reverse() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns);
             rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
             rc.append_row(make_quote(1, "UNO", "OTC", 0.2456));
             rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
@@ -1626,8 +1707,6 @@ mod tests {
     #[test]
     fn test_scan_all_rows() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns);
             assert_eq!(Number(RowsAffected(5)), rc.append_rows(vec![
                 make_quote(0, "ABC", "AMEX", 12.33),
                 make_quote(1, "TED", "OTC", 0.2456),
@@ -1663,10 +1742,8 @@ mod tests {
     }
 
     #[test]
-    fn test_scan_forward() {
+    fn test_find_next_fn() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            let columns = make_quote_parameters();
-            let phys_columns = Column::from_parameters(&columns);
             assert_eq!(Number(RowsAffected(5)), rc.append_rows(vec![
                 make_quote(0, "TED", "OTC", 0.2456),
                 make_quote(1, "ABC", "AMEX", 12.33),
@@ -1714,18 +1791,19 @@ mod tests {
             // resize and verify
             assert_eq!(
                 Some(make_quote(3, "X", "NASDAQ", 33.33)),
-                rc.scan_next(0, &StringValue("X".into()), 0).unwrap()
+                rc.scan_next(TableScanPlan::column_scan(0, StringValue("X".into())))
+                    .unwrap()
             );
 
             rc.len().unwrap() as u64
         }
 
         // test the variants
-        verify_variants("find_next", make_quote_columns(), test_variant);
+        verify_variants("scan_next", make_quote_columns(), test_variant);
     }
 
     #[test]
-    fn test_scan_reverse() {
+    fn test_find_previous() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             assert_eq!(Number(RowsAffected(5)), rc.append_rows(vec![
                 make_quote(0, "TED", "OTC", 0.2456),

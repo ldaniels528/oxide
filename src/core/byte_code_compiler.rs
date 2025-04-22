@@ -607,7 +607,7 @@ mod tests {
     use super::*;
     use crate::dataframe::Dataframe::Model;
     use crate::expression::Conditions::{Equal, GreaterThan, LessOrEqual};
-    use crate::expression::Expression::{Condition, DatabaseOp, If, StructureExpression, Literal, Multiply, Plus, Variable, Via};
+    use crate::expression::Expression::{Condition, DatabaseOp, If, Literal, Multiply, Plus, StructureExpression, Variable, Via};
     use crate::expression::{DatabaseOps, Mutations, Queryables};
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::{F64Value, I64Value};

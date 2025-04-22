@@ -25,6 +25,7 @@ mod errors;
 mod expression;
 mod field;
 mod file_row_collection;
+mod formatting;
 mod hash_table_row_collection;
 mod hybrid_row_collection;
 mod inferences;
@@ -57,6 +58,7 @@ mod tokens;
 mod typed_values;
 mod websockets;
 mod table_options;
+mod table_scan;
 
 const LOCAL_HOST: &str = "0.0.0.0";
 

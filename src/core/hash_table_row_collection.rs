@@ -21,6 +21,7 @@ use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;
+use crate::table_scan::{TableScanPlan, TableScanTypes};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use log::warn;
@@ -353,13 +354,17 @@ impl RowCollection for HashTableRowCollection {
 
     fn scan_first(
         &self,
-        search_column_index: usize,
-        search_column_value: &TypedValue,
+        plan: TableScanPlan,
     ) -> std::io::Result<Option<Row>> {
-        if search_column_index == self.key_column_index {
-            self.find_row_by_key(search_column_value)
-        } else {
-            self.scan_next(search_column_index, search_column_value, 0)
+        match plan.get_scan_type() {
+            TableScanTypes::ColumnScan { column_index, column_value } =>
+                if column_index == self.key_column_index {
+                    self.find_row_by_key(&column_value)
+                } else {
+                    self.scan_next(plan)
+                },
+            TableScanTypes::ConditionScan { .. } => RowCollection::scan_first(self, plan),
+            TableScanTypes::CompleteScan => RowCollection::scan_first(self, plan),
         }
     }
 
@@ -381,6 +386,7 @@ impl RowCollection for HashTableRowCollection {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
     use crate::numbers::Numbers::{Ack, F64Value, RowsAffected};
@@ -390,8 +396,6 @@ mod tests {
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote_columns, make_quote_parameters, StockQuote};
     use std::time::Instant;
-
-    use super::*;
 
     #[test]
     fn test_append_then_find_row_by_key() {
@@ -516,7 +520,8 @@ mod tests {
         println!("[{:.4} msec] find_row_by_key({}) -> {}", msec_b, symbol.unwrap_value(), row_b.clone()
             .map(|r| r.to_string()).unwrap_or(String::new()));
 
-        let (row_a, msec_a) = measure_time(|| stocks.data_table.scan_first(column_id, &symbol).unwrap());
+        let (row_a, msec_a) = measure_time(|| stocks.data_table
+            .scan_first(TableScanPlan::column_scan(column_id, symbol.clone())).unwrap());
         println!("[{:.4} msec] find_row({}, {}) -> {}", msec_a, column_id, symbol.unwrap_value(), row_a.clone()
             .map(|r| r.to_string()).unwrap_or(String::new()));
 

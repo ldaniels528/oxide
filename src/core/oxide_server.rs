@@ -14,6 +14,7 @@ use crate::expression::Expression::Literal;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::object_config::ObjectConfig;
+use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
 use crate::server::SystemInfoJs;
 use crate::structures::Row;
@@ -41,7 +42,6 @@ use tokio::runtime::Runtime;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-use crate::parameter::Parameter;
 
 #[macro_export]
 macro_rules! web_routes {

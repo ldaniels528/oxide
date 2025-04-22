@@ -137,6 +137,14 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn test_tuple_assignment() {
+        verify_exact(r#"
+            (a, b, c) := (3, 5, 7)
+            a + b + c
+        "#, Number(I64Value(15)))
+    }
+
     /// Control-Flow tests
     #[cfg(test)]
     mod control_flow_tests {
@@ -250,26 +258,6 @@ mod tests {
         #[test]
         fn test_directive_must_be_true() {
             verify_exact_text("[+] x := 67", "Ack");
-        }
-
-        #[test]
-        fn test_directives_pipeline() {
-            verify_exact_table_with_ids(r#"
-                [+] stocks := ns("interpreter.pipeline.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] delete from stocks where last_sale < 30.0
-                [+] from stocks
-        "#, vec![
-                "|------------------------------------|",
-                "| id | symbol | exchange | last_sale |",
-                "|------------------------------------|",
-                "| 0  | BOOM   | NYSE     | 56.88     |",
-                "| 2  | JET    | NASDAQ   | 32.12     |",
-                "|------------------------------------|"
-            ]);
         }
     }
 

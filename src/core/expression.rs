@@ -199,6 +199,8 @@ pub enum Expression {
     ColonColon(Box<Expression>, Box<Expression>),
     ColonColonColon(Box<Expression>, Box<Expression>),
     Condition(Conditions),
+    CurvyArrowLeft(Box<Expression>, Box<Expression>),
+    CurvyArrowRight(Box<Expression>, Box<Expression>),
     DatabaseOp(DatabaseOps),
     Directive(Directives),
     Divide(Box<Expression>, Box<Expression>),
@@ -228,6 +230,7 @@ pub enum Expression {
     Modulo(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
     Neg(Box<Expression>),
+    New(Box<Expression>),
     Ns(Box<Expression>),
     Parameters(Vec<Parameter>),
     Plus(Box<Expression>, Box<Expression>),
@@ -242,6 +245,7 @@ pub enum Expression {
     SetVariable(String, Box<Expression>),
     SetVariables(Box<Expression>, Box<Expression>),
     TupleExpression(Vec<Expression>),
+    TypeDecl(Box<Expression>),
     Variable(String),
     Via(Box<Expression>),
     While {
@@ -274,6 +278,10 @@ impl Expression {
                 format!("{} >> {}", Self::decompile(a), Self::decompile(b)),
             Expression::CodeBlock(items) => Self::decompile_code_blocks(items),
             Expression::Condition(cond) => Self::decompile_cond(cond),
+            Expression::CurvyArrowLeft(a, b) =>
+                format!("{} <~ {}", Self::decompile(a), Self::decompile(b)),
+            Expression::CurvyArrowRight(a, b) =>
+                format!("{} ~> {}", Self::decompile(a), Self::decompile(b)),
             Expression::Directive(d) => Self::decompile_directives(d),
             Expression::Divide(a, b) =>
                 format!("{} / {}", Self::decompile(a), Self::decompile(b)),
@@ -330,6 +338,7 @@ impl Expression {
             Expression::Multiply(a, b) =>
                 format!("{} * {}", Self::decompile(a), Self::decompile(b)),
             Expression::Neg(a) => format!("-({})", Self::decompile(a)),
+            Expression::New(a) => format!("new {}", Self::decompile(a)),
             Expression::Ns(a) => format!("ns({})", Self::decompile(a)),
             Expression::Parameters(parameters) => Self::decompile_parameters(parameters),
             Expression::Plus(a, b) =>
@@ -360,6 +369,7 @@ impl Expression {
             Expression::SetVariables(name, value) =>
                 format!("{} := {}", Self::decompile(name), Self::decompile(value)),
             Expression::TupleExpression(args) => format!("({})", Self::decompile_list(args)),
+            Expression::TypeDecl(expr) => format!("type_decl({})", expr.to_code()),
             Expression::Variable(name) => name.to_string(),
             Expression::Via(expr) => format!("via {}", Self::decompile(expr)),
             Expression::While { condition, code } =>
@@ -659,7 +669,7 @@ mod tests {
     use crate::expression::Conditions::*;
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
     use crate::expression::DatabaseOps::{Mutation, Queryable};
-    use crate::expression::Expression::{ArrayExpression, AsValue, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor, DatabaseOp, ElementAt, FnExpression, From, StructureExpression, Literal, Multiply, Ns, Plus, SetVariable, Via};
+    use crate::expression::Expression::{ArrayExpression, AsValue, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor, DatabaseOp, ElementAt, FnExpression, From, Literal, Multiply, Ns, Plus, SetVariable, StructureExpression, Via};
     use crate::expression::*;
     use crate::machine::Machine;
     use crate::number_kind::NumberKind::F64Kind;

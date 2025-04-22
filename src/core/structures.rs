@@ -446,7 +446,7 @@ impl SoftStructure {
         let tuples = tuples.iter()
             .map(|(k, v)| (k.to_string(), v.to_owned()))
             .collect::<Vec<_>>();
-       Self::from_tuples(tuples)
+        Self::from_tuples(tuples)
     }
 
     pub fn ordered(src_tuples: Vec<(String, TypedValue)>) -> Self {

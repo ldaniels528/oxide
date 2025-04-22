@@ -14,7 +14,7 @@ use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity}
 use crate::expression::DatabaseOps::{Mutation, Queryable};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::TableTarget;
-use crate::expression::Mutations::{Create, Declare, Drop, IntoNs, Undelete};
+use crate::expression::Mutations::{Create, Declare, Drop, Undelete};
 use crate::expression::Queryables::Select;
 use crate::expression::*;
 use crate::numbers::Numbers::*;
@@ -320,6 +320,7 @@ impl Compiler {
                 "limit" => throw(ExactNear("`from` is expected before `limit`: from stocks limit 5".into(), nts.current())),
                 "mod" => self.parse_keyword_mod(nts),
                 "NaN" => Ok((Literal(Number(NaNValue)), nts)),
+                "new" => self.parse_expression_1a(nts, New),
                 "ns" => self.parse_expression_1a(nts, Ns),
                 "null" => Ok((NULL, nts)),
                 "overwrite" => self.parse_keyword_overwrite(nts),
@@ -331,6 +332,7 @@ impl Compiler {
                 "Struct" => self.parse_keyword_struct(nts),
                 "table" => self.parse_keyword_table(nts),
                 "true" => Ok((TRUE, nts)),
+                "type_decl" => self.parse_keyword_type_decl(nts),
                 "undefined" => Ok((UNDEFINED, nts)),
                 "undelete" => self.parse_keyword_undelete(nts),
                 "update" => self.parse_keyword_update(nts),
@@ -762,6 +764,16 @@ impl Compiler {
         }
     }
 
+    /// Builds a type declaration
+    /// ex: type_decl(String(80))
+    fn parse_keyword_type_decl(
+        &mut self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (expr, ts) = self.compile_next(ts)?;
+        Ok((TypeDecl(Box::from(expr)), ts))
+    }
+
     /// Builds a language model from an UNDELETE statement:
     /// ex: undelete from stocks where symbol == "BANG"
     fn parse_keyword_undelete(
@@ -863,9 +875,9 @@ impl Compiler {
                     match sym {
                         "&&" => self.parse_conditional_2a(ts, op0, Conditions::And),
                         ":" => self.parse_expression_2nv(ts, op0, AsValue),
-                        "&" => self.parse_expression_2a(ts, op0, |a, b| BitwiseAnd(a, b)),
-                        "|" => self.parse_expression_2a(ts, op0, |a, b| BitwiseOr(a, b)),
-                        "^" => self.parse_expression_2a(ts, op0, |a, b| BitwiseXor(a, b)),
+                        "&" => self.parse_expression_2a(ts, op0, BitwiseAnd),
+                        "|" => self.parse_expression_2a(ts, op0, BitwiseOr),
+                        "^" => self.parse_expression_2a(ts, op0, BitwiseXor),
                         "÷" | "/" => self.parse_expression_2a(ts, op0, Divide),
                         "==" => self.parse_conditional_2a(ts, op0, Equal),
                         "::" => self.parse_expression_2a(ts, op0, ColonColon),
@@ -877,7 +889,8 @@ impl Compiler {
                         "-" => self.parse_expression_2a(ts, op0, Minus),
                         "%" => self.parse_expression_2a(ts, op0, Modulo),
                         "×" | "*" => self.parse_expression_2a(ts, op0, Multiply),
-                        "~>" => self.parse_expression_2a(ts, op0, |a, b| DatabaseOp(Mutation(IntoNs(a, b)))),
+                        "<~" => self.parse_expression_2a(ts, op0, CurvyArrowLeft),
+                        "~>" => self.parse_expression_2a(ts, op0, CurvyArrowRight),
                         "!=" => self.parse_conditional_2a(ts, op0, NotEqual),
                         "||" => self.parse_conditional_2a(ts, op0, Conditions::Or),
                         "+" => self.parse_expression_2a(ts, op0, Plus),
@@ -885,8 +898,8 @@ impl Compiler {
                         "**" => self.parse_expression_2a(ts, op0, Pow),
                         ".." => self.parse_expression_2a(ts, op0, Range),
                         ":=" => self.parse_expression_set(ts, op0),
-                        "<<" => self.parse_expression_2a(ts, op0, |a, b| BitwiseShiftLeft(a, b)),
-                        ">>" => self.parse_expression_2a(ts, op0, |a, b| BitwiseShiftRight(a, b)),
+                        "<<" => self.parse_expression_2a(ts, op0, BitwiseShiftLeft),
+                        ">>" => self.parse_expression_2a(ts, op0, BitwiseShiftRight),
                         unknown => fail(format!("Invalid operator '{}'", unknown))
                     }
                 } else { fail(format!("Illegal start of expression '{}'", symbol)) }
@@ -2067,9 +2080,9 @@ mod tests {
         use crate::expression::Conditions::{Between, Betwixt, Equal, GreaterOrEqual, LessOrEqual, LessThan, Like};
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
         use crate::expression::DatabaseOps::{Mutation, Queryable};
-        use crate::expression::Expression::{ArrayExpression, Condition, DatabaseOp, From, Literal, Ns, StructureExpression, Variable, Via};
+        use crate::expression::Expression::{ArrayExpression, Condition, CurvyArrowRight, DatabaseOp, From, Literal, Ns, StructureExpression, Variable, Via};
         use crate::expression::MutateTarget::TableTarget;
-        use crate::expression::Mutations::{Create, Declare, Drop, IntoNs};
+        use crate::expression::Mutations::{Create, Declare, Drop};
         use crate::expression::TableOptions::Journaling;
         use crate::expression::{Mutations, Queryables};
         use crate::number_kind::NumberKind::F64Kind;
@@ -2499,7 +2512,7 @@ mod tests {
                  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
                         ~> ns("interpreter.into.stocks")
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(IntoNs(
+            assert_eq!(opcodes, CurvyArrowRight(
                 Box::new(ArrayExpression(vec![
                     StructureExpression(vec![
                         ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -2518,8 +2531,30 @@ mod tests {
                     ]),
                 ])),
                 Box::new(Ns(Box::new(Literal(StringValue("interpreter.into.stocks".into()))))),
-            ))
             ));
+        }
+    }
+
+    /// Type tests
+    #[cfg(test)]
+    mod type_tests {
+        use crate::compiler::Compiler;
+        use crate::expression::Expression::{FunctionCall, Literal, TypeDecl, Variable};
+        use crate::numbers::Numbers::I64Value;
+        use crate::typed_values::TypedValue::Number;
+
+        #[test]
+        fn test_simple_type_declaration() {
+            let opcodes = Compiler::build(r#"
+                type_decl(String(32))
+            "#).unwrap();
+            assert_eq!(opcodes, TypeDecl(
+                Box::from(FunctionCall {
+                    fx: Box::from(Variable("String".into())),
+                    args: vec![
+                        Literal(Number(I64Value(32)))
+                    ]
+                })))
         }
     }
 }

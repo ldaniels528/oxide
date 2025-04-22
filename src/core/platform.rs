@@ -36,10 +36,11 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{stderr, stdout, Read, Write};
 use std::ops::Deref;
 use std::path::Path;
 use uuid::Uuid;
+use crate::formatting::DataFormats;
 
 pub const MAJOR_VERSION: u8 = 0;
 pub const MINOR_VERSION: u8 = 3;
@@ -197,42 +198,46 @@ impl PlatformOps {
     }
 
     /// Evaluates the platform function
-    pub fn evaluate(&self, ms: Machine, args: Vec<TypedValue>) -> std::io::Result<(Machine, TypedValue)> {
+    pub fn evaluate(
+        &self,
+        ms: Machine,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match self {
-            PlatformOps::CalDate => Ok(Self::do_cal_date(ms, args)),
-            PlatformOps::CalDateDay => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
-            PlatformOps::CalDateHour24 => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
-            PlatformOps::CalDateHour12 => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
-            PlatformOps::CalDateMinute => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
-            PlatformOps::CalDateMonth => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
-            PlatformOps::CalDateSecond => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
-            PlatformOps::CalDateYear => Ok(self.adapter_fn1_pf(ms, args, Self::do_cal_date_part)),
-            PlatformOps::IoFileCreate => Ok(self.adapter_fn2(ms, args, Self::do_io_create_file)),
-            PlatformOps::IoFileExists => Ok(self.adapter_fn1(ms, args, Self::do_io_exists)),
-            PlatformOps::IoFileReadText => Ok(self.adapter_fn1(ms, args, Self::do_io_read_text_file)),
-            PlatformOps::IoStdErr => Ok(self.adapter_fn1(ms, args, Self::do_io_stderr)),
-            PlatformOps::IoStdOut => Ok(self.adapter_fn1(ms, args, Self::do_io_stdout)),
+            PlatformOps::CalDate => Self::do_cal_date(ms, args),
+            PlatformOps::CalDateDay => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateHour24 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateHour12 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateMinute => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateMonth => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateSecond => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateYear => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::IoFileCreate => self.adapter_fn2_ok(ms, args, Self::do_io_create_file),
+            PlatformOps::IoFileExists => self.adapter_fn1_ok(ms, args, Self::do_io_exists),
+            PlatformOps::IoFileReadText => self.adapter_fn1_ok(ms, args, Self::do_io_read_text_file),
+            PlatformOps::IoStdErr => self.adapter_fn1_ok(ms, args, Self::do_io_stderr),
+            PlatformOps::IoStdOut => self.adapter_fn1_ok(ms, args, Self::do_io_stdout),
             PlatformOps::KungFuAssert => Ok(self.adapter_fn1(ms, args, Self::do_kung_fu_assert)),
-            PlatformOps::KungFuFeature => Ok(self.adapter_fn2(ms, args, Self::do_kung_fu_feature)),
+            PlatformOps::KungFuFeature => self.adapter_fn2_ok(ms, args, Self::do_kung_fu_feature),
             PlatformOps::KungFuMatches => Ok(self.adapter_fn2(ms, args, Self::do_kung_fu_matches)),
             PlatformOps::KungFuTypeOf => Ok(self.adapter_fn1(ms, args, Self::do_kung_fu_type_of)),
-            PlatformOps::OsCall => Ok(Self::do_os_call(ms, args)),
-            PlatformOps::OsCurrentDir => Ok(self.adapter_fn0(ms, args, Self::do_os_current_dir)),
-            PlatformOps::OsClear => Ok(self.adapter_fn0(ms, args, Self::do_os_clear_screen)),
+            PlatformOps::OsCall => Self::do_os_call(ms, args),
+            PlatformOps::OsCurrentDir => self.adapter_fn0_ok(ms, args, Self::do_os_current_dir),
+            PlatformOps::OsClear => self.adapter_fn0_ok(ms, args, Self::do_os_clear_screen),
             PlatformOps::OsEnv => Ok(self.adapter_fn0(ms, args, Self::do_os_env)),
-            PlatformOps::OxideCompile => Ok(self.adapter_fn1(ms, args, Self::do_oxide_compile)),
-            PlatformOps::OxideDebug => Ok(self.adapter_fn1(ms, args, Self::do_oxide_debug)),
-            PlatformOps::OxideEval => Ok(self.adapter_fn1(ms, args, Self::do_oxide_eval)),
+            PlatformOps::OxideCompile => self.adapter_fn1_ok(ms, args, Self::do_oxide_compile),
+            PlatformOps::OxideDebug => self.adapter_fn1_ok(ms, args, Self::do_oxide_debug),
+            PlatformOps::OxideEval => self.adapter_fn1_ok(ms, args, Self::do_oxide_eval),
             PlatformOps::OxideHelp => Ok(self.adapter_fn0(ms, args, Self::do_oxide_help)),
-            PlatformOps::OxideHistory => Ok(Self::do_oxide_history(ms, args)),
+            PlatformOps::OxideHistory => Self::do_oxide_history(ms, args),
             PlatformOps::OxideHome => Ok(self.adapter_fn0(ms, args, Self::do_oxide_home)),
-            PlatformOps::OxidePrintln => Ok(self.adapter_fn1(ms, args, Self::do_io_stdout)),
+            PlatformOps::OxidePrintln => self.adapter_fn1_ok(ms, args, Self::do_io_stdout),
             PlatformOps::OxideReset => Ok(self.adapter_fn0(ms, args, Self::do_oxide_reset)),
-            PlatformOps::OxideUUID => Ok(Self::do_util_uuid(ms, args)),
+            PlatformOps::OxideUUID => Self::do_util_uuid(ms, args),
             PlatformOps::OxideVersion => Ok(self.adapter_fn0(ms, args, Self::do_oxide_version)),
-            PlatformOps::StrEndsWith => Ok(self.adapter_fn2(ms, args, Self::do_str_ends_with)),
+            PlatformOps::StrEndsWith => self.adapter_fn2_ok(ms, args, Self::do_str_ends_with),
             PlatformOps::StrFormat => Ok(Self::do_str_format(ms, args)),
-            PlatformOps::StrIndexOf => Ok(self.adapter_fn2(ms, args, Self::do_str_index_of)),
+            PlatformOps::StrIndexOf => self.adapter_fn2_ok(ms, args, Self::do_str_index_of),
             PlatformOps::StrJoin => Ok(self.adapter_fn2(ms, args, Self::do_str_join)),
             PlatformOps::StrLeft => Ok(self.adapter_fn2(ms, args, Self::do_str_left)),
             PlatformOps::StrLen => Ok(self.adapter_fn1(ms, args, Self::do_str_len)),
@@ -242,37 +247,37 @@ impl PlatformOps {
             PlatformOps::StrSubstring => Ok(self.adapter_fn3(ms, args, Self::do_str_substring)),
             PlatformOps::StrToString => Ok(self.adapter_fn1(ms, args, Self::do_str_to_string)),
             PlatformOps::ToolsCompact => Ok(self.adapter_fn1(ms, args, Self::do_tools_compact)),
-            PlatformOps::ToolsDescribe => Ok(self.adapter_fn1(ms, args, Self::do_tools_describe)),
-            PlatformOps::ToolsFetch => Ok(self.adapter_fn2(ms, args, Self::do_tools_fetch)),
-            PlatformOps::ToolsPop => Ok(self.adapter_fn1(ms, args, Self::do_tools_pop)),
+            PlatformOps::ToolsDescribe => self.adapter_fn1_ok(ms, args, Self::do_tools_describe),
+            PlatformOps::ToolsFetch => self.adapter_fn2_ok(ms, args, Self::do_tools_fetch),
+            PlatformOps::ToolsPop => self.adapter_fn1_ok(ms, args, Self::do_tools_pop),
             PlatformOps::ToolsPush => Self::do_tools_push(ms, args),
-            PlatformOps::ToolsReverse => Ok(self.adapter_fn1(ms, args, Self::do_tools_reverse)),
-            PlatformOps::ToolsScan => Ok(self.adapter_fn1(ms, args, Self::do_tools_scan)),
+            PlatformOps::ToolsReverse => self.adapter_fn1_ok(ms, args, Self::do_tools_reverse),
+            PlatformOps::ToolsScan => self.adapter_fn1_ok(ms, args, Self::do_tools_scan),
             PlatformOps::ToolsToArray => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_array)),
-            PlatformOps::ToolsToCSV => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_csv)),
-            PlatformOps::ToolsToJSON => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_json)),
-            PlatformOps::ToolsToTable => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_table)),
+            PlatformOps::ToolsToCSV => self.adapter_fn1_ok(ms, args, Self::do_tools_to_csv),
+            PlatformOps::ToolsToJSON => self.adapter_fn1_ok(ms, args, Self::do_tools_to_json),
+            PlatformOps::ToolsToTable => self.adapter_fn1_ok(ms, args, Self::do_tools_to_table),
             PlatformOps::UtilBase64 => Ok(self.adapter_fn1(ms, args, Self::do_util_base64)),
             PlatformOps::UtilBinary => Ok(self.adapter_fn1(ms, args, Self::do_util_binary)),
             PlatformOps::UtilMD5 => Ok(self.adapter_fn1(ms, args, Self::do_util_md5)),
             PlatformOps::UtilToASCII => Ok(self.adapter_fn1(ms, args, Self::do_util_to_ascii)),
             PlatformOps::UtilHex => Ok(self.adapter_fn1(ms, args, Self::do_util_to_hex)),
-            PlatformOps::UtilToDate => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToF32 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToF64 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToI8 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToI16 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToI32 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToI64 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToI128 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToU8 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToU16 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToU32 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToU64 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::UtilToU128 => Ok(self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv)),
-            PlatformOps::WwwURLDecode => Ok(self.adapter_fn1(ms, args, Self::do_www_url_decode)),
-            PlatformOps::WwwURLEncode => Ok(self.adapter_fn1(ms, args, Self::do_www_url_encode)),
-            PlatformOps::WwwServe => Ok(self.adapter_fn1(ms, args, Self::do_www_serve)),
+            PlatformOps::UtilToDate => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToF32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToF64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI8 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI16 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI128 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU8 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU16 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU128 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::WwwURLDecode => self.adapter_fn1_ok(ms, args, Self::do_www_url_decode),
+            PlatformOps::WwwURLEncode => self.adapter_fn1_ok(ms, args, Self::do_www_url_encode),
+            PlatformOps::WwwServe => self.adapter_fn1_ok(ms, args, Self::do_www_serve),
         }
     }
 
@@ -895,6 +900,18 @@ impl PlatformOps {
         }
     }
 
+    fn adapter_fn0_ok(
+        &self,
+        ms: Machine,
+        args: Vec<TypedValue>,
+        f: fn(Machine) -> std::io::Result<(Machine, TypedValue)>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match args.len() {
+            0 => f(ms),
+            n => throw(TypeMismatch(ArgumentsMismatched(0, n)))
+        }
+    }
+
     fn adapter_fn1(
         &self,
         ms: Machine,
@@ -907,15 +924,27 @@ impl PlatformOps {
         }
     }
 
+    fn adapter_fn1_ok(
+        &self,
+        ms: Machine,
+        args: Vec<TypedValue>,
+        f: fn(Machine, &TypedValue) -> std::io::Result<(Machine, TypedValue)>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match args.as_slice() {
+            [value] => f(ms, value),
+            args => throw(TypeMismatch(ArgumentsMismatched(1, args.len())))
+        }
+    }
+
     fn adapter_fn1_pf(
         &self,
         ms: Machine,
         args: Vec<TypedValue>,
-        f: fn(Machine, &TypedValue, &PlatformOps) -> (Machine, TypedValue),
-    ) -> (Machine, TypedValue) {
+        f: fn(Machine, &TypedValue, &PlatformOps) -> std::io::Result<(Machine, TypedValue)>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match args.as_slice() {
             [a] => f(ms, a, self),
-            args => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(1, args.len()))))
+            args => throw(TypeMismatch(ArgumentsMismatched(1, args.len())))
         }
     }
 
@@ -931,6 +960,18 @@ impl PlatformOps {
         }
     }
 
+    fn adapter_fn2_ok(
+        &self,
+        ms: Machine,
+        args: Vec<TypedValue>,
+        f: fn(Machine, &TypedValue, &TypedValue) -> std::io::Result<(Machine, TypedValue)>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match args.as_slice() {
+            [a, b] => f(ms, a, b),
+            args => throw(TypeMismatch(ArgumentsMismatched(2, args.len())))
+        }
+    }
+
     fn adapter_fn3(
         &self,
         ms: Machine,
@@ -943,18 +984,21 @@ impl PlatformOps {
         }
     }
 
-    fn do_cal_date(ms: Machine, args: Vec<TypedValue>) -> (Machine, TypedValue) {
-        if !args.is_empty() {
-            return (ms, ErrorValue(Exact(format!("No arguments expected, but found {}", args.len()))));
+    fn do_cal_date(
+        ms: Machine,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match !args.is_empty() {
+            true => throw(Exact(format!("No arguments expected, but found {}", args.len()))),
+            false => Ok((ms, Number(DateValue(Local::now().timestamp_millis()))))
         }
-        (ms, Number(DateValue(Local::now().timestamp_millis())))
     }
 
     fn do_cal_date_part(
         ms: Machine,
         value: &TypedValue,
         plat: &PlatformOps,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match value {
             Number(DateValue(epoch_millis)) => {
                 let datetime = {
@@ -963,17 +1007,17 @@ impl PlatformOps {
                     Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
                 };
                 match plat {
-                    PlatformOps::CalDateDay => (ms, Number(U32Value(datetime.day()))),
-                    PlatformOps::CalDateHour12 => (ms, Number(U32Value(datetime.hour12().1))),
-                    PlatformOps::CalDateHour24 => (ms, Number(U32Value(datetime.hour()))),
-                    PlatformOps::CalDateMinute => (ms, Number(U32Value(datetime.minute()))),
-                    PlatformOps::CalDateMonth => (ms, Number(U32Value(datetime.second()))),
-                    PlatformOps::CalDateSecond => (ms, Number(U32Value(datetime.second()))),
-                    PlatformOps::CalDateYear => (ms, Number(I32Value(datetime.year()))),
-                    pf => (ms, ErrorValue(PlatformOpError(pf.to_owned())))
+                    PlatformOps::CalDateDay => Ok((ms, Number(U32Value(datetime.day())))),
+                    PlatformOps::CalDateHour12 => Ok((ms, Number(U32Value(datetime.hour12().1)))),
+                    PlatformOps::CalDateHour24 => Ok((ms, Number(U32Value(datetime.hour())))),
+                    PlatformOps::CalDateMinute => Ok((ms, Number(U32Value(datetime.minute())))),
+                    PlatformOps::CalDateMonth => Ok((ms, Number(U32Value(datetime.second())))),
+                    PlatformOps::CalDateSecond => Ok((ms, Number(U32Value(datetime.second())))),
+                    PlatformOps::CalDateYear => Ok((ms, Number(I32Value(datetime.year())))),
+                    pf => throw(PlatformOpError(pf.to_owned()))
                 }
             }
-            other => (ms, ErrorValue(TypeMismatch(DateExpected(other.to_code()))))
+            other => throw(TypeMismatch(DateExpected(other.to_code())))
         }
     }
 
@@ -981,66 +1025,60 @@ impl PlatformOps {
         ms: Machine,
         path_v: &TypedValue,
         contents_v: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        // creates or overwrites a file
-        fn create_file(
-            ms: Machine,
-            path_v: &TypedValue,
-            contents_v: &TypedValue,
-        ) -> std::io::Result<(Machine, TypedValue)> {
-            match path_v {
-                StringValue(path) => {
-                    let mut file = File::create(path)?;
-                    let n_bytes = file.write(contents_v.unwrap_value().as_bytes())? as u64;
-                    Ok((ms, Number(U64Value(n_bytes))))
-                }
-                other => Ok((ms, ErrorValue(TypeMismatch(StringExpected(other.to_code())))))
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match path_v {
+            StringValue(path) => {
+                let mut file = File::create(path)?;
+                let n_bytes = file.write(contents_v.unwrap_value().as_bytes())? as u64;
+                Ok((ms, Number(U64Value(n_bytes))))
             }
+            other => throw(TypeMismatch(StringExpected(other.to_code())))
         }
-
-        // create or overwrite the file
-        TypedValue::from_results(create_file(ms, path_v, contents_v))
     }
 
-    fn do_io_exists(ms: Machine, path_value: &TypedValue) -> (Machine, TypedValue) {
+    fn do_io_exists(
+        ms: Machine,
+        path_value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match path_value {
-            StringValue(path) => (ms, Boolean(Path::new(path).exists())),
-            other => (ms, ErrorValue(TypeMismatch(StringExpected(other.to_string()))))
+            StringValue(path) => Ok((ms, Boolean(Path::new(path).exists()))),
+            other => throw(TypeMismatch(StringExpected(other.to_string())))
         }
     }
 
     fn do_io_read_text_file(
         ms: Machine,
         path_v: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        // reads the contents of a file
-        fn read_file(
-            ms: Machine,
-            path_v: &TypedValue,
-        ) -> std::io::Result<(Machine, TypedValue)> {
-            match path_v {
-                StringValue(path) => {
-                    let mut buffer = String::new();
-                    let mut file = File::open(path)?;
-                    let _count = file.read_to_string(&mut buffer)?;
-                    Ok((ms, StringValue(buffer)))
-                }
-                other => Ok((ms, ErrorValue(TypeMismatch(StringExpected(other.to_code())))))
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match path_v {
+            StringValue(path) => {
+                let mut buffer = String::new();
+                let mut file = File::open(path)?;
+                let _count = file.read_to_string(&mut buffer)?;
+                Ok((ms, StringValue(buffer)))
             }
+            other => throw(TypeMismatch(StringExpected(other.to_code())))
         }
-
-        // create or overwrite the file
-        TypedValue::from_results(read_file(ms, path_v))
     }
 
-    fn do_io_stderr(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        eprintln!("{}", value.unwrap_value());
-        (ms, Number(Ack))
+    fn do_io_stderr(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let mut out = stderr();
+        out.write(format!("{}", value.unwrap_value()).as_bytes())?;
+        out.flush()?;
+        Ok((ms, Number(Ack)))
     }
 
-    fn do_io_stdout(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        println!("{}", value.unwrap_value());
-        (ms, Number(Ack))
+    fn do_io_stdout(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let mut out = stdout();
+        out.write(format!("{}", value.unwrap_value()).as_bytes())?;
+        out.flush()?;
+        Ok((ms, Number(Ack)))
     }
 
     fn do_kung_fu_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
@@ -1055,11 +1093,11 @@ impl PlatformOps {
         ms: Machine,
         title: &TypedValue,
         body: &TypedValue,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         // get the feature title
         let title = match title {
             StringValue(s) => Literal(StringValue(s.to_string())),
-            other => return (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), other.get_type()))))
+            other => return throw(TypeMismatch(UnsupportedType(StringType(0), other.get_type())))
         };
 
         // get the feature scenarios
@@ -1077,12 +1115,13 @@ impl PlatformOps {
                     other => Literal(other.clone())
                 }).collect::<Vec<_>>()
             }
-            other => return (ms, ErrorValue(TypeMismatch(UnsupportedType(
-                ArrayType(0), other.get_type()))))
+            other => return throw(TypeMismatch(UnsupportedType(
+                ArrayType(0), other.get_type())
+            ))
         };
 
         // execute the feature
-        TypedValue::from_results(ms.do_feature(&Box::from(title), &scenarios))
+        ms.do_feature(&Box::from(title), &scenarios)
     }
 
     fn do_kung_fu_matches(ms: Machine, a: &TypedValue, b: &TypedValue) -> (Machine, TypedValue) {
@@ -1093,7 +1132,10 @@ impl PlatformOps {
         (ms, StringValue(a.get_type_name()))
     }
 
-    fn do_os_call(ms: Machine, args: Vec<TypedValue>) -> (Machine, TypedValue) {
+    fn do_os_call(
+        ms: Machine,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         fn split_first<T>(vec: Vec<T>) -> Option<(T, Vec<T>)> {
             let mut iter = vec.into_iter();
             iter.next().map(|first| (first, iter.collect()))
@@ -1101,38 +1143,31 @@ impl PlatformOps {
 
         let items: Vec<_> = args.iter().map(|i| i.unwrap_value()).collect();
         if let Some((command, cmd_args)) = split_first(items) {
-            match std::process::Command::new(command).args(cmd_args).output() {
-                Ok(output) =>
-                    if output.status.success() {
-                        let raw_text = String::from_utf8_lossy(&output.stdout);
-                        (ms, StringValue(raw_text.to_string()))
-                    } else {
-                        let message = String::from_utf8_lossy(&output.stderr);
-                        (ms, ErrorValue(Exact(message.to_string())))
-                    }
-                Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+            let output = std::process::Command::new(command).args(cmd_args).output()?;
+            if output.status.success() {
+                let raw_text = String::from_utf8_lossy(&output.stdout);
+                Ok((ms, StringValue(raw_text.to_string())))
+            } else {
+                let message = String::from_utf8_lossy(&output.stderr);
+                Ok((ms, ErrorValue(Exact(message.to_string()))))
             }
         } else {
-            (ms, ErrorValue(TypeMismatch(CollectionExpected(args.iter()
+            Ok((ms, ErrorValue(TypeMismatch(CollectionExpected(args.iter()
                 .map(|e| e.to_code())
                 .collect::<Vec<_>>()
-                .join(", ")))))
+                .join(", "))))))
         }
     }
 
-    fn do_os_clear_screen(ms: Machine) -> (Machine, TypedValue) {
+    fn do_os_clear_screen(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         print!("\x1B[2J\x1B[H");
-        match std::io::stdout().flush() {
-            Ok(_) => (ms, Number(Ack)),
-            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-        }
+        std::io::stdout().flush()?;
+        Ok((ms, Number(Ack)))
     }
 
-    fn do_os_current_dir(ms: Machine) -> (Machine, TypedValue) {
-        match env::current_dir() {
-            Ok(dir) => (ms, StringValue(dir.display().to_string())),
-            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-        }
+    fn do_os_current_dir(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
+        let dir = env::current_dir()?;
+        Ok((ms, StringValue(dir.display().to_string())))
     }
 
     fn do_os_env(ms: Machine) -> (Machine, TypedValue) {
@@ -1152,46 +1187,46 @@ impl PlatformOps {
         (ms, TableValue(Model(mrc)))
     }
 
-    fn do_oxide_compile(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+    fn do_oxide_compile(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match value {
             StringValue(source) => {
-                match Compiler::build(source) {
-                    Ok(code) => (ms, Function {
-                        params: vec![],
-                        body: Box::new(code),
-                        returns: Indeterminate,
-                    }),
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string()))),
-                }
+                let code = Compiler::build(source)?;
+                Ok((ms, Function {
+                    params: vec![],
+                    body: Box::new(code),
+                    returns: Indeterminate,
+                }))
             }
-            z => (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), z.get_type()))))
+            z => throw(TypeMismatch(UnsupportedType(StringType(0), z.get_type())))
         }
     }
 
-    fn do_oxide_debug(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+    fn do_oxide_debug(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match value {
             StringValue(source) => {
-                match Compiler::build(source) {
-                    Ok(code) => (ms, StringValue(format!("{:?}", code))),
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string()))),
-                }
+                let code = Compiler::build(source);
+                Ok((ms, StringValue(format!("{:?}", code))))
             }
-            z => (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), z.get_type()))))
+            z => throw(TypeMismatch(UnsupportedType(StringType(0), z.get_type())))
         }
     }
 
-    fn do_oxide_eval(ms: Machine, query_value: &TypedValue) -> (Machine, TypedValue) {
+    fn do_oxide_eval(
+        ms: Machine,
+        query_value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match query_value {
-            StringValue(ql) =>
-                match Compiler::build(ql.as_str()) {
-                    Ok(opcode) =>
-                        match ms.evaluate(&opcode) {
-                            Ok((machine, tv)) => (machine, tv),
-                            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                        }
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                }
-            x => (ms, ErrorValue(TypeMismatch(StringExpected(x.get_type_name()))))
+            StringValue(ql) => {
+                let opcode = Compiler::build(ql.as_str())?;
+                ms.evaluate(&opcode)
+            }
+            x => throw(TypeMismatch(StringExpected(x.get_type_name())))
         }
     }
 
@@ -1227,7 +1262,10 @@ impl PlatformOps {
         (ms, TableValue(Model(mrc)))
     }
 
-    fn do_oxide_history(ms: Machine, args: Vec<TypedValue>) -> (Machine, TypedValue) {
+    fn do_oxide_history(
+        ms: Machine,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         // re-executes a saved command
         fn re_run(ms: Machine, pid: usize) -> std::io::Result<(Machine, TypedValue)> {
             let frc = FileRowCollection::open_or_create(
@@ -1247,21 +1285,16 @@ impl PlatformOps {
         // evaluate based on the arguments
         match args.as_slice() {
             // history()
-            [] =>
-                match FileRowCollection::open_or_create(
+            [] => {
+                let frc = FileRowCollection::open_or_create(
                     &Self::get_oxide_history_ns(),
-                    PlatformOps::get_oxide_history_parameters()) {
-                    Ok(frc) => (ms, TableValue(Disk(frc))),
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                }
+                    PlatformOps::get_oxide_history_parameters())?;
+                Ok((ms, TableValue(Disk(frc))))
+            }
             // history(11)
-            [Number(pid)] =>
-                match re_run(ms.to_owned(), pid.to_usize()) {
-                    Ok(result) => result,
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                }
+            [Number(pid)] => re_run(ms.to_owned(), pid.to_usize()),
             // history(..)
-            other => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(other.len(), 1))))
+            other => throw(TypeMismatch(ArgumentsMismatched(other.len(), 1)))
         }
     }
 
@@ -1281,14 +1314,14 @@ impl PlatformOps {
         ms: Machine,
         string_value: &TypedValue,
         slice_value: &TypedValue,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match string_value {
             StringValue(src) =>
                 match slice_value {
-                    StringValue(slice) => (ms, Boolean(src.ends_with(slice))),
-                    z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
+                    StringValue(slice) => Ok((ms, Boolean(src.ends_with(slice)))),
+                    z => throw(TypeMismatch(StringExpected(z.to_code())))
                 }
-            z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
+            z => throw(TypeMismatch(StringExpected(z.to_code())))
         }
     }
 
@@ -1336,20 +1369,20 @@ impl PlatformOps {
         ms: Machine,
         host_str: &TypedValue,
         search_str: &TypedValue,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match host_str {
             StringValue(host) => {
                 match search_str {
                     StringValue(search) => {
                         match host.find(search) {
-                            None => (ms, Undefined),
-                            Some(index) => (ms, Number(I64Value(index as i64))),
+                            None => Ok((ms, Undefined)),
+                            Some(index) => Ok((ms, Number(I64Value(index as i64)))),
                         }
                     }
-                    z => (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), z.get_type()))))
+                    z => throw(TypeMismatch(UnsupportedType(StringType(0), z.get_type())))
                 }
             }
-            z => (ms, ErrorValue(TypeMismatch(UnsupportedType(StringType(0), z.get_type()))))
+            z => throw(TypeMismatch(UnsupportedType(StringType(0), z.get_type())))
         }
     }
 
@@ -1499,19 +1532,18 @@ impl PlatformOps {
     fn do_tools_describe(
         ms: Machine,
         item: &TypedValue,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match item {
-            ErrorValue(message) => (ms, ErrorValue(message.to_owned())),
-            NamespaceValue(ns) =>
-                match FileRowCollection::open(&ns) {
-                    Ok(frc) => (ms, frc.describe()),
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                }
-            Structured(Hard(sh)) => (ms, sh.to_table().describe()),
-            Structured(Soft(ss)) => (ms, ss.to_table().describe()),
-            TableValue(rcv) => (ms, rcv.describe()),
+            ErrorValue(message) => throw(message.to_owned()),
+            NamespaceValue(ns) => {
+                let frc = FileRowCollection::open(&ns)?;
+                Ok((ms, frc.describe()))
+            }
+            Structured(Hard(sh)) => Ok((ms, sh.to_table().describe())),
+            Structured(Soft(ss)) => Ok((ms, ss.to_table().describe())),
+            TableValue(rcv) => Ok((ms, rcv.describe())),
             other =>
-                (ms, ErrorValue(TypeMismatch(TableExpected("table or struct".to_string(), other.to_code()))))
+                throw(TypeMismatch(TableExpected("table or struct".to_string(), other.to_code())))
         }
     }
 
@@ -1522,45 +1554,39 @@ impl PlatformOps {
         ms: Machine,
         table: &TypedValue,
         row_offset: &TypedValue,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         let offset = row_offset.to_usize();
         match table {
-            NamespaceValue(ns) =>
-                match FileRowCollection::open(&ns) {
-                    Ok(frc) =>
-                        match frc.read_row(offset) {
-                            Ok((row, _)) => (ms, TableValue(Model(
-                                ModelRowCollection::from_columns_and_rows(frc.get_columns(), &vec![row])
-                            ))),
-                            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                        }
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                }
-            TableValue(rcv) => {
-                let columns = rcv.get_columns();
-                match rcv.read_row(offset) {
-                    Ok((row, _)) =>
-                        (ms, TableValue(Model(ModelRowCollection::from_columns_and_rows(columns, &vec![row])))),
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                }
+            NamespaceValue(ns) => {
+                let frc = FileRowCollection::open(&ns)?;
+                let (row, _) = frc.read_row(offset)?;
+                Ok((ms, TableValue(Model(ModelRowCollection::from_columns_and_rows(
+                    frc.get_columns(), &vec![row])
+                ))))
+            }
+            TableValue(df) => {
+                let columns = df.get_columns();
+                let (row, _) = df.read_row(offset)?;
+                Ok((ms, TableValue(Model(ModelRowCollection::from_columns_and_rows(
+                    columns, &vec![row])
+                ))))
             }
             other =>
-                (ms, ErrorValue(TypeMismatch(TableExpected("[Table, Struct()]".to_string(), other.to_code()))))
+                throw(TypeMismatch(TableExpected("[Table, Struct()]".to_string(), other.to_code())))
         }
     }
 
-    fn do_tools_pop(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        match value.to_sequence() {
-            Ok(seq) => {
-                let result = match seq {
-                    Sequences::TheDataframe(mut df) => df.pop_row(df.get_parameters()).to_table_value(),
-                    Sequences::TheArray(arr) => ErrorValue(Exact("Array::pop() is unimplemented".into())),
-                    Sequences::TheTuple(tp) => ErrorValue(Exact("Tuple::pop() is unimplemented".into())),
-                };
-                (ms, result)
-            }
-            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-        }
+    fn do_tools_pop(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let seq = value.to_sequence()?;
+        let result = match seq {
+            Sequences::TheDataframe(mut df) => df.pop_row(df.get_parameters()).to_table_value(),
+            Sequences::TheArray(arr) => ErrorValue(Exact("Array::pop() is unimplemented".into())),
+            Sequences::TheTuple(tp) => ErrorValue(Exact("Tuple::pop() is unimplemented".into())),
+        };
+        Ok((ms, result))
     }
 
     fn do_tools_push(
@@ -1609,41 +1635,45 @@ impl PlatformOps {
         }
     }
 
-    fn do_tools_reverse(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+    fn do_tools_reverse(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match value {
-            ArrayValue(a) => (ms, ArrayValue(a.rev())),
+            ArrayValue(a) => Ok((ms, ArrayValue(a.rev()))),
             NamespaceValue(ns) =>
-                (ms.clone(), match Self::open_namespace(&ns) {
+                Ok((ms.clone(), match Self::open_namespace(&ns) {
                     TableValue(rcv) => rcv.reverse_table_value(),
                     other => ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
-                }),
-            StringValue(s) => (ms, StringValue(s.chars().rev().collect())),
-            TableValue(rcv) => (ms, rcv.reverse_table_value()),
-            other => (ms, ErrorValue(TypeMismatch(UnsupportedType(
+                })),
+            StringValue(s) => Ok((ms, StringValue(s.chars().rev().collect()))),
+            TableValue(rcv) => Ok((ms, rcv.reverse_table_value())),
+            other => throw(TypeMismatch(UnsupportedType(
                 VaryingType(vec![
                     ArrayType(0),
                     StringType(0),
                     TableType(vec![], 0)
                 ]),
                 other.get_type(),
-            ))))
+            )))
         }
     }
 
-    fn do_tools_scan(ms: Machine, tv_table: &TypedValue) -> (Machine, TypedValue) {
+    fn do_tools_scan(
+        ms: Machine,
+        tv_table: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match tv_table.to_table_value() {
-            ErrorValue(err) => (ms, ErrorValue(err)),
-            TableValue(df) => match df.examine_rows() {
-                Ok(rows) => {
-                    let columns = rows.first()
-                        .map(|row| df.get_columns().to_owned())
-                        .unwrap_or(Vec::new());
-                    let mrc = ModelRowCollection::from_columns_and_rows(&columns, &rows);
-                    (ms, TableValue(Model(mrc)))
-                }
-                Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+            ErrorValue(err) => throw(err),
+            TableValue(df) => {
+                let rows = df.examine_rows()?;
+                let columns = rows.first()
+                    .map(|row| df.get_columns().to_owned())
+                    .unwrap_or(Vec::new());
+                let mrc = ModelRowCollection::from_columns_and_rows(&columns, &rows);
+                Ok((ms, TableValue(Model(mrc))))
             }
-            other => (ms, ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type()))))
+            other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
         }
     }
 
@@ -1651,67 +1681,55 @@ impl PlatformOps {
         (ms, value.to_array())
     }
 
-    fn do_tools_to_csv(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        Self::do_tools_to_csv_or_json(ms, value, true)
-    }
-
-    fn do_tools_to_csv_or_json(
+    fn do_tools_to_csv(
         ms: Machine,
         value: &TypedValue,
-        is_csv: bool,
-    ) -> (Machine, TypedValue) {
-        fn convert_to_csv(
-            ms: Machine,
-            rc: Box<dyn RowCollection>,
-        ) -> (Machine, TypedValue) {
-            (ms, ArrayValue(Array::from(rc.iter()
-                .map(|row| StringValue(row.to_csv()))
-                .collect::<Vec<_>>())))
-        }
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Self::do_tools_to_xxx(ms, value, DataFormats::CSV)
+    }
 
-        fn convert_to_json(
-            ms: Machine,
-            rc: Box<dyn RowCollection>,
-        ) -> (Machine, TypedValue) {
-            (ms, ArrayValue(Array::from(rc.iter()
-                .map(|row| row.to_json_string(rc.get_columns()))
-                .map(StringValue).collect::<Vec<_>>())))
-        }
+    fn do_tools_to_json(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Self::do_tools_to_xxx(ms, value, DataFormats::JSON)
+    }
 
-        match value {
-            NamespaceValue(ns) =>
-                match FileRowCollection::open(&ns) {
-                    Ok(frc) => {
-                        let rc = Box::new(frc);
-                        if is_csv { convert_to_csv(ms, rc) } else { convert_to_json(ms, rc) }
-                    }
-                    Err(err) => (ms.to_owned(), ErrorValue(Exact(err.to_string())))
-                }
-            TableValue(rcv) => {
-                let rc = Box::new(rcv.to_owned());
-                if is_csv { convert_to_csv(ms, rc) } else { convert_to_json(ms, rc) }
-            }
-            _ => (ms.to_owned(), ErrorValue(Exact(format!("Cannot convert to {}", if is_csv { "CSV" } else { "JSON" }))))
+    fn do_tools_to_xxx(
+        ms: Machine,
+        value: &TypedValue,
+        format: DataFormats,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        /// convert the value into a [RowCollection]
+        let rc: Box<dyn RowCollection> = match value {
+            NamespaceValue(ns) => Box::new(FileRowCollection::open(&ns)?),
+            TableValue(df) => Box::new(df.to_owned()),
+            other => return throw(Exact(format!("Cannot convert {} to {}",
+                                                other.get_type().to_code(), format.get_name())))
+        };
+
+        /// transform the [RowCollection] into CSV or JSON
+        match format {
+            DataFormats::CSV =>
+                Ok((ms, ArrayValue(Array::from(rc.iter()
+                    .map(|row| StringValue(row.to_csv()))
+                    .collect::<Vec<_>>())))),
+            DataFormats::JSON =>
+                Ok((ms, ArrayValue(Array::from(rc.iter()
+                    .map(|row| row.to_json_string(rc.get_columns()))
+                    .map(StringValue).collect::<Vec<_>>())))),
         }
     }
 
-    fn do_tools_to_json(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        Self::do_tools_to_csv_or_json(ms, value, false)
-    }
-
-    fn do_tools_to_table(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        fn convert(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
-            let rc = value.to_table()?;
-            let columns = rc.get_columns();
-            let rows = rc.read_active_rows()?;
-            let mrc = ModelRowCollection::from_columns_and_rows(columns, &rows);
-            Ok((ms, TableValue(Model(mrc))))
-        }
-        // convert the value to a RowCollection
-        match convert(ms.clone(), value) {
-            Ok(result) => result,
-            Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-        }
+    fn do_tools_to_table(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let rc = value.to_table()?;
+        let columns = rc.get_columns();
+        let rows = rc.read_active_rows()?;
+        let mrc = ModelRowCollection::from_columns_and_rows(columns, &rows);
+        Ok((ms, TableValue(Model(mrc))))
     }
 
     fn do_util_base64(
@@ -1732,7 +1750,7 @@ impl PlatformOps {
         ms: Machine,
         value: &TypedValue,
         plat: &PlatformOps,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         let result = match plat {
             PlatformOps::UtilToDate => Number(DateValue(value.to_i64())),
             PlatformOps::UtilToF32 => Number(F32Value(value.to_f32())),
@@ -1748,9 +1766,9 @@ impl PlatformOps {
             PlatformOps::UtilToU32 => Number(U32Value(value.to_u32())),
             PlatformOps::UtilToU64 => Number(U64Value(value.to_u64())),
             PlatformOps::UtilToU128 => Number(U128Value(value.to_u128())),
-            plat => ErrorValue(UnsupportedPlatformOps(plat.to_owned()))
+            plat => return throw(UnsupportedPlatformOps(plat.to_owned()))
         };
-        (ms, result)
+        Ok((ms, result))
     }
 
     fn do_util_md5(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
@@ -1770,35 +1788,41 @@ impl PlatformOps {
     fn do_util_uuid(
         ms: Machine,
         args: Vec<TypedValue>,
-    ) -> (Machine, TypedValue) {
-        if !args.is_empty() {
-            return (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(0, args.len()))));
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match args.is_empty() {
+            false => throw(TypeMismatch(ArgumentsMismatched(0, args.len()))),
+            true => Ok((ms, Number(UUIDValue(Uuid::new_v4().as_u128()))))
         }
-        (ms, Number(UUIDValue(Uuid::new_v4().as_u128())))
     }
 
     fn do_www_serve(
         ms: Machine,
         port: &TypedValue,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         oxide_server::start_http_server(port.to_u16());
-        (ms, Number(Ack))
+        Ok((ms, Number(Ack)))
     }
 
-    fn do_www_url_decode(ms: Machine, url: &TypedValue) -> (Machine, TypedValue) {
+    fn do_www_url_decode(
+        ms: Machine,
+        url: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match url {
             StringValue(uri) => match urlencoding::decode(uri) {
-                Ok(decoded) => (ms, StringValue(decoded.to_string())),
-                Err(err) => (ms, ErrorValue(Exact(err.to_string())))
+                Ok(decoded) => Ok((ms, StringValue(decoded.to_string()))),
+                Err(err) => throw(Exact(err.to_string()))
             }
-            other => (ms, ErrorValue(TypeMismatch(StringExpected(other.to_code()))))
+            other => throw(TypeMismatch(StringExpected(other.to_code())))
         }
     }
 
-    fn do_www_url_encode(ms: Machine, url: &TypedValue) -> (Machine, TypedValue) {
+    fn do_www_url_encode(
+        ms: Machine,
+        url: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match url {
-            StringValue(uri) => (ms, StringValue(urlencoding::encode(uri).to_string())),
-            other => (ms, ErrorValue(TypeMismatch(StringExpected(other.to_code()))))
+            StringValue(uri) => Ok((ms, StringValue(urlencoding::encode(uri).to_string()))),
+            other => throw(TypeMismatch(StringExpected(other.to_code())))
         }
     }
 
@@ -1867,7 +1891,6 @@ impl PlatformOps {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::*;
     use crate::interpreter::Interpreter;
     use crate::platform::{PlatformOps, PLATFORM_OPCODES};
@@ -2442,7 +2465,6 @@ mod tests {
     #[cfg(test)]
     mod oxide_tests {
         use super::*;
-        use crate::errors::TypeMismatchErrors::StringExpected;
         use crate::platform::PlatformOps;
         use crate::typed_values::TypedValue::*;
         use PlatformOps::*;
@@ -2476,7 +2498,7 @@ mod tests {
         #[test]
         fn test_oxide_eval_qualified() {
             verify_exact("oxide::eval('2 ** 4')", Number(F64Value(16.)));
-            verify_exact("oxide::eval(123)", ErrorValue(TypeMismatch(StringExpected("i64".into()))));
+            verify_exact("oxide::eval(123)", ErrorValue(Exact("Type Mismatch: Expected a String near i64".into())));
         }
 
         #[test]
@@ -2484,7 +2506,7 @@ mod tests {
             let mut interpreter = Interpreter::new();
             interpreter.evaluate("import oxide").unwrap();
             interpreter = verify_where(interpreter, "'2 ** 4':::eval()", Number(F64Value(16.)));
-            interpreter = verify_where(interpreter, "123:::eval()", ErrorValue(TypeMismatch(StringExpected("i64".into()))));
+            interpreter = verify_where(interpreter, "123:::eval()", ErrorValue(Exact("Type Mismatch: Expected a String near i64".into())));
         }
 
         #[test]

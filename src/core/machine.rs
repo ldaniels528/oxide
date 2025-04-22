@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::{From, Into};
 use std::fs::File;
-use std::io::Read;
+use std::io::{stdout, Read, Write};
 use std::ops::{Deref, Neg};
 use std::path::Path;
 use std::process::Output;
@@ -50,7 +50,6 @@ use crate::object_config::{HashIndexConfig, ObjectConfig};
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::query_engine;
-use crate::query_engine::*;
 use crate::row_collection::RowCollection;
 use crate::structures::Row;
 use crate::structures::Structures::{Firm, Hard, Soft};
@@ -149,6 +148,8 @@ impl Machine {
             BitwiseXor(a, b) => self.do_inline_2(a, b, |aa, bb| aa ^ bb),
             CodeBlock(ops) => Ok(self.evaluate_scope(ops)),
             Condition(condition) => self.evaluate_cond(condition),
+            CurvyArrowLeft(a, b) => self.do_curvy_arrow_left(a, b),
+            CurvyArrowRight(a, b) => self.do_curvy_arrow_right(a, b),
             DatabaseOp(op) => query_engine::evaluate(self, op),
             Directive(d) => self.do_directive(d),
             Divide(a, b) => self.do_inline_2(a, b, |aa, bb| aa / bb),
@@ -159,7 +160,7 @@ impl Machine {
             Feature { title, scenarios } => self.do_feature(title, scenarios),
             FnExpression { params, body, returns } => self.do_fn_expression(params, body, returns),
             ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
-            From(src) => do_table_or_view_query(self, src, &True, &Undefined),
+            From(src) => query_engine::do_table_or_view_query(self, src, &True, &Undefined),
             FunctionCall { fx, args } => self.do_function_call(fx, args),
             HTTP { method, url_or_object } => self.do_http(method, url_or_object),
             If { condition, a, b } => self.do_if_then_else(condition, a, b),
@@ -172,7 +173,8 @@ impl Machine {
             Modulo(a, b) => self.do_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) => self.do_inline_2(a, b, |aa, bb| aa * bb),
             Neg(a) => Ok(self.do_negate(a)),
-            Ns(a) => do_eval_ns(self, a),
+            New(a) => self.do_new_instance(a),
+            Ns(a) => query_engine::do_eval_ns(self, a),
             Parameters(params) => Ok(self.evaluate_parameters(params)),
             Plus(a, b) => self.do_inline_2(a, b, |aa, bb| aa + bb),
             PlusPlus(a, b) => self.do_inline_2(a, b, Self::do_plus_plus),
@@ -187,8 +189,9 @@ impl Machine {
             SetVariables(name, expr) =>
                 self.evaluate_set_variables(name, expr),
             TupleExpression(args) => self.evaluate_tuple(args),
+            TypeDecl(expr) => self.evaluate_type_decl(expr),
             Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
-            Via(src) => do_table_or_view_query(self, src, &True, &Undefined),
+            Via(src) => query_engine::do_table_or_view_query(self, src, &True, &Undefined),
             While { condition, code } =>
                 self.do_while(condition, code),
         }
@@ -399,6 +402,13 @@ impl Machine {
         Ok((ms, TupleValue(results)))
     }
 
+    fn evaluate_type_decl(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        Ok((self.clone(), Kind(DataType::decipher_type(expr)?)))
+    }
+
     /// returns [True] if `a` contains `b`
     fn do_contains(
         &self,
@@ -408,6 +418,39 @@ impl Machine {
         let (machine, a) = self.evaluate(a)?;
         let (machine, b) = machine.evaluate(b)?;
         Ok((machine, a.contains(&b)))
+    }
+
+    /// Creates a new object
+    /// ex: new String(80)
+    fn do_new_instance(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let data_type = DataType::decipher_type(expr)?;
+        Ok((self.clone(), data_type.instantiate()?))
+    }
+
+    /// Evaluates a curvy left arrow (<~)
+    /// ## fetches a record from a table
+    /// `{ symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }` ~> stocks
+    /// ```stock <~ stocks```
+    fn do_curvy_arrow_left(
+        &self,
+        dest: &Expression,
+        src: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        query_engine::do_iter(&self, dest, src)
+    }
+
+    /// Evaluates a curvy right arrow (~>)
+    /// ## write a record to a table
+    /// `{ symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }` ~> stocks
+    fn do_curvy_arrow_right(
+        &self,
+        src: &Expression,
+        dest: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        query_engine::do_into_ns(&self, dest, src)
     }
 
     /// evaluates the specified [Directives]; returning a [TypedValue] result.

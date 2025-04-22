@@ -33,9 +33,9 @@ use crate::object_config::{HashIndexConfig, ObjectConfig};
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::sequences::Sequence;
-use crate::structures::Row;
 use crate::structures::Structure;
 use crate::structures::Structures::Soft;
+use crate::structures::{Row, Structures};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
@@ -120,7 +120,7 @@ pub fn do_mutation(
     }
 }
 
-fn do_into_ns(
+pub fn do_into_ns(
     ms: &Machine,
     table: &Expression,
     source: &Expression,
@@ -145,6 +145,29 @@ fn do_into_ns(
         _ => {}
     }
     Ok((machine, Number(RowsAffected(inserted))))
+}
+
+pub fn do_iter(
+    ms: &Machine,
+    container: &Expression,
+    source: &Expression,
+) -> std::io::Result<(Machine, TypedValue)> {
+    // todo tables need an iterable indexer
+    let (ms, result) = ms.evaluate(source)?;
+    match result.to_table_value() {
+        ErrorValue(err) => Ok((ms, ErrorValue(err))),
+        TableValue(mut df) => {
+            let offset = df.len()?;
+            let response = df.read_one(if offset > 0 { offset - 1 } else { offset })?
+                .map(|r| Structured(Structures::Firm(r, df.get_parameters())))
+                .unwrap_or(Undefined);
+            match container {
+                Variable(name) => Ok((ms.with_variable(name, response), Number(Ack))),
+                other => throw(Exact(other.to_code()))
+            }
+        }
+        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
+    }
 }
 
 pub fn do_eval_ns(
@@ -235,7 +258,7 @@ fn do_table_row_overwrite(
 }
 
 /// Evaluates the queryable [Expression] (e.g. from, limit and where)
-/// e.g.: from ns("interpreter.select.stocks") where last_sale > 1.0 limit 1
+/// e.g.: from ns("query_engine.select.stocks") where last_sale > 1.0 limit 1
 pub fn do_table_or_view_query(
     ms: &Machine,
     src: &Expression,
@@ -248,8 +271,7 @@ pub fn do_table_or_view_query(
     let columns = df.get_columns().clone();
     let mut cursor = Cursor::filter(Box::new(df), condition.to_owned());
     let mrc = ModelRowCollection::from_columns_and_rows(&columns, &cursor.take(limit)?);
-    let table_value = TableValue(Model(mrc));
-    Ok((machine, table_value))
+    Ok((machine, TableValue(Model(mrc))))
 }
 
 fn do_table_row_undelete(
@@ -819,7 +841,7 @@ mod sql_tests {
     #[test]
     fn test_table_create_durable() {
         verify_exact(r#"
-                create table ns("interpreter.create.stocks") (
+                create table ns("query_engine.create.stocks") (
                     symbol: String(8),
                     exchange: String(8),
                     last_sale: f64
@@ -834,7 +856,7 @@ mod sql_tests {
 
         // set up the interpreter
         assert_eq!(Number(Ack), interpreter.evaluate(r#"
-                stocks := ns("interpreter.crud.stocks")
+                stocks := ns("query_engine.crud.stocks")
             "#).unwrap());
 
         // create the table
@@ -907,6 +929,26 @@ mod sql_tests {
     }
 
     #[test]
+    fn test_table_into_then_delete() {
+        verify_exact_table_with_ids(r#"
+                [+] stocks := ns("query_engine.into_then_delete.stocks")
+                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [+] [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                [+] delete from stocks where last_sale < 30.0
+                [+] from stocks
+        "#, vec![
+            "|------------------------------------|",
+            "| id | symbol | exchange | last_sale |",
+            "|------------------------------------|",
+            "| 0  | BOOM   | NYSE     | 56.88     |",
+            "| 2  | JET    | NASDAQ   | 32.12     |",
+            "|------------------------------------|"
+        ]);
+    }
+
+    #[test]
     fn test_table_select_from_namespace() {
         // create a table with test data
         let columns = make_quote_parameters();
@@ -915,7 +957,7 @@ mod sql_tests {
         // append some rows
         let mut interpreter = Interpreter::new();
         assert_eq!(Number(RowsAffected(5)), interpreter.evaluate(r#"
-                stocks := ns("interpreter.select1.stocks")
+                stocks := ns("query_engine.select1.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 append stocks from [
                     { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
@@ -949,7 +991,7 @@ mod sql_tests {
 
         // set up the interpreter
         verify_exact_table_with_ids(r#"
-            [+] stocks := ns("interpreter.select.stocks")
+            [+] stocks := ns("query_engine.select.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
                  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -974,7 +1016,7 @@ mod sql_tests {
     #[test]
     fn test_table_embedded_describe() {
         verify_exact_table_with_ids(r#"
-                stocks := ns("interpreter.embedded_a.stocks")
+                stocks := ns("query_engine.embedded_a.stocks")
                 table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
                 tools::describe(stocks)
             "#, vec![
@@ -990,7 +1032,7 @@ mod sql_tests {
     #[test]
     fn test_table_embedded_empty() {
         verify_exact_table_with_ids(r#"
-                stocks := ns("interpreter.embedded_b.stocks")
+                stocks := ns("query_engine.embedded_b.stocks")
                 table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
                 rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
                 rows ~> stocks
@@ -1005,9 +1047,27 @@ mod sql_tests {
     }
 
     #[test]
+    fn test_read_next_row() {
+        verify_exact_table_with_ids(r#"
+                stocks := ns("query_engine.read_next_row.stocks")
+                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+                rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+                rows ~> stocks
+                // read the last row
+                last_row <~ stocks
+                last_row
+            "#, vec![
+            "|----------------------------------|",
+            "| id | symbol | exchange | history |",
+            "|----------------------------------|",
+            "| 1  | GOTO   | OTC      | null    |",
+            "|----------------------------------|"])
+    }
+
+    #[test]
     fn test_table_append_rows_with_embedded_table() {
         verify_exact_table_with_ids(r#"
-                stocks := ns("interpreter.embedded_c.stocks")
+                stocks := ns("query_engine.embedded_c.stocks")
                 table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64)) ~> stocks
                 append stocks from [
                     { symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66 } },
@@ -1038,14 +1098,14 @@ mod sql_tests {
                  { symbol: "UNO", exchange: "OTC", last_sale: 13.2456 },
                  { symbol: "GOTO", exchange: "OTC", last_sale: 24.1428 },
                  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            [+] select symbol, exchange, price: last_sale, msn: util::md5(symbol)
+            [+] select symbol, exchange, price: last_sale, symbol_md5: util::md5(symbol)
                 from stocks
                 where last_sale > 1.0
                 order by symbol
                 limit 2
         "#, vec![
             "|---------------------------------------------------------------------|",
-            "| id | symbol | exchange | price   | msn                              |",
+            "| id | symbol | exchange | price   | symbol_md5                       |",
             "|---------------------------------------------------------------------|",
             "| 0  | ABC    | AMEX     | 11.77   | 902fbdd2b1df0c4f70b4a5d23525e932 |",
             "| 2  | UNO    | OTC      | 13.2456 | 59f822bcaa8e119bde63eb00919b367a |",

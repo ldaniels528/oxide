@@ -755,37 +755,37 @@ mod tests {
 
         #[test]
         fn test_contains_positive() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert!(tuple.contains(&StringValue("NYSE".into())));
         }
 
         #[test]
         fn test_contains_negative() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert!(!tuple.contains(&StringValue("NASDAQ".into())));
         }
 
         #[test]
         fn test_get() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert_eq!(tuple.get(1), Some(StringValue("NYSE".into())));
         }
 
         #[test]
         fn test_get_or_else_positive() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert_eq!(tuple.get_or_else(1, StringValue("N/A".into())), StringValue("NYSE".into()));
         }
 
         #[test]
         fn test_get_or_else_negative() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert_eq!(tuple.get_or_else(3, StringValue("N/A".into())), StringValue("N/A".into()));
         }
 
         #[test]
         fn test_get_type() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert_eq!(tuple.get_type(), TupleType(vec![
                 DataType::StringType(3),
                 DataType::StringType(4),
@@ -795,7 +795,7 @@ mod tests {
 
         #[test]
         fn test_len() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert_eq!(tuple.len(), 3);
         }
 
@@ -814,7 +814,7 @@ mod tests {
 
         #[test]
         fn test_rev() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert_eq!(tuple.rev(), Tuple::new(vec![
                 Number(F32Value(23.66)),
                 StringValue("NYSE".into()),
@@ -824,7 +824,7 @@ mod tests {
 
         #[test]
         fn test_to_array() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert_eq!(tuple.to_array(), Array::from(vec![
                 StringValue("ABC".into()),
                 StringValue("NYSE".into()),
@@ -834,7 +834,7 @@ mod tests {
 
         #[test]
         fn test_values() {
-            let mut tuple = create_tuple();
+            let tuple = create_tuple();
             assert_eq!(tuple.get_values(), vec![
                 StringValue("ABC".into()),
                 StringValue("NYSE".into()),
