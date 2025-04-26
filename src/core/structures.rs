@@ -653,7 +653,7 @@ impl Row {
     ) -> bool {
         if let Some(condition) = condition {
             let machine = machine.with_row(columns, &self);
-            match machine.evaluate_cond(condition) {
+            match machine.do_condition(condition) {
                 Ok((_, Boolean(true) | Null | Undefined)) => true,
                 Ok(_) => false,
                 Err(..) => false

@@ -6,9 +6,6 @@
 use crate::columns::Column;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Model;
-use crate::sequences::Array;
-
-use crate::expression::ACK;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
@@ -18,6 +15,7 @@ use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::repl;
 use crate::row_collection::RowCollection;
+use crate::sequences::Array;
 use crate::structures::Row;
 use crate::structures::Structures::{Hard, Soft};
 use crate::structures::{HardStructure, SoftStructure, Structure};

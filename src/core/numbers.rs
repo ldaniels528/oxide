@@ -18,7 +18,6 @@ use std::ops::*;
 /// Represents a numeric value
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Numbers {
-    Ack,
     RowId(u64),
     RowsAffected(i64),
     DateValue(i64),
@@ -49,7 +48,6 @@ impl Ord for Numbers {
 impl Hash for Numbers {
     fn hash<H: Hasher>(&self, state: &mut H) {
         match self {
-            Numbers::Ack => 1.hash(state),
             Numbers::RowId(id) => id.hash(state),
             Numbers::RowsAffected(n) => n.hash(state),
             Numbers::DateValue(t) => t.hash(state),
@@ -96,13 +94,32 @@ impl Numbers {
     //  INSTANCE METHODS
     ////////////////////////////////////////////////////////////////////
 
+    pub fn convert_to(&self, kind: NumberKind) -> Numbers {
+        match kind {
+            RowIdKind => RowId(self.to_u64()),
+            RowsAffectedKind => RowsAffected(self.to_i64()),
+            DateKind => DateValue(self.to_i64()),
+            F32Kind => F32Value(self.to_f32()),
+            F64Kind => F64Value(self.to_f64()),
+            I8Kind => I8Value(self.to_i8()),
+            I16Kind => I16Value(self.to_i16()),
+            I32Kind => I32Value(self.to_i32()),
+            I64Kind => I64Value(self.to_i64()),
+            I128Kind => I128Value(self.to_i128()),
+            U8Kind => U8Value(self.to_u8()),
+            U16Kind => U16Value(self.to_u16()),
+            U32Kind => U32Value(self.to_u32()),
+            U64Kind => U64Value(self.to_u64()),
+            U128Kind => U128Value(self.to_u128()),
+            UUIDKind => UUIDValue(self.to_u128()),
+            NaNKind => NaNValue
+        }
+    }
+
     /// encodes the numeric value
     pub fn encode(&self) -> Vec<u8> {
         use Numbers::*;
         match self.to_owned() {
-            Ack => vec![],
-            RowId(id) => id.to_be_bytes().to_vec(),
-            RowsAffected(n) => n.to_be_bytes().to_vec(),
             DateValue(number) => number.to_be_bytes().to_vec(),
             F32Value(number) => number.to_be_bytes().to_vec(),
             F64Value(number) => number.to_be_bytes().to_vec(),
@@ -111,6 +128,8 @@ impl Numbers {
             I32Value(number) => number.to_be_bytes().to_vec(),
             I64Value(number) => number.to_be_bytes().to_vec(),
             I128Value(number) => number.to_be_bytes().to_vec(),
+            RowId(id) => id.to_be_bytes().to_vec(),
+            RowsAffected(n) => n.to_be_bytes().to_vec(),
             U8Value(number) => number.to_be_bytes().to_vec(),
             U16Value(number) => number.to_be_bytes().to_vec(),
             U32Value(number) => number.to_be_bytes().to_vec(),
@@ -123,9 +142,6 @@ impl Numbers {
 
     pub fn get_type_name(&self) -> String {
         let result = match *self {
-            Ack => "Ack",
-            RowId(..) => "RowId",
-            RowsAffected(..) => "RowsAffected",
             DateValue(..) => "Date",
             F32Value(..) => "f32",
             F64Value(..) => "f64",
@@ -135,6 +151,8 @@ impl Numbers {
             I64Value(..) => "i64",
             I128Value(..) => "i128",
             NaNValue => "NaN",
+            RowId(..) => "RowId",
+            RowsAffected(..) => "RowsAffected",
             U8Value(..) => "u8",
             U16Value(..) => "u16",
             U32Value(..) => "u32",
@@ -147,9 +165,6 @@ impl Numbers {
 
     pub fn is_effectively_zero(&self) -> bool {
         match *self {
-            Ack => true,
-            RowId(id) => id == 0,
-            RowsAffected(n) => n == 0,
             DateValue(n) => n == 0,
             F32Value(n) => n == 0.,
             F64Value(n) => n == 0.,
@@ -159,6 +174,8 @@ impl Numbers {
             I64Value(n) => n == 0,
             I128Value(n) => n == 0,
             NaNValue => true,
+            RowId(id) => id == 0,
+            RowsAffected(n) => n == 0,
             U8Value(n) => n == 0,
             U16Value(n) => n == 0,
             U32Value(n) => n == 0,
@@ -174,7 +191,6 @@ impl Numbers {
 
     pub fn kind(&self) -> NumberKind {
         match *self {
-            Ack => AckKind,
             RowId(..) => RowIdKind,
             RowsAffected(..) => RowsAffectedKind,
             DateValue(..) => DateKind,
@@ -197,9 +213,6 @@ impl Numbers {
 
     pub fn to_f32(&self) -> f32 {
         match *self {
-            Ack => 0.,
-            RowId(id) => id as f32,
-            RowsAffected(n) => n as f32,
             DateValue(n) => n as f32,
             F32Value(n) => n,
             F64Value(n) => n as f32,
@@ -209,6 +222,8 @@ impl Numbers {
             I64Value(n) => n as f32,
             I128Value(n) => n as f32,
             NaNValue => 0.0,
+            RowId(id) => id as f32,
+            RowsAffected(n) => n as f32,
             U8Value(n) => n as f32,
             U16Value(n) => n as f32,
             U32Value(n) => n as f32,
@@ -220,9 +235,6 @@ impl Numbers {
 
     pub fn to_f64(&self) -> f64 {
         match *self {
-            Ack => 0.,
-            RowId(id) => id as f64,
-            RowsAffected(n) => n as f64,
             DateValue(t) => t as f64,
             F32Value(n) => n as f64,
             F64Value(n) => n,
@@ -232,6 +244,8 @@ impl Numbers {
             I64Value(n) => n as f64,
             I128Value(n) => n as f64,
             NaNValue => 0.0,
+            RowId(id) => id as f64,
+            RowsAffected(n) => n as f64,
             U8Value(n) => n as f64,
             U16Value(n) => n as f64,
             U32Value(n) => n as f64,
@@ -243,9 +257,6 @@ impl Numbers {
 
     pub fn to_json(&self) -> serde_json::Value {
         match self {
-            Ack => serde_json::json!(0),
-            RowId(id) => serde_json::json!(id),
-            RowsAffected(n) => serde_json::json!(n),
             DateValue(ms) => serde_json::json!(TypedValue::millis_to_iso_date(*ms)
                 .unwrap_or(ms.to_string())),
             F32Value(number) => serde_json::json!(number),
@@ -255,6 +266,8 @@ impl Numbers {
             I32Value(number) => serde_json::json!(number),
             I64Value(number) => serde_json::json!(number),
             I128Value(number) => serde_json::json!(number),
+            RowId(id) => serde_json::json!(id),
+            RowsAffected(n) => serde_json::json!(n),
             NaNValue => serde_json::json!("NaN"),
             U8Value(number) => serde_json::json!(number),
             U16Value(number) => serde_json::json!(number),
@@ -267,9 +280,6 @@ impl Numbers {
 
     pub fn to_i8(&self) -> i8 {
         match *self {
-            Ack => 0,
-            RowId(id) => id as i8,
-            RowsAffected(n) => n as i8,
             DateValue(t) => t as i8,
             F32Value(n) => n as i8,
             F64Value(n) => n as i8,
@@ -279,6 +289,8 @@ impl Numbers {
             I64Value(n) => n as i8,
             I128Value(n) => n as i8,
             NaNValue => 0i8,
+            RowId(id) => id as i8,
+            RowsAffected(n) => n as i8,
             U8Value(n) => n as i8,
             U16Value(n) => n as i8,
             U32Value(n) => n as i8,
@@ -290,9 +302,6 @@ impl Numbers {
 
     pub fn to_i16(&self) -> i16 {
         match *self {
-            Ack => 0,
-            RowId(id) => id as i16,
-            RowsAffected(n) => n as i16,
             DateValue(t) => t as i16,
             F32Value(n) => n as i16,
             F64Value(n) => n as i16,
@@ -302,6 +311,8 @@ impl Numbers {
             I64Value(n) => n as i16,
             I128Value(n) => n as i16,
             NaNValue => 0i16,
+            RowId(id) => id as i16,
+            RowsAffected(n) => n as i16,
             U8Value(n) => n as i16,
             U16Value(n) => n as i16,
             U32Value(n) => n as i16,
@@ -313,9 +324,6 @@ impl Numbers {
 
     pub fn to_i32(&self) -> i32 {
         match *self {
-            Ack => 0,
-            RowId(id) => id as i32,
-            RowsAffected(n) => n as i32,
             DateValue(t) => t as i32,
             F32Value(n) => n as i32,
             F64Value(n) => n as i32,
@@ -325,6 +333,8 @@ impl Numbers {
             I64Value(n) => n as i32,
             I128Value(n) => n as i32,
             NaNValue => 0i32,
+            RowId(id) => id as i32,
+            RowsAffected(n) => n as i32,
             U8Value(n) => n as i32,
             U16Value(n) => n as i32,
             U32Value(n) => n as i32,
@@ -336,9 +346,6 @@ impl Numbers {
 
     pub fn to_i64(&self) -> i64 {
         match *self {
-            Ack => 0,
-            RowId(id) => id as i64,
-            RowsAffected(n) => n as i64,
             DateValue(t) => t as i64,
             F32Value(n) => n as i64,
             F64Value(n) => n as i64,
@@ -348,6 +355,8 @@ impl Numbers {
             I64Value(n) => n,
             I128Value(n) => n as i64,
             NaNValue => 0i64,
+            RowId(id) => id as i64,
+            RowsAffected(n) => n as i64,
             U8Value(n) => n as i64,
             U16Value(n) => n as i64,
             U32Value(n) => n as i64,
@@ -359,7 +368,6 @@ impl Numbers {
 
     pub fn to_i128(&self) -> i128 {
         match *self {
-            Ack => 0,
             RowId(id) => id as i128,
             RowsAffected(n) => n as i128,
             DateValue(t) => t as i128,
@@ -382,7 +390,6 @@ impl Numbers {
 
     pub fn to_u8(&self) -> u8 {
         match *self {
-            Ack => 0,
             RowId(id) => id as u8,
             RowsAffected(n) => n as u8,
             DateValue(t) => t as u8,
@@ -405,7 +412,6 @@ impl Numbers {
 
     pub fn to_u16(&self) -> u16 {
         match *self {
-            Ack => 0,
             RowId(id) => id as u16,
             RowsAffected(n) => n as u16,
             DateValue(t) => t as u16,
@@ -428,7 +434,6 @@ impl Numbers {
 
     pub fn to_u32(&self) -> u32 {
         match *self {
-            Ack => 0,
             RowId(id) => id as u32,
             RowsAffected(n) => n as u32,
             DateValue(t) => t as u32,
@@ -451,7 +456,6 @@ impl Numbers {
 
     pub fn to_u64(&self) -> u64 {
         match *self {
-            Ack => 0,
             RowId(id) => id as u64,
             RowsAffected(n) => n as u64,
             DateValue(t) => t as u64,
@@ -474,7 +478,6 @@ impl Numbers {
 
     pub fn to_u128(&self) -> u128 {
         match *self {
-            Ack => 0,
             RowId(id) => id as u128,
             RowsAffected(n) => n as u128,
             DateValue(t) => t as u128,
@@ -497,7 +500,6 @@ impl Numbers {
 
     pub fn to_usize(&self) -> usize {
         match *self {
-            Ack => 0,
             RowId(id) => id as usize,
             RowsAffected(n) => n as usize,
             DateValue(t) => t as usize,
@@ -533,7 +535,6 @@ impl Numbers {
             )
         }
         match self {
-            Ack => "Ack".into(),
             RowId(id) => id.to_string(),
             RowsAffected(n) => n.to_string(),
             DateValue(ms) => TypedValue::millis_to_iso_date(*ms).unwrap_or("".into()),
@@ -549,7 +550,7 @@ impl Numbers {
             U16Value(number) => number.to_string(),
             U32Value(number) => number.to_string(),
             U64Value(number) => number.to_string(),
-            U128Value(number) => u128_to_uuid(*number),
+            U128Value(number) => number.to_string(),
             UUIDValue(guid) => u128_to_uuid(*guid)
         }
     }
@@ -713,7 +714,6 @@ impl Neg for Numbers {
 
     fn neg(self) -> Self::Output {
         match self {
-            Ack => I64Value(0),
             RowId(n) => I64Value(-(n as i64)),
             RowsAffected(n) => I64Value(-n),
             DateValue(d) => I64Value(-d),
@@ -740,7 +740,6 @@ impl Not for Numbers {
 
     fn not(self) -> Self::Output {
         match self {
-            Ack => I64Value(0),
             RowId(n) => I64Value(-(n as i64)),
             RowsAffected(n) => I64Value(-(n as i64)),
             DateValue(d) => I64Value(-d),

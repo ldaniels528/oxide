@@ -7,16 +7,15 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::compiler::Compiler;
 use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe::Model;
-use crate::errors::Errors::{Exact, Syntax, TypeMismatch};
+use crate::errors::Errors::{Exact, InstantiationError, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, UnrecognizedTypeName, UnsupportedType};
-use crate::errors::{throw, Errors};
+use crate::errors::{throw, Errors, SyntaxErrors};
 use crate::expression::Expression::{ArrayExpression, AsValue, FnExpression, FunctionCall, Literal, SetVariable, TupleExpression, Variable};
 use crate::expression::{Expression, UNDEFINED};
 use crate::field::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
-use crate::numbers::Numbers;
 use crate::numbers::Numbers::I32Value;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
@@ -25,7 +24,6 @@ use crate::sequences::Array;
 use crate::structures::Structures::Hard;
 use crate::structures::{HardStructure, Structure};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, Binary, Boolean, ErrorValue, Function, Null, Number, PlatformOp, StringValue, Structured, TableValue, TupleValue, Undefined, ASCII};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
@@ -39,17 +37,16 @@ pub enum DataType {
     ASCIIType(usize),
     BinaryType(usize),
     BooleanType,
+    DynamicType, // Polymorphic
     EnumType(Vec<Parameter>),
     ErrorType,
     FunctionType(Vec<Parameter>, Box<DataType>),
-    Indeterminate,
     NumberType(NumberKind),
     PlatformOpsType(PlatformOps),
     StringType(usize),
     StructureType(Vec<Parameter>),
     TableType(Vec<Parameter>, usize),
     TupleType(Vec<DataType>),
-    VaryingType(Vec<DataType>), // Polymorphic
 }
 
 impl DataType {
@@ -57,13 +54,22 @@ impl DataType {
     //  STATIC METHODS
     ////////////////////////////////////////////////////////////////////
 
+    pub fn are_compatible(
+        types_a: &Vec<DataType>,
+        types_b: &Vec<DataType>,
+    ) -> bool {
+        types_a.iter().zip(types_b.iter()).all(|(a, b)| a.is_compatible(b))
+    }
+
     /// deciphers a datatype from an expression (e.g. "String" | "String(20)")
     pub fn decipher_type(model: &Expression) -> std::io::Result<DataType> {
+        use crate::typed_values::TypedValue::*;
+
         fn expect_size(args: &Vec<Expression>, f: fn(usize) -> DataType) -> std::io::Result<DataType> {
             match args.as_slice() {
                 [] => Ok(f(0)),
                 [Literal(Number(n))] => Ok(f(n.to_usize())),
-                [other] => throw(Syntax(other.to_code())),
+                [other] => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code()))),
                 other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
             }
         }
@@ -79,8 +85,8 @@ impl DataType {
                 let param = match arg {
                     AsValue(name, model) => Parameter::new(name, decode_model(model)?),
                     SetVariable(name, expr) => Parameter::from_tuple(name, expr.to_pure()?),
-                    Variable(name) => Parameter::build(name),
-                    other => return throw(Exact(format!("Parameter expected near {}", other.to_code())))
+                    Variable(name) => Parameter::add(name),
+                    other => return throw(SyntaxError(SyntaxErrors::ParameterExpected(other.to_code())))
                 };
                 params.push(param);
             }
@@ -107,14 +113,14 @@ impl DataType {
                         "ASCII" => expect_size(args, |size| ASCIIType(size)),
                         "Binary" => expect_size(args, |size| BinaryType(size)),
                         "Enum" => expect_params(args, |params| EnumType(params)),
-                        "fn" => expect_params(args, |params| FunctionType(params, Box::from(Indeterminate))),
+                        "fn" => expect_params(args, |params| FunctionType(params, Box::from(DynamicType))),
                         "String" => expect_size(args, |size| StringType(size)),
                         "Struct" => expect_params(args, |params| StructureType(params)),
                         "Table" => expect_params(args, |params| TableType(params, 0)),
                         type_name if args.is_empty() => decode_model_variable(type_name),
-                        type_name => throw(Syntax(type_name.into()))
+                        type_name => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(type_name.into())))
                     }
-                other => throw(Syntax(other.to_code()))
+                other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
             }
         }
         fn decode_model_tuple(items: &Vec<Expression>) -> std::io::Result<DataType> {
@@ -129,14 +135,13 @@ impl DataType {
         }
         fn decode_model_variable(name: &str) -> std::io::Result<DataType> {
             match name {
-                "Ack" => Ok(NumberType(AckKind)),
                 "Boolean" => Ok(BooleanType),
                 "Date" => Ok(NumberType(DateKind)),
                 "Enum" => Ok(EnumType(vec![])),
                 "Error" => Ok(ErrorType),
                 "f32" => Ok(NumberType(F32Kind)),
                 "f64" => Ok(NumberType(F64Kind)),
-                "Fn" => Ok(FunctionType(vec![], Box::new(Indeterminate))),
+                "Fn" => Ok(FunctionType(vec![], Box::new(DynamicType))),
                 "i8" => Ok(NumberType(I8Kind)),
                 "i16" => Ok(NumberType(I16Kind)),
                 "i32" => Ok(NumberType(I32Kind)),
@@ -165,15 +170,13 @@ impl DataType {
                     Ok(FunctionType(params.clone(), Box::from(returns.clone()))),
                 // e.g. String(80)
                 FunctionCall { fx, args } => decode_model_function_call(fx, args),
-                // e.g. Ack
-                Literal(Number(Numbers::Ack)) => Ok(NumberType(AckKind)),
                 // e.g. Structure(symbol: String, exchange: String, last_sale: f64)
                 Literal(Structured(s)) => Ok(StructureType(s.get_parameters())),
                 // e.g. (f64, f64, f64)
                 TupleExpression(params) => decode_model_tuple(params),
                 // e.g. i64
                 Variable(name) => decode_model_variable(name),
-                other => throw(Syntax(format!("{:?}", other)))
+                other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
             }
         }
         decode_model(model)
@@ -181,6 +184,7 @@ impl DataType {
 
     /// decodes the typed value based on the supplied data type and buffer
     pub fn decode(&self, buffer: &Vec<u8>, offset: usize) -> TypedValue {
+        use crate::typed_values::TypedValue::*;
         match self {
             ArrayType(..) => ArrayValue(Array::new()),
             BinaryType(..) => Binary(Vec::new()),
@@ -197,11 +201,13 @@ impl DataType {
 
     /// decodes the typed value based on the supplied data type and buffer
     pub fn decode_bcc(&self, bcc: &mut ByteCodeCompiler) -> std::io::Result<TypedValue> {
+        use crate::typed_values::TypedValue::*;
         let tv = match self {
             ArrayType(..) => ArrayValue(Array::from(bcc.next_array()?)),
             ASCIIType(..) => ASCII(bcc.next_clob()),
             BinaryType(..) => Binary(bcc.next_blob()),
             BooleanType => Boolean(bcc.next_bool()),
+            DataType::DynamicType => Undefined,
             EnumType(labels) => {
                 let index = bcc.next_u32() as usize;
                 StringValue(labels[index].get_name().to_string())
@@ -218,8 +224,6 @@ impl DataType {
             StructureType(params) => Structured(Hard(bcc.next_struct_with_parameters(params.to_vec())?)),
             TableType(columns, ..) => TableValue(Model(bcc.next_table_with_columns(columns)?)),
             TupleType(..) => TupleValue(bcc.next_array()?),
-            VaryingType(..) => bcc.next_value()?,
-            DataType::Indeterminate => Undefined,
         };
         Ok(tv)
     }
@@ -228,21 +232,21 @@ impl DataType {
         let metadata = FieldMetadata::decode(buffer[offset]);
         if metadata.is_active {
             self.decode(buffer, offset + 1)
-        } else { Null }
+        } else { TypedValue::Null }
     }
 
     pub fn decode_field_value_bcc(&self, bcc: &mut ByteCodeCompiler, offset: usize) -> std::io::Result<TypedValue> {
         let metadata: FieldMetadata = FieldMetadata::decode(bcc[offset]);
         let value: TypedValue = if metadata.is_active {
             self.decode_bcc(bcc)?
-        } else { Null };
+        } else { TypedValue::Null };
         Ok(value)
     }
 
     pub fn encode(&self, value: &TypedValue) -> std::io::Result<Vec<u8>> {
         match self {
             DataType::ArrayType(_) => match value {
-                ArrayValue(_) => Ok(value.encode()),
+                TypedValue::ArrayValue(_) => Ok(value.encode()),
                 z => throw(TypeMismatch(UnsupportedType(self.clone(), z.get_type())))
             }
             DataType::BinaryType(_) => Ok(value.encode()),
@@ -256,8 +260,8 @@ impl DataType {
             DataType::StringType(_) => Ok(value.encode()),
             DataType::StructureType(_) => Ok(value.encode()),
             DataType::TableType(..) =>
-                match value.to_table_value() {
-                    TableValue(df) => Ok(ByteCodeCompiler::encode_df(&df)),
+                match value.to_table() {
+                    TypedValue::TableValue(df) => Ok(ByteCodeCompiler::encode_df(&df)),
                     z => throw(TypeMismatch(UnsupportedType(self.clone(), z.get_type())))
                 },
             _ => Ok(value.encode()),
@@ -286,7 +290,7 @@ impl DataType {
     pub fn get_type_names() -> Vec<String> {
         vec![
             "Array", "ASCII", "Binary", "Boolean", "Date", "Enum", "Error", "Fn",
-            "String", "Struct", "Table", //"Ack", "RowId", "RowsAffected",
+            "String", "Struct", "Table", //, "RowId", "RowsAffected",
             "f32", "f64", "i8", "i16", "i32", "i64", "i128",
             "u8", "u16", "u32", "u64", "u128", "UUID",
         ].iter().map(|s| s.to_string()).collect()
@@ -310,7 +314,7 @@ impl DataType {
             EnumType(..) => 2,
             ErrorType => 256,
             FunctionType(columns, ..) => columns.len() * 8,
-            Indeterminate => 8,
+            DynamicType => 8,
             NumberType(nk) => nk.compute_fixed_size(),
             PlatformOpsType(..) => 4,
             StringType(size) => match size {
@@ -320,19 +324,18 @@ impl DataType {
             StructureType(columns) => columns.len() * 8,
             TableType(columns, ..) => columns.len() * 8,
             TupleType(types) => types.iter().map(|t| t.compute_fixed_size()).sum(),
-            VaryingType(dts) => dts.iter()
-                .map(|t| t.compute_fixed_size())
-                .max().unwrap_or(0),
         };
         width + 1 // +1 for field metadata
     }
 
     pub fn get_default_value(&self) -> TypedValue {
+        use crate::typed_values::TypedValue::*;
         match self {
             ArrayType(..) => ArrayValue(Array::new()),
             ASCIIType(..) => ASCII(vec![]),
             BinaryType(..) => Binary(vec![]),
             BooleanType => Boolean(false),
+            DataType::DynamicType => Null,
             EnumType(..) => Number(I32Value(0)),
             ErrorType => ErrorValue(Errors::Empty),
             FunctionType(params, returns) => Function {
@@ -340,7 +343,6 @@ impl DataType {
                 body: Box::new(Literal(returns.get_default_value())),
                 returns: returns.deref().clone(),
             },
-            Indeterminate => TypedValue::Null,
             NumberType(kind) => Number(kind.get_default_value()),
             PlatformOpsType(kind) => PlatformOp(kind.clone()),
             StringType(..) => StringValue(String::new()),
@@ -350,29 +352,27 @@ impl DataType {
                 TableValue(Model(ModelRowCollection::from_parameters(params))),
             TupleType(dts) => TupleValue(dts.iter()
                 .map(|dt| dt.get_default_value()).collect()),
-            VaryingType(dts) => dts.first()
-                .map(|dt| dt.get_default_value())
-                .unwrap_or(TypedValue::Null),
         }
     }
 
     pub fn instantiate(&self) -> std::io::Result<TypedValue> {
+        use crate::typed_values::TypedValue::*;
         match self {
             ArrayType(_) => Ok(ArrayValue(Array::new())),
             ASCIIType(_) => Ok(ASCII(vec![])),
             BinaryType(_) => Ok(Binary(vec![])),
             BooleanType => Ok(Boolean(false)),
-            EnumType(_) => throw(Exact("Instantiation error".into())),
-            ErrorType => throw(Exact("Instantiation error".into())),
+            DynamicType => throw(InstantiationError(self.clone())),
+            EnumType(_) => throw(InstantiationError(self.clone())),
+            ErrorType => throw(InstantiationError(self.clone())),
             FunctionType(params, kind) =>
                 Ok(Function {
                     params: params.clone(),
                     body: Box::new(UNDEFINED),
                     returns: kind.deref().clone(),
                 }),
-            Indeterminate => throw(Exact("Instantiation error".into())),
             NumberType(kind) => Ok(Number(kind.get_default_value())),
-            PlatformOpsType(_) => throw(Exact("Instantiation error".into())),
+            PlatformOpsType(_) => throw(InstantiationError(self.clone())),
             StringType(..) => Ok(StringValue(String::new())),
             StructureType(params) =>
                 Ok(Structured(Hard(HardStructure::from_parameters(params.to_vec())))),
@@ -383,7 +383,24 @@ impl DataType {
                 for a_type in types { values.push(a_type.get_default_value()) }
                 Ok(TupleValue(values))
             }
-            VaryingType(_) => throw(Exact("Instantiation error".into())),
+        }
+    }
+
+    pub fn is_compatible(&self, other: &DataType) -> bool {
+        match (self, other) {
+            (ArrayType(..), ArrayType(..)) |
+            (ASCIIType(..) | StringType(..), ASCIIType(..) | StringType(..)) |
+            (BinaryType(..), BinaryType(..)) |
+            (DynamicType, _) | (_, DynamicType) => true,
+            (EnumType(a), EnumType(b)) => Parameter::are_compatible(a, b),
+            (FunctionType(a, dta), FunctionType(b, dtb)) =>
+                Parameter::are_compatible(a, b) && dta.is_compatible(dtb),
+            (NumberType(..), NumberType(..)) => true,
+            // TODO add a case for when the source struct|table has a subset of the target fields?
+            (StructureType(a) | TableType(a, _), StructureType(b) | TableType(b, _)) =>
+                Parameter::are_compatible(a, b),
+            (TupleType(a), TupleType(b)) => DataType::are_compatible(a, b),
+            (a, b) => a == b,
         }
     }
 
@@ -423,8 +440,9 @@ impl DataType {
         match self {
             ArrayType(size) => sized("Array", *size),
             ASCIIType(size) => sized("ASCII", *size),
-            BinaryType(size) => sized("Binary", *size), //UTF8
+            BinaryType(size) => sized("Binary", *size), // UTF8
             BooleanType => "Boolean".into(),
+            DynamicType => String::new(),
             EnumType(labels) => parameterized("Enum", labels, true),
             ErrorType => "Error".into(),
             FunctionType(params, returns) =>
@@ -433,16 +451,12 @@ impl DataType {
                             s if !s.is_empty() => format!(": {}", s),
                             _ => String::new()
                         }),
-            Indeterminate => String::new(),
             NumberType(nk) => nk.get_type_name(),
             PlatformOpsType(pf) => pf.to_code(),
             StringType(size) => sized("String", *size),
             StructureType(params) => parameterized("Struct", params, false),
             TableType(params, ..) => parameterized("Table", params, false),
             TupleType(types) => typed("", types),
-            VaryingType(dts) => dts.iter()
-                .map(|dt| dt.to_code())
-                .collect::<Vec<_>>().join("|"),
         }
     }
 
@@ -463,7 +477,211 @@ impl Display for DataType {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    /// Experimental Unit tests
+    /// Compatible Types Unit tests
+    mod compatible_types_tests {
+        use crate::data_types::DataType;
+        use crate::data_types::DataType::*;
+        use crate::number_kind::NumberKind::*;
+
+        #[test]
+        fn test_arrays() {
+            verify_compatibility(ArrayType(800), ArrayType(0))
+        }
+
+        #[test]
+        fn test_ascii_and_strings() {
+            verify_compatibility(ASCIIType(0), ASCIIType(8000));
+            verify_compatibility(ASCIIType(0), StringType(8000));
+            verify_compatibility(StringType(0), ASCIIType(8000));
+            verify_compatibility(StringType(80), StringType(0));
+        }
+
+        #[test]
+        fn test_numbers() {
+            verify_compatibility(NumberType(I64Kind), NumberType(I32Kind));
+            verify_incompatibility(NumberType(I64Kind), BooleanType);
+        }
+
+
+        fn verify_compatibility(a: DataType, b: DataType) {
+            assert!(a.is_compatible(&b));
+        }
+
+        fn verify_incompatibility(a: DataType, b: DataType) {
+            assert!(!a.is_compatible(&b));
+        }
+    }
+
+    /// Compilation Unit tests
+    mod compilation_tests {
+        use crate::data_types::DataType;
+        use crate::data_types::DataType::*;
+        use crate::number_kind::NumberKind::*;
+        use crate::numbers::Numbers::I64Value;
+        use crate::parameter::Parameter;
+        use crate::testdata::make_quote_parameters;
+        use crate::typed_values::TypedValue::Number;
+
+        #[test]
+        fn test_array() {
+            verify_type_construction("Array(12)", ArrayType(12));
+        }
+
+        #[test]
+        fn test_binary() {
+            verify_type_construction("Binary(5566)", BinaryType(5566));
+        }
+
+        #[test]
+        fn test_ascii() {
+            verify_type_construction("ASCII(1000)", ASCIIType(1000));
+        }
+
+        #[test]
+        fn test_boolean() {
+            verify_type_construction("Boolean", BooleanType);
+        }
+
+        #[test]
+        fn test_date() {
+            verify_type_construction("Date", NumberType(DateKind));
+        }
+
+        #[test]
+        fn test_enums_0() {
+            verify_type_construction(
+                "Enum(A, B, C)",
+                EnumType(vec![
+                    Parameter::add("A"),
+                    Parameter::add("B"),
+                    Parameter::add("C"),
+                ]));
+        }
+
+        #[test]
+        fn test_enums_1() {
+            verify_type_construction(
+                "Enum(AMEX := 1, NASDAQ := 2, NYSE := 3, OTCBB := 4)",
+                EnumType(vec![
+                    Parameter::with_default("AMEX", NumberType(I64Kind), Number(I64Value(1))),
+                    Parameter::with_default("NASDAQ", NumberType(I64Kind), Number(I64Value(2))),
+                    Parameter::with_default("NYSE", NumberType(I64Kind), Number(I64Value(3))),
+                    Parameter::with_default("OTCBB", NumberType(I64Kind), Number(I64Value(4))),
+                ]));
+        }
+
+        #[test]
+        fn test_f32() {
+            verify_type_construction("f32", NumberType(F32Kind));
+        }
+
+        #[test]
+        fn test_f64() {
+            verify_type_construction("f64", NumberType(F64Kind));
+        }
+
+        #[test]
+        fn test_fn() {
+            verify_type_construction(
+                "fn(symbol: String(8), exchange: String(8), last_sale: f64)",
+                FunctionType(make_quote_parameters(), Box::from(DynamicType)));
+        }
+
+        #[test]
+        fn test_i8() {
+            verify_type_construction("i8", NumberType(I8Kind));
+        }
+
+        #[test]
+        fn test_i16() {
+            verify_type_construction("i16", NumberType(I16Kind));
+        }
+
+        #[test]
+        fn test_i32() {
+            verify_type_construction("i32", NumberType(I32Kind));
+        }
+
+        #[test]
+        fn test_i64() {
+            verify_type_construction("i64", NumberType(I64Kind));
+        }
+
+        #[test]
+        fn test_i128() {
+            verify_type_construction("i128", NumberType(I128Kind));
+        }
+
+        #[test]
+        fn test_tuple_3() {
+            verify_type_construction("(i64, i64, i64)", TupleType(vec![
+                NumberType(I64Kind),
+                NumberType(I64Kind),
+                NumberType(I64Kind),
+            ]));
+        }
+
+        #[test]
+        fn test_outcome() {
+            verify_type_construction("RowId", NumberType(RowIdKind));
+            verify_type_construction("RowsAffected", NumberType(RowsAffectedKind));
+        }
+
+        #[test]
+        fn test_string() {
+            verify_type_construction("String", StringType(0));
+            verify_type_construction("String(10)", StringType(10));
+        }
+
+        #[test]
+        fn test_struct() {
+            verify_type_construction(
+                "Struct(symbol: String(8), exchange: String(8), last_sale: f64)",
+                StructureType(make_quote_parameters()));
+        }
+
+        #[test]
+        fn test_table() {
+            verify_type_construction(
+                "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
+                TableType(make_quote_parameters(), 0));
+        }
+
+        #[test]
+        fn test_u8() {
+            verify_type_construction("u8", NumberType(U8Kind));
+        }
+
+        #[test]
+        fn test_u16() {
+            verify_type_construction("u16", NumberType(U16Kind));
+        }
+
+        #[test]
+        fn test_u32() {
+            verify_type_construction("u32", NumberType(U32Kind));
+        }
+
+        #[test]
+        fn test_u64() {
+            verify_type_construction("u64", NumberType(U64Kind));
+        }
+
+        #[test]
+        fn test_u128() {
+            verify_type_construction("u128", NumberType(U128Kind));
+        }
+
+        fn verify_type_construction(typedef: &str, data_type: DataType) {
+            let dt: DataType = DataType::from_str(typedef)
+                .expect(format!("Failed to parse type {}", data_type).as_str());
+            assert_eq!(dt, data_type);
+            assert_eq!(data_type.to_code(), typedef);
+            assert_eq!(format!("{}", data_type), typedef.to_string())
+        }
+    }
+
+    /// Default-value Unit tests
     mod defaults_tests {
         use crate::data_types::DataType::*;
         use crate::dataframe::Dataframe::Model;
@@ -573,176 +791,6 @@ mod tests {
             assert_eq!(
                 TableType(make_quote_parameters(), 0).get_default_value(),
                 TableValue(Model(ModelRowCollection::new(make_quote_columns()))));
-        }
-    }
-
-    /// Core Unit tests
-    mod core_tests {
-        use crate::data_types::DataType;
-        use crate::data_types::DataType::*;
-        use crate::number_kind::NumberKind::*;
-        use crate::numbers::Numbers::I64Value;
-        use crate::parameter::Parameter;
-        use crate::testdata::make_quote_parameters;
-        use crate::typed_values::TypedValue::Number;
-
-        #[test]
-        fn test_array() {
-            verify_type_construction("Array(12)", ArrayType(12));
-        }
-
-        #[test]
-        fn test_binary() {
-            verify_type_construction("Binary(5566)", BinaryType(5566));
-        }
-
-        #[test]
-        fn test_ascii() {
-            verify_type_construction("ASCII(1000)", ASCIIType(1000));
-        }
-
-        #[test]
-        fn test_boolean() {
-            verify_type_construction("Boolean", BooleanType);
-        }
-
-        #[test]
-        fn test_date() {
-            verify_type_construction("Date", NumberType(DateKind));
-        }
-
-        #[test]
-        fn test_enums_0() {
-            verify_type_construction(
-                "Enum(A, B, C)",
-                EnumType(vec![
-                    Parameter::build("A"),
-                    Parameter::build("B"),
-                    Parameter::build("C"),
-                ]));
-        }
-
-        #[test]
-        fn test_enums_1() {
-            verify_type_construction(
-                "Enum(AMEX := 1, NASDAQ := 2, NYSE := 3, OTCBB := 4)",
-                EnumType(vec![
-                    Parameter::with_default("AMEX", NumberType(I64Kind), Number(I64Value(1))),
-                    Parameter::with_default("NASDAQ", NumberType(I64Kind), Number(I64Value(2))),
-                    Parameter::with_default("NYSE", NumberType(I64Kind), Number(I64Value(3))),
-                    Parameter::with_default("OTCBB", NumberType(I64Kind), Number(I64Value(4))),
-                ]));
-        }
-
-        #[test]
-        fn test_f32() {
-            verify_type_construction("f32", NumberType(F32Kind));
-        }
-
-        #[test]
-        fn test_f64() {
-            verify_type_construction("f64", NumberType(F64Kind));
-        }
-
-        #[test]
-        fn test_fn() {
-            verify_type_construction(
-                "fn(symbol: String(8), exchange: String(8), last_sale: f64)",
-                FunctionType(make_quote_parameters(), Box::from(Indeterminate)));
-        }
-
-        #[test]
-        fn test_i8() {
-            verify_type_construction("i8", NumberType(I8Kind));
-        }
-
-        #[test]
-        fn test_i16() {
-            verify_type_construction("i16", NumberType(I16Kind));
-        }
-
-        #[test]
-        fn test_i32() {
-            verify_type_construction("i32", NumberType(I32Kind));
-        }
-
-        #[test]
-        fn test_i64() {
-            verify_type_construction("i64", NumberType(I64Kind));
-        }
-
-        #[test]
-        fn test_i128() {
-            verify_type_construction("i128", NumberType(I128Kind));
-        }
-
-        #[test]
-        fn test_tuple_3() {
-            verify_type_construction("(i64, i64, i64)", TupleType(vec![
-                NumberType(I64Kind),
-                NumberType(I64Kind),
-                NumberType(I64Kind),
-            ]));
-        }
-
-        #[test]
-        fn test_outcome() {
-            verify_type_construction("RowId", NumberType(RowIdKind));
-            verify_type_construction("RowsAffected", NumberType(RowsAffectedKind));
-            verify_type_construction("Ack", NumberType(AckKind));
-        }
-
-        #[test]
-        fn test_string() {
-            verify_type_construction("String", StringType(0));
-            verify_type_construction("String(10)", StringType(10));
-        }
-
-        #[test]
-        fn test_struct() {
-            verify_type_construction(
-                "Struct(symbol: String(8), exchange: String(8), last_sale: f64)",
-                StructureType(make_quote_parameters()));
-        }
-
-        #[test]
-        fn test_table() {
-            verify_type_construction(
-                "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
-                TableType(make_quote_parameters(), 0));
-        }
-
-        #[test]
-        fn test_u8() {
-            verify_type_construction("u8", NumberType(U8Kind));
-        }
-
-        #[test]
-        fn test_u16() {
-            verify_type_construction("u16", NumberType(U16Kind));
-        }
-
-        #[test]
-        fn test_u32() {
-            verify_type_construction("u32", NumberType(U32Kind));
-        }
-
-        #[test]
-        fn test_u64() {
-            verify_type_construction("u64", NumberType(U64Kind));
-        }
-
-        #[test]
-        fn test_u128() {
-            verify_type_construction("u128", NumberType(U128Kind));
-        }
-
-        fn verify_type_construction(type_decl: &str, data_type: DataType) {
-            let dt: DataType = DataType::from_str(type_decl)
-                .expect(format!("Failed to parse type {}", data_type).as_str());
-            assert_eq!(dt, data_type);
-            assert_eq!(data_type.to_code(), type_decl);
-            assert_eq!(format!("{}", data_type), type_decl.to_string())
         }
     }
 

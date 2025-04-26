@@ -77,17 +77,17 @@ mod tests {
     #[test]
     fn test_basic_state_manipulation() {
         let mut interpreter = Interpreter::new();
-        assert_eq!(interpreter.evaluate("x := 5").unwrap(), Number(Ack));
+        assert_eq!(interpreter.evaluate("x := 5").unwrap(), Boolean(true));
         assert_eq!(interpreter.evaluate("$x").unwrap(), Number(I64Value(5)));
         assert_eq!(interpreter.evaluate("-x").unwrap(), Number(I64Value(-5)));
         assert_eq!(interpreter.evaluate("x¡").unwrap(), Number(U128Value(120)));
-        assert_eq!(interpreter.evaluate("x := x + 1").unwrap(), Number(Ack));
+        assert_eq!(interpreter.evaluate("x := x + 1").unwrap(), Boolean(true));
         assert_eq!(interpreter.evaluate("x").unwrap(), Number(I64Value(6)));
         assert_eq!(interpreter.evaluate("x < 7").unwrap(), Boolean(true));
-        assert_eq!(interpreter.evaluate("x := x ** 2").unwrap(), Number(Ack));
+        assert_eq!(interpreter.evaluate("x := x ** 2").unwrap(), Boolean(true));
         assert_eq!(interpreter.evaluate("x").unwrap(), Number(F64Value(36.)));
         assert_eq!(interpreter.evaluate("x / 0").unwrap(), Number(NaNValue));
-        assert_eq!(interpreter.evaluate("x := x - 1").unwrap(), Number(Ack));
+        assert_eq!(interpreter.evaluate("x := x - 1").unwrap(), Boolean(true));
         assert_eq!(interpreter.evaluate("x % 5").unwrap(), Number(F64Value(0.)));
         assert_eq!(interpreter.evaluate("x < 35").unwrap(), Boolean(false));
         assert_eq!(interpreter.evaluate("x >= 35").unwrap(), Boolean(true));
@@ -124,14 +124,14 @@ mod tests {
             "|--------------------------------------------------------------------------------------------------------------------------|",
             "| id | level | item                                                                                      | passed | result |",
             "|--------------------------------------------------------------------------------------------------------------------------|",
-            "| 0  | 0     | Matches function                                                                          | true   | Ack    |",
-            "| 1  | 1     | Compare Array contents: Equal                                                             | true   | Ack    |",
+            "| 0  | 0     | Matches function                                                                          | true   | true   |",
+            "| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |",
             r#"| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |"#,
-            "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | Ack    |",
+            "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |",
             r#"| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |"#,
-            "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | Ack    |",
+            "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |",
             r#"| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |"#,
-            "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | Ack    |",
+            "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |",
             r#"| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |"#,
             "|--------------------------------------------------------------------------------------------------------------------------|"
         ]);
@@ -149,7 +149,7 @@ mod tests {
     #[cfg(test)]
     mod control_flow_tests {
         use crate::interpreter::Interpreter;
-        use crate::numbers::Numbers::{Ack, I64Value};
+        use crate::numbers::Numbers::I64Value;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
@@ -159,7 +159,7 @@ mod tests {
                 foreach item in [1, 5, 6, 11, 17] {
                     oxide::println(item)
                }
-            "#, Number(Ack));
+            "#, Boolean(true));
             // 1
             // 5
             // 6
@@ -173,7 +173,7 @@ mod tests {
                 foreach row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
                     oxide::println(row)
                }
-            "#, Number(Ack));
+            "#, Boolean(true));
             // {"value":"apple"}
             // {"value":"berry"}
             // {"value":"kiwi"}
@@ -217,8 +217,8 @@ mod tests {
         #[test]
         fn test_while_loop() {
             let mut interpreter = Interpreter::new();
-            assert_eq!(Number(Ack), interpreter.evaluate("x := 0").unwrap());
-            assert_eq!(Number(Ack), interpreter.evaluate(r#"
+            assert_eq!(Boolean(true), interpreter.evaluate("x := 0").unwrap());
+            assert_eq!(Boolean(true), interpreter.evaluate(r#"
                 while (x < 5)
                     x := x + 1
             "#).unwrap());
@@ -244,7 +244,7 @@ mod tests {
 
         #[test]
         fn test_directive_ignore_failure() {
-            verify_exact_text(r#"[~] 7 / 0"#, "Ack");
+            verify_exact_text(r#"[~] 7 / 0"#, "true");
         }
 
         #[test]
@@ -257,7 +257,7 @@ mod tests {
 
         #[test]
         fn test_directive_must_be_true() {
-            verify_exact_text("[+] x := 67", "Ack");
+            verify_exact_text("[+] x := 67", "true");
         }
     }
 
@@ -265,7 +265,7 @@ mod tests {
     #[cfg(test)]
     mod function_tests {
         use crate::interpreter::Interpreter;
-        use crate::numbers::Numbers::{Ack, I64Value};
+        use crate::numbers::Numbers::I64Value;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
@@ -274,7 +274,7 @@ mod tests {
             let mut interpreter = Interpreter::new();
             assert_eq!(interpreter.evaluate(r#"
                 product := fn (a, b) => a * b
-            "#).unwrap(), Number(Ack));
+            "#).unwrap(), Boolean(true));
 
             assert_eq!(interpreter.evaluate(r#"
                 product(2, 5)
@@ -286,7 +286,7 @@ mod tests {
             let mut interpreter = Interpreter::new();
             assert_eq!(interpreter.evaluate(r#"
                 fn product(a, b) => a * b
-            "#).unwrap(), Number(Ack));
+            "#).unwrap(), Boolean(true));
 
             assert_eq!(interpreter.evaluate(r#"
                 product(3, 7)

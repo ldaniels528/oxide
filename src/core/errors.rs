@@ -6,10 +6,43 @@
 use std::fmt::{Debug, Display, Formatter};
 
 use crate::data_types::DataType;
+use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
 
+/// Represents an enumeration of syntax errors
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum SyntaxErrors {
+    IllegalExpression(String),
+    IllegalOperator(Token),
+    KeywordExpected(String),
+    LiteralExpected(String),
+    ParameterExpected(String),
+    TypeIdentifierExpected(String),
+}
+
+impl Display for SyntaxErrors {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            SyntaxErrors::IllegalExpression(expr) =>
+                format!("Illegal expression: {expr}"),
+            SyntaxErrors::IllegalOperator(token) =>
+                format!("Illegal use of operator '{token}'"),
+            SyntaxErrors::KeywordExpected(a) =>
+                format!("expected keyword '{a}'"),
+            SyntaxErrors::LiteralExpected(a) =>
+                format!("expected literal value, but found '{a}'"),
+            SyntaxErrors::ParameterExpected(a) =>
+                format!("expected parameter, but found '{a}'"),
+            SyntaxErrors::TypeIdentifierExpected(a) =>
+                format!("expected type identifier, but found '{a}'"),
+        };
+        write!(f, "Syntax error: {text}")
+    }
+}
+
+/// Represents an enumeration of type mismatch errors
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum TypeMismatchErrors {
     ArgumentsMismatched(usize, usize),
@@ -21,6 +54,7 @@ pub enum TypeMismatchErrors {
     ConstantValueExpected(String),
     DateExpected(String),
     FunctionArgsExpected(String),
+    FunctionExpected(String),
     IdentifierExpected(String),
     OutcomeExpected(String),
     ParameterExpected(String),
@@ -57,10 +91,12 @@ impl Display for TypeMismatchErrors {
                 format!("Expected a timestamp, but found \"{expr}\" instead"),
             TypeMismatchErrors::FunctionArgsExpected(other) =>
                 format!("Function arguments expected, but found {}", other),
+            TypeMismatchErrors::FunctionExpected(other) =>
+                format!("Function expected, but found {}", other),
             TypeMismatchErrors::IdentifierExpected(other) =>
-                format!("Identifier expected, but got {}", other),
+                format!("Identifier expected, but found {}", other),
             TypeMismatchErrors::OutcomeExpected(expr) =>
-                format!("Expected an outcome (Ack, RowId or RowsAffected) near {expr}"),
+                format!("Expected an outcome (RowId or RowsAffected) near {expr}"),
             TypeMismatchErrors::ParameterExpected(expr) =>
                 format!("Expected a parameter, got \"{expr}\" instead"),
             TypeMismatchErrors::QueryableExpected(expr) =>
@@ -97,15 +133,15 @@ pub enum Errors {
     Exact(String),
     ExactNear(String, Token),
     HashTableOverflow(usize, String),
-    IllegalExpression(String),
-    IllegalOperator(Token),
+    IncompatibleParameters(Vec<Parameter>),
     IndexOutOfRange(String, usize, usize),
+    InstantiationError(DataType),
     InvalidNamespace(String),
     Multiple(Vec<Errors>),
     NotImplemented(String),
     PackageNotFound(String),
     PlatformOpError(PlatformOps),
-    Syntax(String),
+    SyntaxError(SyntaxErrors),
     TypeMismatch(TypeMismatchErrors),
     UnsupportedPlatformOps(PlatformOps),
     ViewsCannotBeResized,
@@ -126,12 +162,12 @@ impl Display for Errors {
                         token.get_line_number(), token.get_column_number()),
             Errors::HashTableOverflow(rid, value) =>
                 format!("Hash table overflow detected (rid: {rid}, key: {value})"),
+            Errors::IncompatibleParameters(params) =>
+                format!("Incompatible parameters: {}", Parameter::render(params)),
             Errors::IndexOutOfRange(name, idx, len) =>
                 format!("{name} index is out of range ({idx} >= {len})"),
-            Errors::IllegalExpression(expr) =>
-                format!("Illegal expression: {expr}"),
-            Errors::IllegalOperator(token) =>
-                format!("Illegal use of operator '{token}'"),
+            Errors::InstantiationError(data_type) =>
+                format!("instantiation error for type {}", data_type.to_code()),
             Errors::InvalidNamespace(expr) =>
                 format!("Invalid namespace reference {expr}"),
             Errors::Multiple(errors) =>
@@ -145,10 +181,10 @@ impl Display for Errors {
                 format!("Package '{name}' not found"),
             Errors::PlatformOpError(op) =>
                 format!("Conversion error: \"{}\"", op.to_code()),
-            Errors::Syntax(message) =>
-                format!("Syntax error: {message}"),
+            Errors::SyntaxError(message) =>
+                format!("{message}"),
             Errors::TypeMismatch(mismatch) =>
-                format!("{}", mismatch),
+                format!("{mismatch}"),
             Errors::UnsupportedPlatformOps(pops) =>
                 format!("Unsupported operation {}", pops.to_code()),
             Errors::ViewsCannotBeResized =>
@@ -180,7 +216,7 @@ mod tests {
         verify(CannotSubtract("a".into(), "b".into()),
                "Cannot subtract b from a");
         verify(PlatformOpError(PlatformOps::UtilHex),
-               "Conversion error: \"util::hex(x)\"");
+               "Conversion error: \"util::hex(a)\"");
         verify(Exact("Something bad happened".into()),
                "Something bad happened");
         verify(ExactNear(
@@ -189,21 +225,28 @@ mod tests {
                "Something bad happened on line 13 column 5");
         verify(HashTableOverflow(100, "AAA".into()),
                "Hash table overflow detected (rid: 100, key: AAA)");
-        verify(IllegalExpression("2 ~ 3".into()),
-               "Illegal expression: 2 ~ 3");
-        verify(IllegalOperator(Token::Atom {
-            text: "+".to_string(),
-            start: 12,
-            end: 14,
-            line_number: 1,
-            column_number: 18,
-        }), "Illegal use of operator '+'");
         verify(InvalidNamespace("a.b.c".into()), "Invalid namespace reference a.b.c");
         verify(NotImplemented("magic()".into()), "Not yet implemented - magic()");
         verify(PackageNotFound("wth".into()), "Package 'wth' not found");
         verify(IndexOutOfRange("bytes".into(), 5, 4),
                "bytes index is out of range (5 >= 4)");
-        verify(Syntax("cannot do it".into()), "Syntax error: cannot do it");
+    }
+
+    #[test]
+    fn test_syntax_errors() {
+        verify(SyntaxError(SyntaxErrors::IllegalExpression("2 ~ 3".into())),
+               "Syntax error: Illegal expression: 2 ~ 3");
+        verify(SyntaxError(SyntaxErrors::IllegalOperator(Token::Atom {
+            text: "+".to_string(),
+            start: 12,
+            end: 14,
+            line_number: 1,
+            column_number: 18,
+        })), "Syntax error: Illegal use of operator '+'");
+        verify(SyntaxError(SyntaxErrors::LiteralExpected("What".to_string())),
+               "Syntax error: expected literal value, but found 'What'");
+        verify(SyntaxError(SyntaxErrors::TypeIdentifierExpected("hot_dog".to_string())),
+               "Syntax error: expected type identifier, but found 'hot_dog'");
     }
 
     #[test]
@@ -223,7 +266,7 @@ mod tests {
         verify(TypeMismatch(FunctionArgsExpected("Tom".into())),
                "Type Mismatch: Function arguments expected, but found Tom");
         verify(TypeMismatch(OutcomeExpected("wth".into())),
-               "Type Mismatch: Expected an outcome (Ack, RowId or RowsAffected) near wth");
+               "Type Mismatch: Expected an outcome (RowId or RowsAffected) near wth");
         verify(TypeMismatch(ParameterExpected("@".into())),
                "Type Mismatch: Expected a parameter, got \"@\" instead");
         verify(TypeMismatch(QueryableExpected("reset".into())),

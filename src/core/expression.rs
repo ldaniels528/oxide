@@ -5,12 +5,12 @@
 
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::VaryingType;
+use crate::data_types::DataType::DynamicType;
 use crate::sequences::{Array, Sequence};
 
-use crate::errors::throw;
-use crate::errors::Errors::{IllegalOperator, TypeMismatch};
+use crate::errors::Errors::{SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ConstantValueExpected, UnsupportedType};
+use crate::errors::{throw, SyntaxErrors};
 use crate::expression::Expression::{CodeBlock, Condition, FunctionCall, If, Literal, Return, Variable, While};
 use crate::inferences::Inferences;
 use crate::numbers::Numbers;
@@ -26,7 +26,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 
 // constants
-pub const ACK: Expression = Literal(Number(Numbers::Ack));
 pub const FALSE: Expression = Condition(Conditions::False);
 pub const TRUE: Expression = Condition(Conditions::True);
 pub const NULL: Expression = Literal(TypedValue::Null);
@@ -245,7 +244,7 @@ pub enum Expression {
     SetVariable(String, Box<Expression>),
     SetVariables(Box<Expression>, Box<Expression>),
     TupleExpression(Vec<Expression>),
-    TypeDecl(Box<Expression>),
+    TypeDef(Box<Expression>),
     Variable(String),
     Via(Box<Expression>),
     While {
@@ -369,7 +368,7 @@ impl Expression {
             Expression::SetVariables(name, value) =>
                 format!("{} := {}", Self::decompile(name), Self::decompile(value)),
             Expression::TupleExpression(args) => format!("({})", Self::decompile_list(args)),
-            Expression::TypeDecl(expr) => format!("type_decl({})", expr.to_code()),
+            Expression::TypeDef(expr) => format!("typedef({})", expr.to_code()),
             Expression::Variable(name) => name.to_string(),
             Expression::Via(expr) => format!("via {}", Self::decompile(expr)),
             Expression::While { condition, code } =>
@@ -544,7 +543,7 @@ impl Expression {
             Token::Backticks { text, .. } => Variable(text),
             Token::DoubleQuoted { text, .. } => Literal(StringValue(text)),
             Token::Numeric { text, .. } => Literal(Number(Numbers::from_string(text))),
-            Token::Operator { .. } => Literal(ErrorValue(IllegalOperator(token))),
+            Token::Operator { .. } => Literal(ErrorValue(SyntaxError(SyntaxErrors::IllegalOperator(token)))),
             Token::SingleQuoted { text, .. } => Literal(StringValue(text)),
             Token::URL { text, .. } => Literal(StringValue(text)),
         }
@@ -616,7 +615,7 @@ impl Expression {
                         .map(|row| Structured(Firm(row, df.get_parameters())))
                         .unwrap_or(Undefined),
                     TypedValue::Undefined => Undefined,
-                    z => ErrorValue(TypeMismatch(UnsupportedType(VaryingType(vec![]), z.get_type())))
+                    z => ErrorValue(TypeMismatch(UnsupportedType(DynamicType, z.get_type())))
                 })
             }
             Expression::Factorial(expr) => expr.to_pure().map(|v| v.factorial()),
@@ -665,7 +664,7 @@ fn to_ns(path: Expression) -> Expression {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::data_types::DataType::{Indeterminate, NumberType, StringType};
+    use crate::data_types::DataType::{DynamicType, NumberType, StringType};
     use crate::expression::Conditions::*;
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
     use crate::expression::DatabaseOps::{Mutation, Queryable};
@@ -730,7 +729,7 @@ mod tests {
     fn test_conditional_and() {
         let machine = Machine::empty();
         let model = Conditions::And(Box::new(TRUE), Box::new(FALSE));
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(false));
         assert_eq!(model.to_code(), "true && false")
     }
@@ -743,7 +742,7 @@ mod tests {
             Box::new(Literal(Number(I32Value(1)))),
             Box::new(Literal(Number(I32Value(10)))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "10 between 1 and 10")
     }
@@ -756,7 +755,7 @@ mod tests {
             Box::new(Literal(Number(I32Value(1)))),
             Box::new(Literal(Number(I32Value(10)))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(false));
         assert_eq!(model.to_code(), "10 betwixt 1 and 10")
     }
@@ -768,7 +767,7 @@ mod tests {
             Box::new(Literal(Number(I32Value(5)))),
             Box::new(Literal(Number(I32Value(5)))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5 == 5")
     }
@@ -780,7 +779,7 @@ mod tests {
             Box::new(Literal(Number(F64Value(5.1)))),
             Box::new(Literal(Number(F64Value(5.1)))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5.1 == 5.1")
     }
@@ -792,7 +791,7 @@ mod tests {
             Box::new(Literal(StringValue("Hello".to_string()))),
             Box::new(Literal(StringValue("Hello".to_string()))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "\"Hello\" == \"Hello\"")
     }
@@ -814,7 +813,7 @@ mod tests {
             Box::new(Literal(StringValue("Hello".to_string()))),
             Box::new(Literal(StringValue("Goodbye".to_string()))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "\"Hello\" != \"Goodbye\"")
     }
@@ -827,7 +826,7 @@ mod tests {
             Box::new(Variable("x".into())),
             Box::new(Literal(Number(I64Value(1)))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "x > 1")
     }
@@ -839,7 +838,7 @@ mod tests {
             Box::new(Literal(Number(I32Value(5)))),
             Box::new(Literal(Number(I32Value(1)))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5 >= 1")
     }
@@ -851,7 +850,7 @@ mod tests {
             Box::new(Literal(Number(I32Value(4)))),
             Box::new(Literal(Number(I32Value(5)))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "4 < 5")
     }
@@ -863,7 +862,7 @@ mod tests {
             Box::new(Literal(Number(I32Value(1)))),
             Box::new(Literal(Number(I32Value(5)))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "1 <= 5")
     }
@@ -875,7 +874,7 @@ mod tests {
             Box::new(Literal(Number(I32Value(-5)))),
             Box::new(Literal(Number(I32Value(5)))),
         );
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "-5 != 5")
     }
@@ -884,7 +883,7 @@ mod tests {
     fn test_conditional_or() {
         let machine = Machine::empty();
         let model = Conditions::Or(Box::new(TRUE), Box::new(FALSE));
-        let (_, result) = machine.evaluate_cond(&model).unwrap();
+        let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "true || false")
     }
@@ -1062,15 +1061,15 @@ mod tests {
     fn test_define_anonymous_function() {
         let model = FnExpression {
             params: vec![
-                Parameter::build("a"),
-                Parameter::build("b"),
+                Parameter::add("a"),
+                Parameter::add("b"),
             ],
             body: Some(Box::new(Multiply(Box::new(
                 Variable("a".into())
             ), Box::new(
                 Variable("b".into())
             )))),
-            returns: Indeterminate,
+            returns: DynamicType,
         };
         assert_eq!(Expression::decompile(&model), "fn(a, b) => a * b")
     }
@@ -1080,15 +1079,15 @@ mod tests {
         let model = SetVariable("add".into(), Box::new(
             FnExpression {
                 params: vec![
-                    Parameter::build("a"),
-                    Parameter::build("b"),
+                    Parameter::add("a"),
+                    Parameter::add("b"),
                 ],
                 body: Some(Box::new(Plus(Box::new(
                     Variable("a".into())
                 ), Box::new(
                     Variable("b".into())
                 )))),
-                returns: Indeterminate,
+                returns: DynamicType,
             }),
         );
         assert_eq!(Expression::decompile(&model), "add := fn(a, b) => a + b")

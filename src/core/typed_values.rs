@@ -6,8 +6,10 @@
 use std::cmp::Ordering;
 use std::collections::Bound;
 use std::fmt::Display;
+use std::fs::File;
 use std::hash::{DefaultHasher, Hasher};
 use std::i32;
+use std::io::Read;
 use std::ops::*;
 
 use chrono::DateTime;
@@ -27,9 +29,9 @@ use crate::data_types::*;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, Model};
 
-use crate::errors::Errors::{CannotSubtract, Exact, Multiple, Syntax, TypeMismatch};
+use crate::errors::Errors::{CannotSubtract, Exact, IncompatibleParameters, Multiple, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CannotBeNegated, StructsOneOrMoreExpected, UnsupportedType};
-use crate::errors::{throw, Errors};
+use crate::errors::{throw, Errors, SyntaxErrors, TypeMismatchErrors};
 use crate::expression::Expression;
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
@@ -142,11 +144,11 @@ impl TypedValue {
 
     pub fn from_token(token: &Token) -> std::io::Result<TypedValue> {
         match token {
-            Token::Atom { .. } => throw(Syntax("literal expected".to_string())),
-            Token::Backticks { .. } => throw(Syntax("literal expected".to_string())),
+            Token::Atom { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get_raw_value()))),
+            Token::Backticks { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get_raw_value()))),
             Token::DoubleQuoted { text, .. } => Ok(StringValue(text.to_string())),
             Token::Numeric { text, .. } => Self::from_numeric(text),
-            Token::Operator { .. } => throw(Syntax("literal expected".to_string())),
+            Token::Operator { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get_raw_value()))),
             Token::SingleQuoted { text, .. } => Ok(StringValue(text.to_string())),
             Token::URL { text, .. } => Ok(StringValue(text.to_string())),
         }
@@ -193,7 +195,6 @@ impl TypedValue {
         }
         let result = match raw_value.trim() {
             "" => Null,
-            "Ack" => Number(Ack),
             "false" => Boolean(false),
             "null" => Null,
             "true" => Boolean(true),
@@ -204,7 +205,7 @@ impl TypedValue {
                     .map_err(|e| cnv_error!(e))?.timestamp_millis())),
             s if uuid_regex.is_match(s) => Number(U128Value(ByteCodeCompiler::decode_uuid(s)?)),
             s if is_quoted(s) => StringValue(s[1..s.len() - 1].to_string()),
-            s => return throw(Syntax(format!("Literal value expected near {}", s)))
+            s => return throw(SyntaxError(SyntaxErrors::LiteralExpected(s.to_string()))),
         };
         Ok(result)
     }
@@ -245,6 +246,44 @@ impl TypedValue {
         }
     }
 
+    pub fn convert_to(&self, data_type: DataType) -> std::io::Result<TypedValue> {
+        Ok(match data_type {
+            ArrayType(max_len) => Undefined,
+            ASCIIType(max_len) => ASCII(self.unwrap_as_string(max_len).chars().collect()),
+            BinaryType(max_len) => Binary(self.unwrap_as_bytes(max_len)?),
+            BooleanType => match self {
+                Number(n) => Boolean(n.to_f64() != 0.),
+                StringValue(s) => Boolean(s == "true"),
+                _ => Undefined
+            },
+            EnumType(params) => Undefined,
+            ErrorType => ErrorValue(Exact(self.unwrap_value())),
+            FunctionType(my_params, my_returns) =>
+                match self {
+                    ErrorValue(err) => ErrorValue(err.clone()),
+                    Function { body, .. } => {
+                        Function {
+                            params: my_params,
+                            body: body.clone(),
+                            returns: my_returns.deref().clone(),
+                        }
+                    }
+                    other => ErrorValue(TypeMismatch(TypeMismatchErrors::FunctionExpected(other.to_code())))
+                }
+            DynamicType => self.clone(),
+            NumberType(kind) => match self {
+                Boolean(b) => Number(U8Value(if *b { 1 } else { 0 }).convert_to(kind)),
+                Number(number) => Number(number.convert_to(kind)),
+                _ => Undefined,
+            }
+            PlatformOpsType(_kind) => Undefined,
+            StringType(max_len) => StringValue(self.unwrap_as_string(max_len)),
+            StructureType(params) => Undefined,
+            TableType(params, ..) => self.to_table_with_schema(&params),
+            TupleType(params) => Undefined,
+        })
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         match self {
             ArrayValue(items) => {
@@ -280,7 +319,7 @@ impl TypedValue {
                 FunctionType(params.clone(), Box::from(returns.clone())),
             Kind(data_type) => data_type.clone(),
             NamespaceValue(..) => TableType(Vec::new(), 0),
-            Null | Undefined => VaryingType(Vec::new()),
+            Null | Undefined => DynamicType,
             Number(n) => NumberType(n.kind()),
             PlatformOp(op) => op.get_type(),
             Sequenced(seq) => seq.get_type(),
@@ -304,11 +343,11 @@ impl TypedValue {
     }
 
     pub fn is_ok(&self) -> bool {
-        matches!(self, Number(Numbers::Ack) | Boolean(true) | Number(..) | NamespaceValue(..) | TableValue(..))
+        matches!(self, Boolean(true) | Number(..) | NamespaceValue(..) | TableValue(..))
     }
 
     pub fn is_true(&self) -> bool {
-        matches!(self, Number(Numbers::Ack) | Boolean(true))
+        matches!(self, Boolean(true))
     }
 
     pub fn matches(&self, other: &Self) -> TypedValue {
@@ -338,7 +377,6 @@ impl TypedValue {
 
     pub fn to_bool(&self) -> bool {
         match self {
-            Number(Numbers::Ack) => true,
             Boolean(b) => *b,
             _ => false
         }
@@ -346,6 +384,10 @@ impl TypedValue {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
+            ASCII(chars) => chars.iter().flat_map(|&c| {
+                let mut buf = [0; 4];
+                c.encode_utf8(&mut buf).as_bytes().to_vec()
+            }).collect(),
             Binary(bytes) => bytes.to_vec(),
             StringValue(s) => s.bytes().collect(),
             z => z.encode()
@@ -487,15 +529,7 @@ impl TypedValue {
         }
     }
 
-    pub fn to_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
-        match self.to_table_value() {
-            ErrorValue(error) => throw(error),
-            TableValue(df) => Ok(Box::new(df)),
-            z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
-        }
-    }
-
-    pub fn to_table_value(&self) -> TypedValue {
+    pub fn to_table(&self) -> TypedValue {
         match self {
             ArrayValue(items) =>
                 match self.convert_array_to_table(&items.get_values()) {
@@ -509,12 +543,33 @@ impl TypedValue {
                         match FileRowCollection::open(ns) {
                             Ok(frc) => TableValue(Disk(frc)),
                             Err(err) => ErrorValue(Exact(err.to_string())),
-                        },
+                        }
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 }
             Structured(s) => TableValue(s.to_dataframe()),
             TableValue(df) => TableValue(df.to_owned()),
             z => z.to_owned()
+        }
+    }
+
+    pub fn to_table_impl(&self) -> std::io::Result<Box<dyn RowCollection>> {
+        match self.to_table() {
+            ErrorValue(error) => throw(error),
+            TableValue(df) => Ok(Box::new(df)),
+            z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
+        }
+    }
+
+    pub fn to_table_with_schema(&self, params: &Vec<Parameter>) -> TypedValue {
+        match self.to_table() {
+            TableValue(df) => {
+                let my_params = df.get_parameters();
+                match Parameter::are_compatible(params, &my_params) {
+                    true => TableValue(df),
+                    false => ErrorValue(IncompatibleParameters(my_params))
+                }
+            }
+            other => other
         }
     }
 
@@ -551,7 +606,6 @@ impl TypedValue {
 
     pub fn to_u8(&self) -> u8 {
         match self {
-            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u8(),
             _ => 0
@@ -560,7 +614,6 @@ impl TypedValue {
 
     pub fn to_u16(&self) -> u16 {
         match self {
-            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u16(),
             _ => 0
@@ -569,7 +622,6 @@ impl TypedValue {
 
     pub fn to_u32(&self) -> u32 {
         match self {
-            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u32(),
             _ => 0
@@ -578,7 +630,6 @@ impl TypedValue {
 
     pub fn to_u64(&self) -> u64 {
         match self {
-            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u64(),
             _ => 0
@@ -587,7 +638,6 @@ impl TypedValue {
 
     pub fn to_u128(&self) -> u128 {
         match self {
-            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_u128(),
             _ => 0
@@ -596,10 +646,47 @@ impl TypedValue {
 
     pub fn to_usize(&self) -> usize {
         match self {
-            Number(Numbers::Ack) => 1,
             Boolean(true) => 1,
             Number(n) => n.to_usize(),
             _ => 0
+        }
+    }
+
+    fn unwrap_as_bytes(&self, max_len: usize) -> std::io::Result<Vec<u8>> {
+        let bytes = match self {
+            ArrayValue(_) => vec![],
+            Binary(bytes) => bytes.clone(),
+            Boolean(b) => vec![if *b { 1u8 } else { 0u8 }],
+            Function { .. } => vec![],
+            NamespaceValue(ns) => {
+                let mut f = File::open(ns.get_table_file_path())?;
+                let mut buffer = Vec::new();
+                f.read_to_end(&mut buffer)?;
+                buffer
+            }
+            Null => vec![],
+            Number(_) => vec![],
+            PlatformOp(_) => vec![],
+            Sequenced(_) => vec![],
+            StringValue(s) => s.as_bytes().to_vec(),
+            Structured(_) => vec![],
+            TableValue(_) => vec![],
+            TupleValue(_) => vec![],
+            Undefined => vec![],
+            _ => self.unwrap_value().bytes().collect(),
+        };
+        Ok(match max_len {
+            n if n < 1 || n > bytes.len() => bytes,
+            n => (&bytes[..n]).to_vec()
+        })
+    }
+
+    /// converts the value to a [String] with a maximum length
+    fn unwrap_as_string(&self, max_len: usize) -> String {
+        let s = self.unwrap_value();
+        match max_len {
+            n if n < 1 || n > s.len() => s,
+            n => (&s[..n]).to_string()
         }
     }
 
@@ -699,7 +786,6 @@ impl Add for TypedValue {
             (b, ArrayValue(a)) => ArrayValue(Array::from(a.get_values().iter()
                 .map(|i| i.clone() + b.clone())
                 .collect::<Vec<_>>())),
-            (Boolean(..), Number(Numbers::Ack)) => Boolean(true),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
             (ErrorValue(Multiple(mut errors0)), ErrorValue(Multiple(errors1))) => {
                 errors0.extend(errors1);
@@ -717,7 +803,6 @@ impl Add for TypedValue {
             (ErrorValue(a), _) => ErrorValue(a),
             (_, ErrorValue(b)) => ErrorValue(b),
             (Number(a), Number(b)) => Number(a + b),
-            (Number(Numbers::Ack), Boolean(b)) => Boolean(b),
             (StringValue(a), StringValue(b)) => StringValue(a + b.as_str()),
             (TableValue(a), Structured(Hard(b))) => {
                 let mut mrc = match ModelRowCollection::from_table(Box::new(&a)) {
@@ -971,7 +1056,7 @@ impl Sub for TypedValue {
 
 /// Unit tests
 #[cfg(test)]
-mod tests {
+mod core_tests {
     use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
     use serde_json::{json, Value};
 
@@ -1197,7 +1282,6 @@ mod tests {
 
     #[test]
     fn test_outcomes() {
-        verify_encode_decode(&Number(Numbers::Ack));
         verify_encode_decode(&Number(Numbers::RowId(1013)));
         verify_encode_decode(&Number(Numbers::RowsAffected(19)));
     }
@@ -1205,7 +1289,6 @@ mod tests {
     #[test]
     fn test_to_json() {
         use Numbers::*;
-        verify_to_json(Number(Numbers::Ack), json!(0));
         verify_to_json(Boolean(false), serde_json::Value::Bool(false));
         verify_to_json(Boolean(true), serde_json::Value::Bool(true));
         verify_to_json(Number(DateValue(1709163679081)), serde_json::Value::String("2024-02-28T23:41:19.081Z".into()));
@@ -1223,7 +1306,6 @@ mod tests {
         verify_to_json(Number(U128Value(123_456_789)), serde_json::json!(123_456_789));
         verify_to_json(Null, serde_json::Value::Null);
         verify_to_json(StringValue("Hello World".into()), serde_json::Value::String("Hello World".into()));
-        //verify_to_json()
         verify_to_json(Undefined, serde_json::Value::Null);
     }
 
@@ -1234,7 +1316,6 @@ mod tests {
 
     #[test]
     fn test_wrap_and_unwrap_value() {
-        verify_wrap_unwrap("Ack", Number(Ack));
         verify_wrap_unwrap("false", Boolean(false));
         verify_wrap_unwrap("true", Boolean(true));
         verify_wrap_unwrap("2024-02-28T23:41:19.081Z", Number(DateValue(1709163679081)));
@@ -1272,3 +1353,158 @@ mod tests {
         };
     }
 }
+
+/// conversion tests
+#[cfg(test)]
+mod conversion_tests {
+    use crate::data_types::DataType;
+    use crate::data_types::DataType::*;
+    use crate::dataframe::Dataframe;
+    use crate::errors::Errors::Exact;
+    use crate::model_row_collection::ModelRowCollection;
+    use crate::number_kind::NumberKind::*;
+    use crate::numbers::Numbers::*;
+    use crate::parameter::Parameter;
+    use crate::sequences::Array;
+    use crate::structures::Structures::Hard;
+    use crate::structures::{HardStructure, Row};
+    use crate::typed_values::TypedValue;
+    use crate::typed_values::TypedValue::*;
+
+    #[test]
+    fn test_array_to_table() {
+        let params = vec![
+            Parameter::with_default("symbol", StringType(3), StringValue("BIZ".into())),
+            Parameter::with_default("exchange", StringType(4), StringValue("NYSE".into())),
+            Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.66))),
+        ];
+        let array = ArrayValue(Array::from(vec![
+            Structured(Hard(HardStructure::new(params.clone(), vec![
+                StringValue("BIZ".into()), StringValue("NYSE".into()), Number(F64Value(23.66))
+            ]))),
+            Structured(Hard(HardStructure::new(params.clone(), vec![
+                StringValue("DMX".into()), StringValue("OTC_BB".into()), Number(F64Value(1.17))
+            ])))
+        ]));
+        verify(array, TableType(params.clone(), 0), TableValue(Dataframe::Model(
+            ModelRowCollection::from_parameters_and_rows(&params, &vec![
+                Row::new(0, vec![
+                    StringValue("BIZ".into()), StringValue("NYSE".into()), Number(F64Value(23.66)),
+                ]),
+                Row::new(1, vec![
+                    StringValue("DMX".into()), StringValue("OTC_BB".into()), Number(F64Value(1.17)),
+                ])
+            ])
+        )))
+    }
+
+    #[test]
+    fn test_boolean_to_i64() {
+        verify(Boolean(true), NumberType(I64Kind), Number(I64Value(1)));
+        verify(Boolean(false), NumberType(I64Kind), Number(I64Value(0)));
+    }
+
+    #[test]
+    fn test_boolean_to_string() {
+        verify(Boolean(true), StringType(0), StringValue("true".into()));
+        verify(Boolean(false), StringType(0), StringValue("false".into()));
+    }
+
+    #[test]
+    fn test_date_to_i64() {
+        verify(Number(DateValue(17453558321123)), NumberType(I64Kind), Number(I64Value(17453558321123)));
+    }
+
+    #[test]
+    fn test_date_to_string() {
+        verify(Number(DateValue(17453558321123)), StringType(0), StringValue("2523-01-30T18:38:41.123Z".into()));
+    }
+
+    #[test]
+    fn test_f32_to_f64() {
+        verify(Number(F32Value(124.357)), NumberType(F64Kind), Number(F64Value(124.35700225830078)));
+    }
+
+    #[test]
+    fn test_f32_to_i64() {
+        verify(Number(F32Value(124.357)), NumberType(I64Kind), Number(I64Value(124)));
+    }
+
+    #[test]
+    fn test_f32_to_string() {
+        verify(Number(F32Value(124.35)), StringType(4), StringValue("124.".into()));
+    }
+
+    #[test]
+    fn test_f64_to_f32() {
+        verify(Number(F64Value(124.357)), NumberType(F32Kind), Number(F32Value(124.357)));
+    }
+
+    #[test]
+    fn test_f64_to_string() {
+        verify(Number(F64Value(12.35)), StringType(5), StringValue("12.35".into()));
+    }
+
+    #[test]
+    fn test_f64_to_u32() {
+        verify(Number(F64Value(1502460.78)), NumberType(U32Kind), Number(U32Value(1502460)));
+    }
+
+    #[test]
+    fn test_f64_to_u64() {
+        verify(Number(F64Value(1502460.78)), NumberType(U64Kind), Number(U64Value(1502460)));
+    }
+
+    #[test]
+    fn test_i64_to_boolean() {
+        verify(Number(I64Value(0)), BooleanType, Boolean(false));
+        verify(Number(I64Value(1)), BooleanType, Boolean(true));
+    }
+
+    #[test]
+    fn test_string_to_ascii() {
+        verify(StringValue("This is an ASCII string".into()),
+               ASCIIType(0), ASCII("This is an ASCII string".chars().collect()));
+    }
+
+    #[test]
+    fn test_string_to_boolean() {
+        verify(StringValue("true".into()), BooleanType, Boolean(true));
+    }
+
+    #[test]
+    fn test_string_to_error() {
+        verify(StringValue("This is an error".into()),
+               ErrorType, ErrorValue(Exact("This is an error".into())));
+    }
+
+    #[test]
+    fn test_u128_to_string() {
+        verify(Number(U128Value(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128)),
+               StringType(0), StringValue("338859001745337648252653219454709070542".into()));
+    }
+
+    #[test]
+    fn test_u128_to_uuid() {
+        verify(Number(U128Value(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128)),
+               NumberType(UUIDKind), Number(UUIDValue(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128)));
+    }
+
+    #[test]
+    fn test_uuid_to_u128() {
+        verify(Number(UUIDValue(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128)),
+               NumberType(U128Kind), Number(U128Value(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128)));
+    }
+
+    #[test]
+    fn test_uuid_to_string() {
+        verify(Number(UUIDValue(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128)),
+               StringType(0), StringValue("feeddead-beef-deaf-fade-cafebabeface".into()));
+    }
+
+    fn verify(from_value: TypedValue, to_type: DataType, to_value: TypedValue) {
+        assert_eq!(from_value.convert_to(to_type).unwrap(), to_value);
+    }
+}
+
+

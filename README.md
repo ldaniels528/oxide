@@ -265,7 +265,7 @@ server response:
 cal::now()
 </pre>
 <pre>
-2025-03-28T03:15:55.942Z
+2025-04-24T17:08:39.324Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -276,7 +276,7 @@ now():::day_of()
 
 </pre>
 <pre>
-27
+24
 </pre>
 <hr>
 <h4>cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -287,7 +287,7 @@ now():::hour12()
 
 </pre>
 <pre>
-8
+10
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -298,7 +298,7 @@ now():::hour24()
 
 </pre>
 <pre>
-20
+10
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -309,7 +309,7 @@ now():::minute_of()
 
 </pre>
 <pre>
-15
+8
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -320,7 +320,7 @@ now():::month_of()
 
 </pre>
 <pre>
-55
+39
 </pre>
 <hr>
 <h4>cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
@@ -331,7 +331,7 @@ now():::second_of()
 
 </pre>
 <pre>
-55
+39
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -383,7 +383,7 @@ file:::read_text_file()
 io::stderr("Goodbye Cruel World")
 </pre>
 <pre>
-Ack
+true
 </pre>
 <hr>
 <h4>io::stdout &#8212; Writes a string to STDOUT</h4>
@@ -391,10 +391,10 @@ Ack
 io::stdout("Hello World")
 </pre>
 <pre>
-Ack
+true
 </pre>
 <hr>
-<h4>testing::assert &#8212; Evaluates an assertion returning Ack or an error</h4>
+<h4>testing::assert &#8212; Evaluates an assertion returning true or an error</h4>
 <pre>
 
 import testing
@@ -436,14 +436,14 @@ assert(matches(
 |--------------------------------------------------------------------------------------------------------------------------|
 | id | level | item                                                                                      | passed | result |
 |--------------------------------------------------------------------------------------------------------------------------|
-| 0  | 0     | Matches function                                                                          | true   | Ack    |
-| 1  | 1     | Compare Array contents: Equal                                                             | true   | Ack    |
+| 0  | 0     | Matches function                                                                          | true   | true   |
+| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |
 | 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |
-| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | Ack    |
+| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |
 | 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |
-| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | Ack    |
+| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |
 | 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |
-| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | Ack    |
+| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |
 | 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |
 |--------------------------------------------------------------------------------------------------------------------------|
 </pre>
@@ -489,7 +489,7 @@ os::call("chmod", "777", oxide::home())
 os::clear()
 </pre>
 <pre>
-Ack
+true
 </pre>
 <hr>
 <h4>os::current_dir &#8212; Returns the current directory</h4>
@@ -540,7 +540,7 @@ os::env()
 | 17 | CARGO_PKG_VERSION_PATCH    | 0                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 18 | CARGO_PKG_VERSION_PRE      |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 19 | COMMAND_MODE               | unix2003                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 20 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-3c7e39002162ae64/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib                                              |
+| 20 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-fc50b23a4619b9d4/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib                                              |
 | 21 | HOME                       | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | 22 | IDEA_INITIAL_DIRECTORY     | /                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 23 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                        |
@@ -560,7 +560,7 @@ os::env()
 | 37 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 38 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 39 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 40 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.s3Detqy0KH/Listeners                                                                                                                                                                                                                                                                                                                                                                                    |
+| 40 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.P9u3L7iTL6/Listeners                                                                                                                                                                                                                                                                                                                                                                                    |
 | 41 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | 42 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                      |
 | 43 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
@@ -587,7 +587,7 @@ code()
 oxide::debug("2 ** 4")
 </pre>
 <pre>
-Pow(Literal(Number(I64Value(2))), Literal(Number(I64Value(4))))
+Ok(Pow(Literal(Number(I64Value(2))), Literal(Number(I64Value(4)))))
 </pre>
 <hr>
 <h4>oxide::eval &#8212; Evaluates a string containing Oxide code</h4>
@@ -607,13 +607,13 @@ Hello World
 from oxide::help() limit 3
 </pre>
 <pre>
-|-------------------------------------------------------------------------------------------------------------------------------------|
-| id | name        | module | signature                                 | description                                       | returns |
-|-------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | to_string   | str    | str::to_string(x)                         | Converts a value to its text-based representation | String  |
-| 1  | substring   | str    | str::substring(s: String, m: i64, n: i64) | Returns a substring of string `s` from `m` to `n` | String  |
-| 2  | starts_with | str    | str::starts_with(a: String, b: String)    | Returns true if string `a` starts with string `b` | Boolean |
-|-------------------------------------------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------|
+| id | name           | module | signature                     | description                                   | returns |
+|------------------------------------------------------------------------------------------------------------------------|
+| 0  | stdout         | io     | io::stdout(s: String)         | Writes a string to STDOUT                     | String  |
+| 1  | stderr         | io     | io::stderr(s: String)         | Writes a string to STDERR                     | String  |
+| 2  | read_text_file | io     | io::read_text_file(s: String) | Reads the contents of a text file into memory | Array   |
+|------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -621,13 +621,10 @@ from oxide::help() limit 3
 from oxide::history() limit 3
 </pre>
 <pre>
-|-------------------------------------------------------------------|
-| id | session_id    | user_id | cpu_time_ms | input                |
-|-------------------------------------------------------------------|
-| 0  | 1736823002231 | 501     | 2.081       | import oxide; help() |
-| 1  | 1736823002627 | 501     | 3.596       | import oxide; help() |
-| 2  | 1736827273725 | 501     | 0.971       | import oxide; help() |
-|-------------------------------------------------------------------|
+|-------------------------------------------------|
+| id | session_id | user_id | cpu_time_ms | input |
+|-------------------------------------------------|
+|-------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::home &#8212; Returns the Oxide home directory path</h4>
@@ -643,7 +640,7 @@ oxide::home()
 oxide::println("Hello World")
 </pre>
 <pre>
-Ack
+true
 </pre>
 <hr>
 <h4>oxide::reset &#8212; Clears the scope of all user-defined objects</h4>
@@ -651,7 +648,7 @@ Ack
 oxide::reset()
 </pre>
 <pre>
-Ack
+true
 </pre>
 <hr>
 <h4>oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
@@ -659,7 +656,7 @@ Ack
 oxide::uuid()
 </pre>
 <pre>
-0a5749e5-1795-484b-9e6d-a8c5e66b85b6
+724930a6-e253-4912-b363-5a13193e7a1b
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>
@@ -1135,7 +1132,7 @@ util::to_u64(88)
 util::to_u128(88)
 </pre>
 <pre>
-00000000-0000-0000-0000-000000000058
+88
 </pre>
 <hr>
 <h4>www::url_decode &#8212; Decodes a URL-encoded string</h4>

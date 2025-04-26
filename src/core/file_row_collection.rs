@@ -21,7 +21,7 @@ use crate::row_collection::{RowCollection, RowEncoding};
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Number};
+use crate::typed_values::TypedValue::{Boolean, ErrorValue, Number};
 use log::error;
 use serde::de::Error;
 use serde::ser::SerializeStruct;
@@ -322,7 +322,7 @@ impl RowCollection for FileRowCollection {
     fn resize(&mut self, new_size: usize) -> TypedValue {
         let new_length = new_size as u64 * self.record_size as u64;
         match self.file.set_len(new_length) {
-            Ok(..) => Number(Numbers::Ack),
+            Ok(..) => Boolean(true),
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }

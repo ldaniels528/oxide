@@ -9,11 +9,10 @@ use crate::data_types::DataType;
 
 use crate::errors::Errors::TypeMismatch;
 use crate::errors::TypeMismatchErrors::ArgumentsMismatched;
-use crate::numbers::Numbers;
 use crate::parameter::Parameter;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Number};
+use crate::typed_values::TypedValue::{Boolean, ErrorValue, Number};
 
 /// Represents a column in a table
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -90,7 +89,7 @@ impl Column {
             (a, b) if a.len() != b.len() =>
                 ErrorValue(TypeMismatch(ArgumentsMismatched(cs0.len(), cs1.len()))),
             _ =>
-                Number(Numbers::Ack)
+                Boolean(true)
         }
     }
 }

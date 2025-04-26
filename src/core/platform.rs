@@ -15,6 +15,7 @@ use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CollectionExpected, DateExpected, StringExpected, StructExpected, TableExpected, UnsupportedType};
 use crate::expression::Expression::{CodeBlock, Literal, Scenario};
 use crate::file_row_collection::FileRowCollection;
+use crate::formatting::DataFormats;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -40,7 +41,6 @@ use std::io::{stderr, stdout, Read, Write};
 use std::ops::Deref;
 use std::path::Path;
 use uuid::Uuid;
-use crate::formatting::DataFormats;
 
 pub const MAJOR_VERSION: u8 = 0;
 pub const MINOR_VERSION: u8 = 3;
@@ -302,7 +302,7 @@ impl PlatformOps {
             PlatformOps::IoFileReadText => "Reads the contents of a text file into memory",
             PlatformOps::IoStdErr => "Writes a string to STDERR",
             PlatformOps::IoStdOut => "Writes a string to STDOUT",
-            PlatformOps::KungFuAssert => "Evaluates an assertion returning Ack or an error",
+            PlatformOps::KungFuAssert => "Evaluates an assertion returning true or an error",
             PlatformOps::KungFuFeature => "Creates a new test feature",
             PlatformOps::KungFuMatches => "Compares two values",
             PlatformOps::KungFuTypeOf => "Returns the type of a value",
@@ -759,7 +759,7 @@ impl PlatformOps {
             KungFuTypeOf | StrToString | ToolsToTable | UtilBase64 | UtilBinary | UtilHex | UtilMD5 | UtilToDate |
             UtilToF32 | UtilToF64 | UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 | UtilToI128 |
             UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128
-            => vec![VaryingType(vec![])],
+            => vec![DynamicType],
             // single-parameter (string)
             IoFileExists | IoFileReadText | IoStdErr | IoStdOut | OxidePrintln | OsCall |
             OxideCompile | OxideDebug | OxideEval | StrLen | WwwURLDecode | WwwURLEncode
@@ -770,7 +770,7 @@ impl PlatformOps {
             => vec![TableType(Vec::new(), 0)],
             // two-parameter (lazy, lazy)
             KungFuMatches | ToolsPush
-            => vec![VaryingType(vec![]), VaryingType(vec![])],
+            => vec![DynamicType, DynamicType],
             // two-parameter (string, string)
             IoFileCreate | StrEndsWith | StrFormat | StrSplit | StrStartsWith
             => vec![StringType(0), StringType(0)],
@@ -795,7 +795,6 @@ impl PlatformOps {
     pub fn get_parameters(&self) -> Vec<Parameter> {
         let names = match self.get_parameter_types().as_slice() {
             [BooleanType] => vec!['b'],
-            [VaryingType(..)] => vec!['x'],
             [NumberType(..)] => vec!['n'],
             [StringType(..)] => vec!['s'],
             [StringType(..), NumberType(..)] => vec!['s', 'n'],
@@ -828,7 +827,7 @@ impl PlatformOps {
             // f64
             OxideVersion => NumberType(F64Kind),
             // function
-            OxideCompile | OxideDebug => FunctionType(vec![], Box::from(Indeterminate)),
+            OxideCompile | OxideDebug => FunctionType(vec![], Box::from(DynamicType)),
             // number
             StrIndexOf | StrLen => NumberType(I64Kind),
             CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
@@ -847,7 +846,7 @@ impl PlatformOps {
             UtilToU128 | OxideUUID => NumberType(U128Kind),
             // outcome
             IoFileCreate | KungFuAssert | OsClear | OxidePrintln | OxideReset |
-            ToolsPush | WwwServe => NumberType(AckKind),
+            ToolsPush | WwwServe => BooleanType,
             // string
             IoStdErr | IoStdOut | KungFuTypeOf | OsCall | OsCurrentDir |
             OxideEval | OxideHome | StrFormat | StrJoin | StrLeft | StrRight |
@@ -1068,7 +1067,7 @@ impl PlatformOps {
         let mut out = stderr();
         out.write(format!("{}", value.unwrap_value()).as_bytes())?;
         out.flush()?;
-        Ok((ms, Number(Ack)))
+        Ok((ms, Boolean(true)))
     }
 
     fn do_io_stdout(
@@ -1078,7 +1077,7 @@ impl PlatformOps {
         let mut out = stdout();
         out.write(format!("{}", value.unwrap_value()).as_bytes())?;
         out.flush()?;
-        Ok((ms, Number(Ack)))
+        Ok((ms, Boolean(true)))
     }
 
     fn do_kung_fu_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
@@ -1162,7 +1161,7 @@ impl PlatformOps {
     fn do_os_clear_screen(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         print!("\x1B[2J\x1B[H");
         std::io::stdout().flush()?;
-        Ok((ms, Number(Ack)))
+        Ok((ms, Boolean(true)))
     }
 
     fn do_os_current_dir(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
@@ -1197,7 +1196,7 @@ impl PlatformOps {
                 Ok((ms, Function {
                     params: vec![],
                     body: Box::new(code),
-                    returns: Indeterminate,
+                    returns: DynamicType,
                 }))
             }
             z => throw(TypeMismatch(UnsupportedType(StringType(0), z.get_type())))
@@ -1303,7 +1302,7 @@ impl PlatformOps {
     }
 
     fn do_oxide_reset(_ms: Machine) -> (Machine, TypedValue) {
-        (Machine::new_platform(), Number(Ack))
+        (Machine::new_platform(), Boolean(true))
     }
 
     fn do_oxide_version(ms: Machine) -> (Machine, TypedValue) {
@@ -1582,9 +1581,9 @@ impl PlatformOps {
     ) -> std::io::Result<(Machine, TypedValue)> {
         let seq = value.to_sequence()?;
         let result = match seq {
-            Sequences::TheDataframe(mut df) => df.pop_row(df.get_parameters()).to_table_value(),
-            Sequences::TheArray(arr) => ErrorValue(Exact("Array::pop() is unimplemented".into())),
-            Sequences::TheTuple(tp) => ErrorValue(Exact("Tuple::pop() is unimplemented".into())),
+            Sequences::TheDataframe(mut df) => df.pop_row(df.get_parameters()).to_table(),
+            Sequences::TheArray(arr) => ErrorValue(NotImplemented("Array::pop()".into())),
+            Sequences::TheTuple(tp) => ErrorValue(NotImplemented("Tuple::pop()".into())),
         };
         Ok((ms, result))
     }
@@ -1648,14 +1647,7 @@ impl PlatformOps {
                 })),
             StringValue(s) => Ok((ms, StringValue(s.chars().rev().collect()))),
             TableValue(rcv) => Ok((ms, rcv.reverse_table_value())),
-            other => throw(TypeMismatch(UnsupportedType(
-                VaryingType(vec![
-                    ArrayType(0),
-                    StringType(0),
-                    TableType(vec![], 0)
-                ]),
-                other.get_type(),
-            )))
+            other => throw(TypeMismatch(UnsupportedType(DynamicType, other.get_type())))
         }
     }
 
@@ -1663,7 +1655,7 @@ impl PlatformOps {
         ms: Machine,
         tv_table: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match tv_table.to_table_value() {
+        match tv_table.to_table() {
             ErrorValue(err) => throw(err),
             TableValue(df) => {
                 let rows = df.examine_rows()?;
@@ -1725,7 +1717,7 @@ impl PlatformOps {
         ms: Machine,
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        let rc = value.to_table()?;
+        let rc = value.to_table_impl()?;
         let columns = rc.get_columns();
         let rows = rc.read_active_rows()?;
         let mrc = ModelRowCollection::from_columns_and_rows(columns, &rows);
@@ -1800,7 +1792,7 @@ impl PlatformOps {
         port: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
         oxide_server::start_http_server(port.to_u16());
-        Ok((ms, Number(Ack)))
+        Ok((ms, Boolean(true)))
     }
 
     fn do_www_url_decode(
@@ -2016,7 +2008,7 @@ mod tests {
         assert_eq!(KungFuAssert.to_code(), "testing::assert(b: Boolean)");
         assert_eq!(KungFuFeature.to_code(), "testing::feature(a: String, b: Struct)");
         assert_eq!(KungFuMatches.to_code(), "testing::matches(a, b)");
-        assert_eq!(KungFuTypeOf.to_code(), "testing::type_of(x)");
+        assert_eq!(KungFuTypeOf.to_code(), "testing::type_of(a)");
         // os
         assert_eq!(OsCall.to_code(), "os::call(s: String)");
         assert_eq!(OsClear.to_code(), "os::clear()");
@@ -2044,7 +2036,7 @@ mod tests {
         assert_eq!(StrSplit.to_code(), "str::split(a: String, b: String)");
         assert_eq!(StrStartsWith.to_code(), "str::starts_with(a: String, b: String)");
         assert_eq!(StrSubstring.to_code(), "str::substring(s: String, m: i64, n: i64)");
-        assert_eq!(StrToString.to_code(), "str::to_string(x)");
+        assert_eq!(StrToString.to_code(), "str::to_string(a)");
         // tools
         assert_eq!(ToolsCompact.to_code(), "tools::compact(t: Table)");
         assert_eq!(ToolsDescribe.to_code(), "tools::describe(t: Table)");
@@ -2056,26 +2048,26 @@ mod tests {
         assert_eq!(ToolsToArray.to_code(), "tools::to_array(t: Table)");
         assert_eq!(ToolsToCSV.to_code(), "tools::to_csv(t: Table)");
         assert_eq!(ToolsToJSON.to_code(), "tools::to_json(t: Table)");
-        assert_eq!(ToolsToTable.to_code(), "tools::to_table(x)");
+        assert_eq!(ToolsToTable.to_code(), "tools::to_table(a)");
         // util
-        assert_eq!(UtilBase64.to_code(), "util::base64(x)");
-        assert_eq!(UtilBinary.to_code(), "util::to_binary(x)");
-        assert_eq!(UtilHex.to_code(), "util::hex(x)");
-        assert_eq!(UtilMD5.to_code(), "util::md5(x)");
+        assert_eq!(UtilBase64.to_code(), "util::base64(a)");
+        assert_eq!(UtilBinary.to_code(), "util::to_binary(a)");
+        assert_eq!(UtilHex.to_code(), "util::hex(a)");
+        assert_eq!(UtilMD5.to_code(), "util::md5(a)");
         assert_eq!(UtilToASCII.to_code(), "util::to_ascii(n: u32)");
-        assert_eq!(UtilToDate.to_code(), "util::to_date(x)");
-        assert_eq!(UtilToF32.to_code(), "util::to_f32(x)");
-        assert_eq!(UtilToF64.to_code(), "util::to_f64(x)");
-        assert_eq!(UtilToI8.to_code(), "util::to_i8(x)");
-        assert_eq!(UtilToI16.to_code(), "util::to_i16(x)");
-        assert_eq!(UtilToI32.to_code(), "util::to_i32(x)");
-        assert_eq!(UtilToI64.to_code(), "util::to_i64(x)");
-        assert_eq!(UtilToI128.to_code(), "util::to_i128(x)");
-        assert_eq!(UtilToU8.to_code(), "util::to_u8(x)");
-        assert_eq!(UtilToU16.to_code(), "util::to_u16(x)");
-        assert_eq!(UtilToU32.to_code(), "util::to_u32(x)");
-        assert_eq!(UtilToU64.to_code(), "util::to_u64(x)");
-        assert_eq!(UtilToU128.to_code(), "util::to_u128(x)");
+        assert_eq!(UtilToDate.to_code(), "util::to_date(a)");
+        assert_eq!(UtilToF32.to_code(), "util::to_f32(a)");
+        assert_eq!(UtilToF64.to_code(), "util::to_f64(a)");
+        assert_eq!(UtilToI8.to_code(), "util::to_i8(a)");
+        assert_eq!(UtilToI16.to_code(), "util::to_i16(a)");
+        assert_eq!(UtilToI32.to_code(), "util::to_i32(a)");
+        assert_eq!(UtilToI64.to_code(), "util::to_i64(a)");
+        assert_eq!(UtilToI128.to_code(), "util::to_i128(a)");
+        assert_eq!(UtilToU8.to_code(), "util::to_u8(a)");
+        assert_eq!(UtilToU16.to_code(), "util::to_u16(a)");
+        assert_eq!(UtilToU32.to_code(), "util::to_u32(a)");
+        assert_eq!(UtilToU64.to_code(), "util::to_u64(a)");
+        assert_eq!(UtilToU128.to_code(), "util::to_u128(a)");
         // www
         assert_eq!(WwwURLDecode.to_code(), "www::url_decode(s: String)");
         assert_eq!(WwwURLEncode.to_code(), "www::url_encode(s: String)");
@@ -2211,12 +2203,12 @@ mod tests {
 
         #[test]
         fn test_io_stderr() {
-            verify_exact(r#"io::stderr("Goodbye Cruel World")"#, Number(Ack));
+            verify_exact(r#"io::stderr("Goodbye Cruel World")"#, Boolean(true));
         }
 
         #[test]
         fn test_io_stdout() {
-            verify_exact(r#"io::stdout("Hello World")"#, Number(Ack));
+            verify_exact(r#"io::stdout("Hello World")"#, Boolean(true));
         }
     }
 
@@ -2255,14 +2247,14 @@ mod tests {
                 "|--------------------------------------------------------------------------------------------------------------------------|",
                 "| id | level | item                                                                                      | passed | result |",
                 "|--------------------------------------------------------------------------------------------------------------------------|",
-                "| 0  | 0     | Matches function                                                                          | true   | Ack    |",
-                "| 1  | 1     | Compare Array contents: Equal                                                             | true   | Ack    |",
+                "| 0  | 0     | Matches function                                                                          | true   | true   |",
+                "| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |",
                 r#"| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |"#,
-                "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | Ack    |",
+                "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |",
                 r#"| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |"#,
-                "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | Ack    |",
+                "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |",
                 r#"| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |"#,
-                "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | Ack    |",
+                "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |",
                 r#"| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |"#,
                 "|--------------------------------------------------------------------------------------------------------------------------|"
             ]);
@@ -2432,7 +2424,7 @@ mod tests {
 
         #[test]
         fn test_os_clear() {
-            verify_exact("os::clear()", Number(Ack))
+            verify_exact("os::clear()", Boolean(true))
         }
 
         #[test]
@@ -2535,7 +2527,7 @@ mod tests {
 
         #[test]
         fn test_oxide_println() {
-            verify_exact(r#"oxide::println("Hello World")"#, Number(Ack));
+            verify_exact(r#"oxide::println("Hello World")"#, Boolean(true));
         }
 
         #[test]
@@ -3122,7 +3114,7 @@ mod tests {
                 [+] delete from stocks where last_sale > 1.0
                 [+] stocks:::scan()
             "#).unwrap();
-            assert_eq!(result.to_table().unwrap().read_active_rows().unwrap(), vec![
+            assert_eq!(result.to_table_impl().unwrap().read_active_rows().unwrap(), vec![
                 make_scan_quote(0, "ABC", "AMEX", 12.33, false),
                 make_scan_quote(1, "UNO", "OTC", 0.2456, true),
                 make_scan_quote(2, "BIZ", "NYSE", 9.775, false),
@@ -3325,7 +3317,7 @@ mod tests {
 
         #[test]
         fn test_util_md5_type() {
-            verify_data_type("util::md5(x)", BinaryType(16));
+            verify_data_type("util::md5(a)", BinaryType(16));
         }
 
         #[test]
@@ -3443,7 +3435,7 @@ mod tests {
             let result = interpreter.evaluate(r#"
                 www::serve(8833)
             "#).unwrap();
-            assert_eq!(result, Number(Ack));
+            assert_eq!(result, Boolean(true));
 
             // create the table
             let result = interpreter.evaluate(r#"
@@ -3453,7 +3445,7 @@ mod tests {
                     last_sale: f64
                 )
             "#).unwrap();
-            assert_eq!(result, Number(Ack));
+            assert_eq!(result, Boolean(true));
 
             // append a new row
             let row_id = interpreter.evaluate(r#"

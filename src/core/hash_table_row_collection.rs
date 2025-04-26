@@ -225,7 +225,7 @@ impl HashTableRowCollection {
             Ok(table) => table,
             Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
         };
-        if keys_table.resize(0) != Number(Numbers::Ack) {
+        if keys_table.resize(0) != Boolean(true) {
             warn!("Failed to truncate index for column {}", self.get_key_column().get_name());
         }
         let mut inserted_rows = 0;
@@ -389,7 +389,7 @@ mod tests {
     use super::*;
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
-    use crate::numbers::Numbers::{Ack, F64Value, RowsAffected};
+    use crate::numbers::Numbers::{F64Value, RowsAffected};
     use crate::row_collection::RowCollection;
     use crate::sequences::{Array, Sequence};
     use crate::structures::Row;
@@ -480,7 +480,7 @@ mod tests {
         let bucket_count = max_count / 10;
         let bucket_depth = bucket_count / 10;
         let mut stocks = build_hash_key_table(&ns, 0, bucket_count, bucket_depth);
-        assert_eq!(Number(Ack), stocks.resize(0));
+        assert_eq!(Boolean(true), stocks.resize(0));
 
         let mut timings = Vec::new();
         for n in 0..max_count {

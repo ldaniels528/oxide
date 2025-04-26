@@ -436,19 +436,7 @@ mod tests {
 
         #[test]
         fn test_function() {
-            let mut tf = TableFunction::new(
-                make_quote_parameters(),
-                Compiler::build(r#"
-             { symbol: symbol, exchange: exchange, last_sale: last_sale * 2.0, rank: id + 1 }
-            "#).unwrap(),
-                Model(ModelRowCollection::from_parameters(&make_quote_parameters())),
-                Model(ModelRowCollection::from_parameters(&{
-                    let mut params = make_quote_parameters();
-                    params.push(Parameter::new("rank", NumberType(U64Kind)));
-                    params
-                })),
-                Machine::new_platform(),
-            );
+            let mut tf = make_table_function();
 
             // insert a new row
             let result = tf.overwrite_row(0, Row::new(0, vec![
@@ -487,19 +475,7 @@ mod tests {
 
         #[test]
         fn test_replay() {
-            let mut tfrc = TableFunction::new(
-                make_quote_parameters(),
-                Compiler::build(r#"
-             { symbol: symbol, exchange: exchange, last_sale: last_sale * 2.0, rank: id + 1 }
-            "#).unwrap(),
-                Model(ModelRowCollection::from_parameters(&make_quote_parameters())),
-                Model(ModelRowCollection::from_parameters(&{
-                    let mut params = make_quote_parameters();
-                    params.push(Parameter::new("rank", NumberType(U64Kind)));
-                    params
-                })),
-                Machine::new_platform(),
-            );
+            let mut tfrc = make_table_function();
 
             // ensure row collection is completely empty
             tfrc.journal.resize(0);
@@ -550,6 +526,22 @@ mod tests {
                     Number(F64Value(5.0))
                 ]),
             ]);
+        }
+
+        fn make_table_function() -> TableFunction {
+            TableFunction::new(
+                make_quote_parameters(),
+                Compiler::build(r#"
+                 { symbol: symbol, exchange: exchange, last_sale: last_sale * 2.0, rank: id + 1 }
+                "#).unwrap(),
+                Model(ModelRowCollection::from_parameters(&make_quote_parameters())),
+                Model(ModelRowCollection::from_parameters(&{
+                    let mut params = make_quote_parameters();
+                    params.push(Parameter::new("rank", NumberType(U64Kind)));
+                    params
+                })),
+                Machine::new_platform(),
+            )
         }
     }
 

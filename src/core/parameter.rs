@@ -5,7 +5,7 @@
 
 use crate::columns::Column;
 use crate::data_types::DataType;
-use crate::data_types::DataType::VaryingType;
+use crate::data_types::DataType::DynamicType;
 
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Null;
@@ -25,8 +25,15 @@ impl Parameter {
     //  STATIC METHODS
     ////////////////////////////////////////////////////////////////////
 
-    pub fn build(name: impl Into<String>) -> Self {
-        Self::new(name, VaryingType(vec![]))
+    pub fn add(name: impl Into<String>) -> Self {
+        Self::new(name, DynamicType)
+    }
+
+    pub fn are_compatible(
+        parameters_a: &Vec<Parameter>,
+        parameters_b: &Vec<Parameter>,
+    ) -> bool {
+        parameters_a.iter().zip(parameters_b.iter()).all(|(a, b)| a.is_compatible(b))
     }
 
     pub fn from_column(column: &Column) -> Self {
@@ -76,11 +83,18 @@ impl Parameter {
 
     pub fn get_param_type(&self) -> Option<String> { self.data_type.to_type_declaration() }
 
+    pub fn is_compatible(&self, parameter_b: &Parameter) -> bool {
+        *self == *parameter_b || (
+            self.name == parameter_b.name &&
+                self.data_type.is_compatible(&parameter_b.data_type)
+        )
+    }
+
     pub fn to_code(&self) -> String {
         let mut buf = self.get_name().to_string();
-        if let Some(type_decl) = self.get_param_type() {
-            if !type_decl.trim().is_empty() {
-                buf = format!("{}: {}", buf, type_decl)
+        if let Some(typedef) = self.get_param_type() {
+            if !typedef.trim().is_empty() {
+                buf = format!("{}: {}", buf, typedef)
             }
         }
         match self.get_default_value() {
@@ -130,8 +144,7 @@ mod tests {
 
     #[test]
     fn test_to_code() {
-        let param =
-            Parameter::with_default("symbol", StringType(8), StringValue("N/A".into()));
+        let param = Parameter::with_default("symbol", StringType(8), StringValue("N/A".into()));
         assert_eq!(param.to_code(), r#"symbol: String(8) := "N/A""#)
     }
 

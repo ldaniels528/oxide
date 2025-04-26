@@ -8,6 +8,7 @@ use crate::data_types::DataType::*;
 use crate::expression::Expression::*;
 use crate::expression::{DatabaseOps, Expression, Mutations};
 use crate::number_kind::NumberKind;
+use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
 use crate::sequences::{Array, Sequence};
 use crate::typed_values::TypedValue;
@@ -29,72 +30,73 @@ impl Inferences {
             BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b),
             BitwiseShiftRight(a, b) => Self::infer_a_or_b(a, b),
             BitwiseXor(a, b) => Self::infer_a_or_b(a, b),
-            CodeBlock(ops) => ops.last().map(Self::infer).unwrap_or(VaryingType(vec![])),
-            ColonColon(a, b) => match (a.deref(), b.deref()) {
-                (Variable(pkg), FunctionCall { fx, .. }) => match fx.deref() {
-                    Variable(name) =>
-                        PlatformOps::find_function(pkg, name)
-                            .map(|pf| pf.return_type.clone())
-                            .unwrap_or(VaryingType(vec![])),
-                    _ => VaryingType(vec![]),
+            CodeBlock(ops) => ops.last().map(Self::infer).unwrap_or(DynamicType),
+            ColonColon(a, b) | ColonColonColon(a, b) =>
+                match (a.deref(), b.deref()) {
+                    (Variable(pkg), FunctionCall { fx, .. }) => match fx.deref() {
+                        Variable(name) =>
+                            PlatformOps::find_function(pkg, name)
+                                .map(|pf| pf.return_type.clone())
+                                .unwrap_or(DynamicType),
+                        _ => DynamicType,
+                    }
+                    _ => DynamicType
                 }
-                _ => VaryingType(vec![])
-            }
-            ColonColonColon(..) => VaryingType(vec![]),
             Condition(..) => BooleanType,
             CurvyArrowLeft(..) => StructureType(vec![]),
-            CurvyArrowRight(..) => NumberType(NumberKind::AckKind),
+            CurvyArrowRight(..) => BooleanType,
             DatabaseOp(a) => match a {
-                DatabaseOps::Queryable(_) => NumberType(NumberKind::AckKind),
+                DatabaseOps::Queryable(_) => BooleanType,
                 DatabaseOps::Mutation(m) => match m {
                     Mutations::Append { .. } => NumberType(NumberKind::RowIdKind),
                     _ => NumberType(NumberKind::RowsAffectedKind),
                 }
             }
-            Directive(..) => NumberType(NumberKind::AckKind),
+            Directive(..) => BooleanType,
             Divide(a, b) => Self::infer_a_or_b(a, b),
-            ElementAt(..) => VaryingType(vec![]),
+            ElementAt(..) => DynamicType,
             Factorial(a) => Self::infer(a),
-            Feature { .. } => NumberType(NumberKind::AckKind),
+            Feature { .. } => BooleanType,
             FnExpression { params, returns, .. } =>
                 FunctionType(params.clone(), Box::from(returns.clone())),
-            ForEach(..) => NumberType(NumberKind::AckKind),
+            ForEach(..) => BooleanType,
             From(..) => TableType(vec![], 0),
             FunctionCall { fx, .. } => Self::infer(fx),
-            HTTP { .. } => VaryingType(vec![]),
+            HTTP { .. } => DynamicType,
             If { a: true_v, b: Some(false_v), .. } =>
                 Self::infer_alles(vec![true_v, false_v]),
             If { a: true_v, .. } => Self::infer(true_v),
-            Import(..) => NumberType(NumberKind::AckKind),
-            Include(..) => NumberType(NumberKind::AckKind),
+            Import(..) => BooleanType,
+            Include(..) => BooleanType,
             Literal(Function { body: code, .. }) => Self::infer(code),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
             Minus(a, b) => Self::infer_a_or_b(a, b),
-            Module(..) => NumberType(NumberKind::AckKind),
+            Module(..) => BooleanType,
             Modulo(a, b) => Self::infer_a_or_b(a, b),
             Multiply(a, b) => Self::infer_a_or_b(a, b),
             Neg(a) => Self::infer(a),
             New(a) => Self::infer(a),
-            Ns(..) => NumberType(NumberKind::AckKind),
+            Ns(..) => BooleanType,
             Parameters(params) => ArrayType(params.len()),
             Plus(a, b) => Self::infer_a_or_b(a, b),
             PlusPlus(a, b) => Self::infer_a_or_b(a, b),
             Pow(a, b) => Self::infer_a_or_b(a, b),
             Range(a, b) => Self::infer_a_or_b(a, b),
             Return(a) => Self::infer_all(a),
-            Scenario { .. } => NumberType(NumberKind::AckKind),
-            SetVariable(..) => NumberType(NumberKind::AckKind),
-            SetVariables(..) => NumberType(NumberKind::AckKind),
-            StructureExpression(..) => StructureType(Vec::new()), // TODO can we infer?
-            TupleExpression(params) =>
-                TupleType(params.iter()
-                    .map(|p| Self::infer(p))
-                    .collect::<Vec<_>>()),
-            TypeDecl(expr) => Self::infer(expr),
-            Variable(..) => VaryingType(vec![]),
+            Scenario { .. } => BooleanType,
+            SetVariable(..) => BooleanType,
+            SetVariables(..) => BooleanType,
+            StructureExpression(params) => StructureType(params.iter()
+                .map(|(name, expr)| Parameter::new(name, Inferences::infer(expr)))
+                .collect()),
+            TupleExpression(params) => TupleType(params.iter()
+                .map(|p| Self::infer(p))
+                .collect::<Vec<_>>()),
+            TypeDef(expr) => Self::infer(expr),
+            Variable(..) => DynamicType,
             Via(..) => TableType(vec![], 0),
-            While { .. } => VaryingType(vec![]),
+            While { .. } => DynamicType,
         }
     }
 
@@ -131,31 +133,15 @@ impl Inferences {
             (if a > b { a } else { b }).to_owned()
         }
 
-        let result = match types.len() {
-            0 => VaryingType(vec![]),
+        match types.len() {
+            0 => DynamicType,
             1 => types[0].to_owned(),
             _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
                 match (agg, t) {
-                    (VaryingType(a), b) => VaryingType({
-                        let mut c = a.clone();
-                        c.push(b.clone());
-                        c
-                    }),
-                    (b, VaryingType(a)) => VaryingType({
-                        let mut c = a.clone();
-                        c.push(b.clone());
-                        c
-                    }),
                     (BinaryType(a), BinaryType(b)) => StringType(larger(&a, b)),
                     (StringType(a), StringType(b)) => StringType(larger(&a, b)),
                     (_, t) => t.to_owned()
                 })
-        };
-
-        // final massaging
-        match result {
-            VaryingType(a) if a.len() == 1 => a[0].clone(),
-            z => z
         }
     }
 

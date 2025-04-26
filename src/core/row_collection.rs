@@ -239,7 +239,7 @@ pub trait RowCollection: Debug {
         let machine = Machine::empty();
         let result = self.iter().filter(|row| {
             let machine = machine.with_row(self.get_columns(), &row);
-            match machine.evaluate_cond(condition) {
+            match machine.do_condition(condition) {
                 Ok((_, Boolean(true))) => true,
                 _ => false
             }
@@ -427,8 +427,8 @@ pub trait RowCollection: Debug {
         let columns = self.get_columns();
         for row in self.iter() {
             let ms = machine.with_row(columns, &row);
-            match ms.evaluate_cond(condition) {
-                Ok((_ms, Number(Numbers::Ack) | Boolean(true))) => {
+            match ms.do_condition(condition) {
+                Ok((_ms, Boolean(true) | Boolean(true))) => {
                     match callback(&result, row) {
                         ErrorValue(msg) => return ErrorValue(msg),
                         value => result = value
@@ -703,7 +703,7 @@ pub trait RowCollection: Debug {
                 Box::new(move |row: &Row| column_value == row[column_index]),
             TableScanTypes::ConditionScan { machine, condition } =>
                 Box::new(move |row: &Row| matches!(
-                        machine.with_row(self.get_columns(), row).evaluate_cond(&condition),
+                        machine.with_row(self.get_columns(), row).do_condition(&condition),
                         Ok((_ms, Boolean(true)))
                     )),
             TableScanTypes::CompleteScan => Box::new(|_row: &Row| true)
@@ -881,7 +881,7 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::number_kind::NumberKind::F64Kind;
-    use crate::numbers::Numbers::{Ack, F64Value, RowId, RowsAffected};
+    use crate::numbers::Numbers::{F64Value, RowId, RowsAffected};
     use crate::parameter::Parameter;
     use crate::structures::Structures::Firm;
     use crate::table_renderer::TableRenderer;
@@ -1192,7 +1192,7 @@ mod tests {
             assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
 
             // describe the table
-            let mrc = rc.describe().to_table().unwrap();
+            let mrc = rc.describe().to_table_impl().unwrap();
             let mrc_columns = mrc.get_columns().to_owned();
             let mrc_rows = mrc.read_active_rows().unwrap();
             let count = rc.count(|_| true);
@@ -1600,7 +1600,7 @@ mod tests {
             assert_eq!(6, rc.len().unwrap());
 
             // resize and verify
-            assert_eq!(Number(Ack), rc.resize(0));
+            assert_eq!(Boolean(true), rc.resize(0));
             assert_eq!(rc.len().unwrap(), 0);
 
             rc.len().unwrap() as u64
@@ -1613,7 +1613,7 @@ mod tests {
     #[test]
     fn test_resize_grow() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            assert_eq!(Number(Ack), rc.resize(0));
+            assert_eq!(Boolean(true), rc.resize(0));
 
             // insert some rows and verify the size
             assert_eq!(Number(RowsAffected(1)), rc.overwrite_row(5, make_quote(0, "DUMMY", "OTC_BB", 0.0001)));

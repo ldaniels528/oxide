@@ -6,13 +6,12 @@
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
 use crate::field::FieldMetadata;
-use crate::numbers::Numbers;
 use crate::numbers::Numbers::RowsAffected;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Number, Undefined};
+use crate::typed_values::TypedValue::{Boolean, Number, Undefined};
 use serde::{Deserialize, Serialize};
 
 /// Byte-vector-based RowCollection implementation
@@ -162,7 +161,7 @@ impl RowCollection for ByteRowCollection {
     fn resize(&mut self, new_size: usize) -> TypedValue {
         self.row_data.resize(new_size, Vec::new());
         self.watermark = new_size;
-        Number(Numbers::Ack)
+        Boolean(true)
     }
 }
 

@@ -9,9 +9,8 @@ use crate::errors::Errors::{Exact, TypeMismatch};
 use crate::errors::TypeMismatchErrors::UnexpectedResult;
 use crate::expression::Expression;
 use crate::interpreter::Interpreter;
-use crate::numbers::Numbers::Ack;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, Number, StringValue, Undefined};
+use crate::typed_values::TypedValue::{Boolean, ErrorValue, Number, StringValue, Undefined};
 use actix::{Actor, StreamHandler};
 use actix_web_actors::ws;
 use actix_web_actors::ws::WebsocketContext;
@@ -115,7 +114,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for OxideWebSocketSer
             }
             Ok(ws::Message::Close(reason)) => {
                 let message = reason.and_then(|r| r.description).unwrap_or_default();
-                let value = if message.is_empty() { Number(Ack) } else { ErrorValue(Exact(message)) };
+                let value = if message.is_empty() { Boolean(true) } else { ErrorValue(Exact(message)) };
                 transmit(ctx, &value)
             }
             Ok(ws::Message::Ping(msg)) => ctx.pong(&msg),

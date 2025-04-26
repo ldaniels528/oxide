@@ -13,7 +13,7 @@ use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Null, Number};
+use crate::typed_values::TypedValue::{Boolean, Null, Number};
 use serde::{Deserialize, Serialize};
 
 /// Row-model-vector-based [RowCollection] implementation
@@ -215,7 +215,7 @@ impl RowCollection for ModelRowCollection {
     fn resize(&mut self, new_size: usize) -> TypedValue {
         self.row_data.resize(new_size, (Row::create(new_size, &self.columns), RowMetadata::new(true)));
         self.watermark = new_size;
-        Number(Numbers::Ack)
+        Boolean(true)
     }
 }
 

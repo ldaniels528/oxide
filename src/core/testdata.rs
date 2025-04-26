@@ -6,11 +6,12 @@
 use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::{NumberType, StringType, VaryingType};
+use crate::data_types::DataType::*;
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Disk;
 
+use crate::errors::Errors;
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
 use crate::interpreter::Interpreter;
@@ -33,7 +34,6 @@ use serde_json::Value;
 use std::fs::File;
 use std::thread;
 use std::time::Duration;
-use crate::errors::Errors;
 
 pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
     make_dataframe_ns(Namespace::new(database, schema, name), columns)
@@ -111,13 +111,13 @@ pub fn verify_data_type(code: &str, expected: DataType) {
 
 pub fn verify_bit_operator(op: &str) {
     verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
-    verify_data_type(format!("a {} b", op).as_str(), VaryingType(vec![]));
+    verify_data_type(format!("a {} b", op).as_str(), DynamicType);
 }
 
 pub fn verify_math_operator(op: &str) {
     verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
     verify_data_type(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
-    verify_data_type(format!("a {} b", op).as_str(), VaryingType(vec![]));
+    verify_data_type(format!("a {} b", op).as_str(), DynamicType);
 }
 
 pub fn verify_exact(code: &str, expected: TypedValue) {
@@ -143,7 +143,7 @@ pub fn verify_exact_json(code: &str, expected: Value) {
 pub fn verify_exact_table_with_ids(code: &str, expected: Vec<&str>) {
     let mut interpreter = Interpreter::new();
     let result = interpreter.evaluate(code)
-        .unwrap().to_table().unwrap();
+        .unwrap().to_table_impl().unwrap();
     let actual = TableRenderer::from_table_with_ids(&result).unwrap();
     for s in &actual { println!("{}", s) }
     assert_eq!(actual, expected);
@@ -155,7 +155,7 @@ pub fn verify_exact_table_where(
     expected: Vec<&str>,
 ) -> Interpreter {
     let result = interpreter.evaluate(code)
-        .unwrap().to_table().unwrap();
+        .unwrap().to_table_impl().unwrap();
     let actual = TableRenderer::from_table_with_ids(&result).unwrap();
     for s in &actual { println!("{}", s) }
     assert_eq!(actual, expected);

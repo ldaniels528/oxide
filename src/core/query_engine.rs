@@ -6,13 +6,13 @@
 use crate::columns::Column;
 use crate::cursor::Cursor;
 use crate::data_types::DataType;
-use crate::data_types::DataType::{TableType, VaryingType};
+use crate::data_types::DataType::TableType;
 
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::*;
-use crate::errors::throw;
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::{CollectionExpected, FunctionArgsExpected, QueryableExpected, TableExpected, UnsupportedType};
+use crate::errors::{throw, SyntaxErrors};
 use crate::expression::Conditions::True;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity};
 use crate::expression::DatabaseOps::Mutation;
@@ -27,7 +27,6 @@ use crate::journaling::{JournaledRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
-use crate::numbers::Numbers::Ack;
 use crate::numbers::Numbers::RowsAffected;
 use crate::object_config::{HashIndexConfig, ObjectConfig};
 use crate::parameter::Parameter;
@@ -154,7 +153,7 @@ pub fn do_iter(
 ) -> std::io::Result<(Machine, TypedValue)> {
     // todo tables need an iterable indexer
     let (ms, result) = ms.evaluate(source)?;
-    match result.to_table_value() {
+    match result.to_table() {
         ErrorValue(err) => Ok((ms, ErrorValue(err))),
         TableValue(mut df) => {
             let offset = df.len()?;
@@ -162,7 +161,7 @@ pub fn do_iter(
                 .map(|r| Structured(Structures::Firm(r, df.get_parameters())))
                 .unwrap_or(Undefined);
             match container {
-                Variable(name) => Ok((ms.with_variable(name, response), Number(Ack))),
+                Variable(name) => Ok((ms.with_variable(name, response), Boolean(true))),
                 other => throw(Exact(other.to_code()))
             }
         }
@@ -193,7 +192,7 @@ fn do_table_row_resize(
     limit: TypedValue,
 ) -> std::io::Result<(Machine, TypedValue)> {
     let (machine, table) = ms.evaluate(table)?;
-    match table.to_table_value() {
+    match table.to_table() {
         ErrorValue(err) => Ok((machine, ErrorValue(err))),
         TableValue(mut df) => Ok((machine, df.resize(limit.to_usize()))),
         other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
@@ -207,11 +206,11 @@ fn do_table_row_append(
 ) -> std::io::Result<(Machine, TypedValue)> {
     // evaluate the table expression (table_expr)
     let (ms, table) = ms.evaluate(table_expr)?;
-    match table.to_table_value() {
+    match table.to_table() {
         TableValue(mut df) => {
             // evaluate the query expression (from_expr)
             let (ms, result) = ms.evaluate(from_expr)?;
-            match result.to_table_value() {
+            match result.to_table() {
                 TableValue(src) => {
                     // write the rows to the dataframe
                     Ok((ms, df.append_rows(src.read_active_rows()?)))
@@ -231,7 +230,7 @@ fn do_table_row_delete(
 ) -> std::io::Result<(Machine, TypedValue)> {
     let (ms, limit) = ms.evaluate_opt(limit)?;
     let (ms, table) = ms.evaluate(from)?;
-    match table.to_table_value() {
+    match table.to_table() {
         TableValue(mut rc) => Ok((ms.clone(), rc.delete_where(&ms, &condition, limit)?)),
         other => Ok((ms, ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))))
     }
@@ -247,7 +246,7 @@ fn do_table_row_overwrite(
     let (machine, limit) = ms.evaluate_opt(limit)?;
     let (machine, tv_table) = machine.evaluate(table)?;
     let (fields, values) = expect_via(&ms, &table, &source)?;
-    match tv_table.to_table_value() {
+    match tv_table.to_table() {
         ErrorValue(err) => Ok((machine, ErrorValue(err))),
         TableValue(rc) => {
             let (_, overwritten) = Dataframe::overwrite_where(rc, &machine, &fields, &values, condition, limit)?;
@@ -266,7 +265,7 @@ pub fn do_table_or_view_query(
     limit: &TypedValue,
 ) -> std::io::Result<(Machine, TypedValue)> {
     //println!("do_table_or_view_query: src = {src:?}, condition = {condition:?}, limit = {limit:?}");
-    let (machine, df) = ms.evaluate_as_dataframe(src)?;
+    let (machine, df) = ms.eval_as_dataframe(src)?;
     let limit = limit.to_usize();
     let columns = df.get_columns().clone();
     let mut cursor = Cursor::filter(Box::new(df), condition.to_owned());
@@ -282,7 +281,7 @@ fn do_table_row_undelete(
 ) -> std::io::Result<(Machine, TypedValue)> {
     let (ms, limit) = ms.evaluate_opt(limit)?;
     let (ms, table) = ms.evaluate(from)?;
-    match table.to_table_value() {
+    match table.to_table() {
         ErrorValue(err) => Ok((ms, ErrorValue(err))),
         TableValue(mut rc) =>
             match rc.undelete_where(&ms, &condition, limit) {
@@ -303,7 +302,7 @@ fn do_table_row_update(
     let (ms, limit) = ms.evaluate_opt(limit)?;
     let (ms, tv_table) = ms.evaluate(table)?;
     let (fields, values) = expect_via(&ms, &table, &source)?;
-    match tv_table.to_table_value() {
+    match tv_table.to_table() {
         ErrorValue(err) => Ok((ms, ErrorValue(err))),
         TableValue(rc) =>
             match Dataframe::update_where(rc, &ms, &fields, &values, &condition, limit) {
@@ -327,7 +326,7 @@ fn do_table_create_index(
             throw(Exact("Memory collections do not yet support indexes".to_string())),
         NamespaceValue(ns) => {
             // evaluate the columns
-            let (machine, columns) = ms.evaluate_as_atoms(columns)?;
+            let (machine, columns) = ms.eval_as_atoms(columns)?;
 
             // load the configuration
             let config = ObjectConfig::load(&ns)?;
@@ -339,7 +338,7 @@ fn do_table_create_index(
             // update the configuration
             let updated_config = config.with_indices(indices);
             updated_config.save(&ns)?;
-            Ok((machine, Number(Ack)))
+            Ok((machine, Boolean(true)))
         }
         z => throw(TypeMismatch(CollectionExpected(z.to_code())))
     }
@@ -366,7 +365,7 @@ fn do_table_create_table(
                     Disk(FileRowCollection::create_table(&ns, columns)?)
                 };
             // append the rows of the "from" clause
-            Ok((populate_dataframe_opt(&ms, rc, from)?, Number(Ack)))
+            Ok((populate_dataframe_opt(&ms, rc, from)?, Boolean(true)))
         }
         x => throw(TypeMismatch(CollectionExpected(x.to_code())))
     }
@@ -385,7 +384,7 @@ fn do_table_create_table_fn(
                 Model(ModelRowCollection::from_parameters(&params)),
                 ms.clone(),
             );
-            Ok((ms.clone(), Number(Ack)))
+            Ok((ms.clone(), Boolean(true)))
         }
         other =>
             throw(TypeMismatch(FunctionArgsExpected(other.to_code())))
@@ -429,7 +428,7 @@ fn do_table_drop(ms: &Machine, table: &Expression) -> std::io::Result<(Machine, 
         ErrorValue(err) => Ok((machine, ErrorValue(err))),
         NamespaceValue(ns) => {
             let result = fs::remove_file(ns.get_table_file_path());
-            Ok((machine, if result.is_ok() { Number(Ack) } else { Boolean(false) }))
+            Ok((machine, if result.is_ok() { Boolean(true) } else { Boolean(false) }))
         }
         _ => Ok((machine, Boolean(false)))
     }
@@ -520,7 +519,7 @@ fn populate_dataframe(
     mut target: Dataframe,
     from: &Expression,
 ) -> std::io::Result<Machine> {
-    let (ms, source) = ms.evaluate_as_dataframe(from)?;
+    let (ms, source) = ms.eval_as_dataframe(from)?;
     target.append_rows(source.read_active_rows()?);
     Ok(ms)
 }
@@ -651,7 +650,7 @@ fn expect_row_collection(
     table: &Expression,
 ) -> std::io::Result<Box<dyn RowCollection>> {
     let (_, v_table) = ms.evaluate(table)?;
-    v_table.to_table()
+    v_table.to_table_impl()
 }
 
 fn expect_rows(
@@ -705,7 +704,7 @@ fn expect_via(
                 return throw(Exact("Expected a data object".to_string()));
             }
         } else {
-            return throw(Exact("Expected keyword 'via'".to_string()));
+            return throw(SyntaxError(SyntaxErrors::KeywordExpected("via".to_string())));
         }
     };
     Ok((fields, values))
@@ -723,7 +722,7 @@ fn transform_table(
     for row in rc0.iter() {
         let ms = row.pollute(&ms0, columns);
         if row.matches(&ms, condition, columns) {
-            match ms.evaluate_array(field_values) {
+            match ms.eval_as_array(field_values) {
                 Ok((_ms, ArrayValue(array))) => {
                     let new_row = Row::new(row.get_id(), array.get_values().clone());
                     rc1.overwrite_row(new_row.get_id(), new_row);
@@ -776,7 +775,6 @@ fn resolve_field_as_column(
                 // md5sum: util::md5(sku)
                 other =>
                     match Inferences::infer(other) {
-                        VaryingType(v) => fail(format!("Variable type detected - {v:?}")),
                         dt => Ok(Column::new(label, dt.clone(), Null, offset)),
                     }
             }
@@ -787,7 +785,7 @@ fn resolve_field_as_column(
                 None => fail(column_not_found(name, columns)),
             }
         other =>
-            fail(format!("{}", Syntax(other.to_code()).to_string()))
+            throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
     }
 }
 
@@ -803,7 +801,7 @@ mod sql_tests {
     use crate::dataframe::Dataframe::Model;
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::Numbers::{Ack, RowsAffected};
+    use crate::numbers::Numbers::RowsAffected;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
 
@@ -845,7 +843,7 @@ mod sql_tests {
                     symbol: String(8),
                     exchange: String(8),
                     last_sale: f64
-                )"#, Number(Ack))
+                )"#, Boolean(true))
     }
 
     #[test]
@@ -855,7 +853,7 @@ mod sql_tests {
         let phys_columns = Column::from_parameters(&columns);
 
         // set up the interpreter
-        assert_eq!(Number(Ack), interpreter.evaluate(r#"
+        assert_eq!(Boolean(true), interpreter.evaluate(r#"
                 stocks := ns("query_engine.crud.stocks")
             "#).unwrap());
 

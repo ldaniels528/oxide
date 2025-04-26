@@ -110,7 +110,7 @@ fn generate_examples(mut file: File) -> std::io::Result<File> {
 
 fn generate_example_results(op: PlatformOps) -> std::io::Result<Vec<String>> {
     let value = Interpreter::new().evaluate(op.get_example().as_str())?;
-    match value.to_table_value() {
+    match value.to_table() {
         TableValue(df) => {
             let rc: Box<dyn RowCollection> = Box::new(df);
             TableRenderer::from_table_with_ids(&rc)

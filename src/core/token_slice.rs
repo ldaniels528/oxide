@@ -81,7 +81,7 @@ impl TokenSlice {
     pub fn expect(&self, term: &str) -> std::io::Result<Self> {
         if let (Some(tok), ts) = self.next() {
             if tok.contains(term) { Ok(ts) } else {
-                fail(format!("Expected '{}' but got '{}'", term, tok))
+                fail(format!("Expected '{}' but found '{}'", term, tok))
             }
         } else {
             fail(format!("Expected '{}'", term))

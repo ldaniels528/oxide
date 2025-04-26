@@ -5,16 +5,15 @@
 
 use crate::data_types::DataType;
 use crate::data_types::DataType::TupleType;
-use crate::data_types::DataType::{ArrayType, Indeterminate, TableType, VaryingType};
+use crate::data_types::DataType::{ArrayType, DynamicType, TableType};
 use crate::dataframe::Dataframe;
 use crate::errors::Errors::{Exact, TypeMismatch};
 use crate::errors::TypeMismatchErrors::StructExpected;
-use crate::numbers::Numbers::Ack;
 use crate::row_collection::RowCollection;
 use crate::structures::Structures::{Firm, Hard};
 use crate::structures::{Structure, Structures};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, ErrorValue, Number, Structured, TupleValue, Undefined};
+use crate::typed_values::TypedValue::{ArrayValue, Boolean, ErrorValue, Number, Structured, TupleValue, Undefined};
 use log::error;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -164,7 +163,7 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => {
                 array.push(value);
-                Number(Ack)
+                Boolean(true)
             }
             Sequences::TheDataframe(df) =>
                 match value {
@@ -173,7 +172,7 @@ impl Sequence for Sequences {
                 }
             Sequences::TheTuple(tuple) => {
                 tuple.push(value);
-                Number(Ack)
+                Boolean(true)
             }
         }
     }
@@ -259,9 +258,9 @@ impl Array {
                 }
             });
         match kinds.as_slice() {
-            [] => Indeterminate,
+            [] => DynamicType,
             [kind] => kind.clone(),
-            kinds => VaryingType(kinds.to_vec())
+            _ => DynamicType
         }
     }
 
@@ -562,7 +561,7 @@ mod tests {
     /// Unit array tests
     #[cfg(test)]
     mod array_tests {
-        use crate::data_types::DataType::{ArrayType, BooleanType, StringType, VaryingType};
+        use crate::data_types::DataType::{ArrayType, DynamicType, StringType};
         use crate::numbers::Numbers::I64Value;
         use crate::sequences::{Array, Sequence, Tuple};
         use crate::testdata::*;
@@ -603,15 +602,11 @@ mod tests {
             assert_eq!(array.get_component_type(), StringType(5));
 
             array.push(Boolean(true));
-            assert_eq!(array.get_component_type(), VaryingType(vec![
-                StringType(5), BooleanType
-            ]));
+            assert_eq!(array.get_component_type(), DynamicType);
 
             array.push(StringValue("Hello World".into()));
             array.push(StringValue("Hello World".into()));
-            assert_eq!(array.get_component_type(), VaryingType(vec![
-                StringType(5), BooleanType, StringType(11)
-            ]));
+            assert_eq!(array.get_component_type(), DynamicType);
 
             assert_eq!(array.get_type(), ArrayType(4));
         }

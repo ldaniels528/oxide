@@ -16,9 +16,8 @@ use uuid::Uuid;
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum NumberKind {
-    AckKind = 15,
-    RowIdKind = 16,
-    RowsAffectedKind = 17,
+    RowIdKind = 15,
+    RowsAffectedKind = 16,
     DateKind = 0,
     F32Kind = 1,
     F64Kind = 2,
@@ -40,7 +39,7 @@ impl NumberKind {
     pub fn compute_fixed_size(&self) -> usize {
         use NumberKind::*;
         match self {
-            AckKind | RowIdKind | RowsAffectedKind => 2,
+            RowIdKind | RowsAffectedKind => 2,
             I8Kind | U8Kind => 1,
             I16Kind | U16Kind => 2,
             F32Kind | I32Kind | U32Kind => 4,
@@ -53,7 +52,6 @@ impl NumberKind {
     /// decodes the typed value based on the supplied data type and buffer
     pub fn decode(&self, buffer: &Vec<u8>, offset: usize) -> Numbers {
         match self {
-            NumberKind::AckKind => Ack,
             NumberKind::RowIdKind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| RowId(u64::from_be_bytes(b))),
             NumberKind::RowsAffectedKind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| RowsAffected(i64::from_be_bytes(b))),
             NumberKind::DateKind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
@@ -76,7 +74,6 @@ impl NumberKind {
 
     pub fn decode_buffer(&self, bcc: &mut ByteCodeCompiler) -> std::io::Result<Numbers> {
         let result = match self {
-            NumberKind::AckKind => Ack,
             NumberKind::RowIdKind => RowId(bcc.next_u64()),
             NumberKind::RowsAffectedKind => RowsAffected(bcc.next_i64()),
             NumberKind::DateKind => DateValue(bcc.next_i64()),
@@ -100,7 +97,6 @@ impl NumberKind {
 
     pub fn get_default_value(&self) -> Numbers {
         match self {
-            NumberKind::AckKind => Ack,
             NumberKind::RowIdKind => RowId(0),
             NumberKind::RowsAffectedKind => RowsAffected(0),
             NumberKind::DateKind => DateValue(Local::now().timestamp_millis()),
@@ -124,7 +120,6 @@ impl NumberKind {
     pub fn get_type_name(&self) -> String {
         use NumberKind::*;
         let name = match self {
-            AckKind => "Ack",
             RowIdKind => "RowId",
             RowsAffectedKind => "RowsAffected",
             DateKind => "Date",

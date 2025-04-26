@@ -5,10 +5,10 @@
 
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::{Indeterminate, VaryingType};
-use crate::errors::throw;
-use crate::errors::Errors::{ExactNear, Syntax, TypeMismatch};
+use crate::data_types::DataType::DynamicType;
+use crate::errors::Errors::{ExactNear, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{CodeBlockExpected, ParameterExpected, VariableExpected};
+use crate::errors::{throw, SyntaxErrors};
 use crate::expression::Conditions::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity};
 use crate::expression::DatabaseOps::{Mutation, Queryable};
@@ -17,6 +17,7 @@ use crate::expression::MutateTarget::TableTarget;
 use crate::expression::Mutations::{Create, Declare, Drop, Undelete};
 use crate::expression::Queryables::Select;
 use crate::expression::*;
+use crate::inferences::Inferences;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::structures::HardStructure;
@@ -297,7 +298,6 @@ impl Compiler {
                 "[+]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustAck(e))),
                 "[-]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustNotAck(e))),
                 "[~]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustIgnoreAck(e))),
-                "Ack" => Ok((ACK, nts)),
                 "append" => self.parse_keyword_append(nts),
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
@@ -332,7 +332,7 @@ impl Compiler {
                 "Struct" => self.parse_keyword_struct(nts),
                 "table" => self.parse_keyword_table(nts),
                 "true" => Ok((TRUE, nts)),
-                "type_decl" => self.parse_keyword_type_decl(nts),
+                "typedef" => self.parse_keyword_type_decl(nts),
                 "undefined" => Ok((UNDEFINED, nts)),
                 "undelete" => self.parse_keyword_undelete(nts),
                 "update" => self.parse_keyword_update(nts),
@@ -364,7 +364,7 @@ impl Compiler {
             match t.get_raw_value().as_str() {
                 "index" => self.parse_keyword_create_index(ts),
                 "table" => self.parse_keyword_create_table(ts),
-                name => throw(ExactNear(format!("Syntax error: expect type identifier, got '{}'", name), ts.current()))
+                name => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(name.to_string())))
             }
         } else { fail("Unexpected end of input") }
     }
@@ -632,16 +632,16 @@ impl Compiler {
                                 match item {
                                     Literal(StringValue(name)) => func_list.push(name),
                                     Variable(name) => func_list.push(name),
-                                    other => return throw(Syntax(other.to_code()))
+                                    other => return throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
                                 }
                             }
                             ops.push(ImportOps::Selection(pkg, func_list))
                         }
-                        (a, ..) => return throw(Syntax(a.to_code()))
+                        (a, ..) => return throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(a.to_code())))
                     }
                 }
                 // syntax error
-                other => return throw(Syntax(other.to_code()))
+                other => return throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
             }
 
             // if there's a comma, keep going
@@ -765,13 +765,13 @@ impl Compiler {
     }
 
     /// Builds a type declaration
-    /// ex: type_decl(String(80))
+    /// ex: typedef(String(80))
     fn parse_keyword_type_decl(
         &mut self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (expr, ts) = self.compile_next(ts)?;
-        Ok((TypeDecl(Box::from(expr)), ts))
+        Ok((TypeDef(Box::from(expr)), ts))
     }
 
     /// Builds a language model from an UNDELETE statement:
@@ -1038,7 +1038,9 @@ impl Compiler {
     }
 
     /// Expects function parameters and a body
+    /// ex: (a, b) => a + b
     /// ex: (a: i32, b: i32) => a + b
+    /// ex: (a: String, b: String): String => a + b
     fn expect_function_parameters_and_body(
         &mut self,
         name: Option<String>,
@@ -1046,13 +1048,26 @@ impl Compiler {
     ) -> std::io::Result<(Expression, TokenSlice)> {
         // extract the function parameters
         if let (Parameters(params), ts) = self.expect_parameters(ts.to_owned())? {
+            // extract or infer the function return type
+            let (returns, ts) = match ts.next() {
+                (Some(Operator { text, .. }), ts) if text == ":" => {
+                    let (expr, ts) = self.compile_next(ts)?;
+                    let data_type = DataType::decipher_type(&expr)?;
+                    (Some(data_type), ts)
+                }
+                _ => (None, ts)
+            };
             // extract the function body
             match ts.next() {
-                (Some(Operator { text: symbol, .. }), ts) if symbol == "=>" => {
+                (Some(Operator { text, .. }), ts) if text == "=>" => {
                     let (body, ts) = self.compile_next(ts)?;
-                    let returns = DataType::Indeterminate; // TODO parse type
+                    let returns = returns.unwrap_or(Inferences::infer(&body));
                     // build the model
-                    let func = FnExpression { params, body: Some(Box::new(body)), returns };
+                    let func = FnExpression {
+                        params,
+                        body: Some(Box::new(body)),
+                        returns,
+                    };
                     match name {
                         Some(name) => Ok((SetVariable(name, Box::new(func)), ts)),
                         None => Ok((func, ts))
@@ -1062,7 +1077,7 @@ impl Compiler {
                 // ex: fn(symbol: String(8), exchange: String(8), last_sale: f64)
                 _ => match name {
                     Some(..) => throw(ExactNear("Symbol expected '=>'".into(), ts.current())),
-                    None => Ok((FnExpression { params, body: None, returns: Indeterminate }, ts))
+                    None => Ok((FnExpression { params, body: None, returns: DynamicType }, ts))
                 }
             }
         } else {
@@ -1102,7 +1117,7 @@ impl Compiler {
         match ts.next() {
             (Some(Atom { text: name, .. }), ts) => {
                 // next, check for type constraint
-                let (type_decl, ts) = if ts.is(":") {
+                let (typedef, ts) = if ts.is(":") {
                     self.expect_parameter_type_decl(ts.skip())?
                 } else { (None, ts) };
 
@@ -1115,7 +1130,7 @@ impl Compiler {
                     }
                 } else { (Null, ts) };
 
-                Ok((Parameter::with_default(name, type_decl.unwrap_or(VaryingType(vec![])), default_value), ts))
+                Ok((Parameter::with_default(name, typedef.unwrap_or(DynamicType), default_value), ts))
             }
             (_, ats) => throw(ExactNear("Function name expected".into(), ats.current()))
         }
@@ -1175,7 +1190,7 @@ impl Compiler {
                 AsValue(name, expr) =>
                     params.push(Parameter::new(name, DataType::decipher_type(expr)?)),
                 Variable(name) =>
-                    params.push(Parameter::new(name, VaryingType(vec![]))),
+                    params.push(Parameter::new(name, DynamicType)),
                 expr =>
                     return throw(TypeMismatch(ParameterExpected(expr.to_code())))
             }
@@ -1481,57 +1496,112 @@ mod tests {
     #[cfg(test)]
     mod function_tests {
         use crate::compiler::Compiler;
-        use crate::data_types::DataType::Indeterminate;
+        use crate::data_types::DataType::{DynamicType, NumberType};
         use crate::expression::Expression::{FnExpression, FunctionCall, Literal, Multiply, Plus, SetVariable, Variable};
+        use crate::number_kind::NumberKind::{I32Kind, I64Kind};
         use crate::numbers::Numbers::I64Value;
         use crate::parameter::Parameter;
         use crate::typed_values::TypedValue::Number;
 
         #[test]
-        fn test_define_named_function() {
-            // examples:
-            // fn add(a: u64, b: u64) => a + b
-            // fn add(a: u64, b: u64) : u64 => a + b
+        fn test_define_anonymous_function_with_explicit_types() {
             let code = Compiler::build(r#"
-                fn add(a, b) => a + b
-            "#).unwrap();
-            assert_eq!(code, SetVariable("add".to_string(), Box::new(
-                FnExpression {
-                    params: vec![
-                        Parameter::build("a"),
-                        Parameter::build("b"),
-                    ],
-                    body: Some(Box::new(Plus(Box::new(
-                        Variable("a".into())
-                    ), Box::new(
-                        Variable("b".into())
-                    )))),
-                    returns: Indeterminate
-                }
-            ))
-            )
-        }
-
-        #[test]
-        fn test_define_anonymous_function() {
-            // examples:
-            // fn (a: u64, b: u64) : u64 => a + b
-            // fn (a, b) => a + b
-            let code = Compiler::build(r#"
-                fn (a, b) => a * b
+                fn (a: i64, b: i64) : i64 => a * b
             "#).unwrap();
             assert_eq!(code, FnExpression {
                 params: vec![
-                    Parameter::build("a"),
-                    Parameter::build("b"),
+                    Parameter::new("a", NumberType(I64Kind)),
+                    Parameter::new("b", NumberType(I64Kind)),
                 ],
                 body: Some(Box::new(Multiply(Box::new(
                     Variable("a".into())
                 ), Box::new(
                     Variable("b".into())
                 )))),
-                returns: Indeterminate
+                returns: NumberType(I64Kind)
             })
+        }
+
+        #[test]
+        fn test_define_anonymous_function_with_inferred_types() {
+            let code = Compiler::build(r#"
+                fn (a, b) => a * b
+            "#).unwrap();
+            assert_eq!(code, FnExpression {
+                params: vec![
+                    Parameter::add("a"),
+                    Parameter::add("b"),
+                ],
+                body: Some(Box::new(Multiply(Box::new(
+                    Variable("a".into())
+                ), Box::new(
+                    Variable("b".into())
+                )))),
+                returns: DynamicType
+            })
+        }
+
+        #[test]
+        fn test_define_named_function_with_explicit_types() {
+            let code = Compiler::build(r#"
+                fn add(a: i32, b: i32): i32 => a + b
+            "#).unwrap();
+            assert_eq!(code, SetVariable("add".to_string(), Box::new(
+                FnExpression {
+                    params: vec![
+                        Parameter::new("a", NumberType(I32Kind)),
+                        Parameter::new("b", NumberType(I32Kind)),
+                    ],
+                    body: Some(Box::new(Plus(Box::new(
+                        Variable("a".into())
+                    ), Box::new(
+                        Variable("b".into())
+                    )))),
+                    returns: NumberType(I32Kind)
+                }
+            )))
+        }
+
+        #[test]
+        fn test_define_named_function_with_explicit_and_inferred_types() {
+            let code = Compiler::build(r#"
+                fn add(a: i32, b: i32) => a + b
+            "#).unwrap();
+            assert_eq!(code, SetVariable("add".to_string(), Box::new(
+                FnExpression {
+                    params: vec![
+                        Parameter::new("a", NumberType(I32Kind)),
+                        Parameter::new("b", NumberType(I32Kind)),
+                    ],
+                    body: Some(Box::new(Plus(Box::new(
+                        Variable("a".into())
+                    ), Box::new(
+                        Variable("b".into())
+                    )))),
+                    returns: DynamicType
+                }
+            )))
+        }
+
+        #[test]
+        fn test_define_named_function_with_inferred_types() {
+            let code = Compiler::build(r#"
+                fn add(a, b) => a + b
+            "#).unwrap();
+            assert_eq!(code, SetVariable("add".to_string(), Box::new(
+                FnExpression {
+                    params: vec![
+                        Parameter::add("a"),
+                        Parameter::add("b"),
+                    ],
+                    body: Some(Box::new(Plus(Box::new(
+                        Variable("a".into())
+                    ), Box::new(
+                        Variable("b".into())
+                    )))),
+                    returns: DynamicType
+                }
+            )))
         }
 
         #[test]
@@ -2030,7 +2100,7 @@ mod tests {
     #[cfg(test)]
     mod parameter_and_tuple_tests {
         use crate::compiler::Compiler;
-        use crate::data_types::DataType::{NumberType, VaryingType};
+        use crate::data_types::DataType::{DynamicType, NumberType};
         use crate::expression::Expression::{Parameters, TupleExpression, Variable};
         use crate::number_kind::NumberKind::I64Kind;
         use crate::parameter::Parameter;
@@ -2053,8 +2123,8 @@ mod tests {
                 (a, b, c: i64)
             "#).unwrap();
             assert_eq!(expr, Parameters(vec![
-                Parameter::new("a", VaryingType(vec![])),
-                Parameter::new("b", VaryingType(vec![])),
+                Parameter::new("a", DynamicType),
+                Parameter::new("b", DynamicType),
                 Parameter::new("c", NumberType(I64Kind)),
             ]))
         }
@@ -2539,16 +2609,16 @@ mod tests {
     #[cfg(test)]
     mod type_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Expression::{FunctionCall, Literal, TypeDecl, Variable};
+        use crate::expression::Expression::{FunctionCall, Literal, TypeDef, Variable};
         use crate::numbers::Numbers::I64Value;
         use crate::typed_values::TypedValue::Number;
 
         #[test]
         fn test_simple_type_declaration() {
             let opcodes = Compiler::build(r#"
-                type_decl(String(32))
+                typedef(String(32))
             "#).unwrap();
-            assert_eq!(opcodes, TypeDecl(
+            assert_eq!(opcodes, TypeDef(
                 Box::from(FunctionCall {
                     fx: Box::from(Variable("String".into())),
                     args: vec![

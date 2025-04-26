@@ -85,8 +85,8 @@ impl Dataframe {
                 // if the predicate matches the condition, overwrite the row.
                 if row.matches(machine, condition, df.get_columns()) {
                     let (machine, my_fields) =
-                        machine.with_row(df.get_columns(), &row).evaluate_as_atoms(fields)?;
-                    if let (_, TypedValue::ArrayValue(my_values)) = machine.evaluate_array(values)? {
+                        machine.with_row(df.get_columns(), &row).eval_as_atoms(fields)?;
+                    if let (_, TypedValue::ArrayValue(my_values)) = machine.eval_as_array(values)? {
                         let new_row = row.transform(df.get_columns(), &my_fields, &my_values.get_values())?;
                         overwritten += df.overwrite_row(row.get_id(), new_row).to_result(|v| v.to_i64())?;
                     }
@@ -181,8 +181,8 @@ impl Dataframe {
                 // if the predicate matches the condition, update the row.
                 if row.matches(ms, condition, &columns) {
                     let (ms, field_names) =
-                        ms.with_row(&columns, &row).evaluate_as_atoms(fields)?;
-                    if let (_, TypedValue::ArrayValue(field_values)) = ms.evaluate_array(values)? {
+                        ms.with_row(&columns, &row).eval_as_atoms(fields)?;
+                    if let (_, TypedValue::ArrayValue(field_values)) = ms.eval_as_array(values)? {
                         let new_row = row.transform(&columns, &field_names, &field_values.get_values())?;
                         let result = rc.overwrite_row(id, new_row);
                         if result.is_ok() { updated += 1 }
