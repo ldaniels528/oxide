@@ -557,6 +557,6 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"title":"Oxide","version":"0.3"}"#);
+        assert_eq!(body, r#"{"title":"Oxide","version":"0.35"}"#);
     }
 }

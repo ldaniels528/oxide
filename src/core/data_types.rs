@@ -260,7 +260,7 @@ impl DataType {
             DataType::StringType(_) => Ok(value.encode()),
             DataType::StructureType(_) => Ok(value.encode()),
             DataType::TableType(..) =>
-                match value.to_table() {
+                match value.to_table()? {
                     TypedValue::TableValue(df) => Ok(ByteCodeCompiler::encode_df(&df)),
                     z => throw(TypeMismatch(UnsupportedType(self.clone(), z.get_type())))
                 },

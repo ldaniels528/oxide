@@ -128,6 +128,18 @@ pub fn verify_exact(code: &str, expected: TypedValue) {
     }
 }
 
+pub fn verify_exact_where(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: TypedValue
+) -> Interpreter {
+    match interpreter.evaluate(code) {
+        Ok(actual) => assert_eq!(actual, expected),
+        Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected),
+    }
+    interpreter
+}
+
 pub fn verify_exact_text(code: &str, expected: &str) {
     let mut interpreter = Interpreter::new();
     let actual = interpreter.evaluate(code).unwrap();

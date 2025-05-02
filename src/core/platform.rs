@@ -1,6 +1,6 @@
 #![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
-// PlatformOps class
+// Platform Operations class
 ////////////////////////////////////////////////////////////////////
 
 use crate::byte_code_compiler::ByteCodeCompiler;
@@ -9,19 +9,19 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::sequences::{Array, Sequence, Sequences};
 
-use crate::dataframe::Dataframe::{Disk, Model};
+use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
 use crate::errors::throw;
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CollectionExpected, DateExpected, StringExpected, StructExpected, TableExpected, UnsupportedType};
-use crate::expression::Expression::{CodeBlock, Literal, Scenario};
+use crate::expression::Expression::{CodeBlock, Literal, Multiply, Scenario};
 use crate::file_row_collection::FileRowCollection;
 use crate::formatting::DataFormats;
+use crate::journaling::Journaling;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers::*;
-use crate::oxide_server;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps::*;
 use crate::row_collection::RowCollection;
@@ -30,6 +30,8 @@ use crate::structures::Structure;
 use crate::structures::Structures::{Hard, Soft};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use crate::{machine, oxide_server};
+use actix::ActorStreamExt;
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
 use num_traits::ToPrimitive;
@@ -44,7 +46,14 @@ use uuid::Uuid;
 
 pub const MAJOR_VERSION: u8 = 0;
 pub const MINOR_VERSION: u8 = 3;
-pub const VERSION: &str = "0.3";
+pub const VERSION: &str = "0.35";
+
+// duration unit constants
+const MILLIS: i64 = 1;
+const SECONDS: i64 = 1000 * MILLIS;
+const MINUTES: i64 = 60 * SECONDS;
+const HOURS: i64 = 60 * MINUTES;
+const DAYS: i64 = 24 * HOURS;
 
 /// Represents a Platform Function
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -62,7 +71,6 @@ pub struct PlatformFunction {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum PlatformOps {
     // cal package
-    CalDate,
     CalDateDay,
     CalDateHour12,
     CalDateHour24,
@@ -70,17 +78,19 @@ pub enum PlatformOps {
     CalDateMonth,
     CalDateSecond,
     CalDateYear,
+    CalNow,
+    // durations
+    DurationsDays,
+    DurationsHours,
+    DurationsMillis,
+    DurationsMinutes,
+    DurationsSeconds,
     // io package
     IoFileCreate,
     IoFileExists,
     IoFileReadText,
     IoStdErr,
     IoStdOut,
-    // kung-fu package
-    KungFuAssert,
-    KungFuFeature,
-    KungFuMatches,
-    KungFuTypeOf,
     // os package
     OsCall,
     OsClear,
@@ -109,13 +119,21 @@ pub enum PlatformOps {
     StrStartsWith,
     StrSubstring,
     StrToString,
+    // testing package
+    TestingAssert,
+    TestingFeature,
+    TestingMatches,
+    TestingTypeOf,
     // tools package
     ToolsCompact,
     ToolsDescribe,
     ToolsFetch,
+    ToolsJournal,
     ToolsPop,
     ToolsPush,
+    ToolsReplay,
     ToolsReverse,
+    ToolsRowId,
     ToolsScan,
     ToolsToArray,
     ToolsToCSV,
@@ -124,6 +142,8 @@ pub enum PlatformOps {
     // util package
     UtilBase64,
     UtilBinary,
+    UtilGzip,
+    UtilGunzip,
     UtilHex,
     UtilMD5,
     UtilToASCII,
@@ -146,16 +166,17 @@ pub enum PlatformOps {
     WwwURLEncode,
 }
 
-pub const PLATFORM_OPCODES: [PlatformOps; 74] = {
+pub const PLATFORM_OPCODES: [PlatformOps; 84] = {
     use PlatformOps::*;
     [
         // cal
-        CalDate, CalDateDay, CalDateHour12, CalDateHour24, CalDateMinute,
+        CalNow, CalDateDay, CalDateHour12, CalDateHour24, CalDateMinute,
         CalDateMonth, CalDateSecond, CalDateYear,
+        // durations
+        DurationsDays, DurationsHours, DurationsMillis, DurationsMinutes,
+        DurationsSeconds,
         // io
         IoFileCreate, IoFileExists, IoFileReadText, IoStdErr, IoStdOut,
-        // kung fu
-        KungFuAssert, KungFuFeature, KungFuMatches, KungFuTypeOf,
         // os
         OsCall, OsClear, OsCurrentDir, OsEnv,
         // oxide
@@ -164,12 +185,15 @@ pub const PLATFORM_OPCODES: [PlatformOps; 74] = {
         // str
         StrEndsWith, StrFormat, StrIndexOf, StrJoin, StrLeft, StrLen,
         StrRight, StrSplit, StrStartsWith, StrSubstring, StrToString,
+        // testing
+        TestingAssert, TestingFeature, TestingMatches, TestingTypeOf,
         // tools
-        ToolsCompact, ToolsDescribe, ToolsFetch, ToolsPop, ToolsPush, ToolsReverse, ToolsScan,
-        ToolsToArray, ToolsToCSV, ToolsToJSON, ToolsToTable,
+        ToolsCompact, ToolsDescribe, ToolsFetch, ToolsJournal, ToolsPop, ToolsPush,
+        ToolsReplay, ToolsReverse, ToolsRowId, ToolsScan, ToolsToArray, ToolsToCSV,
+        ToolsToJSON, ToolsToTable,
         // util
-        UtilBase64, UtilBinary, UtilHex, UtilMD5, UtilToASCII, UtilToDate,
-        UtilToF32, UtilToF64,
+        UtilBase64, UtilBinary, UtilGzip, UtilGunzip, UtilHex, UtilMD5,
+        UtilToASCII, UtilToDate, UtilToF32, UtilToF64,
         UtilToI8, UtilToI16, UtilToI32, UtilToI64, UtilToI128,
         UtilToU8, UtilToU16, UtilToU32, UtilToU64, UtilToU128,
         // www
@@ -181,10 +205,10 @@ impl PlatformOps {
     /// Builds a mapping of package name to function vector
     pub fn build_packages() -> HashMap<String, Vec<PlatformOps>> {
         PLATFORM_OPCODES.iter()
-            .fold(HashMap::new(), |mut hm, key| {
-                hm.entry(key.get_package_name())
+            .fold(HashMap::new(), |mut hm, op| {
+                hm.entry(op.get_package_name())
                     .or_insert_with(Vec::new)
-                    .push(key.to_owned());
+                    .push(op.to_owned());
                 hm
             })
     }
@@ -204,7 +228,6 @@ impl PlatformOps {
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Machine, TypedValue)> {
         match self {
-            PlatformOps::CalDate => Self::do_cal_date(ms, args),
             PlatformOps::CalDateDay => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
             PlatformOps::CalDateHour24 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
             PlatformOps::CalDateHour12 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
@@ -212,15 +235,21 @@ impl PlatformOps {
             PlatformOps::CalDateMonth => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
             PlatformOps::CalDateSecond => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
             PlatformOps::CalDateYear => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalNow => Self::do_cal_now(ms, args),
+            PlatformOps::DurationsDays => self.adapter_fn1_pf(ms, args, Self::do_durations),
+            PlatformOps::DurationsHours => self.adapter_fn1_pf(ms, args, Self::do_durations),
+            PlatformOps::DurationsMillis => self.adapter_fn1_pf(ms, args, Self::do_durations),
+            PlatformOps::DurationsMinutes => self.adapter_fn1_pf(ms, args, Self::do_durations),
+            PlatformOps::DurationsSeconds => self.adapter_fn1_pf(ms, args, Self::do_durations),
             PlatformOps::IoFileCreate => self.adapter_fn2_ok(ms, args, Self::do_io_create_file),
             PlatformOps::IoFileExists => self.adapter_fn1_ok(ms, args, Self::do_io_exists),
             PlatformOps::IoFileReadText => self.adapter_fn1_ok(ms, args, Self::do_io_read_text_file),
             PlatformOps::IoStdErr => self.adapter_fn1_ok(ms, args, Self::do_io_stderr),
             PlatformOps::IoStdOut => self.adapter_fn1_ok(ms, args, Self::do_io_stdout),
-            PlatformOps::KungFuAssert => Ok(self.adapter_fn1(ms, args, Self::do_kung_fu_assert)),
-            PlatformOps::KungFuFeature => self.adapter_fn2_ok(ms, args, Self::do_kung_fu_feature),
-            PlatformOps::KungFuMatches => Ok(self.adapter_fn2(ms, args, Self::do_kung_fu_matches)),
-            PlatformOps::KungFuTypeOf => Ok(self.adapter_fn1(ms, args, Self::do_kung_fu_type_of)),
+            PlatformOps::TestingAssert => Ok(self.adapter_fn1(ms, args, Self::do_testing_assert)),
+            PlatformOps::TestingFeature => self.adapter_fn2_ok(ms, args, Self::do_testing_feature),
+            PlatformOps::TestingMatches => Ok(self.adapter_fn2(ms, args, Self::do_testing_matches)),
+            PlatformOps::TestingTypeOf => Ok(self.adapter_fn1(ms, args, Self::do_testing_type_of)),
             PlatformOps::OsCall => Self::do_os_call(ms, args),
             PlatformOps::OsCurrentDir => self.adapter_fn0_ok(ms, args, Self::do_os_current_dir),
             PlatformOps::OsClear => self.adapter_fn0_ok(ms, args, Self::do_os_clear_screen),
@@ -249,9 +278,12 @@ impl PlatformOps {
             PlatformOps::ToolsCompact => Ok(self.adapter_fn1(ms, args, Self::do_tools_compact)),
             PlatformOps::ToolsDescribe => self.adapter_fn1_ok(ms, args, Self::do_tools_describe),
             PlatformOps::ToolsFetch => self.adapter_fn2_ok(ms, args, Self::do_tools_fetch),
+            PlatformOps::ToolsJournal => self.adapter_fn1_ok(ms, args, Self::do_tools_journal),
             PlatformOps::ToolsPop => self.adapter_fn1_ok(ms, args, Self::do_tools_pop),
             PlatformOps::ToolsPush => Self::do_tools_push(ms, args),
+            PlatformOps::ToolsReplay => self.adapter_fn1_ok(ms, args, Self::do_tools_replay),
             PlatformOps::ToolsReverse => self.adapter_fn1_ok(ms, args, Self::do_tools_reverse),
+            PlatformOps::ToolsRowId => Ok(self.adapter_fn0(ms, args, Self::do_tools_row_id)),
             PlatformOps::ToolsScan => self.adapter_fn1_ok(ms, args, Self::do_tools_scan),
             PlatformOps::ToolsToArray => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_array)),
             PlatformOps::ToolsToCSV => self.adapter_fn1_ok(ms, args, Self::do_tools_to_csv),
@@ -259,6 +291,8 @@ impl PlatformOps {
             PlatformOps::ToolsToTable => self.adapter_fn1_ok(ms, args, Self::do_tools_to_table),
             PlatformOps::UtilBase64 => Ok(self.adapter_fn1(ms, args, Self::do_util_base64)),
             PlatformOps::UtilBinary => Ok(self.adapter_fn1(ms, args, Self::do_util_binary)),
+            PlatformOps::UtilGzip => self.adapter_fn1_ok(ms, args, Self::do_util_gzip),
+            PlatformOps::UtilGunzip => self.adapter_fn1_ok(ms, args, Self::do_util_gunzip),
             PlatformOps::UtilMD5 => Ok(self.adapter_fn1(ms, args, Self::do_util_md5)),
             PlatformOps::UtilToASCII => Ok(self.adapter_fn1(ms, args, Self::do_util_to_ascii)),
             PlatformOps::UtilHex => Ok(self.adapter_fn1(ms, args, Self::do_util_to_hex)),
@@ -283,13 +317,14 @@ impl PlatformOps {
 
     pub fn find_function(package: &str, name: &str) -> Option<PlatformFunction> {
         PLATFORM_OPCODES.iter()
-            .map(|p| p.get_info())
+            .map(|pf| pf.get_info())
             .find(|pfi| pfi.package_name == package && pfi.name == name)
     }
 
     pub fn get_description(&self) -> String {
         let result = match self {
-            PlatformOps::CalDate => "Returns the current local date and time",
+            // cal
+            PlatformOps::CalNow => "Returns the current local date and time",
             PlatformOps::CalDateDay => "Returns the day of the month of a Date",
             PlatformOps::CalDateHour12 => "Returns the hour of the day of a Date",
             PlatformOps::CalDateHour24 => "Returns the hour (military time) of the day of a Date",
@@ -297,19 +332,24 @@ impl PlatformOps {
             PlatformOps::CalDateMonth => "Returns the month of the year of a Date",
             PlatformOps::CalDateSecond => "Returns the seconds of the minute of a Date",
             PlatformOps::CalDateYear => "Returns the year of a Date",
+            // durations
+            PlatformOps::DurationsDays => "Converts a number into the equivalent number of days",
+            PlatformOps::DurationsHours => "Converts a number into the equivalent number of hours",
+            PlatformOps::DurationsMillis => "Converts a number into the equivalent number of millis",
+            PlatformOps::DurationsMinutes => "Converts a number into the equivalent number of minutes",
+            PlatformOps::DurationsSeconds => "Converts a number into the equivalent number of seconds",
+            // io
             PlatformOps::IoFileCreate => "Creates a new file",
             PlatformOps::IoFileExists => "Returns true if the source path exists",
             PlatformOps::IoFileReadText => "Reads the contents of a text file into memory",
             PlatformOps::IoStdErr => "Writes a string to STDERR",
             PlatformOps::IoStdOut => "Writes a string to STDOUT",
-            PlatformOps::KungFuAssert => "Evaluates an assertion returning true or an error",
-            PlatformOps::KungFuFeature => "Creates a new test feature",
-            PlatformOps::KungFuMatches => "Compares two values",
-            PlatformOps::KungFuTypeOf => "Returns the type of a value",
+            // os
             PlatformOps::OsCall => "Invokes an operating system application",
             PlatformOps::OsClear => "Clears the terminal/screen",
             PlatformOps::OsCurrentDir => "Returns the current directory",
             PlatformOps::OsEnv => "Returns a table of the OS environment variables",
+            // oxide
             PlatformOps::OxideCompile => "Compiles source code from a string input",
             PlatformOps::OxideDebug => "Compiles source code from a string input; returning a debug string",
             PlatformOps::OxidePrintln => "Print line function",
@@ -320,6 +360,7 @@ impl PlatformOps {
             PlatformOps::OxideReset => "Clears the scope of all user-defined objects",
             PlatformOps::OxideUUID => "Returns a random 128-bit UUID",
             PlatformOps::OxideVersion => "Returns the Oxide version",
+            // str
             PlatformOps::StrEndsWith => "Returns true if string `a` ends with string `b`",
             PlatformOps::StrFormat => "Returns an argument-formatted string",
             PlatformOps::StrIndexOf => "Returns the index of string `b` in string `a`",
@@ -331,19 +372,31 @@ impl PlatformOps {
             PlatformOps::StrStartsWith => "Returns true if string `a` starts with string `b`",
             PlatformOps::StrSubstring => "Returns a substring of string `s` from `m` to `n`",
             PlatformOps::StrToString => "Converts a value to its text-based representation",
+            // testing
+            PlatformOps::TestingAssert => "Evaluates an assertion returning true or an error",
+            PlatformOps::TestingFeature => "Creates a new test feature",
+            PlatformOps::TestingMatches => "Compares two values",
+            PlatformOps::TestingTypeOf => "Returns the type of a value",
+            // tools
             PlatformOps::ToolsCompact => "Shrinks a table by removing deleted rows",
             PlatformOps::ToolsDescribe => "Describes a table or structure",
             PlatformOps::ToolsFetch => "Retrieves a raw structure from a table",
+            PlatformOps::ToolsJournal => "Retrieves the journal for an event-source or table function",
             PlatformOps::ToolsPop => "Removes and returns a value or object from a Sequence",
             PlatformOps::ToolsPush => "Appends a value or object to a Sequence",
+            PlatformOps::ToolsReplay => "Reconstructs the state of a journaled table",
             PlatformOps::ToolsReverse => "Returns a reverse copy of a table, string or array",
+            PlatformOps::ToolsRowId => "Returns the unique ID for the last retrieved row",
             PlatformOps::ToolsScan => "Returns existence metadata for a table",
             PlatformOps::ToolsToArray => "Converts a collection into an array",
             PlatformOps::ToolsToCSV => "Converts a collection to CSV format",
             PlatformOps::ToolsToJSON => "Converts a collection to JSON format",
             PlatformOps::ToolsToTable => "Converts an object into a to_table",
+            // util
             PlatformOps::UtilBase64 => "Translates bytes into Base 64",
             PlatformOps::UtilBinary => "Translates a numeric value into binary",
+            PlatformOps::UtilGzip => "Compresses bytes via gzip",
+            PlatformOps::UtilGunzip => "Decompresses bytes via gzip",
             PlatformOps::UtilHex => "Translates bytes into hexadecimal",
             PlatformOps::UtilMD5 => "Creates a MD5 digest",
             PlatformOps::UtilToASCII => "Converts an integer to ASCII",
@@ -360,6 +413,7 @@ impl PlatformOps {
             PlatformOps::UtilToU32 => "Converts a value to u32",
             PlatformOps::UtilToU64 => "Converts a value to u64",
             PlatformOps::UtilToU128 => "Converts a value to u128",
+            // www
             PlatformOps::WwwServe => "Starts a local HTTP service",
             PlatformOps::WwwURLDecode => "Decodes a URL-encoded string",
             PlatformOps::WwwURLEncode => "Encodes a URL string",
@@ -369,7 +423,8 @@ impl PlatformOps {
 
     pub fn get_example(&self) -> String {
         let result = match self {
-            PlatformOps::CalDate => "cal::now()",
+            // cal
+            PlatformOps::CalNow => "cal::now()",
             PlatformOps::CalDateDay => r#"
                 import cal
                 now():::day_of()
@@ -398,6 +453,28 @@ impl PlatformOps {
                 import cal
                 now():::year_of()
             "#,
+            // durations
+            PlatformOps::DurationsDays => r#"
+                import durations
+                3::days()
+            "#,
+            PlatformOps::DurationsHours => r#"
+                import durations
+                8::hours()
+            "#,
+            PlatformOps::DurationsMillis => r#"
+                import durations
+                8::millis()
+            "#,
+            PlatformOps::DurationsMinutes => r#"
+                import durations
+                30::minutes()
+            "#,
+            PlatformOps::DurationsSeconds => r#"
+                import durations
+                30::seconds()
+            "#,
+            // io
             PlatformOps::IoFileCreate => r#"
                 io::create_file("quote.json", { symbol: "TRX", exchange: "NYSE", last_sale: 45.32 })
             "#,
@@ -412,11 +489,12 @@ impl PlatformOps {
             "#,
             PlatformOps::IoStdErr => r#"io::stderr("Goodbye Cruel World")"#,
             PlatformOps::IoStdOut => r#"io::stdout("Hello World")"#,
-            PlatformOps::KungFuAssert => r#"
+            // testing
+            PlatformOps::TestingAssert => r#"
                 import testing
                 assert(matches([ 1 "a" "b" "c" ], [ 1 "a" "b" "c" ]))
             "#,
-            PlatformOps::KungFuFeature => r#"
+            PlatformOps::TestingFeature => r#"
             import testing
             feature("Matches function", {
                 "Compare Array contents: Equal": fn(ctx) => {
@@ -440,13 +518,13 @@ impl PlatformOps {
                         { id: "A1537", scores: [82 78 99] }))
                 }
             })"#,
-            PlatformOps::KungFuMatches => r#"
+            PlatformOps::TestingMatches => r#"
                 import testing::matches
                 a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
                 b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
                 matches(a, b)
             "#,
-            PlatformOps::KungFuTypeOf => "testing::type_of([12, 76, 444])",
+            PlatformOps::TestingTypeOf => "testing::type_of([12, 76, 444])",
             PlatformOps::OsCall => r#"
                 create table ns("platform.os.call") (
                     symbol: String(8),
@@ -516,6 +594,23 @@ impl PlatformOps {
                      { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                 [+] tools::fetch(stocks, 2)
             "#,
+            PlatformOps::ToolsJournal => r#"
+                import tools
+                stocks := ns("platform.journal.stocks")
+                drop table stocks
+                create table stocks fn(
+                   symbol: String(8), exchange: String(8), last_sale: f64
+                ) => {
+                    symbol: symbol,
+                    exchange: exchange,
+                    last_sale: last_sale,
+                    ingest_time: cal::now()
+                }
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                stocks:::journal()
+            "#,
             PlatformOps::ToolsPop => r#"
                 import tools
                 [+] stocks := ns("platform.pop.stocks")
@@ -535,9 +630,29 @@ impl PlatformOps {
                 [+] stocks::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
                 [+] stocks
             "#,
+            PlatformOps::ToolsReplay => r#"
+                import tools
+                stocks := ns("platform.table_fn.stocks")
+                drop table stocks
+                create table stocks fn(
+                   symbol: String(8), exchange: String(8), last_sale: f64
+                ) => {
+                    symbol: symbol,
+                    exchange: exchange,
+                    last_sale: last_sale * 2.0,
+                    rank: __row_id__ + 1
+                }
+                [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                stocks:::replay()
+            "#,
             PlatformOps::ToolsReverse => r#"
                 import tools
                 to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
+            "#,
+            PlatformOps::ToolsRowId => r#"
+                tools::row_id()
             "#,
             PlatformOps::ToolsScan => r#"
                 [+] import tools
@@ -579,6 +694,8 @@ impl PlatformOps {
             "#,
             PlatformOps::UtilBase64 => "util::base64('Hello World')",
             PlatformOps::UtilBinary => "util::to_binary(0b1011 & 0b1101)",
+            PlatformOps::UtilGzip => "util::gzip('Hello World')",
+            PlatformOps::UtilGunzip => "util::gunzip('Hello World')", // TODO
             PlatformOps::UtilHex => "util::hex('Hello World')",
             PlatformOps::UtilMD5 => "util::md5('Hello World')",
             PlatformOps::UtilToASCII => "util::to_ascii(177)",
@@ -626,7 +743,8 @@ impl PlatformOps {
 
     pub fn get_name(&self) -> String {
         let result = match self {
-            PlatformOps::CalDate => "now",
+            // cal
+            PlatformOps::CalNow => "now",
             PlatformOps::CalDateDay => "day_of",
             PlatformOps::CalDateHour12 => "hour12",
             PlatformOps::CalDateHour24 => "hour24",
@@ -634,18 +752,28 @@ impl PlatformOps {
             PlatformOps::CalDateMonth => "month_of",
             PlatformOps::CalDateSecond => "second_of",
             PlatformOps::CalDateYear => "year_of",
+            // durations
+            PlatformOps::DurationsDays => "days",
+            PlatformOps::DurationsHours => "hours",
+            PlatformOps::DurationsMillis => "millis",
+            PlatformOps::DurationsMinutes => "minutes",
+            PlatformOps::DurationsSeconds => "seconds",
+            // io
             PlatformOps::IoFileCreate => "create_file",
             PlatformOps::IoFileExists => "exists",
             PlatformOps::IoFileReadText => "read_text_file",
             PlatformOps::IoStdErr => "stderr",
             PlatformOps::IoStdOut => "stdout",
-            PlatformOps::KungFuAssert => "assert",
-            PlatformOps::KungFuFeature => "feature",
-            PlatformOps::KungFuMatches => "matches",
+            // testing
+            PlatformOps::TestingAssert => "assert",
+            PlatformOps::TestingFeature => "feature",
+            PlatformOps::TestingMatches => "matches",
+            // os
             PlatformOps::OsCall => "call",
             PlatformOps::OsClear => "clear",
             PlatformOps::OsCurrentDir => "current_dir",
             PlatformOps::OsEnv => "env",
+            // oxide
             PlatformOps::OxideCompile => "compile",
             PlatformOps::OxideDebug => "debug",
             PlatformOps::OxideEval => "eval",
@@ -654,9 +782,10 @@ impl PlatformOps {
             PlatformOps::OxideHome => "home",
             PlatformOps::OxidePrintln => "println",
             PlatformOps::OxideReset => "reset",
-            PlatformOps::KungFuTypeOf => "type_of",
+            PlatformOps::TestingTypeOf => "type_of",
             PlatformOps::OxideUUID => "uuid",
             PlatformOps::OxideVersion => "version",
+            // str
             PlatformOps::StrEndsWith => "ends_with",
             PlatformOps::StrFormat => "format",
             PlatformOps::StrIndexOf => "index_of",
@@ -668,19 +797,26 @@ impl PlatformOps {
             PlatformOps::StrStartsWith => "starts_with",
             PlatformOps::StrSubstring => "substring",
             PlatformOps::StrToString => "to_string",
+            // tool
             PlatformOps::ToolsCompact => "compact",
             PlatformOps::ToolsDescribe => "describe",
             PlatformOps::ToolsFetch => "fetch",
+            PlatformOps::ToolsJournal => "journal",
             PlatformOps::ToolsPop => "pop",
             PlatformOps::ToolsPush => "push",
+            PlatformOps::ToolsReplay => "replay",
             PlatformOps::ToolsReverse => "reverse",
+            PlatformOps::ToolsRowId => "row_id",
             PlatformOps::ToolsScan => "scan",
             PlatformOps::ToolsToArray => "to_array",
             PlatformOps::ToolsToCSV => "to_csv",
             PlatformOps::ToolsToJSON => "to_json",
             PlatformOps::ToolsToTable => "to_table",
+            // util
             PlatformOps::UtilBase64 => "base64",
             PlatformOps::UtilBinary => "to_binary",
+            PlatformOps::UtilGzip => "gzip",
+            PlatformOps::UtilGunzip => "gunzip",
             PlatformOps::UtilHex => "hex",
             PlatformOps::UtilMD5 => "md5",
             PlatformOps::UtilToASCII => "to_ascii",
@@ -697,6 +833,7 @@ impl PlatformOps {
             PlatformOps::UtilToU32 => "to_u32",
             PlatformOps::UtilToU64 => "to_u64",
             PlatformOps::UtilToU128 => "to_u128",
+            // www
             PlatformOps::WwwServe => "serve",
             PlatformOps::WwwURLDecode => "url_decode",
             PlatformOps::WwwURLEncode => "url_encode",
@@ -709,11 +846,14 @@ impl PlatformOps {
         let result = match self {
             // cal
             CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
-            CalDateMonth | CalDateSecond | CalDateYear | CalDate => "cal",
+            CalDateMonth | CalDateSecond | CalDateYear | CalNow => "cal",
+            // durations
+            DurationsDays | DurationsHours | DurationsMillis | DurationsMinutes |
+            DurationsSeconds => "durations",
             // io
             IoFileCreate | IoFileExists | IoFileReadText | IoStdErr | IoStdOut => "io",
-            // kung fu
-            KungFuAssert | KungFuFeature | KungFuMatches | KungFuTypeOf => "testing",
+            // testing
+            TestingAssert | TestingFeature | TestingMatches | TestingTypeOf => "testing",
             // oxide
             OxideCompile | OxideDebug | OxideEval | OxideHelp | OxideHistory |
             OxideHome | OxidePrintln | OxideReset | OxideUUID | OxideVersion => "oxide",
@@ -724,12 +864,12 @@ impl PlatformOps {
             StrLeft | StrLen | StrRight | StrSplit |
             StrStartsWith | StrSubstring | StrToString => "str",
             // tools
-            ToolsCompact | ToolsDescribe | ToolsFetch | ToolsPop | ToolsPush |
-            ToolsReverse | ToolsScan | ToolsToArray | ToolsToCSV | ToolsToJSON |
-            ToolsToTable => "tools",
+            ToolsCompact | ToolsDescribe | ToolsFetch | ToolsJournal | ToolsPop |
+            ToolsPush | ToolsReplay | ToolsReverse | ToolsRowId | ToolsScan |
+            ToolsToArray | ToolsToCSV | ToolsToJSON | ToolsToTable => "tools",
             // util
-            UtilBase64 | UtilBinary | UtilHex | UtilMD5 | UtilToASCII | UtilToDate |
-            UtilToF32 | UtilToF64 |
+            UtilBase64 | UtilBinary | UtilGzip | UtilGunzip | UtilHex | UtilMD5 |
+            UtilToASCII | UtilToDate | UtilToF32 | UtilToF64 |
             UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 | UtilToI128 |
             UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128 => "util",
             // www
@@ -742,11 +882,14 @@ impl PlatformOps {
         use PlatformOps::*;
         match self {
             // zero-parameter
+            DurationsDays | DurationsHours | DurationsMillis | DurationsMinutes |
+            DurationsSeconds |
             OsCurrentDir | OsEnv | OxideHome | OxideReset | OsClear |
-            OxideHelp | OxideHistory | OxideVersion | CalDate | OxideUUID
+            OxideHelp | OxideHistory | OxideVersion | CalNow | OxideUUID |
+            ToolsReplay | ToolsRowId
             => vec![],
             // single-parameter (boolean)
-            KungFuAssert
+            TestingAssert
             => vec![BooleanType],
             // single-parameter (date)
             CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
@@ -755,21 +898,22 @@ impl PlatformOps {
             // single-parameter (int)
             UtilToASCII | WwwServe
             => vec![NumberType(U32Kind)],
-            // single-parameter (lazy)
-            KungFuTypeOf | StrToString | ToolsToTable | UtilBase64 | UtilBinary | UtilHex | UtilMD5 | UtilToDate |
-            UtilToF32 | UtilToF64 | UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 | UtilToI128 |
-            UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128
+            // single-parameter (dynamic)
+            TestingTypeOf | StrToString | ToolsToTable | UtilBase64 | UtilBinary |
+            UtilGzip | UtilGunzip | UtilHex | UtilMD5 | UtilToDate |
+            UtilToF32 | UtilToF64 | UtilToI8 | UtilToI16 | UtilToI32 | UtilToI64 |
+            UtilToI128 | UtilToU8 | UtilToU16 | UtilToU32 | UtilToU64 | UtilToU128
             => vec![DynamicType],
             // single-parameter (string)
             IoFileExists | IoFileReadText | IoStdErr | IoStdOut | OxidePrintln | OsCall |
             OxideCompile | OxideDebug | OxideEval | StrLen | WwwURLDecode | WwwURLEncode
             => vec![StringType(0)],
             // single-parameter (table)
-            ToolsCompact | ToolsDescribe | ToolsPop | ToolsReverse | ToolsScan |
-            ToolsToArray | ToolsToCSV | ToolsToJSON
+            ToolsCompact | ToolsDescribe | ToolsJournal | ToolsPop | ToolsReverse |
+            ToolsScan | ToolsToArray | ToolsToCSV | ToolsToJSON
             => vec![TableType(Vec::new(), 0)],
             // two-parameter (lazy, lazy)
-            KungFuMatches | ToolsPush
+            TestingMatches | ToolsPush
             => vec![DynamicType, DynamicType],
             // two-parameter (string, string)
             IoFileCreate | StrEndsWith | StrFormat | StrSplit | StrStartsWith
@@ -778,7 +922,7 @@ impl PlatformOps {
             StrIndexOf | StrLeft | StrRight
             => vec![StringType(0), NumberType(I64Kind)],
             // two-parameter (string, struct)
-            KungFuFeature
+            TestingFeature
             => vec![StringType(0), StructureType(vec![])],
             // two-parameter (table, u64)
             ToolsFetch
@@ -819,15 +963,22 @@ impl PlatformOps {
             ToolsToArray => ArrayType(0),
             IoFileReadText | StrSplit | ToolsToCSV | ToolsToJSON => ArrayType(0),
             // boolean
-            IoFileExists | KungFuMatches | StrEndsWith | StrStartsWith => BooleanType,
+            IoFileExists | StrEndsWith | StrStartsWith | TestingMatches |
+            ToolsReplay => BooleanType,
             // bytes
+            UtilGzip | UtilGunzip => BinaryType(0),
             UtilMD5 => BinaryType(16),
             // date
-            CalDate | UtilToDate => NumberType(DateKind),
+            CalNow | UtilToDate => NumberType(DateKind),
+            // durations
+            DurationsDays | DurationsHours | DurationsMillis |
+            DurationsMinutes | DurationsSeconds => NumberType(F64Kind),
             // f64
             OxideVersion => NumberType(F64Kind),
             // function
             OxideCompile | OxideDebug => FunctionType(vec![], Box::from(DynamicType)),
+            // i64
+            ToolsRowId => NumberType(I64Kind),
             // number
             StrIndexOf | StrLen => NumberType(I64Kind),
             CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
@@ -845,21 +996,21 @@ impl PlatformOps {
             UtilToU64 => NumberType(U64Kind),
             UtilToU128 | OxideUUID => NumberType(U128Kind),
             // outcome
-            IoFileCreate | KungFuAssert | OsClear | OxidePrintln | OxideReset |
+            IoFileCreate | TestingAssert | OsClear | OxidePrintln | OxideReset |
             ToolsPush | WwwServe => BooleanType,
             // string
-            IoStdErr | IoStdOut | KungFuTypeOf | OsCall | OsCurrentDir |
+            IoStdErr | IoStdOut | TestingTypeOf | OsCall | OsCurrentDir |
             OxideEval | OxideHome | StrFormat | StrJoin | StrLeft | StrRight |
             StrSubstring | StrToString | UtilBase64 | UtilBinary | UtilToASCII | UtilHex |
             WwwURLDecode | WwwURLEncode => StringType(0),
             // row|structure
             ToolsPop => StructureType(vec![]),
             // table
-            KungFuFeature => TableType(Self::get_kung_fu_feature_parameters(), 0),
+            TestingFeature => TableType(Self::get_testing_feature_parameters(), 0),
             OsEnv => TableType(Self::get_os_env_parameters(), 0),
             OxideHelp => TableType(Self::get_oxide_help_parameters(), 0),
             OxideHistory => TableType(Self::get_oxide_history_parameters(), 0),
-            ToolsCompact | ToolsFetch | ToolsReverse | ToolsScan |
+            ToolsCompact | ToolsFetch | ToolsJournal | ToolsReverse | ToolsScan |
             ToolsToTable => TableType(Vec::new(), 0),
             ToolsDescribe => TableType(Self::get_tools_describe_parameters(), 0),
         }
@@ -983,7 +1134,7 @@ impl PlatformOps {
         }
     }
 
-    fn do_cal_date(
+    fn do_cal_now(
         ms: Machine,
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Machine, TypedValue)> {
@@ -1018,6 +1169,23 @@ impl PlatformOps {
             }
             other => throw(TypeMismatch(DateExpected(other.to_code())))
         }
+    }
+
+    fn do_durations(
+        ms: Machine,
+        value: &TypedValue,
+        plat: &PlatformOps,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let factor = match plat {
+            DurationsDays => Number(I64Value(24 * 60 * 60 * 1000)),
+            DurationsHours => Number(I64Value(60 * 60 * 1000)),
+            DurationsMillis => Number(I64Value(1)),
+            DurationsMinutes => Number(I64Value(60 * 1000)),
+            DurationsSeconds => Number(I64Value(1000)),
+            _ => Undefined
+        };
+        let op = Multiply(Box::new(Literal(value.clone())), Box::new(Literal(factor)));
+        ms.evaluate(&op)
     }
 
     fn do_io_create_file(
@@ -1080,7 +1248,7 @@ impl PlatformOps {
         Ok((ms, Boolean(true)))
     }
 
-    fn do_kung_fu_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+    fn do_testing_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
         match value {
             ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
             Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
@@ -1088,7 +1256,7 @@ impl PlatformOps {
         }
     }
 
-    fn do_kung_fu_feature(
+    fn do_testing_feature(
         ms: Machine,
         title: &TypedValue,
         body: &TypedValue,
@@ -1123,11 +1291,11 @@ impl PlatformOps {
         ms.do_feature(&Box::from(title), &scenarios)
     }
 
-    fn do_kung_fu_matches(ms: Machine, a: &TypedValue, b: &TypedValue) -> (Machine, TypedValue) {
+    fn do_testing_matches(ms: Machine, a: &TypedValue, b: &TypedValue) -> (Machine, TypedValue) {
         (ms, a.matches(b))
     }
 
-    fn do_kung_fu_type_of(ms: Machine, a: &TypedValue) -> (Machine, TypedValue) {
+    fn do_testing_type_of(ms: Machine, a: &TypedValue) -> (Machine, TypedValue) {
         (ms, StringValue(a.get_type_name()))
     }
 
@@ -1575,17 +1743,30 @@ impl PlatformOps {
         }
     }
 
+    fn do_tools_journal(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match value.clone() {
+            NamespaceValue(ns) => Self::do_tools_journal(ms, &TableValue(ns.load_table()?)),
+            TableValue(EventSource(mut df)) => Ok((ms, TableValue(df.get_journal()))),
+            TableValue(TableFn(mut df)) => Ok((ms, TableValue(df.get_journal()))),
+            TableValue(..) => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), value.get_type()))),
+            other => throw(TypeMismatch(UnsupportedType(DynamicType, other.get_type())))
+        }
+    }
+
     fn do_tools_pop(
         ms: Machine,
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
         let seq = value.to_sequence()?;
-        let result = match seq {
-            Sequences::TheDataframe(mut df) => df.pop_row(df.get_parameters()).to_table(),
-            Sequences::TheArray(arr) => ErrorValue(NotImplemented("Array::pop()".into())),
-            Sequences::TheTuple(tp) => ErrorValue(NotImplemented("Tuple::pop()".into())),
-        };
-        Ok((ms, result))
+        match seq {
+            Sequences::TheDataframe(mut df) =>
+                df.pop_row(df.get_parameters()).to_table().map(|tv| (ms, tv)),
+            Sequences::TheArray(..) => throw(NotImplemented("Array::pop()".into())),
+            Sequences::TheTuple(..) => throw(NotImplemented("Tuple::pop()".into())),
+        }
     }
 
     fn do_tools_push(
@@ -1634,6 +1815,19 @@ impl PlatformOps {
         }
     }
 
+    fn do_tools_replay(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match value.clone() {
+            NamespaceValue(ns) => Self::do_tools_replay(ms, &TableValue(ns.load_table()?)),
+            TableValue(EventSource(mut df)) => Ok((ms, df.replay())),
+            TableValue(TableFn(mut df)) => Ok((ms, df.replay())),
+            TableValue(..) => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), value.get_type()))),
+            other => throw(TypeMismatch(UnsupportedType(DynamicType, other.get_type())))
+        }
+    }
+
     fn do_tools_reverse(
         ms: Machine,
         value: &TypedValue,
@@ -1646,17 +1840,21 @@ impl PlatformOps {
                     other => ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
                 })),
             StringValue(s) => Ok((ms, StringValue(s.chars().rev().collect()))),
-            TableValue(rcv) => Ok((ms, rcv.reverse_table_value())),
+            TableValue(df) => Ok((ms, df.reverse_table_value())),
             other => throw(TypeMismatch(UnsupportedType(DynamicType, other.get_type())))
         }
+    }
+
+    fn do_tools_row_id(ms: Machine) -> (Machine, TypedValue) {
+        let result = ms.get(machine::ROW_ID).unwrap_or_else(|| Number(U64Value(0)));
+        (ms, result)
     }
 
     fn do_tools_scan(
         ms: Machine,
         tv_table: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match tv_table.to_table() {
-            ErrorValue(err) => throw(err),
+        match tv_table.to_table()? {
             TableValue(df) => {
                 let rows = df.examine_rows()?;
                 let columns = rows.first()
@@ -1736,6 +1934,29 @@ impl PlatformOps {
         a: &TypedValue,
     ) -> (Machine, TypedValue) {
         (ms, StringValue(format!("{:b}", a.to_u64())))
+    }
+
+    fn do_util_gzip(
+        ms: Machine,
+        a: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(a.to_bytes().as_slice())?;
+        Ok((ms, Binary(encoder.finish()?.to_vec())))
+    }
+
+    fn do_util_gunzip(
+        ms: Machine,
+        a: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        use flate2::read::GzDecoder;
+        let bytes = a.to_bytes();
+        let mut decoder = GzDecoder::new(bytes.as_slice());
+        let mut output = Vec::new();
+        decoder.read_to_end(&mut output)?;
+        Ok((ms, Binary(output)))
     }
 
     fn do_util_numeric_conv(
@@ -1818,7 +2039,7 @@ impl PlatformOps {
         }
     }
 
-    pub fn get_kung_fu_feature_parameters() -> Vec<Parameter> {
+    pub fn get_testing_feature_parameters() -> Vec<Parameter> {
         vec![
             Parameter::new("level", NumberType(U16Kind)),
             Parameter::new("item", StringType(256)),
@@ -1911,14 +2132,14 @@ mod tests {
 
     #[test]
     fn test_get_info_cal_now() {
-        assert_eq!(CalDate.get_info(), PlatformFunction {
+        assert_eq!(CalNow.get_info(), PlatformFunction {
             name: "now".into(),
             description: "Returns the current local date and time".into(),
             example: "cal::now()".into(),
             package_name: "cal".into(),
             parameters: Vec::new(),
             return_type: NumberType(DateKind),
-            opcode: CalDate,
+            opcode: CalNow,
         });
     }
 
@@ -1990,7 +2211,7 @@ mod tests {
     #[test]
     fn test_to_code() {
         // cal
-        assert_eq!(CalDate.to_code(), "cal::now()");
+        assert_eq!(CalNow.to_code(), "cal::now()");
         assert_eq!(CalDateDay.to_code(), "cal::day_of(n: Date)");
         assert_eq!(CalDateHour12.to_code(), "cal::hour12(n: Date)");
         assert_eq!(CalDateHour24.to_code(), "cal::hour24(n: Date)");
@@ -2005,10 +2226,10 @@ mod tests {
         assert_eq!(IoStdErr.to_code(), "io::stderr(s: String)");
         assert_eq!(IoStdOut.to_code(), "io::stdout(s: String)");
         // testing
-        assert_eq!(KungFuAssert.to_code(), "testing::assert(b: Boolean)");
-        assert_eq!(KungFuFeature.to_code(), "testing::feature(a: String, b: Struct)");
-        assert_eq!(KungFuMatches.to_code(), "testing::matches(a, b)");
-        assert_eq!(KungFuTypeOf.to_code(), "testing::type_of(a)");
+        assert_eq!(TestingAssert.to_code(), "testing::assert(b: Boolean)");
+        assert_eq!(TestingFeature.to_code(), "testing::feature(a: String, b: Struct)");
+        assert_eq!(TestingMatches.to_code(), "testing::matches(a, b)");
+        assert_eq!(TestingTypeOf.to_code(), "testing::type_of(a)");
         // os
         assert_eq!(OsCall.to_code(), "os::call(s: String)");
         assert_eq!(OsClear.to_code(), "os::clear()");
@@ -2146,6 +2367,63 @@ mod tests {
         }
     }
 
+    /// Package "durations" tests
+    #[cfg(test)]
+    mod duration_tests {
+        use super::*;
+        use crate::numbers::Numbers::I64Value;
+        use crate::testdata::verify_exact;
+        use crate::typed_values::TypedValue::Number;
+
+        #[test]
+        fn test_durations_days() {
+            verify_exact(r#"
+                import durations
+                3:::days()
+            "#, Number(I64Value(3 * DAYS)));
+        }
+
+        #[test]
+        fn test_durations_hours() {
+            verify_exact(r#"
+                import durations
+                8:::hours()
+            "#, Number(I64Value(8 * HOURS)));
+        }
+
+        #[test]
+        fn test_durations_hours_f64() {
+            verify_exact(r#"
+                import durations
+                0.5:::hours()
+            "#, Number(F64Value(30.0 * MINUTES.to_f64().unwrap())));
+        }
+
+        #[test]
+        fn test_durations_millis() {
+            verify_exact(r#"
+                import durations
+                1000:::millis()
+            "#, Number(I64Value(1 * SECONDS)));
+        }
+
+        #[test]
+        fn test_durations_minutes() {
+            verify_exact(r#"
+                import durations
+                30:::minutes()
+            "#, Number(I64Value(30 * MINUTES)));
+        }
+
+        #[test]
+        fn test_durations_seconds() {
+            verify_exact(r#"
+                import durations
+                20:::seconds()
+            "#, Number(I64Value(20 * SECONDS)));
+        }
+    }
+
     /// Package "io" tests
     #[cfg(test)]
     mod io_tests {
@@ -2209,196 +2487,6 @@ mod tests {
         #[test]
         fn test_io_stdout() {
             verify_exact(r#"io::stdout("Hello World")"#, Boolean(true));
-        }
-    }
-
-    /// Package "kung_fu" tests
-    #[cfg(test)]
-    mod kung_fu_tests {
-        use crate::testdata::{verify_exact, verify_exact_table_with_ids, verify_exact_text};
-        use crate::typed_values::TypedValue::Boolean;
-
-        #[test]
-        fn test_kung_fu_feature() {
-            verify_exact_table_with_ids(r#"
-            import testing
-            feature("Matches function", {
-                "Compare Array contents: Equal": fn(ctx) => {
-                    assert(matches(
-                        [ 1 "a" "b" "c" ],
-                        [ 1 "a" "b" "c" ]))
-                },
-                "Compare Array contents: Not Equal": fn(ctx) => {
-                    assert(!matches(
-                        [ 1 "a" "b" "c" ],
-                        [ 0 "x" "y" "z" ]))
-                },
-                "Compare JSON contents (in sequence)": fn(ctx) => {
-                    assert(matches(
-                        { first: "Tom" last: "Lane" },
-                        { first: "Tom" last: "Lane" }))
-                },
-                "Compare JSON contents (out of sequence)": fn(ctx) => {
-                    assert(matches(
-                        { scores: [82 78 99], id: "A1537" },
-                        { id: "A1537", scores: [82 78 99] }))
-                }
-            })"#, vec![
-                "|--------------------------------------------------------------------------------------------------------------------------|",
-                "| id | level | item                                                                                      | passed | result |",
-                "|--------------------------------------------------------------------------------------------------------------------------|",
-                "| 0  | 0     | Matches function                                                                          | true   | true   |",
-                "| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |",
-                r#"| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |"#,
-                "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |",
-                r#"| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |"#,
-                "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |",
-                r#"| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |"#,
-                "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |",
-                r#"| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |"#,
-                "|--------------------------------------------------------------------------------------------------------------------------|"
-            ]);
-        }
-
-        #[test]
-        fn test_kung_fu_matches_exact() {
-            // test a perfect match
-            verify_exact(r#"
-                a := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
-                b := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
-                testing::matches(a, b)
-            "#, Boolean(true));
-        }
-
-        #[test]
-        fn test_kung_fu_matches_unordered() {
-            // test an unordered match
-            verify_exact(r#"
-                import testing::matches
-                a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-                b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
-                matches(a, b)
-            "#, Boolean(true));
-        }
-
-        #[test]
-        fn test_kung_fu_matches_not_match_1() {
-            // test when things do not match 1
-            verify_exact(r#"
-                import testing
-                a := { first: "Tom", last: "Lane" }
-                b := { first: "Jerry", last: "Lane" }
-                a:::matches(b)
-            "#, Boolean(false));
-        }
-
-        #[test]
-        fn test_kung_fu_matches_not_match_2() {
-            // test when things do not match 2
-            verify_exact(r#"
-                a := { key: "123", values: [1, 74, 88] }
-                b := { key: "123", values: [1, 74, 88, 0] }
-                testing::matches(a, b)
-            "#, Boolean(false));
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_array_bool() {
-            verify_exact_text_q("testing::type_of([true, false])", "Array(2)");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_array_i64() {
-            verify_exact_text_q("testing::type_of([12, 76, 444])", "Array(3)");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_array_str() {
-            verify_exact_text_q("testing::type_of(['ciao', 'hello', 'world'])", "Array(3)");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_array_f64() {
-            verify_exact_text_q("testing::type_of([12, 'hello', 76.78])", "Array(3)");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_bool() {
-            verify_exact_text_q("testing::type_of(false)", "Boolean");
-            verify_exact_text_q("testing::type_of(true)", "Boolean");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_date() {
-            verify_exact_text_q("testing::type_of(cal::now())", "Date");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_fn() {
-            verify_exact_text_q("testing::type_of(fn(a, b) => a + b)", "fn(a, b)");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_i64() {
-            verify_exact_text_q("testing::type_of(1234)", "i64");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_f64() {
-            verify_exact_text_q("testing::type_of(12.394)", "f64");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_string() {
-            verify_exact_text_q("testing::type_of('1234')", "String(4)");
-            verify_exact_text_q(r#"testing::type_of("abcde")"#, "String(5)");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_structure_hard() {
-            verify_exact_text_q(r#"testing::type_of(Struct(symbol: String(3) = "ABC"))"#,
-                                r#"Struct(symbol: String(3) := "ABC")"#);
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_structure_soft() {
-            verify_exact_text_q(r#"testing::type_of({symbol:"ABC"})"#,
-                                r#"Struct(symbol: String(3) := "ABC")"#);
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_namespace() {
-            verify_exact_text_q(r#"testing::type_of(ns("a.b.c"))"#, "Table");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_table() {
-            verify_exact_text_q(r#"testing::type_of(table(symbol: String(8), exchange: String(8), last_sale: f64))"#,
-                                "Table(symbol: String(8), exchange: String(8), last_sale: f64)");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_uuid() {
-            verify_exact_text_q("testing::type_of(oxide::uuid())", "UUID");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_variable() {
-            verify_exact_text_q("testing::type_of(my_var)", "");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_null() {
-            verify_exact_text_q("testing::type_of(null)", "");
-        }
-
-        #[test]
-        fn test_kung_fu_type_of_undefined() {
-            verify_exact_text_q("testing::type_of(undefined)", "");
-        }
-
-        fn verify_exact_text_q(code: &str, expected: &str) {
-            verify_exact_text(code, format!("\"{}\"", expected).as_str())
         }
     }
 
@@ -2795,6 +2883,196 @@ mod tests {
         }
     }
 
+    /// Package "testing" tests
+    #[cfg(test)]
+    mod testing_tests {
+        use crate::testdata::{verify_exact, verify_exact_table_with_ids, verify_exact_text};
+        use crate::typed_values::TypedValue::Boolean;
+
+        #[test]
+        fn test_testing_feature() {
+            verify_exact_table_with_ids(r#"
+            import testing
+            feature("Matches function", {
+                "Compare Array contents: Equal": fn(ctx) => {
+                    assert(matches(
+                        [ 1 "a" "b" "c" ],
+                        [ 1 "a" "b" "c" ]))
+                },
+                "Compare Array contents: Not Equal": fn(ctx) => {
+                    assert(!matches(
+                        [ 1 "a" "b" "c" ],
+                        [ 0 "x" "y" "z" ]))
+                },
+                "Compare JSON contents (in sequence)": fn(ctx) => {
+                    assert(matches(
+                        { first: "Tom" last: "Lane" },
+                        { first: "Tom" last: "Lane" }))
+                },
+                "Compare JSON contents (out of sequence)": fn(ctx) => {
+                    assert(matches(
+                        { scores: [82 78 99], id: "A1537" },
+                        { id: "A1537", scores: [82 78 99] }))
+                }
+            })"#, vec![
+                "|--------------------------------------------------------------------------------------------------------------------------|",
+                "| id | level | item                                                                                      | passed | result |",
+                "|--------------------------------------------------------------------------------------------------------------------------|",
+                "| 0  | 0     | Matches function                                                                          | true   | true   |",
+                "| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |",
+                r#"| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |"#,
+                "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |",
+                r#"| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |"#,
+                "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |",
+                r#"| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |"#,
+                "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |",
+                r#"| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |"#,
+                "|--------------------------------------------------------------------------------------------------------------------------|"
+            ]);
+        }
+
+        #[test]
+        fn test_testing_matches_exact() {
+            // test a perfect match
+            verify_exact(r#"
+                a := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
+                b := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
+                testing::matches(a, b)
+            "#, Boolean(true));
+        }
+
+        #[test]
+        fn test_testing_matches_unordered() {
+            // test an unordered match
+            verify_exact(r#"
+                import testing::matches
+                a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
+                b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
+                matches(a, b)
+            "#, Boolean(true));
+        }
+
+        #[test]
+        fn test_testing_matches_not_match_1() {
+            // test when things do not match 1
+            verify_exact(r#"
+                import testing
+                a := { first: "Tom", last: "Lane" }
+                b := { first: "Jerry", last: "Lane" }
+                a:::matches(b)
+            "#, Boolean(false));
+        }
+
+        #[test]
+        fn test_testing_matches_not_match_2() {
+            // test when things do not match 2
+            verify_exact(r#"
+                a := { key: "123", values: [1, 74, 88] }
+                b := { key: "123", values: [1, 74, 88, 0] }
+                testing::matches(a, b)
+            "#, Boolean(false));
+        }
+
+        #[test]
+        fn test_testing_type_of_array_bool() {
+            verify_exact_text_q("testing::type_of([true, false])", "Array(2)");
+        }
+
+        #[test]
+        fn test_testing_type_of_array_i64() {
+            verify_exact_text_q("testing::type_of([12, 76, 444])", "Array(3)");
+        }
+
+        #[test]
+        fn test_testing_type_of_array_str() {
+            verify_exact_text_q("testing::type_of(['ciao', 'hello', 'world'])", "Array(3)");
+        }
+
+        #[test]
+        fn test_testing_type_of_array_f64() {
+            verify_exact_text_q("testing::type_of([12, 'hello', 76.78])", "Array(3)");
+        }
+
+        #[test]
+        fn test_testing_type_of_bool() {
+            verify_exact_text_q("testing::type_of(false)", "Boolean");
+            verify_exact_text_q("testing::type_of(true)", "Boolean");
+        }
+
+        #[test]
+        fn test_testing_type_of_date() {
+            verify_exact_text_q("testing::type_of(cal::now())", "Date");
+        }
+
+        #[test]
+        fn test_testing_type_of_fn() {
+            verify_exact_text_q("testing::type_of(fn(a, b) => a + b)", "fn(a, b)");
+        }
+
+        #[test]
+        fn test_testing_type_of_i64() {
+            verify_exact_text_q("testing::type_of(1234)", "i64");
+        }
+
+        #[test]
+        fn test_testing_type_of_f64() {
+            verify_exact_text_q("testing::type_of(12.394)", "f64");
+        }
+
+        #[test]
+        fn test_testing_type_of_string() {
+            verify_exact_text_q("testing::type_of('1234')", "String(4)");
+            verify_exact_text_q(r#"testing::type_of("abcde")"#, "String(5)");
+        }
+
+        #[test]
+        fn test_testing_type_of_structure_hard() {
+            verify_exact_text_q(r#"testing::type_of(Struct(symbol: String(3) = "ABC"))"#,
+                                r#"Struct(symbol: String(3) := "ABC")"#);
+        }
+
+        #[test]
+        fn test_testing_type_of_structure_soft() {
+            verify_exact_text_q(r#"testing::type_of({symbol:"ABC"})"#,
+                                r#"Struct(symbol: String(3) := "ABC")"#);
+        }
+
+        #[test]
+        fn test_testing_type_of_namespace() {
+            verify_exact_text_q(r#"testing::type_of(ns("a.b.c"))"#, "Table");
+        }
+
+        #[test]
+        fn test_testing_type_of_table() {
+            verify_exact_text_q(r#"testing::type_of(table(symbol: String(8), exchange: String(8), last_sale: f64))"#,
+                                "Table(symbol: String(8), exchange: String(8), last_sale: f64)");
+        }
+
+        #[test]
+        fn test_testing_type_of_uuid() {
+            verify_exact_text_q("testing::type_of(oxide::uuid())", "UUID");
+        }
+
+        #[test]
+        fn test_testing_type_of_variable() {
+            verify_exact_text_q("testing::type_of(my_var)", "");
+        }
+
+        #[test]
+        fn test_testing_type_of_null() {
+            verify_exact_text_q("testing::type_of(null)", "");
+        }
+
+        #[test]
+        fn test_testing_type_of_undefined() {
+            verify_exact_text_q("testing::type_of(undefined)", "");
+        }
+
+        fn verify_exact_text_q(code: &str, expected: &str) {
+            verify_exact_text(code, format!("\"{}\"", expected).as_str())
+        }
+    }
+
     /// Package "tools" tests
     #[cfg(test)]
     mod tools_tests {
@@ -2916,6 +3194,37 @@ mod tests {
         }
 
         #[test]
+        fn test_tools_journal() {
+            verify_exact_table_with_ids(r#"
+                stocks := ns("platform.journal.stocks")
+                drop table stocks
+
+                create table stocks fn(
+                   symbol: String(8), exchange: String(8), last_sale: f64
+                ) => {
+                        symbol: symbol,
+                        exchange: exchange,
+                        last_sale: last_sale * 2.0,
+                        event_time: cal::now()
+                     }
+
+                ([{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]) ~> stocks
+
+                import tools
+                stocks:::journal()
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | BOOM   | NYSE     | 56.88     |",
+                "| 1  | ABC    | AMEX     | 12.49     |",
+                "| 2  | JET    | NASDAQ   | 32.12     |",
+                "|------------------------------------|"])
+        }
+
+        #[test]
         fn test_tools_pop() {
             verify_exact_table_with_ids(r#"
                 [+] import tools
@@ -3028,6 +3337,39 @@ mod tests {
                 r#"| 3  | ("DEX", "OTC_BB", 0.0086) |"#,
                 r#"|--------------------------------|"#
             ]);
+        }
+
+        #[test]
+        fn test_tools_replay() {
+            verify_exact_table_with_ids(r#"
+                stocks := ns("platform.table_fn.stocks")
+                drop table stocks
+
+                create table stocks fn(
+                   symbol: String(8), exchange: String(8), last_sale: f64
+                ) => {
+                        symbol: symbol,
+                        exchange: exchange,
+                        last_sale: last_sale * 2.0,
+                        rank: __row_id__ + 1
+                     }
+
+                ([{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]) ~> stocks
+
+                import tools
+                stocks:::replay()
+                from stocks
+            "#, vec![
+                "|-------------------------------------------|",
+                "| id | symbol | exchange | last_sale | rank |",
+                "|-------------------------------------------|",
+                "| 0  | BOOM   | NYSE     | 113.76    | 1    |",
+                "| 1  | ABC    | AMEX     | 24.98     | 2    |",
+                "| 2  | JET    | NASDAQ   | 64.24     | 3    |",
+                "|-------------------------------------------|"
+            ])
         }
 
         #[test]
@@ -3299,6 +3641,14 @@ mod tests {
             verify_exact(
                 "util::base64('Hello World')",
                 StringValue("SGVsbG8gV29ybGQ=".into()))
+        }
+
+        #[test]
+        fn test_util_gzip_and_gunzip() {
+            verify_exact(r#"
+                compressed := util::gzip('Hello World')
+                util::gunzip(compressed)
+            "#, Binary(b"Hello World".to_vec()))
         }
 
         #[test]

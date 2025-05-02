@@ -11,19 +11,17 @@ use crate::data_types::DataType::TableType;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::*;
 use crate::errors::Errors::*;
-use crate::errors::TypeMismatchErrors::{CollectionExpected, FunctionArgsExpected, QueryableExpected, TableExpected, UnsupportedType};
-use crate::errors::{throw, SyntaxErrors};
+use crate::errors::TypeMismatchErrors::{CollectionExpected, FunctionArgsExpected, NamespaceExpected, QueryableExpected, TableExpected, UnsupportedType};
+use crate::errors::{throw, SyntaxErrors, TypeMismatchErrors};
 use crate::expression::Conditions::True;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity};
-use crate::expression::DatabaseOps::Mutation;
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::expression::Mutations::Declare;
-use crate::expression::TableOptions::Journaling;
-use crate::expression::{Conditions, DatabaseOps, Expression, Mutations, Queryables, TableOptions};
+use crate::expression::{Conditions, DatabaseOps, Expression, Mutations, Queryables, NULL};
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
-use crate::journaling::{JournaledRowCollection, TableFunction};
+use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -44,55 +42,66 @@ use std::convert::From;
 use std::fs;
 use std::ops::Deref;
 
+/// Represents a Table Option
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+enum TableOption {
+    Journaling,
+    Transform(Expression),
+    TTL(u64),
+}
+
 /// Evaluates the database operation
 pub fn evaluate(
     ms: &Machine,
     database_op: &DatabaseOps,
+    options: &Expression,
 ) -> std::io::Result<(Machine, TypedValue)> {
     match database_op {
-        DatabaseOps::Queryable(q) => do_inquiry(ms, q),
-        DatabaseOps::Mutation(m) => do_mutation(ms, m),
+        DatabaseOps::Queryable(q) => eval_inquiry(ms, q, options),
+        DatabaseOps::Mutation(m) => eval_mutation(ms, m, options),
     }
 }
 
-pub fn do_inquiry(
+pub fn eval_inquiry(
     ms: &Machine,
     queryable: &Queryables,
+    _options: &Expression,
 ) -> std::io::Result<(Machine, TypedValue)> {
     match queryable {
         Queryables::Limit { from, limit } => {
             let (ms, limit) = ms.evaluate(limit)?;
-            do_table_or_view_query(&ms, from, &True, &limit)
+            eval_table_or_view_query(&ms, from, &True, &limit)
         }
         Queryables::Select { fields, from, condition, group_by, having, order_by, limit } =>
             do_select(&ms, fields, from, condition, group_by, having, order_by, limit),
         Queryables::Where { from, condition } =>
-            do_table_or_view_query(&ms, from, condition, &Undefined),
+            eval_table_or_view_query(&ms, from, condition, &Undefined),
     }
 }
 
-pub fn do_mutation(
+pub fn eval_mutation(
     ms: &Machine,
     mutation: &Mutations,
+    options: &Expression,
 ) -> std::io::Result<(Machine, TypedValue)> {
     match mutation {
         Mutations::Append { path, source } =>
             do_table_row_append(&ms, path, source),
         Mutations::Create { path, entity } => match entity {
             IndexEntity { columns } =>
-                do_table_create_index(&ms, path, columns),
-            TableEntity { columns, from, options } =>
-                do_table_create_table(&ms, path, columns, from, options),
+                do_create_table_index(&ms, path, columns),
+            TableEntity { columns, from } =>
+                do_create_table(&ms, path, columns, from, options),
             TableFnEntity { fx } =>
-                do_table_create_table_fn(&ms, fx),
+                do_create_table_fn(&ms, path, fx),
         }
         Mutations::Declare(entity) => match entity {
             IndexEntity { columns } =>
-                do_table_declare_index(&ms, columns),
-            TableEntity { columns, from, options } =>
-                do_table_declare_table(&ms, columns, from, options),
+                do_declare_table_index(&ms, columns),
+            TableEntity { columns, from } =>
+                do_declare_table(&ms, columns, from, options),
             TableFnEntity { fx } =>
-                do_table_declare_table_fn(&ms, fx),
+                do_declare_table_fn(&ms, fx),
         }
         Mutations::Delete { path, condition, limit } =>
             do_table_row_delete(&ms, path, condition, limit),
@@ -101,7 +110,7 @@ pub fn do_mutation(
             TableTarget { path } => do_table_drop(&ms, path),
         }
         Mutations::IntoNs(source, target) =>
-            do_into_ns(&ms, target, source),
+            eval_into_ns(&ms, target, source),
         Mutations::Overwrite { path, source, condition, limit } =>
             do_table_row_overwrite(&ms, path, source, condition, limit),
         Mutations::Truncate { path, limit } =>
@@ -119,20 +128,20 @@ pub fn do_mutation(
     }
 }
 
-pub fn do_into_ns(
+pub fn eval_into_ns(
     ms: &Machine,
     table: &Expression,
     source: &Expression,
 ) -> std::io::Result<(Machine, TypedValue)> {
     let m0 = ms.to_owned();
     let (machine, rows) = match source {
-        From(source) => do_rows_from_query(&ms, source, table)?,
+        From(source) => do_table_rows_from_query(&ms, source, table)?,
         Literal(Kind(TableType(_params, _size))) => (m0, vec![]),
         Literal(NamespaceValue(ns)) => (m0, FileRowCollection::open(ns)?.read_active_rows()?),
         Literal(TableValue(rc)) => (m0, rc.get_rows()),
-        DatabaseOp(Mutation(Declare(TableEntity { columns, from, options: _ }))) =>
-            do_rows_from_table_declaration(&m0, table, from, columns)?,
-        source => do_rows_from_query(&ms, source, table)?,
+        DatabaseOp(DatabaseOps::Mutation(Declare(TableEntity { columns, from }))) =>
+            do_table_rows_from_table_declaration(&m0, table, from, columns)?,
+        source => do_table_rows_from_query(&ms, source, table)?,
     };
 
     // write the rows to the target
@@ -146,15 +155,14 @@ pub fn do_into_ns(
     Ok((machine, Number(RowsAffected(inserted))))
 }
 
-pub fn do_iter(
+pub fn eval_iter(
     ms: &Machine,
     container: &Expression,
     source: &Expression,
 ) -> std::io::Result<(Machine, TypedValue)> {
     // todo tables need an iterable indexer
     let (ms, result) = ms.evaluate(source)?;
-    match result.to_table() {
-        ErrorValue(err) => Ok((ms, ErrorValue(err))),
+    match result.to_table()? {
         TableValue(mut df) => {
             let offset = df.len()?;
             let response = df.read_one(if offset > 0 { offset - 1 } else { offset })?
@@ -169,13 +177,13 @@ pub fn do_iter(
     }
 }
 
-pub fn do_eval_ns(
+pub fn eval_ns(
     ms: &Machine,
     expr: &Expression,
 ) -> std::io::Result<(Machine, TypedValue)> {
     let (ms, result) = ms.evaluate(expr)?;
     match result {
-        ErrorValue(err) => Ok((ms, ErrorValue(err))),
+        ErrorValue(err) => throw(err),
         StringValue(path) =>
             match path.split('.').collect::<Vec<_>>().as_slice() {
                 [d, s, n] => Ok((ms, NamespaceValue(Namespace::new(d, s, n)))),
@@ -186,16 +194,192 @@ pub fn do_eval_ns(
     }
 }
 
-fn do_table_row_resize(
+/// Evaluates the queryable [Expression] (e.g. from, limit and where)
+/// e.g.: from ns("query_engine.select.stocks") where last_sale > 1.0 limit 1
+pub fn eval_table_or_view_query(
+    ms: &Machine,
+    src: &Expression,
+    condition: &Conditions,
+    limit: &TypedValue,
+) -> std::io::Result<(Machine, TypedValue)> {
+    //println!("do_table_or_view_query: src = {src:?}, condition = {condition:?}, limit = {limit:?}");
+    let (machine, df) = ms.eval_as_dataframe(src)?;
+    let limit = limit.to_usize();
+    let columns = df.get_columns().clone();
+    let mut cursor = Cursor::filter(Box::new(df), condition.to_owned());
+    let mrc = ModelRowCollection::from_columns_and_rows(&columns, &cursor.take(limit)?);
+    Ok((machine, TableValue(Model(mrc))))
+}
+
+fn do_create_table(
     ms: &Machine,
     table: &Expression,
-    limit: TypedValue,
+    columns: &Vec<Parameter>,
+    from: &Option<Box<Expression>>,
+    options: &Expression,
 ) -> std::io::Result<(Machine, TypedValue)> {
+    let (ms, result) = ms.evaluate(table)?;
+    match result.to_owned() {
+        Null | Undefined => Ok((ms, result)),
+        ErrorValue(err) => throw(err),
+        TableValue(_rcv) => throw(Exact("Memory collections do not use 'create' keyword".to_string())),
+        NamespaceValue(ns) => do_create_table_ns(&ms, &ns, columns, from, options),
+        x => throw(TypeMismatch(CollectionExpected(x.to_code())))
+    }
+}
+
+fn do_create_table_fn(
+    ms: &Machine,
+    table_ns: &Expression,
+    fx: &Expression,
+) -> std::io::Result<(Machine, TypedValue)> {
+    // decode the model
+    match fx.clone() {
+        Expression::FnExpression { params, body, .. } => {
+            // create the input and output tables
+            let (ms, ns_value) = ms.evaluate(table_ns)?;
+            match ns_value {
+                NamespaceValue(ns) => {
+                    TableFunction::create_table_fn(
+                        &ns,
+                        params,
+                        match body {
+                            None => NULL,
+                            Some(expr) => expr.deref().clone()
+                        },
+                        Machine::new_platform(), //ms.clone(),
+                    )?;
+                    Ok((ms, Boolean(true)))
+                }
+                x => throw(TypeMismatch(NamespaceExpected(x.to_code())))
+            }
+        }
+        // Expression::Literal(Function { params, body, returns }) =>
+        //     create_table_fn(ms, params, returns, body.deref().clone()),
+        other => throw(TypeMismatch(FunctionArgsExpected(other.to_code())))
+    }
+}
+
+fn do_create_table_index(
+    ms: &Machine,
+    index: &Expression,
+    columns: &Vec<Expression>,
+) -> std::io::Result<(Machine, TypedValue)> {
+    let (ms1, result) = ms.evaluate(index)?;
+    match result {
+        Null | Undefined => Ok((ms1, result)),
+        TableValue(_rcv) => throw(UnsupportedFeature("in-memory indices".into())),
+        NamespaceValue(ns) => {
+            // evaluate the columns
+            let (ms2, columns) = ms.eval_as_atoms(columns)?;
+
+            // load the configuration
+            let config = ObjectConfig::load(&ns)?;
+
+            // update the indices
+            let mut indices = config.get_indices();
+            indices.push(HashIndexConfig::new(columns, false));
+
+            // update the configuration
+            let updated_config = config.with_indices(indices);
+            updated_config.save(&ns)?;
+            Ok((ms2, Boolean(true)))
+        }
+        z => throw(TypeMismatch(CollectionExpected(z.to_code())))
+    }
+}
+
+fn do_create_table_ns(
+    ms: &Machine,
+    ns: &Namespace,
+    columns: &Vec<Parameter>,
+    from: &Option<Box<Expression>>,
+    options: &Expression,
+) -> std::io::Result<(Machine, TypedValue)> {
+    // determine the table kind
+    let (ms, table_opts) = do_decode_create_table_options(&ms, options)?;
+    let df = match table_opts {
+        opts if opts.contains(&TableOption::Journaling) =>
+            EventSource(EventSourceRowCollection::new(&ns, columns)?),
+        _ => Disk(FileRowCollection::create_table(&ns, columns)?)
+    };
+    // append the rows of the "from" clause
+    let (ms, _df) = populate_dataframe_opt(&ms, df, from)?;
+    Ok((ms, Boolean(true)))
+}
+
+fn do_declare_table(
+    ms: &Machine,
+    columns: &Vec<Parameter>,
+    from: &Option<Box<Expression>>,
+    options: &Expression,
+) -> std::io::Result<(Machine, TypedValue)> {
+    let columns = Column::from_parameters(columns);
+
+    // determine the table kind
+    let (ms, table_opts) = do_decode_create_table_options(&ms, options)?;
+    let df = match table_opts {
+        opts if opts.contains(&TableOption::Journaling) =>
+            return throw(UnsupportedFeature("journaling".into())),
+        opts if opts.iter().any(|o| matches!(o, TableOption::TTL(..))) =>
+            return throw(UnsupportedFeature("ttl".into())),
+        _ => Model(ModelRowCollection::with_rows(columns, Vec::new()))
+    };
+    // append the rows of the "from" clause
+    let (ms, df) = populate_dataframe_opt(&ms, df, from)?;
+    Ok((ms, TableValue(df)))
+}
+
+fn do_declare_table_fn(
+    ms: &Machine,
+    fx: &Box<Expression>,
+) -> std::io::Result<(Machine, TypedValue)> {
+    match fx.deref().clone() {
+        Expression::FnExpression { params, body, returns } => Ok(todo!()),
+        Expression::Literal(Function { params, body, returns }) => Ok(todo!()),
+        other => throw(TypeMismatch(FunctionArgsExpected(other.to_code())))
+    }
+}
+
+fn do_declare_table_index(
+    ms: &Machine,
+    columns: &Vec<Expression>,
+) -> std::io::Result<(Machine, TypedValue)> {
+    // TODO determine how to implement
+    throw(NotImplemented("declare index".to_string()))
+}
+
+fn do_decode_create_table_options(
+    ms: &Machine,
+    options: &Expression,
+) -> std::io::Result<(Machine, Vec<TableOption>)> {
+    let mut table_opts = Vec::new();
+    let (ms, opts) = ms.evaluate(options)?;
+    match opts {
+        Structured(s) =>
+            for (param, val) in s.get_parameters().iter().zip(s.get_values()) {
+                match (param.get_name(), val) {
+                    ("journaling", Boolean(true)) =>
+                        table_opts.push(TableOption::Journaling),
+                    ("ttl", Number(n)) =>
+                        table_opts.push(TableOption::TTL(n.to_u64())),
+                    _ => {}
+                }
+            }
+        Null | Undefined => {}
+        z => return throw(TypeMismatch(TypeMismatchErrors::StructExpected(z.to_code(), z.to_code())))
+    }
+    Ok((ms, table_opts))
+}
+
+fn do_table_drop(ms: &Machine, table: &Expression) -> std::io::Result<(Machine, TypedValue)> {
     let (machine, table) = ms.evaluate(table)?;
-    match table.to_table() {
-        ErrorValue(err) => Ok((machine, ErrorValue(err))),
-        TableValue(mut df) => Ok((machine, df.resize(limit.to_usize()))),
-        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
+    match table {
+        NamespaceValue(ns) => {
+            let result = fs::remove_file(ns.get_table_file_path());
+            Ok((machine, Boolean(result.is_ok())))
+        }
+        _ => Ok((machine, Boolean(false)))
     }
 }
 
@@ -206,11 +390,11 @@ fn do_table_row_append(
 ) -> std::io::Result<(Machine, TypedValue)> {
     // evaluate the table expression (table_expr)
     let (ms, table) = ms.evaluate(table_expr)?;
-    match table.to_table() {
+    match table.to_table()? {
         TableValue(mut df) => {
             // evaluate the query expression (from_expr)
             let (ms, result) = ms.evaluate(from_expr)?;
-            match result.to_table() {
+            match result.to_table()? {
                 TableValue(src) => {
                     // write the rows to the dataframe
                     Ok((ms, df.append_rows(src.read_active_rows()?)))
@@ -230,7 +414,7 @@ fn do_table_row_delete(
 ) -> std::io::Result<(Machine, TypedValue)> {
     let (ms, limit) = ms.evaluate_opt(limit)?;
     let (ms, table) = ms.evaluate(from)?;
-    match table.to_table() {
+    match table.to_table()? {
         TableValue(mut rc) => Ok((ms.clone(), rc.delete_where(&ms, &condition, limit)?)),
         other => Ok((ms, ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))))
     }
@@ -246,8 +430,8 @@ fn do_table_row_overwrite(
     let (machine, limit) = ms.evaluate_opt(limit)?;
     let (machine, tv_table) = machine.evaluate(table)?;
     let (fields, values) = expect_via(&ms, &table, &source)?;
-    match tv_table.to_table() {
-        ErrorValue(err) => Ok((machine, ErrorValue(err))),
+    match tv_table.to_table()? {
+        ErrorValue(err) => throw(err),
         TableValue(rc) => {
             let (_, overwritten) = Dataframe::overwrite_where(rc, &machine, &fields, &values, condition, limit)?;
             Ok((machine, overwritten))
@@ -256,21 +440,16 @@ fn do_table_row_overwrite(
     }
 }
 
-/// Evaluates the queryable [Expression] (e.g. from, limit and where)
-/// e.g.: from ns("query_engine.select.stocks") where last_sale > 1.0 limit 1
-pub fn do_table_or_view_query(
+fn do_table_row_resize(
     ms: &Machine,
-    src: &Expression,
-    condition: &Conditions,
-    limit: &TypedValue,
+    table: &Expression,
+    limit: TypedValue,
 ) -> std::io::Result<(Machine, TypedValue)> {
-    //println!("do_table_or_view_query: src = {src:?}, condition = {condition:?}, limit = {limit:?}");
-    let (machine, df) = ms.eval_as_dataframe(src)?;
-    let limit = limit.to_usize();
-    let columns = df.get_columns().clone();
-    let mut cursor = Cursor::filter(Box::new(df), condition.to_owned());
-    let mrc = ModelRowCollection::from_columns_and_rows(&columns, &cursor.take(limit)?);
-    Ok((machine, TableValue(Model(mrc))))
+    let (machine, table) = ms.evaluate(table)?;
+    match table.to_table()? {
+        TableValue(mut df) => Ok((machine, df.resize(limit.to_usize()))),
+        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
+    }
 }
 
 fn do_table_row_undelete(
@@ -281,8 +460,7 @@ fn do_table_row_undelete(
 ) -> std::io::Result<(Machine, TypedValue)> {
     let (ms, limit) = ms.evaluate_opt(limit)?;
     let (ms, table) = ms.evaluate(from)?;
-    match table.to_table() {
-        ErrorValue(err) => Ok((ms, ErrorValue(err))),
+    match table.to_table()? {
         TableValue(mut rc) =>
             match rc.undelete_where(&ms, &condition, limit) {
                 Ok(restored) => Ok((ms, restored)),
@@ -302,8 +480,7 @@ fn do_table_row_update(
     let (ms, limit) = ms.evaluate_opt(limit)?;
     let (ms, tv_table) = ms.evaluate(table)?;
     let (fields, values) = expect_via(&ms, &table, &source)?;
-    match tv_table.to_table() {
-        ErrorValue(err) => Ok((ms, ErrorValue(err))),
+    match tv_table.to_table()? {
         TableValue(rc) =>
             match Dataframe::update_where(rc, &ms, &fields, &values, &condition, limit) {
                 Ok(modified) => Ok((ms, modified)),
@@ -313,299 +490,12 @@ fn do_table_row_update(
     }
 }
 
-fn do_table_create_index(
-    ms: &Machine,
-    index: &Expression,
-    columns: &Vec<Expression>,
-) -> std::io::Result<(Machine, TypedValue)> {
-    let (machine, result) = ms.evaluate(index)?;
-    match result {
-        ErrorValue(msg) => throw(msg),
-        Null | Undefined => Ok((machine, result)),
-        TableValue(_rcv) =>
-            throw(Exact("Memory collections do not yet support indexes".to_string())),
-        NamespaceValue(ns) => {
-            // evaluate the columns
-            let (machine, columns) = ms.eval_as_atoms(columns)?;
-
-            // load the configuration
-            let config = ObjectConfig::load(&ns)?;
-
-            // update the indices
-            let mut indices = config.get_indices();
-            indices.push(HashIndexConfig::new(columns, false));
-
-            // update the configuration
-            let updated_config = config.with_indices(indices);
-            updated_config.save(&ns)?;
-            Ok((machine, Boolean(true)))
-        }
-        z => throw(TypeMismatch(CollectionExpected(z.to_code())))
-    }
-}
-
-fn do_table_create_table(
-    ms: &Machine,
-    table: &Expression,
-    columns: &Vec<Parameter>,
-    from: &Option<Box<Expression>>,
-    options: &Vec<TableOptions>,
-) -> std::io::Result<(Machine, TypedValue)> {
-    let (ms, result) = ms.evaluate(table)?;
-    match result.to_owned() {
-        Null | Undefined => Ok((ms, result)),
-        ErrorValue(err) => Ok((ms, ErrorValue(err))),
-        TableValue(_rcv) => throw(Exact("Memory collections do not 'create' keyword".to_string())),
-        NamespaceValue(ns) => {
-            // determine the table kind
-            let rc =
-                if options.contains(&Journaling) {
-                    Journaled(JournaledRowCollection::new(&ns, columns)?)
-                } else {
-                    Disk(FileRowCollection::create_table(&ns, columns)?)
-                };
-            // append the rows of the "from" clause
-            Ok((populate_dataframe_opt(&ms, rc, from)?, Boolean(true)))
-        }
-        x => throw(TypeMismatch(CollectionExpected(x.to_code())))
-    }
-}
-
-fn do_table_create_table_fn(
-    ms: &Machine,
-    fx: &Box<Expression>,
-) -> std::io::Result<(Machine, TypedValue)> {
-    match fx.deref().clone() {
-        Literal(Function { params, body: code, returns }) => {
-            TableFunction::new(
-                params.clone(),
-                code.deref().clone(),
-                Model(ModelRowCollection::from_parameters(&params)),
-                Model(ModelRowCollection::from_parameters(&params)),
-                ms.clone(),
-            );
-            Ok((ms.clone(), Boolean(true)))
-        }
-        other =>
-            throw(TypeMismatch(FunctionArgsExpected(other.to_code())))
-    }
-}
-
-fn do_table_declare_index(
-    ms: &Machine,
-    columns: &Vec<Expression>,
-) -> std::io::Result<(Machine, TypedValue)> {
-    // TODO determine how to implement
-    throw(NotImplemented("declare index".to_string()))
-}
-
-fn do_table_declare_table(
-    ms: &Machine,
-    columns: &Vec<Parameter>,
-    from: &Option<Box<Expression>>,
-    options: &Vec<TableOptions>,
-) -> std::io::Result<(Machine, TypedValue)> {
-    let columns = Column::from_parameters(columns);
-    Ok((ms.to_owned(), TableValue(Model(ModelRowCollection::with_rows(columns, Vec::new())))))
-}
-
-fn do_table_declare_table_fn(
-    ms: &Machine,
-    fx: &Box<Expression>,
-) -> std::io::Result<(Machine, TypedValue)> {
-    match fx.deref().clone() {
-        Literal(Function { params, body: code, returns }) => {
-            Ok(todo!())
-        }
-        other =>
-            throw(TypeMismatch(FunctionArgsExpected(other.to_code())))
-    }
-}
-
-fn do_table_drop(ms: &Machine, table: &Expression) -> std::io::Result<(Machine, TypedValue)> {
-    let (machine, table) = ms.evaluate(table)?;
-    match table {
-        ErrorValue(err) => Ok((machine, ErrorValue(err))),
-        NamespaceValue(ns) => {
-            let result = fs::remove_file(ns.get_table_file_path());
-            Ok((machine, if result.is_ok() { Boolean(true) } else { Boolean(false) }))
-        }
-        _ => Ok((machine, Boolean(false)))
-    }
-}
-
-pub fn do_select(
-    ms: &Machine,
-    fields: &Vec<Expression>,
-    from: &Option<Box<Expression>>,
-    condition: &Option<Conditions>,
-    group_by: &Option<Vec<Expression>>,
-    having: &Option<Box<Expression>>,
-    order_by: &Option<Vec<Expression>>,
-    limit: &Option<Box<Expression>>,
-) -> std::io::Result<(Machine, TypedValue)> {
-    match ms.evaluate_opt(from) {
-        Ok((ms, table_v)) =>
-            match table_v {
-                ErrorValue(err) => throw(err),
-                NamespaceValue(ns) =>
-                    match FileRowCollection::open(&ns) {
-                        Ok(frc) =>
-                            Ok(do_select_go(ms, Disk(frc), fields, condition, group_by, having, order_by, limit)),
-                        Err(err) => throw(Exact(err.to_string()))
-                    }
-                TableValue(rc) =>
-                    Ok(do_select_go(ms, rc, fields, condition, group_by, having, order_by, limit)),
-                z => throw(TypeMismatch(CollectionExpected(z.to_code())))
-            }
-        Err(err) => throw(Exact(err.to_string()))
-    }
-}
-
-fn do_select_go(
-    ms: Machine,
-    df0: Dataframe,
-    fields: &Vec<Expression>,
-    condition: &Option<Conditions>,
-    group_by: &Option<Vec<Expression>>,
-    having: &Option<Box<Expression>>,
-    order_by: &Option<Vec<Expression>>,
-    limit: &Option<Box<Expression>>,
-) -> (Machine, TypedValue) {
-    // cache the initial state
-    let ms0 = ms.clone();
-
-    // step 1: determine output layout and limits
-    let (_, rc1, new_columns, limit) =
-        step_1_determine_layout_and_limit(ms, df0, fields, limit);
-
-    // step 2: transform the eligible rows
-    let (_, rc2) =
-        match step_2_transform_eligible_rows(&ms0, &rc1, fields, &new_columns, condition) {
-            (ms, ErrorValue(err)) => return (ms, ErrorValue(err)),
-            (ms, TableValue(rc)) => (ms, rc),
-            (ms, other) => return (ms, ErrorValue(TypeMismatch(UnsupportedType(
-                TableType(new_columns.iter()
-                              .map(|c| c.to_parameter())
-                              .collect::<Vec<_>>(), 0),
-                other.get_type(),
-            )))),
-        };
-
-    // step 3: aggregate the dataset
-    let rc3 = match group_by {
-        Some(agg_fields) => step_3_aggregate_table(rc2, agg_fields, having),
-        None => rc2
-    };
-
-    // step 4: sort the dataset
-    let rc4 = match order_by {
-        Some(order_fields) => step_4_sort_table(rc3, order_fields),
-        None => rc3
-    };
-
-    // step 5: limit the dataset
-    let rc5 = match limit {
-        Number(cut_off) => step_5_limit_table(rc4, cut_off.to_usize()),
-        _ => rc4
-    };
-
-    // return the table value
-    (ms0, TableValue(rc5))
-}
-
-fn populate_dataframe(
-    ms: &Machine,
-    mut target: Dataframe,
-    from: &Expression,
-) -> std::io::Result<Machine> {
-    let (ms, source) = ms.eval_as_dataframe(from)?;
-    target.append_rows(source.read_active_rows()?);
-    Ok(ms)
-}
-
-fn populate_dataframe_opt(
-    ms: &Machine,
-    mut target: Dataframe,
-    from: &Option<Box<Expression>>,
-) -> std::io::Result<Machine> {
-    if let Some(source) = from {
-        populate_dataframe(ms, target, source)
-    } else { Ok(ms.clone()) }
-}
-
-fn step_1_determine_layout_and_limit(
-    ms0: Machine,
-    rc0: Dataframe,
-    fields: &Vec<Expression>,
-    limit: &Option<Box<Expression>>,
-) -> (Machine, Dataframe, Vec<Column>, TypedValue) {
-    let columns = rc0.get_columns();
-    let (ms, limit) = ms0.evaluate_opt(limit)
-        .unwrap_or_else(|err| (ms0, ErrorValue(Exact(err.to_string()))));
-    let new_columns = match resolve_fields_as_columns(columns, fields) {
-        Ok(new_columns) => new_columns,
-        Err(err) => return (ms, rc0, vec![], ErrorValue(Exact(err.to_string())))
-    };
-    (ms, rc0, new_columns, limit)
-}
-
-fn step_2_transform_eligible_rows(
-    ms: &Machine,
-    rc1: &Dataframe,
-    fields: &Vec<Expression>,
-    new_columns: &Vec<Column>,
-    condition: &Option<Conditions>,
-) -> (Machine, TypedValue) {
-    let (ms, result) = match transform_table(ms, rc1, fields, new_columns, condition) {
-        (ms, ErrorValue(err)) => return (ms, ErrorValue(err)),
-        (ms, TableValue(rc)) => (ms, TableValue(rc)),
-        (ms, other) => return (ms, ErrorValue(TypeMismatch(UnsupportedType(
-            TableType(vec![], 0),
-            other.get_type(),
-        )))),
-    };
-    (ms, result)
-}
-
-fn step_3_aggregate_table(
-    src: Dataframe,
-    group_by: &Vec<Expression>,
-    having: &Option<Box<Expression>>,
-) -> Dataframe {
-    // todo add aggregation code to rc
-    src
-}
-
-fn step_4_sort_table(
-    src: Dataframe,
-    sort_fields: &Vec<Expression>,
-) -> Dataframe {
-    // todo add sorting code to rc
-    src
-}
-
-fn step_5_limit_table(
-    src: Dataframe,
-    cut_off: usize,
-) -> Dataframe {
-    let mut dest = ModelRowCollection::new(src.get_columns().clone());
-    let mut count: usize = 0;
-    for row in src.iter() {
-        if count >= cut_off { break; }
-        dest.overwrite_row(row.get_id(), row);
-        count += 1;
-    }
-    Model(dest)
-}
-
-fn do_rows_from_table_declaration(
+fn do_table_rows_from_table_declaration(
     ms: &Machine,
     table: &Expression,
     from: &Option<Box<Expression>>,
     columns: &Vec<Parameter>,
 ) -> std::io::Result<(Machine, Vec<Row>)> {
-    let machine = ms.to_owned();
     // create the config and an empty data file
     let ns = expect_namespace(&ms, table)?;
     let cfg = ObjectConfig::build_table(columns.clone());
@@ -614,24 +504,175 @@ fn do_rows_from_table_declaration(
     // decipher the "from" expression
     let columns = Column::from_parameters(columns);
     let results = match from {
-        Some(expr) => expect_rows(&machine, expr.deref(), &columns)?,
+        Some(expr) => expect_rows(ms, expr.deref(), &columns)?,
         None => Vec::new()
     };
-    Ok((machine, results))
+    Ok((ms.clone(), results))
 }
 
-fn do_rows_from_query(
+fn do_table_rows_from_query(
     ms: &Machine,
     source: &Expression,
     table: &Expression,
 ) -> std::io::Result<(Machine, Vec<Row>)> {
     // determine the row collection
-    let machine = ms.to_owned();
-    let rc = expect_row_collection(&machine, table)?;
+    let rc = expect_row_collection(ms, table)?;
 
     // retrieve rows from the source
-    let rows = expect_rows(&machine, source, rc.get_columns())?;
-    Ok((machine, rows))
+    let rows = expect_rows(ms, source, rc.get_columns())?;
+    Ok((ms.clone(), rows))
+}
+
+fn do_select(
+    ms: &Machine,
+    fields: &Vec<Expression>,
+    from: &Option<Box<Expression>>,
+    condition: &Option<Conditions>,
+    group_by: &Option<Vec<Expression>>,
+    having: &Option<Box<Expression>>,
+    order_by: &Option<Vec<Expression>>,
+    limit: &Option<Box<Expression>>,
+) -> std::io::Result<(Machine, TypedValue)> {
+    let (ms, table_v) = ms.evaluate_opt(from)?;
+    match table_v {
+        NamespaceValue(ns) => {
+            let frc = FileRowCollection::open(&ns)?;
+            do_select_from_dataframe(ms, Disk(frc), fields, condition, group_by, having, order_by, limit)
+        }
+        TableValue(rc) => do_select_from_dataframe(ms, rc, fields, condition, group_by, having, order_by, limit),
+        z => throw(TypeMismatch(CollectionExpected(z.to_code())))
+    }
+}
+
+fn do_select_from_dataframe(
+    ms: Machine,
+    df0: Dataframe,
+    fields: &Vec<Expression>,
+    condition: &Option<Conditions>,
+    group_by: &Option<Vec<Expression>>,
+    having: &Option<Box<Expression>>,
+    order_by: &Option<Vec<Expression>>,
+    limit: &Option<Box<Expression>>,
+) -> std::io::Result<(Machine, TypedValue)> {
+    // cache the initial state
+    let ms0 = ms.clone();
+
+    // step 1: determine output layout and limits
+    let (_, rc1, new_columns, limit) =
+        step_1_determine_layout_and_limit(ms, df0, fields, limit)?;
+
+    // step 2: transform the eligible rows
+    let (_, rc2) =
+        match step_2_transform_eligible_rows(&ms0, &rc1, fields, &new_columns, condition)? {
+            (ms, TableValue(rc)) => (ms, rc),
+            (_ms, other) => return throw(TypeMismatch(UnsupportedType(
+                TableType(new_columns.iter()
+                              .map(|c| c.to_parameter())
+                              .collect::<Vec<_>>(), 0),
+                other.get_type(),
+            ))),
+        };
+
+    // step 3: aggregate the dataset
+    let rc3 = match group_by {
+        Some(agg_fields) => step_3_aggregate_table(rc2, agg_fields, having)?,
+        None => rc2
+    };
+
+    // step 4: sort the dataset
+    let rc4 = match order_by {
+        Some(order_fields) => step_4_sort_table(rc3, order_fields)?,
+        None => rc3
+    };
+
+    // step 5: limit the dataset
+    let rc5 = match limit {
+        Number(cut_off) => step_5_limit_table(rc4, cut_off.to_usize())?,
+        _ => rc4
+    };
+
+    // return the table value
+    Ok((ms0, TableValue(rc5)))
+}
+
+fn populate_dataframe(
+    ms: &Machine,
+    mut target: Dataframe,
+    from: &Expression,
+) -> std::io::Result<(Machine, Dataframe)> {
+    let (ms, source) = ms.eval_as_dataframe(from)?;
+    target.append_rows(source.read_active_rows()?);
+    Ok((ms, target))
+}
+
+fn populate_dataframe_opt(
+    ms: &Machine,
+    mut target: Dataframe,
+    from: &Option<Box<Expression>>,
+) -> std::io::Result<(Machine, Dataframe)> {
+    if let Some(source) = from {
+        populate_dataframe(ms, target, source)
+    } else { Ok((ms.clone(), target)) }
+}
+
+fn step_1_determine_layout_and_limit(
+    ms0: Machine,
+    rc0: Dataframe,
+    fields: &Vec<Expression>,
+    limit: &Option<Box<Expression>>,
+) -> std::io::Result<(Machine, Dataframe, Vec<Column>, TypedValue)> {
+    let columns = rc0.get_columns();
+    let (ms, limit) = ms0.evaluate_opt(limit)?;
+    let new_columns = resolve_fields_as_columns(columns, fields)?;
+    Ok((ms, rc0, new_columns, limit))
+}
+
+fn step_2_transform_eligible_rows(
+    ms: &Machine,
+    rc1: &Dataframe,
+    fields: &Vec<Expression>,
+    new_columns: &Vec<Column>,
+    condition: &Option<Conditions>,
+) -> std::io::Result<(Machine, TypedValue)> {
+    let (ms, result) = match transform_table(ms, rc1, fields, new_columns, condition)? {
+        (ms, TableValue(rc)) => (ms, TableValue(rc)),
+        (_ms, other) => return throw(TypeMismatch(UnsupportedType(
+            TableType(vec![], 0),
+            other.get_type(),
+        ))),
+    };
+    Ok((ms, result))
+}
+
+fn step_3_aggregate_table(
+    src: Dataframe,
+    group_by: &Vec<Expression>,
+    having: &Option<Box<Expression>>,
+) -> std::io::Result<Dataframe> {
+    // todo add aggregation code to rc
+    Ok(src)
+}
+
+fn step_4_sort_table(
+    src: Dataframe,
+    sort_fields: &Vec<Expression>,
+) -> std::io::Result<Dataframe> {
+    // todo add sorting code to rc
+    Ok(src)
+}
+
+fn step_5_limit_table(
+    src: Dataframe,
+    cut_off: usize,
+) -> std::io::Result<Dataframe> {
+    let mut dest = ModelRowCollection::new(src.get_columns().clone());
+    let mut count: usize = 0;
+    for row in src.iter() {
+        if count >= cut_off { break; }
+        dest.overwrite_row(row.get_id(), row);
+        count += 1;
+    }
+    Ok(Model(dest))
 }
 
 fn expect_namespace(
@@ -716,23 +757,22 @@ fn transform_table(
     field_values: &Vec<Expression>,
     field_columns: &Vec<Column>,
     condition: &Option<Conditions>,
-) -> (Machine, TypedValue) {
+) -> std::io::Result<(Machine, TypedValue)> {
     let columns = rc0.get_columns();
     let mut rc1 = ModelRowCollection::new(field_columns.clone());
     for row in rc0.iter() {
         let ms = row.pollute(&ms0, columns);
         if row.matches(&ms, condition, columns) {
-            match ms.eval_as_array(field_values) {
-                Ok((_ms, ArrayValue(array))) => {
+            match ms.eval_as_array(field_values)? {
+                (_ms, ArrayValue(array)) => {
                     let new_row = Row::new(row.get_id(), array.get_values().clone());
                     rc1.overwrite_row(new_row.get_id(), new_row);
                 }
-                Ok((ms, z)) => return (ms, ErrorValue(Exact(z.to_code()))),
-                Err(err) => return (ms, ErrorValue(Exact(err.to_string())))
+                (_ms, z) => return throw(TypeMismatch(TypeMismatchErrors::ArrayExpected(z.to_string())))
             }
         }
     }
-    (ms0.clone(), TableValue(Model(rc1)))
+    Ok((ms0.clone(), TableValue(Model(rc1))))
 }
 
 fn resolve_fields_as_columns(
@@ -844,6 +884,38 @@ mod sql_tests {
                     exchange: String(8),
                     last_sale: f64
                 )"#, Boolean(true))
+    }
+
+    #[test]
+    fn test_create_table_fn() {
+        let mut interpreter = Interpreter::new();
+        interpreter = verify_exact_where(interpreter, r#"
+            stocks := ns("query_engine.table_fn.stocks")
+            drop table stocks
+            create table stocks fn(
+               symbol: String(8), exchange: String(8), last_sale: f64
+            ) => {
+                    symbol: symbol,
+                    exchange: exchange,
+                    last_sale: last_sale * 2.0,
+                    rank: __row_id__ + 1
+                 }
+        "#, Boolean(true));
+
+        interpreter = verify_exact_where(interpreter, r#"
+            [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+             { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+             { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+        "#, Number(RowsAffected(3)));
+
+        verify_exact_table_where(interpreter, "from stocks", vec![
+            "|-------------------------------------------|",
+            "| id | symbol | exchange | last_sale | rank |",
+            "|-------------------------------------------|",
+            "| 0  | BOOM   | NYSE     | 113.76    | 1    |",
+            "| 1  | ABC    | AMEX     | 24.98     | 2    |",
+            "| 2  | JET    | NASDAQ   | 64.24     | 3    |",
+            "|-------------------------------------------|"]);
     }
 
     #[test]

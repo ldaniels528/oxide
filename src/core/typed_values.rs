@@ -27,7 +27,7 @@ use crate::data_types::DataType::*;
 
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Disk, Model};
+use crate::dataframe::Dataframe::{Disk, Model, TableFn};
 
 use crate::errors::Errors::{CannotSubtract, Exact, IncompatibleParameters, Multiple, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CannotBeNegated, StructsOneOrMoreExpected, UnsupportedType};
@@ -36,6 +36,7 @@ use crate::expression::Expression;
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
+use crate::journaling::TableFunction;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -279,7 +280,7 @@ impl TypedValue {
             PlatformOpsType(_kind) => Undefined,
             StringType(max_len) => StringValue(self.unwrap_as_string(max_len)),
             StructureType(params) => Undefined,
-            TableType(params, ..) => self.to_table_with_schema(&params),
+            TableType(params, ..) => self.to_table_with_schema(&params)?,
             TupleType(params) => Undefined,
         })
     }
@@ -529,47 +530,42 @@ impl TypedValue {
         }
     }
 
-    pub fn to_table(&self) -> TypedValue {
+    pub fn to_table(&self) -> std::io::Result<TypedValue> {
         match self {
             ArrayValue(items) =>
-                match self.convert_array_to_table(&items.get_values()) {
-                    Ok(df) => TableValue(df),
-                    Err(error) => ErrorValue(Exact(error.to_string())),
-                }
-            ErrorValue(err) => ErrorValue(err.to_owned()),
+                self.convert_array_to_table(&items.get_values()).map(|df| TableValue(df)),
             NamespaceValue(ns) =>
-                match ObjectConfig::load(ns) {
-                    Ok(ObjectConfig::TableConfig { .. }) =>
-                        match FileRowCollection::open(ns) {
-                            Ok(frc) => TableValue(Disk(frc)),
-                            Err(err) => ErrorValue(Exact(err.to_string())),
-                        }
-                    Err(err) => ErrorValue(Exact(err.to_string()))
+                match ObjectConfig::load(ns)? {
+                    ObjectConfig::TableConfig { .. } =>
+                        FileRowCollection::open(ns).map(|frc| TableValue(Disk(frc))),
+                    ObjectConfig::TableFnConfig { .. } =>
+                        TableFunction::from_namespace(ns, Machine::new_platform())
+                            .map(|tf| TableValue(TableFn(Box::new(tf)))),
                 }
-            Structured(s) => TableValue(s.to_dataframe()),
-            TableValue(df) => TableValue(df.to_owned()),
-            z => z.to_owned()
+            Structured(s) => Ok(TableValue(s.to_dataframe())),
+            TableValue(df) => Ok(TableValue(df.to_owned())),
+            z => Ok(z.to_owned())
         }
     }
 
     pub fn to_table_impl(&self) -> std::io::Result<Box<dyn RowCollection>> {
-        match self.to_table() {
+        match self.to_table()? {
             ErrorValue(error) => throw(error),
             TableValue(df) => Ok(Box::new(df)),
             z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
         }
     }
 
-    pub fn to_table_with_schema(&self, params: &Vec<Parameter>) -> TypedValue {
-        match self.to_table() {
+    pub fn to_table_with_schema(&self, params: &Vec<Parameter>) -> std::io::Result<TypedValue> {
+        match self.to_table()? {
             TableValue(df) => {
                 let my_params = df.get_parameters();
                 match Parameter::are_compatible(params, &my_params) {
-                    true => TableValue(df),
-                    false => ErrorValue(IncompatibleParameters(my_params))
+                    true => Ok(TableValue(df)),
+                    false => throw(IncompatibleParameters(my_params))
                 }
             }
-            other => other
+            other => Ok(other)
         }
     }
 

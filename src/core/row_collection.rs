@@ -877,7 +877,7 @@ mod tests {
     use crate::expression::Expression::{Literal, Variable};
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::hybrid_row_collection::HybridRowCollection;
-    use crate::journaling::JournaledRowCollection;
+    use crate::journaling::EventSourceRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::number_kind::NumberKind::F64Kind;
@@ -1975,7 +1975,7 @@ mod tests {
     fn verify_event_sourcing_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
         let ns = Namespace::new("journaled", name, "stocks");
         let params = Parameter::from_columns(&columns);
-        let mut jrc = JournaledRowCollection::new(&ns, &params).unwrap();
+        let mut jrc = EventSourceRowCollection::new(&ns, &params).unwrap();
         jrc.resize(0);
         test_variant(kind, Box::new(jrc), columns.to_owned())
     }

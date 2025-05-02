@@ -46,6 +46,7 @@ impl Display for SyntaxErrors {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum TypeMismatchErrors {
     ArgumentsMismatched(usize, usize),
+    ArrayExpected(String),
     BooleanExpected(String),
     CannotBeNegated(String),
     CodeBlockExpected(String),
@@ -57,6 +58,7 @@ pub enum TypeMismatchErrors {
     FunctionExpected(String),
     IdentifierExpected(String),
     OutcomeExpected(String),
+    NamespaceExpected(String),
     ParameterExpected(String),
     QueryableExpected(String),
     RowsAffectedExpected(String),
@@ -75,6 +77,8 @@ impl Display for TypeMismatchErrors {
         let text = match self {
             TypeMismatchErrors::ArgumentsMismatched(a, b) =>
                 format!("Mismatched number of arguments: {a} vs. {b}"),
+            TypeMismatchErrors::ArrayExpected(a) =>
+                format!("Array value expected near {a}"),
             TypeMismatchErrors::BooleanExpected(a) =>
                 format!("Boolean value expected near {a}"),
             TypeMismatchErrors::CannotBeNegated(a) =>
@@ -95,6 +99,8 @@ impl Display for TypeMismatchErrors {
                 format!("Function expected, but found {}", other),
             TypeMismatchErrors::IdentifierExpected(other) =>
                 format!("Identifier expected, but found {}", other),
+            TypeMismatchErrors::NamespaceExpected(expr) =>
+                format!("Expected a namespace (e.g. ns(\"a.b.c\")) near {expr}"),
             TypeMismatchErrors::OutcomeExpected(expr) =>
                 format!("Expected an outcome (RowId or RowsAffected) near {expr}"),
             TypeMismatchErrors::ParameterExpected(expr) =>
@@ -143,6 +149,7 @@ pub enum Errors {
     PlatformOpError(PlatformOps),
     SyntaxError(SyntaxErrors),
     TypeMismatch(TypeMismatchErrors),
+    UnsupportedFeature(String),
     UnsupportedPlatformOps(PlatformOps),
     ViewsCannotBeResized,
     WriteProtected,
@@ -155,7 +162,7 @@ impl Display for Errors {
                 format!("Assertion Error: {a} was not {b}"),
             Errors::CannotSubtract(a, b) =>
                 format!("Cannot subtract {b} from {a}"),
-            Errors::Empty => String::from("Doh."),
+            Errors::Empty => String::from("General fault occurred"),
             Errors::Exact(message) => format!("{message}"),
             Errors::ExactNear(message, token) =>
                 format!("{message} on line {} column {}",
@@ -185,6 +192,8 @@ impl Display for Errors {
                 format!("{message}"),
             Errors::TypeMismatch(mismatch) =>
                 format!("{mismatch}"),
+            Errors::UnsupportedFeature(name) =>
+                format!("Unsupported feature '{name}'"),
             Errors::UnsupportedPlatformOps(pops) =>
                 format!("Unsupported operation {}", pops.to_code()),
             Errors::ViewsCannotBeResized =>
@@ -217,6 +226,7 @@ mod tests {
                "Cannot subtract b from a");
         verify(PlatformOpError(PlatformOps::UtilHex),
                "Conversion error: \"util::hex(a)\"");
+        verify(Empty, "General fault occurred".into());
         verify(Exact("Something bad happened".into()),
                "Something bad happened");
         verify(ExactNear(
@@ -230,6 +240,7 @@ mod tests {
         verify(PackageNotFound("wth".into()), "Package 'wth' not found");
         verify(IndexOutOfRange("bytes".into(), 5, 4),
                "bytes index is out of range (5 >= 4)");
+        verify(UnsupportedFeature("journaling".into()), "Unsupported feature 'journaling'")
     }
 
     #[test]

@@ -57,6 +57,16 @@ impl Column {
         columns
     }
 
+    pub fn render(columns: &Vec<Column>) -> String {
+        Self::render_f(columns, |c| c.to_parameter().to_code())
+    }
+
+    pub fn render_f(columns: &Vec<Column>, f: fn(&Column) -> String) -> String {
+        columns.iter().map(|c| f(c))
+            .collect::<Vec<String>>()
+            .join(", ")
+    }
+
     pub fn get_name(&self) -> &str {
         self.name.as_str()
     }

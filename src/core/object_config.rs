@@ -1,6 +1,6 @@
 #![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
-// ObjectConfig enumeration
+// Object Configuration enumerations
 ////////////////////////////////////////////////////////////////////
 
 use std::fs;
@@ -8,8 +8,8 @@ use std::fs;
 use serde::{Deserialize, Serialize};
 
 use crate::cnv_error;
+use crate::expression::Expression;
 use crate::namespaces::Namespace;
-use crate::object_config::ObjectConfig::TableConfig;
 use crate::parameter::Parameter;
 
 /// Oxide Object Configuration
@@ -20,13 +20,32 @@ pub enum ObjectConfig {
         indices: Vec<HashIndexConfig>,
         partitions: Vec<String>,
     },
+    TableFnConfig {
+        columns: Vec<Parameter>,
+        code: Expression,
+        indices: Vec<HashIndexConfig>,
+        partitions: Vec<String>,
+    },
 }
 
 impl ObjectConfig {
-    /// instantiates a new dataframe configuration.
+    /// instantiates a new table configuration.
     pub fn build_table(columns: Vec<Parameter>) -> Self {
         ObjectConfig::TableConfig {
             columns,
+            indices: vec![],
+            partitions: vec![],
+        }
+    }
+
+    /// instantiates a new table function configuration.
+    pub fn build_table_fn(
+        columns: Vec<Parameter>,
+        code: Expression,
+    ) -> Self {
+        ObjectConfig::TableFnConfig {
+            columns,
+            code,
             indices: vec![],
             partitions: vec![],
         }
@@ -39,22 +58,22 @@ impl ObjectConfig {
 
     pub fn get_columns(&self) -> Vec<Parameter> {
         match self {
-            ObjectConfig::TableConfig { columns, .. } => columns.clone(),
-            _ => vec![]
+            ObjectConfig::TableConfig { columns, .. } |
+            ObjectConfig::TableFnConfig { columns, .. } => columns.clone(),
         }
     }
 
     pub fn get_indices(&self) -> Vec<HashIndexConfig> {
         match self {
-            ObjectConfig::TableConfig { indices, .. } => indices.clone(),
-            _ => vec![]
+            ObjectConfig::TableConfig { indices, .. } |
+            ObjectConfig::TableFnConfig { indices, .. } => indices.clone(),
         }
     }
 
     pub fn get_partitions(&self) -> Option<&Vec<String>> {
         match self {
-            ObjectConfig::TableConfig { partitions, .. } => Some(partitions),
-            _ => None
+            ObjectConfig::TableConfig { partitions, .. } |
+            ObjectConfig::TableFnConfig { partitions, .. } => Some(partitions),
         }
     }
 
@@ -73,25 +92,37 @@ impl ObjectConfig {
 
     pub fn with_indices(self, indices: Vec<HashIndexConfig>) -> Self {
         match self {
-            ObjectConfig::TableConfig { columns, partitions, .. } => {
-                TableConfig {
+            ObjectConfig::TableConfig { columns, partitions, .. } =>
+                ObjectConfig::TableConfig {
                     columns,
                     indices,
                     partitions,
+                },
+            ObjectConfig::TableFnConfig { columns, code, partitions, .. } =>
+                ObjectConfig::TableFnConfig {
+                    columns,
+                    code,
+                    indices,
+                    partitions,
                 }
-            }
         }
     }
 
     pub fn with_partitions(self, partitions: Vec<String>) -> Self {
         match self {
-            ObjectConfig::TableConfig { columns, indices, .. } => {
-                TableConfig {
+            ObjectConfig::TableConfig { columns, indices, .. } =>
+                ObjectConfig::TableConfig {
                     columns,
                     indices,
                     partitions,
+                },
+            ObjectConfig::TableFnConfig { columns, code, indices, .. } =>
+                ObjectConfig::TableFnConfig {
+                    columns,
+                    code,
+                    indices,
+                    partitions,
                 }
-            }
         }
     }
 }
@@ -114,6 +145,7 @@ impl HashIndexConfig {
 mod tests {
     use super::*;
     use crate::data_types::DataType::{NumberType, StringType};
+    use crate::expression::Expression::{ColonColon, FunctionCall, StructureExpression, Variable};
     use crate::namespaces::Namespace;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::F64Value;
@@ -122,23 +154,71 @@ mod tests {
     use tokio::io;
 
     #[test]
-    fn test_config_load_and_save() -> io::Result<()> {
+    fn test_table_config_load_and_save() -> io::Result<()> {
         let cfg = ObjectConfig::build_table(vec![
             Parameter::new("symbol", StringType(8)),
             Parameter::new("exchange", StringType(8)),
             Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
         ]);
-        let ns = Namespace::parse("securities.other_otc.stocks")?;
+        let ns = Namespace::parse("object_config.table_cfg.stocks")?;
         cfg.save(&ns)?;
 
         // retrieve and verify
         let cfg = ObjectConfig::load(&ns)?;
-        assert_eq!(cfg, TableConfig {
+        assert_eq!(cfg, ObjectConfig::TableConfig {
             columns: vec![
                 Parameter::new("symbol", StringType(8)),
                 Parameter::new("exchange", StringType(8)),
                 Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
             ],
+            indices: Vec::new(),
+            partitions: Vec::new(),
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn test_table_fn_config_load_and_save() -> io::Result<()> {
+        let cfg = ObjectConfig::build_table_fn(
+            vec![
+                Parameter::new("symbol", StringType(8)),
+                Parameter::new("exchange", StringType(8)),
+                Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
+            ],
+            StructureExpression(vec![
+                ("symbol".to_string(), Variable("symbol".into())),
+                ("market".to_string(), Variable("exchange".into())),
+                ("last_sale".to_string(), Variable("last_sale".into())),
+                ("process_time".to_string(), ColonColon(
+                    Box::new(Variable("cal".into())),
+                    Box::new(FunctionCall {
+                        fx: Box::new(Variable("now".into())),
+                        args: vec![]
+                    })))
+            ]),
+        );
+        let ns = Namespace::parse("object_config.table_fn.stocks")?;
+        cfg.save(&ns)?;
+
+        // retrieve and verify
+        let cfg = ObjectConfig::load(&ns)?;
+        assert_eq!(cfg, ObjectConfig::TableFnConfig {
+            columns: vec![
+                Parameter::new("symbol", StringType(8)),
+                Parameter::new("exchange", StringType(8)),
+                Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
+            ],
+            code: StructureExpression(vec![
+                ("symbol".to_string(), Variable("symbol".into())),
+                ("market".to_string(), Variable("exchange".into())),
+                ("last_sale".to_string(), Variable("last_sale".into())),
+                ("process_time".to_string(), ColonColon(
+                    Box::new(Variable("cal".into())),
+                    Box::new(FunctionCall {
+                        fx: Box::new(Variable("now".into())),
+                        args: vec![]
+                    })))
+            ]),
             indices: Vec::new(),
             partitions: Vec::new(),
         });

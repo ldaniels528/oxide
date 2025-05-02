@@ -11,8 +11,10 @@ use regex::Error;
 use reqwest::blocking::{multipart, Client, RequestBuilder, Response};
 use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::{From, Into};
+use std::fmt::format;
 use std::fs::File;
 use std::io::{stdout, Read, Write};
 use std::ops::{Deref, Neg};
@@ -60,11 +62,26 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use shared_lib::{cnv_error, fail};
 
+pub const ROW_ID: &str = "__row_id__";
+pub const FX_SELF: &str = "__self__";
+
 /// Represents the state of the machine.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Machine {
     stack: Vec<TypedValue>,
     variables: HashMap<String, TypedValue>,
+}
+
+impl Ord for Machine {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.stack.cmp(&other.stack)
+    }
+}
+
+impl PartialOrd for Machine {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.stack.partial_cmp(&other.stack)
+    }
 }
 
 impl Machine {
@@ -152,7 +169,7 @@ impl Machine {
             Condition(condition) => self.do_condition(condition),
             CurvyArrowLeft(a, b) => self.do_curvy_arrow_left(a, b),
             CurvyArrowRight(a, b) => self.do_curvy_arrow_right(a, b),
-            DatabaseOp(op) => query_engine::evaluate(self, op),
+            DatabaseOp(op) => query_engine::evaluate(self, op, &UNDEFINED),
             Directive(d) => self.do_directive(d),
             Divide(a, b) => self.eval_inline_2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.do_index_of_collection(a, b),
@@ -160,7 +177,7 @@ impl Machine {
             Feature { title, scenarios } => self.do_feature(title, scenarios),
             FnExpression { params, body, returns } => self.do_fn_expression(params, body, returns),
             ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
-            From(src) => query_engine::do_table_or_view_query(self, src, &True, &Undefined),
+            From(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
             FunctionCall { fx, args } => self.do_function_call(fx, args),
             HTTP { method, url_or_object } => self.do_http(method, url_or_object),
             If { condition, a, b } => self.do_if_then_else(condition, a, b),
@@ -173,13 +190,13 @@ impl Machine {
             Multiply(a, b) => self.eval_inline_2(a, b, |aa, bb| aa * bb),
             Neg(a) => Ok(self.do_negate(a)),
             New(a) => self.do_new_instance(a),
-            Ns(a) => query_engine::do_eval_ns(self, a),
+            Ns(a) => query_engine::eval_ns(self, a),
             Parameters(params) => Ok(self.evaluate_parameters(params)),
             Plus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa + bb),
             PlusPlus(a, b) => self.eval_inline_2(a, b, Self::do_plus_plus),
             Pow(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
             Range(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
-            Return(a) => self.eval_as_array(a),
+            Return(a) => self.evaluate(a),
             Scenario { .. } => Ok((self.to_owned(), ErrorValue(Exact("Scenario should not be called directly".to_string())))),
             SetVariable(name, expr) => {
                 let (machine, value) = self.evaluate(expr)?;
@@ -190,7 +207,7 @@ impl Machine {
             TupleExpression(args) => self.do_tuple(args),
             TypeDef(expr) => self.do_type_decl(expr),
             Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
-            Via(src) => query_engine::do_table_or_view_query(self, src, &True, &Undefined),
+            Via(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
             While { condition, code } => self.do_while(condition, code),
         }
     }
@@ -269,15 +286,21 @@ impl Machine {
         object: &Expression,
         field: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        match field {
-            FunctionCall { fx, args } => {
-                // "hello":::left(5) => left("hello", 5)
-                let mut enriched_args = Vec::new();
-                enriched_args.push(object.to_owned());
-                enriched_args.extend(args.to_owned());
-                self.do_function_call(fx, &enriched_args)
-            }
-            z => fail(format!("{} is not a function call", z.to_code()))
+        match object {
+            // table(symbol: String(8), exchange: String(8), last_sale: f64):::options
+            DatabaseOp(op) => query_engine::evaluate(self, op, field),
+            _ =>
+            // "hello":::left(5)
+                match field {
+                    FunctionCall { fx, args } => {
+                        // "hello":::left(5) => left("hello", 5)
+                        let mut enriched_args = Vec::new();
+                        enriched_args.push(object.to_owned());
+                        enriched_args.extend(args.to_owned());
+                        self.do_function_call(fx, &enriched_args)
+                    }
+                    z => fail(format!("{} is not a function call", z.to_code()))
+                }
         }
     }
 
@@ -337,7 +360,7 @@ impl Machine {
         dest: &Expression,
         src: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        query_engine::do_iter(&self, dest, src)
+        query_engine::eval_iter(&self, dest, src)
     }
 
     /// Evaluates a curvy right arrow (~>)
@@ -348,7 +371,7 @@ impl Machine {
         src: &Expression,
         dest: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        query_engine::do_into_ns(&self, dest, src)
+        query_engine::eval_into_ns(&self, dest, src)
     }
 
     /// evaluates the specified [Directives]; returning a [TypedValue] result.
@@ -433,7 +456,7 @@ impl Machine {
                       scenarios: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         // create a table and capture function to store the verification report
-        let verification_columns = Column::from_parameters(&PlatformOps::get_kung_fu_feature_parameters());
+        let verification_columns = Column::from_parameters(&PlatformOps::get_testing_feature_parameters());
         let mut report = ModelRowCollection::new(verification_columns.to_owned());
         let mut capture = |level: u16, text: String, passed: bool, result: TypedValue| {
             let outcome = report.push_row(Row::new(0, vec![
@@ -536,7 +559,10 @@ impl Machine {
                              params: Vec<Parameter>,
                              args: Vec<TypedValue>,
     ) -> Self {
-        assert_eq!(params.len(), args.len());
+        if params.len() > args.len() {
+            println!("Argument mismatch (params: {}, args: {:?})", Parameter::render(&params), args);
+            assert_eq!(params.len(), args.len());
+        }
         params.iter().zip(args.iter())
             .fold(self.to_owned(), |ms, (c, v)|
                 ms.with_variable(c.get_name(), v.to_owned()))
@@ -552,13 +578,7 @@ impl Machine {
             Ok((ms, ArrayValue(args))) =>
                 match ms.evaluate(fx) {
                     Ok((ms, Function { params, body: code, returns })) =>
-                        match ms.do_function_arguments(params, args.get_values().clone()).evaluate(&code) {
-                            Ok((ms, result)) => {
-                                println!("convert: {result} -> {returns} => {}", result.convert_to(returns.clone())?);
-                                Ok((ms, result))
-                            },
-                            Err(err) => throw(Exact(err.to_string()))
-                        }
+                        ms.do_function_arguments(params, args.get_values().clone()).evaluate(&code),
                     Ok((ms, PlatformOp(pf))) => pf.evaluate(ms, args.get_values().clone()),
                     Ok((_, z)) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
                     Err(err) => throw(Exact(err.to_string()))
@@ -1187,7 +1207,7 @@ impl Machine {
         expr: &Expression,
     ) -> std::io::Result<(Self, Dataframe)> {
         let (ms, value) = self.evaluate(expr)?;
-        match value.to_table() {
+        match value.to_table()? {
             NamespaceValue(ns) => Ok((ms, Disk(FileRowCollection::open(&ns)?))),
             TableValue(df) => Ok((ms, df)),
             ErrorValue(err) => throw(err),
@@ -1272,9 +1292,8 @@ impl Machine {
 
     pub fn with_row(&self, columns: &Vec<Column>, row: &Row) -> Self {
         row.get_values().iter().zip(columns.iter())
-            .fold(self.to_owned(), |machine, (v, c)| {
-                machine.with_variable(c.get_name(), v.to_owned())
-            })
+            .fold(self.clone(), |ms, (v, c)| ms.with_variable(c.get_name(), v.to_owned()))
+            .with_variable(ROW_ID, Number(I64Value(row.get_id() as i64)))
     }
 
     pub fn with_tuples(&self, tuples: Vec<(&str, TypedValue)>) -> Self {
@@ -1772,7 +1791,6 @@ mod tests {
                 entity: TableEntity {
                     columns: make_quote_parameters(),
                     from: None,
-                    options: vec![],
                 },
             }));
 
@@ -1804,7 +1822,6 @@ mod tests {
                 entity: TableEntity {
                     columns: make_quote_parameters(),
                     from: None,
-                    options: vec![],
                 },
             }))).unwrap();
             assert_eq!(result, Boolean(true));
@@ -1838,7 +1855,6 @@ mod tests {
                     Parameter::new("last_sale", NumberType(F64Kind)),
                 ],
                 from: None,
-                options: vec![],
             })));
 
             let machine = Machine::empty();

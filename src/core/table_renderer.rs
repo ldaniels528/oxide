@@ -10,7 +10,7 @@ use crate::cursor::Cursor;
 use crate::data_types::DataType::NumberType;
 use crate::dataframe::Dataframe;
 use crate::model_row_collection::ModelRowCollection;
-use crate::number_kind::NumberKind::U64Kind;
+use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers::U64Value;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
@@ -65,7 +65,7 @@ impl TableRenderer {
     pub fn from_table_with_ids(rc: &Box<dyn RowCollection>) -> std::io::Result<Vec<String>> {
         // define columns by combining "id" column with those from the RowCollection
         let columns: Vec<Column> = {
-            let mut params = vec![Parameter::new("id", NumberType(U64Kind))];
+            let mut params = vec![Parameter::new("id", NumberType(I64Kind))];
             params.extend(rc.get_columns().iter().map(|c| c.to_parameter()));
             Column::from_parameters(&params)
         };

@@ -1,17 +1,18 @@
 #![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
-// Inferences class
+// Type Inferences class
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::expression::Expression::*;
 use crate::expression::{DatabaseOps, Expression, Mutations};
+use crate::machine;
 use crate::number_kind::NumberKind;
+use crate::number_kind::NumberKind::I64Kind;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps;
-use crate::sequences::{Array, Sequence};
-use crate::typed_values::TypedValue;
+use crate::sequences::Sequence;
 use crate::typed_values::TypedValue::{Function, PlatformOp};
 use std::convert::From;
 use std::ops::Deref;
@@ -22,109 +23,134 @@ pub struct Inferences;
 impl Inferences {
     /// provides type inference for the given [Expression]
     pub fn infer(expr: &Expression) -> DataType {
+        Self::infer_with_hints(expr, &vec![])
+    }
+
+    /// provides type inference for the given [Expression] with hints
+    /// to improve the matching performance.
+    pub fn infer_with_hints(
+        expr: &Expression,
+        hints: &Vec<Parameter>,
+    ) -> DataType {
+        let data_type = Self::do_infer_with_hints(expr, hints);
+        //println!("infer_with_hints: [{}] {:?} => '{}'", if hints.is_empty() { "N" } else { "Y" }, expr, data_type);
+        data_type
+    }
+
+    /// provides type inference for the given [Expression] with hints
+    /// to improve the matching performance.
+    fn do_infer_with_hints(
+        expr: &Expression,
+        hints: &Vec<Parameter>,
+    ) -> DataType {
         match expr {
             ArrayExpression(items) => ArrayType(items.len()),
-            AsValue(_, e) => Self::infer(e),
-            BitwiseAnd(a, b) => Self::infer_a_or_b(a, b),
-            BitwiseOr(a, b) => Self::infer_a_or_b(a, b),
-            BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b),
-            BitwiseShiftRight(a, b) => Self::infer_a_or_b(a, b),
-            BitwiseXor(a, b) => Self::infer_a_or_b(a, b),
-            CodeBlock(ops) => ops.last().map(Self::infer).unwrap_or(DynamicType),
+            // alias functions: name: get_name()
+            AsValue(_, e) => Self::infer_with_hints(e, hints),
+            BitwiseAnd(a, b) => Self::infer_a_or_b(a, b, hints),
+            BitwiseOr(a, b) => Self::infer_a_or_b(a, b, hints),
+            BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b, hints),
+            BitwiseShiftRight(a, b) => Self::infer_a_or_b(a, b, hints),
+            BitwiseXor(a, b) => Self::infer_a_or_b(a, b, hints),
+            CodeBlock(ops) => ops.last().map(|op| Self::infer_with_hints(op, hints))
+                .unwrap_or(DynamicType),
+            // platform functions: cal::now()
             ColonColon(a, b) | ColonColonColon(a, b) =>
                 match (a.deref(), b.deref()) {
-                    (Variable(pkg), FunctionCall { fx, .. }) => match fx.deref() {
-                        Variable(name) =>
-                            PlatformOps::find_function(pkg, name)
-                                .map(|pf| pf.return_type.clone())
-                                .unwrap_or(DynamicType),
-                        _ => DynamicType,
-                    }
+                    (Variable(package), FunctionCall { fx, .. }) =>
+                        match fx.deref() {
+                            Variable(name) =>
+                                PlatformOps::find_function(package, name)
+                                    .map(|pf| pf.return_type)
+                                    .unwrap_or(DynamicType),
+                            _ => DynamicType
+                        }
                     _ => DynamicType
                 }
             Condition(..) => BooleanType,
             CurvyArrowLeft(..) => StructureType(vec![]),
             CurvyArrowRight(..) => BooleanType,
             DatabaseOp(a) => match a {
-                DatabaseOps::Queryable(_) => BooleanType,
+                DatabaseOps::Queryable(_) => TableType(vec![], 0),
                 DatabaseOps::Mutation(m) => match m {
                     Mutations::Append { .. } => NumberType(NumberKind::RowIdKind),
                     _ => NumberType(NumberKind::RowsAffectedKind),
                 }
             }
             Directive(..) => BooleanType,
-            Divide(a, b) => Self::infer_a_or_b(a, b),
+            Divide(a, b) => Self::infer_a_or_b(a, b, hints),
             ElementAt(..) => DynamicType,
-            Factorial(a) => Self::infer(a),
+            Factorial(a) => Self::infer_with_hints(a, hints),
             Feature { .. } => BooleanType,
             FnExpression { params, returns, .. } =>
                 FunctionType(params.clone(), Box::from(returns.clone())),
-            ForEach(..) => BooleanType,
+            ForEach(..) => DynamicType,
             From(..) => TableType(vec![], 0),
-            FunctionCall { fx, .. } => Self::infer(fx),
+            FunctionCall { fx, .. } => Self::infer_with_hints(fx, hints),
             HTTP { .. } => DynamicType,
-            If { a: true_v, b: Some(false_v), .. } =>
-                Self::infer_alles(vec![true_v, false_v]),
-            If { a: true_v, .. } => Self::infer(true_v),
+            If { a: true_v, b: Some(false_v), .. } => Self::infer_a_or_b(true_v, false_v, hints),
+            If { a: true_v, .. } => Self::infer_with_hints(true_v, hints),
             Import(..) => BooleanType,
             Include(..) => BooleanType,
-            Literal(Function { body: code, .. }) => Self::infer(code),
+            Literal(Function { body, .. }) => Self::infer_with_hints(body, hints),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
-            Minus(a, b) => Self::infer_a_or_b(a, b),
+            Minus(a, b) => Self::infer_a_or_b(a, b, hints),
             Module(..) => BooleanType,
-            Modulo(a, b) => Self::infer_a_or_b(a, b),
-            Multiply(a, b) => Self::infer_a_or_b(a, b),
-            Neg(a) => Self::infer(a),
-            New(a) => Self::infer(a),
+            Modulo(a, b) => Self::infer_a_or_b(a, b, hints),
+            Multiply(a, b) => Self::infer_a_or_b(a, b, hints),
+            Neg(a) => Self::infer_with_hints(a, hints),
+            New(a) => Self::infer_with_hints(a, hints),
             Ns(..) => BooleanType,
             Parameters(params) => ArrayType(params.len()),
-            Plus(a, b) => Self::infer_a_or_b(a, b),
-            PlusPlus(a, b) => Self::infer_a_or_b(a, b),
-            Pow(a, b) => Self::infer_a_or_b(a, b),
-            Range(a, b) => Self::infer_a_or_b(a, b),
-            Return(a) => Self::infer_all(a),
+            Plus(a, b) => Self::infer_a_or_b(a, b, hints),
+            PlusPlus(a, b) => Self::infer_a_or_b(a, b, hints),
+            Pow(a, b) => Self::infer_a_or_b(a, b, hints),
+            Range(a, b) => Self::infer_a_or_b(a, b, hints),
+            Return(a) => Self::infer_with_hints(a, hints),
             Scenario { .. } => BooleanType,
             SetVariable(..) => BooleanType,
             SetVariables(..) => BooleanType,
-            StructureExpression(params) => StructureType(params.iter()
-                .map(|(name, expr)| Parameter::new(name, Inferences::infer(expr)))
-                .collect()),
-            TupleExpression(params) => TupleType(params.iter()
-                .map(|p| Self::infer(p))
+            // structures: { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
+            StructureExpression(key_values) => {
+                let mut params = vec![];
+                let mut combined_hints = hints.clone();
+                for (name, value) in key_values {
+                    let param = Parameter::new(name.clone(), Self::infer_with_hints(value, &combined_hints));
+                    params.push(param.clone());
+                    combined_hints.push(param);
+                }
+                StructureType(params)
+            }
+            // tuples: (100, 23, 36)
+            TupleExpression(values) => TupleType(values.iter()
+                .map(|p| Self::infer_with_hints(p, hints))
                 .collect::<Vec<_>>()),
-            TypeDef(expr) => Self::infer(expr),
-            Variable(..) => DynamicType,
+            TypeDef(expr) => Self::infer_with_hints(expr, hints),
+            Variable(name) =>
+                match name {
+                    s if s == machine::ROW_ID => NumberType(I64Kind),
+                    _ =>
+                        match hints.iter().find(|hint| hint.get_name() == name) {
+                            Some(param) => param.get_data_type(),
+                            None => DynamicType
+                        }
+                }
             Via(..) => TableType(vec![], 0),
             While { .. } => DynamicType,
         }
     }
 
     /// provides type inference for the given [Expression]s
-    fn infer_a_or_b(a: &Expression, b: &Expression) -> DataType {
-        Self::infer_best_fit(vec![Self::infer(a), Self::infer(b)])
-    }
-
-    /// provides type inference for the given [Expression]s
-    fn infer_all(items: &Vec<Expression>) -> DataType {
-        Self::infer_best_fit(items.iter()
-            .map(Self::infer)
-            .collect::<Vec<_>>())
-    }
-
-    /// provides type inference for the given [Expression]s
-    fn infer_alles(items: Vec<&Expression>) -> DataType {
-        Self::infer_best_fit(items.iter()
-            .map(|e| *e)
-            .map(Self::infer)
-            .collect::<Vec<_>>())
-    }
-
-    /// provides type inference for the given [TypedValue]
-    pub fn infer_array(array: &Array) -> DataType {
-        Self::infer_best_fit(array.get_values().iter()
-            .map(|v| v.get_type())
-            .collect::<Vec<_>>())
+    fn infer_a_or_b(
+        a: &Expression,
+        b: &Expression,
+        hints: &Vec<Parameter>,
+    ) -> DataType {
+        Self::infer_best_fit(vec![
+            Self::infer_with_hints(a, hints),
+            Self::infer_with_hints(b, hints)
+        ])
     }
 
     /// provides type resolution for the given [Vec<DataType>]
@@ -143,13 +169,6 @@ impl Inferences {
                     (_, t) => t.to_owned()
                 })
         }
-    }
-
-    /// provides type inference for the given [TypedValue]
-    pub fn infer_values(values: &Vec<TypedValue>) -> DataType {
-        Self::infer_best_fit(values.iter()
-            .map(|v| v.get_type())
-            .collect::<Vec<_>>())
     }
 }
 
@@ -175,6 +194,7 @@ mod tests {
         let kind = Inferences::infer_a_or_b(
             &Literal(StringValue("yes".into())),
             &Literal(StringValue("hello".into())),
+            &vec![],
         );
         assert_eq!(kind, StringType(5))
     }
@@ -184,18 +204,9 @@ mod tests {
         let kind = Inferences::infer_a_or_b(
             &Literal(Number(I64Value(76))),
             &Literal(Number(F64Value(76.0))),
+            &vec![],
         );
         assert_eq!(kind, NumberType(F64Kind))
-    }
-
-    #[test]
-    fn test_infer_all() {
-        let kind = Inferences::infer_all(&vec![
-            Literal(StringValue("apple".into())),
-            Literal(StringValue("banana".into())),
-            Literal(StringValue("cherry".into())),
-        ]);
-        assert_eq!(kind, StringType(6))
     }
 
     #[test]
@@ -314,12 +325,12 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_values() {
-        let kind = Inferences::infer_values(&vec![
-            StringValue("apple".into()),
-            StringValue("banana".into()),
-            StringValue("cherry".into()),
-        ]);
-        assert_eq!(kind, StringType(6))
+    fn test_infer_row_id() {
+        verify_data_type("__row_id__", NumberType(I64Kind));
+    }
+
+    #[test]
+    fn test_infer_tools_row_id() {
+        verify_data_type("tools::row_id()", NumberType(I64Kind));
     }
 }

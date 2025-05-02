@@ -7,7 +7,11 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
+use crate::dataframe::Dataframe;
+use crate::file_row_collection::FileRowCollection;
+use crate::journaling::TableFunction;
 use crate::machine::Machine;
+use crate::object_config::ObjectConfig;
 use shared_lib::fail;
 
 // Namespace is a logical representation of a Lollypop object namespace or path
@@ -34,10 +38,6 @@ impl Namespace {
             [d, s, n] => Ok(Namespace::new(d, s, n)),
             _ => fail(format!("Failed to parse namespace '{}'", text))
         }
-    }
-
-    pub fn id(&self) -> String {
-        format!("{}.{}.{}", self.database, self.schema, self.name)
     }
 
     pub fn get_blob_file_path(&self) -> String {
@@ -85,6 +85,28 @@ impl Namespace {
 
     pub fn get_table_file_path(&self) -> String {
         self.get_file_path("table")
+    }
+
+    pub fn get_table_fn_journal_file_path(&self) -> String {
+        self.get_file_path("journal")
+    }
+
+    pub fn get_table_fn_state_file_path(&self) -> String {
+        self.get_file_path("state")
+    }
+
+    pub fn id(&self) -> String {
+        format!("{}.{}.{}", self.database, self.schema, self.name)
+    }
+
+    pub fn load_table(&self) -> std::io::Result<Dataframe> {
+        match ObjectConfig::load(self)? {
+            ObjectConfig::TableConfig { .. } =>
+                FileRowCollection::open(self).map(|frc| Dataframe::Disk(frc)),
+            ObjectConfig::TableFnConfig { .. } =>
+                TableFunction::from_namespace(self, Machine::new_platform())
+                    .map(|tf| Dataframe::TableFn(Box::new(tf)))
+        }
     }
 }
 

@@ -83,16 +83,10 @@ pub enum CreationEntity {
     TableEntity {
         columns: Vec<Parameter>,
         from: Option<Box<Expression>>,
-        options: Vec<TableOptions>,
     },
     TableFnEntity {
         fx: Box<Expression>,
     },
-}
-
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum TableOptions {
-    Journaling
 }
 
 /// Represents an import definition
@@ -236,7 +230,7 @@ pub enum Expression {
     PlusPlus(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
     Range(Box<Expression>, Box<Expression>),
-    Return(Vec<Expression>),
+    Return(Box<Expression>),
     Scenario {
         title: Box<Expression>,
         verifications: Vec<Expression>,
@@ -353,8 +347,8 @@ impl Expression {
                 },
             Expression::Range(a, b) =>
                 format!("{}..{}", Self::decompile(a), Self::decompile(b)),
-            Expression::Return(items) =>
-                format!("return {}", Self::decompile_list(items)),
+            Expression::Return(a) =>
+                format!("return {}", Self::decompile(a)),
             Expression::Scenario { title, verifications } => {
                 let title = title.to_code();
                 let verifications = verifications.iter()
@@ -475,7 +469,7 @@ impl Expression {
                 match entity {
                     CreationEntity::IndexEntity { columns } =>
                         format!("create index {} [{}]", Self::decompile(path), Self::decompile_list(columns)),
-                    CreationEntity::TableEntity { columns, from, options } =>
+                    CreationEntity::TableEntity { columns, from } =>
                         format!("create table {} ({})", Self::decompile(path), Self::decompile_parameters(columns)),
                     CreationEntity::TableFnEntity { fx } =>
                         format!("create table {} fn({})", Self::decompile(path), Self::decompile(fx)),
@@ -484,7 +478,7 @@ impl Expression {
                 match entity {
                     CreationEntity::IndexEntity { columns } =>
                         format!("index [{}]", Self::decompile_list(columns)),
-                    CreationEntity::TableEntity { columns, from, options } =>
+                    CreationEntity::TableEntity { columns, from } =>
                         format!("table({})", Self::decompile_parameters(columns)),
                     CreationEntity::TableFnEntity { fx } =>
                         format!("table fn({})", Self::decompile(fx)),
@@ -1133,7 +1127,6 @@ mod tests {
                     Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.))),
                 ],
                 from: None,
-                options: vec![],
             },
         }));
         assert_eq!(
@@ -1150,7 +1143,6 @@ mod tests {
                 Parameter::new("last_sale", NumberType(F64Kind)),
             ],
             from: None,
-            options: vec![],
         })));
         assert_eq!(
             Expression::decompile(&model),

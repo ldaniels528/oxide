@@ -4,20 +4,24 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::columns::Column;
-use crate::data_types::DataType::{NumberType, StringType, TableType};
+use crate::data_types::DataType::{NumberType, StringType, StructureType, TableType};
 use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::Disk;
 use crate::errors::Errors::{Exact, TypeMismatch};
-use crate::errors::TypeMismatchErrors::StructExpected;
+use crate::errors::{throw, TypeMismatchErrors};
 use crate::expression::Expression;
 use crate::expression::Expression::{FunctionCall, Literal, Variable};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
+use crate::inferences::Inferences;
 use crate::interpreter::Interpreter;
+use crate::machine;
 use crate::machine::Machine;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::{DateKind, U16Kind, U64Kind};
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::{DateValue, U16Value, U64Value};
+use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
@@ -33,28 +37,34 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
+use std::fs;
+use std::fs::{File, OpenOptions};
+use std::sync::Arc;
 
 /// Implemented by [RowCollection] classes offering the ability
 /// to replay events from a journal
 pub trait Journaling: RowCollection {
+    /// returns the table's journal
+    fn get_journal(&self) -> Dataframe;
+
     /// replays the journal to rebuild the current state
     fn replay(&mut self) -> TypedValue;
 }
 
 ////////////////////////////////////////////////////////////////////
-//      JournaledRowCollection class
+//      Event-Source Row-Collection class
 ////////////////////////////////////////////////////////////////////
 
-/// Represents a Journaled Row Collection
+/// Represents an Event-Source Row Collection
 #[derive(Clone)]
-pub struct JournaledRowCollection {
+pub struct EventSourceRowCollection {
     namespace: Namespace,
     columns: Vec<Column>,
     events: FileRowCollection,
     state: FileRowCollection,
 }
 
-impl JournaledRowCollection {
+impl EventSourceRowCollection {
 
     ////////////////////////////////////////////////////////////////////
     //      static functions
@@ -105,15 +115,19 @@ impl JournaledRowCollection {
     }
 }
 
-impl Debug for JournaledRowCollection {
+impl Debug for EventSourceRowCollection {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "JournaledRowCollection({})", self.get_record_size())
+        write!(f, "EventSourceRowCollection({})", self.get_record_size())
     }
 }
 
-impl Eq for JournaledRowCollection {}
+impl Eq for EventSourceRowCollection {}
 
-impl Journaling for JournaledRowCollection {
+impl Journaling for EventSourceRowCollection {
+    fn get_journal(&self) -> Dataframe {
+        Disk(self.events.clone())
+    }
+
     fn replay(&mut self) -> TypedValue {
         let mut rows_affected = 0;
         let empty_values = self.state.get_columns().iter().map(|_| TypedValue::Null).collect::<Vec<_>>();
@@ -169,25 +183,25 @@ impl Journaling for JournaledRowCollection {
     }
 }
 
-impl Ord for JournaledRowCollection {
+impl Ord for EventSourceRowCollection {
     fn cmp(&self, other: &Self) -> Ordering {
         self.get_record_size().cmp(&other.get_record_size())
     }
 }
 
-impl PartialEq for JournaledRowCollection {
+impl PartialEq for EventSourceRowCollection {
     fn eq(&self, other: &Self) -> bool {
         self.get_record_size() == other.get_record_size()
     }
 }
 
-impl PartialOrd for JournaledRowCollection {
+impl PartialOrd for EventSourceRowCollection {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.get_record_size().partial_cmp(&other.get_record_size())
     }
 }
 
-impl RowCollection for JournaledRowCollection {
+impl RowCollection for EventSourceRowCollection {
     fn delete_row(&mut self, id: usize) -> TypedValue {
         match self.read_row(id) {
             Ok((row, _)) => {
@@ -253,19 +267,19 @@ impl RowCollection for JournaledRowCollection {
     }
 }
 
-impl Serialize for JournaledRowCollection {
+impl Serialize for EventSourceRowCollection {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        let mut state = serializer.serialize_struct("JournaledRowCollection", 2)?;
+        let mut state = serializer.serialize_struct("EventSourceRowCollection", 2)?;
         state.serialize_field("columns", &self.get_columns())?;
         state.serialize_field("ns", &self.get_namespace())?;
         state.end()
     }
 }
 
-impl<'de> Deserialize<'de> for JournaledRowCollection {
+impl<'de> Deserialize<'de> for EventSourceRowCollection {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -278,7 +292,7 @@ impl<'de> Deserialize<'de> for JournaledRowCollection {
         }
 
         let helper = JournaledRowCollectionHelper::deserialize(deserializer)?;
-        JournaledRowCollection::new(&helper.ns, &helper.columns).map_err(D::Error::custom)
+        EventSourceRowCollection::new(&helper.ns, &helper.columns).map_err(D::Error::custom)
     }
 }
 
@@ -287,7 +301,7 @@ impl<'de> Deserialize<'de> for JournaledRowCollection {
 ////////////////////////////////////////////////////////////////////
 
 /// Represents a Table Function
-#[derive(Clone)]
+#[derive(Clone, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct TableFunction {
     columns: Vec<Column>,
     fx: TypedValue,
@@ -302,6 +316,82 @@ impl TableFunction {
     //      static functions
     ////////////////////////////////////////////////////////////////////
 
+    /// Creates a new table function within the specified namespace
+    /// and having the specified input- and output-columns
+    pub fn create_table_fn(
+        ns: &Namespace,
+        params: Vec<Parameter>,
+        code: Expression,
+        ms0: Machine,
+    ) -> std::io::Result<Self> {
+        // build a new configuration
+        let cfg = ObjectConfig::build_table_fn(
+            params.clone(),
+            code.clone(),
+        );
+
+        // save the configuration
+        cfg.save(ns)?;
+
+        // instantiate the table function
+        Self::initialize(ns, cfg, ms0, true)
+    }
+
+    pub fn from_namespace(
+        ns: &Namespace,
+        ms0: Machine,
+    ) -> std::io::Result<Self> {
+        Self::initialize(ns, ObjectConfig::load(&ns)?, ms0, false)
+    }
+
+    pub fn initialize(
+        ns: &Namespace,
+        cfg: ObjectConfig,
+        ms0: Machine,
+        is_create: bool,
+    ) -> std::io::Result<Self> {
+        match cfg {
+            ObjectConfig::TableConfig { .. } =>
+                throw(Exact("Table configuration is invalid for this device".into())),
+            ObjectConfig::TableFnConfig {
+                columns,
+                code, ..
+            } => {
+                // build the journal and state columns
+                let journal_columns = Column::from_parameters(&columns);
+                let state_columns = match Inferences::infer_with_hints(&code, &columns) {
+                    StructureType(params) => Column::from_parameters(&params),
+                    TableType(params, ..) => Column::from_parameters(&params),
+                    z => return throw(TypeMismatch(TypeMismatchErrors::UnsupportedType(StructureType(vec![]), z)))
+                };
+
+                // build the journal device
+                let journal_path = ns.get_table_fn_journal_file_path();
+                let journal = FileRowCollection::new(
+                    journal_columns.clone(),
+                    Arc::new(Self::load_or_create_file(ns, journal_path.as_str(), is_create)?),
+                    journal_path.as_str(),
+                );
+
+                // build the state device
+                let state_path = ns.get_table_fn_state_file_path();
+                let state = FileRowCollection::new(
+                    state_columns,
+                    Arc::new(Self::load_or_create_file(ns, state_path.as_str(), is_create)?),
+                    state_path.as_str(),
+                );
+
+                Ok(Self::new(
+                    columns,
+                    code,
+                    Dataframe::Disk(journal),
+                    Dataframe::Disk(state),
+                    ms0,
+                ))
+            }
+        }
+    }
+
     /// Creates a new table function
     pub fn new(
         params: Vec<Parameter>,
@@ -310,16 +400,40 @@ impl TableFunction {
         state: Dataframe,
         ms0: Machine,
     ) -> Self {
+        // println!();
+        // println!("TableFunction::params:  ({})", Parameter::render(&params));
+        // println!("TableFunction::code:    {}", code.to_code());
+        // println!("TableFunction::journal: ({})", Parameter::render(&journal.get_parameters()));
+        // println!("TableFunction::state:   ({})", Parameter::render(&state.get_parameters()));
+
         Self {
             columns: Column::from_parameters(&params),
+            fx: Function {
+                params,
+                body: Box::from(code),
+                returns: TableType(state.get_parameters(), 0),
+            },
             journal,
             state,
-            fx: Function {
-                params: params.clone(),
-                body: Box::from(code),
-                returns: TableType(params, 0),
-            },
             ms0,
+        }
+    }
+
+    fn load_or_create_file(
+        ns: &Namespace,
+        file_path: &str,
+        is_create: bool,
+    ) -> std::io::Result<File> {
+        match is_create {
+            true => {
+                fs::create_dir_all(ns.get_root_path())?;
+                OpenOptions::new().truncate(true).create(true).read(true).write(true)
+                    .open(file_path)
+            }
+            false => {
+                OpenOptions::new().read(true).write(true)
+                    .open(file_path)
+            }
         }
     }
 }
@@ -331,6 +445,10 @@ impl Debug for TableFunction {
 }
 
 impl Journaling for TableFunction {
+    fn get_journal(&self) -> Dataframe {
+        self.journal.clone()
+    }
+
     fn replay(&mut self) -> TypedValue {
         let mut rows_affected = 0;
         self.state.resize(0);
@@ -338,6 +456,7 @@ impl Journaling for TableFunction {
             self.overwrite_row(row.get_id(), row);
             rows_affected += 1;
         }
+        println!("{rows_affected} event(s) replayed.");
         Number(Numbers::RowsAffected(rows_affected))
     }
 }
@@ -368,23 +487,26 @@ impl RowCollection for TableFunction {
     }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
-        let ms = self.ms0
-            .with_variable("id", Number(Numbers::RowId(id as u64)))
-            .with_variable("self", self.fx.clone())
-            .with_row(self.get_columns(), &row);
-        let result = match ms.evaluate(&FunctionCall {
-            fx: Box::new(Variable("self".into())),
-            args: row.get_values().iter().map(|v| Literal(v.clone())).collect(),
-        }).map(|(_, v)| v) {
-            Ok(TypedValue::Structured(s)) => self.state.overwrite_row(id, s.to_row()),
-            Ok(value) => ErrorValue(TypeMismatch(StructExpected("Struct()".into(), value.get_type_name()))),
-            Err(err) => ErrorValue(Exact(err.to_string()))
-        };
-        if let ErrorValue(x) = result {
-            // TODO figure out how to apply the error to df1
-            eprintln!("{}", x)
+        match self.journal.overwrite_row(id, row.clone()) {
+            Number(..) => {
+                let ms = self.ms0
+                    .with_variable(machine::FX_SELF, self.fx.clone())
+                    .with_row(self.get_columns(), &row);
+                let fx_call = FunctionCall {
+                    fx: Box::new(Variable(machine::FX_SELF.into())),
+                    args: row.get_values().iter().map(|v| Literal(v.clone())).collect(),
+                };
+                match ms.evaluate(&fx_call).map(|(_, v)| v) {
+                    Ok(TypedValue::Structured(s)) => {
+                        let new_row = s.to_row().with_row_id(id);
+                        self.state.overwrite_row(id, new_row)
+                    }
+                    Ok(value) => ErrorValue(TypeMismatch(TypeMismatchErrors::UnsupportedType(StructureType(self.get_parameters()), value.get_type()))),
+                    Err(err) => ErrorValue(Exact(err.to_string()))
+                }
+            }
+            other => other
         }
-        self.journal.overwrite_row(id, row)
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
@@ -415,141 +537,11 @@ impl RowCollection for TableFunction {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    /// Unit tests
-    #[cfg(test)]
-    mod table_function_tests {
-        use crate::compiler::Compiler;
-        use crate::data_types::DataType::NumberType;
-        use crate::dataframe::Dataframe::Model;
-        use crate::journaling::{Journaling, TableFunction};
-        use crate::machine::Machine;
-        use crate::model_row_collection::ModelRowCollection;
-        use crate::number_kind::NumberKind::U64Kind;
-        use crate::numbers::Numbers;
-        use crate::numbers::Numbers::F64Value;
-        use crate::parameter::Parameter;
-        use crate::row_collection::RowCollection;
-        use crate::structures::Row;
-        use crate::table_renderer::TableRenderer;
-        use crate::testdata::{make_quote, make_quote_parameters};
-        use crate::typed_values::TypedValue::{Number, StringValue};
-
-        #[test]
-        fn test_function() {
-            let mut tf = make_table_function();
-
-            // insert a new row
-            let result = tf.overwrite_row(0, Row::new(0, vec![
-                StringValue("ABC".into()),
-                StringValue("NYSE".into()),
-                Number(F64Value(3.25)),
-            ]));
-
-            // display the source data
-            // |-------------------------------|
-            // | symbol | exchange | last_sale |
-            // |-------------------------------|
-            // | ABC    | NYSE     | 3.25      |
-            // |-------------------------------|
-            for s in TableRenderer::from_dataframe(&tf.journal) { println!("{}", s) }
-
-            // display the transformed data
-            // |--------------------------------------|
-            // | symbol | exchange | last_sale | rank |
-            // |--------------------------------------|
-            // | ABC    | NYSE     | 6.5       | 1    |
-            // |--------------------------------------|
-            for s in TableRenderer::from_dataframe(&tf.state) { println!("{}", s) }
-
-            // verify the results
-            assert_eq!(tf.get_rows(), vec![
-                Row::new(0, vec![
-                    StringValue("ABC".into()),
-                    StringValue("NYSE".into()),
-                    Number(F64Value(6.50)),
-                    Number(F64Value(1.)),
-                ])
-            ]);
-            assert_eq!(result, Number(Numbers::RowsAffected(1)))
-        }
-
-        #[test]
-        fn test_replay() {
-            let mut tfrc = make_table_function();
-
-            // ensure row collection is completely empty
-            tfrc.journal.resize(0);
-            tfrc.state.resize(0);
-
-            // insert some rows
-            assert_eq!(Number(Numbers::RowsAffected(5)), tfrc.append_rows(vec![
-                make_quote(0, "ABC", "AMEX", 11.77),
-                make_quote(1, "UNO", "OTC", 0.2456),
-                make_quote(2, "BIZ", "NYSE", 23.66),
-                make_quote(3, "GOTO", "OTC", 0.1428),
-                make_quote(4, "BOOM", "NASDAQ", 56.87),
-            ]));
-
-            // replay the outputs
-            assert_eq!(tfrc.replay(), Number(Numbers::RowsAffected(5)));
-
-            // verify the rows
-            assert_eq!(tfrc.read_active_rows().unwrap(), vec![
-                Row::new(0, vec![
-                    StringValue("ABC".into()),
-                    StringValue("AMEX".into()),
-                    Number(F64Value(23.54)),
-                    Number(F64Value(1.0))
-                ]),
-                Row::new(1, vec![
-                    StringValue("UNO".into()),
-                    StringValue("OTC".into()),
-                    Number(F64Value(0.4912)),
-                    Number(F64Value(2.0))
-                ]),
-                Row::new(2, vec![
-                    StringValue("BIZ".into()),
-                    StringValue("NYSE".into()),
-                    Number(F64Value(47.32)),
-                    Number(F64Value(3.0))
-                ]),
-                Row::new(3, vec![
-                    StringValue("GOTO".into()),
-                    StringValue("OTC".into()),
-                    Number(F64Value(0.2856)),
-                    Number(F64Value(4.0))
-                ]),
-                Row::new(4, vec![
-                    StringValue("BOOM".into()),
-                    StringValue("NASDAQ".into()),
-                    Number(F64Value(113.74)),
-                    Number(F64Value(5.0))
-                ]),
-            ]);
-        }
-
-        fn make_table_function() -> TableFunction {
-            TableFunction::new(
-                make_quote_parameters(),
-                Compiler::build(r#"
-                 { symbol: symbol, exchange: exchange, last_sale: last_sale * 2.0, rank: id + 1 }
-                "#).unwrap(),
-                Model(ModelRowCollection::from_parameters(&make_quote_parameters())),
-                Model(ModelRowCollection::from_parameters(&{
-                    let mut params = make_quote_parameters();
-                    params.push(Parameter::new("rank", NumberType(U64Kind)));
-                    params
-                })),
-                Machine::new_platform(),
-            )
-        }
-    }
-
-    /// Unit tests
+    /// journaled unit tests
     #[cfg(test)]
     mod journaled_collection_tests {
         use crate::file_row_collection::FileRowCollection;
-        use crate::journaling::{JournaledRowCollection, Journaling};
+        use crate::journaling::{EventSourceRowCollection, Journaling};
         use crate::namespaces::Namespace;
         use crate::numbers::Numbers;
         use crate::numbers::Numbers::F64Value;
@@ -561,9 +553,10 @@ mod tests {
         #[test]
         fn test_events_crud() {
             // 1. create an event sourced table:
-            //  table stocks (symbol: String(8), exchange: String(8), last_sale: Date)
-            //      with journaling
-            let mut jrc = JournaledRowCollection::new(
+            //  table stocks (symbol: String(8), exchange: String(8), last_sale: Date):::{
+            //      journaling: true
+            //  }
+            let mut jrc = EventSourceRowCollection::new(
                 &Namespace::new("event_src", "basics", "stocks"),
                 &make_quote_parameters(),
             ).unwrap();
@@ -668,6 +661,137 @@ mod tests {
             println!("{}", label);
             let lines = TableRenderer::from_rows_with_ids(frc.get_columns(), &frc.get_rows()).unwrap();
             for s in lines { println!("{}", s) }
+        }
+    }
+
+    /// table function unit tests
+    #[cfg(test)]
+    mod table_function_tests {
+        use crate::compiler::Compiler;
+        use crate::data_types::DataType::NumberType;
+        use crate::dataframe::Dataframe::Model;
+        use crate::journaling::{Journaling, TableFunction};
+        use crate::machine::Machine;
+        use crate::model_row_collection::ModelRowCollection;
+        use crate::number_kind::NumberKind::U64Kind;
+        use crate::numbers::Numbers;
+        use crate::numbers::Numbers::{F64Value, I64Value};
+        use crate::parameter::Parameter;
+        use crate::row_collection::RowCollection;
+        use crate::structures::Row;
+        use crate::table_renderer::TableRenderer;
+        use crate::testdata::{make_quote, make_quote_parameters};
+        use crate::typed_values::TypedValue::{Number, StringValue};
+
+        #[test]
+        fn test_table_function() {
+            let mut tf = make_table_function();
+
+            // insert a new row
+            let result = tf.overwrite_row(0, Row::new(0, vec![
+                StringValue("ABC".into()),
+                StringValue("NYSE".into()),
+                Number(F64Value(3.25)),
+            ]));
+
+            // display the source data
+            // |-------------------------------|
+            // | symbol | exchange | last_sale |
+            // |-------------------------------|
+            // | ABC    | NYSE     | 3.25      |
+            // |-------------------------------|
+            for s in TableRenderer::from_dataframe(&tf.journal) { println!("{}", s) }
+
+            // display the transformed data
+            // |--------------------------------------|
+            // | symbol | exchange | last_sale | rank |
+            // |--------------------------------------|
+            // | ABC    | NYSE     | 6.5       | 1    |
+            // |--------------------------------------|
+            for s in TableRenderer::from_dataframe(&tf.state) { println!("{}", s) }
+
+            // verify the results
+            assert_eq!(tf.get_rows(), vec![
+                Row::new(0, vec![
+                    StringValue("ABC".into()),
+                    StringValue("NYSE".into()),
+                    Number(F64Value(6.50)),
+                    Number(I64Value(1)),
+                ])
+            ]);
+            assert_eq!(result, Number(Numbers::RowsAffected(1)))
+        }
+
+        #[test]
+        fn test_replay() {
+            let mut tfrc = make_table_function();
+
+            // ensure row collection is completely empty
+            tfrc.journal.resize(0);
+            tfrc.state.resize(0);
+
+            // insert some rows
+            assert_eq!(Number(Numbers::RowsAffected(5)), tfrc.append_rows(vec![
+                make_quote(0, "ABC", "AMEX", 11.77),
+                make_quote(1, "UNO", "OTC", 0.2456),
+                make_quote(2, "BIZ", "NYSE", 23.66),
+                make_quote(3, "GOTO", "OTC", 0.1428),
+                make_quote(4, "BOOM", "NASDAQ", 56.87),
+            ]));
+
+            // replay the outputs
+            assert_eq!(tfrc.replay(), Number(Numbers::RowsAffected(5)));
+
+            // verify the rows
+            assert_eq!(tfrc.read_active_rows().unwrap(), vec![
+                Row::new(0, vec![
+                    StringValue("ABC".into()),
+                    StringValue("AMEX".into()),
+                    Number(F64Value(23.54)),
+                    Number(I64Value(1))
+                ]),
+                Row::new(1, vec![
+                    StringValue("UNO".into()),
+                    StringValue("OTC".into()),
+                    Number(F64Value(0.4912)),
+                    Number(I64Value(2))
+                ]),
+                Row::new(2, vec![
+                    StringValue("BIZ".into()),
+                    StringValue("NYSE".into()),
+                    Number(F64Value(47.32)),
+                    Number(I64Value(3))
+                ]),
+                Row::new(3, vec![
+                    StringValue("GOTO".into()),
+                    StringValue("OTC".into()),
+                    Number(F64Value(0.2856)),
+                    Number(I64Value(4))
+                ]),
+                Row::new(4, vec![
+                    StringValue("BOOM".into()),
+                    StringValue("NASDAQ".into()),
+                    Number(F64Value(113.74)),
+                    Number(I64Value(5))
+                ]),
+            ]);
+        }
+
+        fn make_table_function() -> TableFunction {
+            let params = make_quote_parameters();
+            TableFunction::new(
+                params.clone(),
+                Compiler::build(r#"
+                 { symbol: symbol, exchange: exchange, last_sale: last_sale * 2.0, rank: __row_id__ + 1 }
+                "#).unwrap(),
+                Model(ModelRowCollection::from_parameters(&params)),
+                Model(ModelRowCollection::from_parameters(&{
+                    let mut new_params = params.clone();
+                    new_params.push(Parameter::new("rank", NumberType(U64Kind)));
+                    new_params
+                })),
+                Machine::new_platform(),
+            )
         }
     }
 }

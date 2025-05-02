@@ -14,6 +14,8 @@ use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::TypeMismatchErrors::{OutcomeExpected, RowsAffectedExpected};
 use crate::field::FieldMetadata;
+use crate::machine;
+use crate::machine::Machine;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::U64Value;
@@ -44,7 +46,7 @@ impl HashTableRowCollection {
     /// Generates the columns for the index base on the source column
     fn create_hash_keys_columns(src_column: &Column) -> Vec<Column> {
         Column::from_parameters(&vec![
-            Parameter::new("__row_id__", NumberType(U64Kind)),
+            Parameter::new(machine::ROW_ID, NumberType(U64Kind)),
             src_column.to_parameter()
         ])
     }

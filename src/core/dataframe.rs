@@ -5,12 +5,11 @@
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
-use crate::dataframe::Dataframe::Model;
 use crate::expression::{Conditions, Expression};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::hybrid_row_collection::HybridRowCollection;
-use crate::journaling::JournaledRowCollection;
+use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -32,9 +31,10 @@ use std::sync::Arc;
 pub enum Dataframe {
     Binary(ByteRowCollection),
     Disk(FileRowCollection),
+    EventSource(EventSourceRowCollection),
     Hybrid(HybridRowCollection),
-    Journaled(JournaledRowCollection),
     Model(ModelRowCollection),
+    TableFn(Box<TableFunction>),
 }
 
 impl Dataframe {
@@ -159,7 +159,7 @@ impl Dataframe {
         let columns = Column::from_parameters(&params);
 
         // create a new table with the combine columns
-        let mut mrc = Model(ModelRowCollection::new(columns));
+        let mut mrc = Self::Model(ModelRowCollection::new(columns));
         for df in dataframes { merge(&mut mrc, &df); }
         mrc
     }
@@ -197,131 +197,144 @@ impl Dataframe {
 impl RowCollection for Dataframe {
     fn get_columns(&self) -> &Vec<Column> {
         match self {
-            Self::Binary(rc) => rc.get_columns(),
-            Self::Disk(rc) => rc.get_columns(),
-            Self::Hybrid(rc) => rc.get_columns(),
-            Self::Journaled(rc) => rc.get_columns(),
-            Self::Model(rc) => rc.get_columns(),
+            Self::Binary(df) => df.get_columns(),
+            Self::Disk(df) => df.get_columns(),
+            Self::Hybrid(df) => df.get_columns(),
+            Self::EventSource(df) => df.get_columns(),
+            Self::Model(df) => df.get_columns(),
+            Self::TableFn(rc) => rc.get_columns(),
         }
     }
 
     fn get_record_size(&self) -> usize {
         match self {
-            Self::Binary(rc) => rc.get_record_size(),
-            Self::Disk(rc) => rc.get_record_size(),
-            Self::Hybrid(rc) => rc.get_record_size(),
-            Self::Journaled(rc) => rc.get_record_size(),
-            Self::Model(rc) => rc.get_record_size(),
+            Self::Binary(df) => df.get_record_size(),
+            Self::Disk(df) => df.get_record_size(),
+            Self::Hybrid(df) => df.get_record_size(),
+            Self::EventSource(df) => df.get_record_size(),
+            Self::Model(df) => df.get_record_size(),
+            Self::TableFn(rc) => rc.get_record_size(),
         }
     }
 
     fn get_rows(&self) -> Vec<Row> {
         match self {
-            Self::Binary(rc) => rc.get_rows(),
-            Self::Disk(rc) => rc.get_rows(),
-            Self::Hybrid(rc) => rc.get_rows(),
-            Self::Journaled(rc) => rc.get_rows(),
-            Self::Model(rc) => rc.get_rows(),
+            Self::Binary(df) => df.get_rows(),
+            Self::Disk(df) => df.get_rows(),
+            Self::Hybrid(df) => df.get_rows(),
+            Self::EventSource(df) => df.get_rows(),
+            Self::Model(df) => df.get_rows(),
+            Self::TableFn(rc) => rc.get_rows(),
         }
     }
 
     fn len(&self) -> std::io::Result<usize> {
         match self {
-            Self::Binary(rc) => rc.len(),
-            Self::Disk(rc) => rc.len(),
-            Self::Hybrid(rc) => rc.len(),
-            Self::Journaled(rc) => rc.len(),
-            Self::Model(rc) => rc.len(),
+            Self::Binary(df) => df.len(),
+            Self::Disk(df) => df.len(),
+            Self::Hybrid(df) => df.len(),
+            Self::EventSource(df) => df.len(),
+            Self::Model(df) => df.len(),
+            Self::TableFn(rc) => rc.len(),
         }
     }
 
     fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> TypedValue {
         match self {
-            Self::Binary(rc) => rc.overwrite_field(id, column_id, new_value),
-            Self::Disk(rc) => rc.overwrite_field(id, column_id, new_value),
-            Self::Hybrid(rc) => rc.overwrite_field(id, column_id, new_value),
-            Self::Journaled(rc) => rc.overwrite_field(id, column_id, new_value),
-            Self::Model(rc) => rc.overwrite_field(id, column_id, new_value),
+            Self::Binary(df) => df.overwrite_field(id, column_id, new_value),
+            Self::Disk(df) => df.overwrite_field(id, column_id, new_value),
+            Self::Hybrid(df) => df.overwrite_field(id, column_id, new_value),
+            Self::EventSource(df) => df.overwrite_field(id, column_id, new_value),
+            Self::Model(df) => df.overwrite_field(id, column_id, new_value),
+            Self::TableFn(rc) => rc.overwrite_field(id, column_id, new_value),
         }
     }
 
     fn overwrite_field_metadata(&mut self, id: usize, column_id: usize, metadata: FieldMetadata) -> TypedValue {
         match self {
-            Self::Binary(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
-            Self::Disk(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
-            Self::Hybrid(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
-            Self::Journaled(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
-            Self::Model(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
+            Self::Binary(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::Disk(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::Hybrid(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::EventSource(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::Model(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::TableFn(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
         }
     }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
         match self {
-            Self::Binary(rc) => rc.overwrite_row(id, row),
-            Self::Disk(rc) => rc.overwrite_row(id, row),
-            Self::Hybrid(rc) => rc.overwrite_row(id, row),
-            Self::Journaled(rc) => rc.overwrite_row(id, row),
-            Self::Model(rc) => rc.overwrite_row(id, row),
+            Self::Binary(df) => df.overwrite_row(id, row),
+            Self::Disk(df) => df.overwrite_row(id, row),
+            Self::Hybrid(df) => df.overwrite_row(id, row),
+            Self::EventSource(df) => df.overwrite_row(id, row),
+            Self::Model(df) => df.overwrite_row(id, row),
+            Self::TableFn(rc) => rc.overwrite_row(id, row),
         }
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
         match self {
-            Self::Binary(rc) => rc.overwrite_row_metadata(id, metadata),
-            Self::Disk(rc) => rc.overwrite_row_metadata(id, metadata),
-            Self::Hybrid(rc) => rc.overwrite_row_metadata(id, metadata),
-            Self::Journaled(rc) => rc.overwrite_row_metadata(id, metadata),
-            Self::Model(rc) => rc.overwrite_row_metadata(id, metadata),
+            Self::Binary(df) => df.overwrite_row_metadata(id, metadata),
+            Self::Disk(df) => df.overwrite_row_metadata(id, metadata),
+            Self::Hybrid(df) => df.overwrite_row_metadata(id, metadata),
+            Self::EventSource(df) => df.overwrite_row_metadata(id, metadata),
+            Self::Model(df) => df.overwrite_row_metadata(id, metadata),
+            Self::TableFn(rc) => rc.overwrite_row_metadata(id, metadata),
         }
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
         match self {
-            Self::Binary(rc) => rc.read_field(id, column_id),
-            Self::Disk(rc) => rc.read_field(id, column_id),
-            Self::Hybrid(rc) => rc.read_field(id, column_id),
-            Self::Journaled(rc) => rc.read_field(id, column_id),
-            Self::Model(rc) => rc.read_field(id, column_id),
+            Self::Binary(df) => df.read_field(id, column_id),
+            Self::Disk(df) => df.read_field(id, column_id),
+            Self::Hybrid(df) => df.read_field(id, column_id),
+            Self::EventSource(df) => df.read_field(id, column_id),
+            Self::Model(df) => df.read_field(id, column_id),
+            Self::TableFn(rc) => rc.read_field(id, column_id),
         }
     }
 
     fn read_field_metadata(&self, id: usize, column_id: usize) -> std::io::Result<FieldMetadata> {
         match self {
-            Self::Binary(rc) => rc.read_field_metadata(id, column_id),
-            Self::Disk(rc) => rc.read_field_metadata(id, column_id),
-            Self::Hybrid(rc) => rc.read_field_metadata(id, column_id),
-            Self::Journaled(rc) => rc.read_field_metadata(id, column_id),
-            Self::Model(rc) => rc.read_field_metadata(id, column_id),
+            Self::Binary(df) => df.read_field_metadata(id, column_id),
+            Self::Disk(df) => df.read_field_metadata(id, column_id),
+            Self::Hybrid(df) => df.read_field_metadata(id, column_id),
+            Self::EventSource(df) => df.read_field_metadata(id, column_id),
+            Self::Model(df) => df.read_field_metadata(id, column_id),
+            Self::TableFn(rc) => rc.read_field_metadata(id, column_id),
         }
     }
 
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
         match self {
-            Self::Binary(rc) => rc.read_row(id),
-            Self::Disk(rc) => rc.read_row(id),
-            Self::Hybrid(rc) => rc.read_row(id),
-            Self::Journaled(rc) => rc.read_row(id),
-            Self::Model(rc) => rc.read_row(id),
+            Self::Binary(df) => df.read_row(id),
+            Self::Disk(df) => df.read_row(id),
+            Self::Hybrid(df) => df.read_row(id),
+            Self::EventSource(df) => df.read_row(id),
+            Self::Model(df) => df.read_row(id),
+            Self::TableFn(rc) => rc.read_row(id),
         }
     }
 
     fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
         match self {
-            Self::Binary(rc) => rc.read_row_metadata(id),
-            Self::Disk(rc) => rc.read_row_metadata(id),
-            Self::Hybrid(rc) => rc.read_row_metadata(id),
-            Self::Journaled(rc) => rc.read_row_metadata(id),
-            Self::Model(rc) => rc.read_row_metadata(id),
+            Self::Binary(df) => df.read_row_metadata(id),
+            Self::Disk(df) => df.read_row_metadata(id),
+            Self::Hybrid(df) => df.read_row_metadata(id),
+            Self::EventSource(df) => df.read_row_metadata(id),
+            Self::Model(df) => df.read_row_metadata(id),
+            Self::TableFn(rc) => rc.read_row_metadata(id),
         }
     }
 
     fn resize(&mut self, new_size: usize) -> TypedValue {
         match self {
-            Self::Binary(rc) => rc.resize(new_size),
-            Self::Disk(rc) => rc.resize(new_size),
-            Self::Hybrid(rc) => rc.resize(new_size),
-            Self::Journaled(rc) => rc.resize(new_size),
-            Self::Model(rc) => rc.resize(new_size),
+            Self::Binary(df) => df.resize(new_size),
+            Self::Disk(df) => df.resize(new_size),
+            Self::Hybrid(df) => df.resize(new_size),
+            Self::EventSource(df) => df.resize(new_size),
+            Self::Model(df) => df.resize(new_size),
+            Self::TableFn(rc) => rc.resize(new_size),
         }
     }
 }
