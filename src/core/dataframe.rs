@@ -13,7 +13,7 @@ use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
-use crate::numbers::Numbers::RowsAffected;
+use crate::numbers::Numbers::I64Value;
 use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
@@ -61,11 +61,11 @@ impl Dataframe {
             if let Some(row) = self.read_one(id)? {
                 // if the predicate matches the condition, delete the row.
                 if row.matches(machine, condition, self.get_columns()) {
-                    deleted += self.delete_row(id).to_result(|v| v.to_i64())?;
+                    deleted += self.delete_row(id)?;
                 }
             }
         }
-        Ok(Number(RowsAffected(deleted)))
+        Ok(Number(I64Value(deleted)))
     }
 
     /// overwrites rows that match the supplied criteria
@@ -88,12 +88,12 @@ impl Dataframe {
                         machine.with_row(df.get_columns(), &row).eval_as_atoms(fields)?;
                     if let (_, TypedValue::ArrayValue(my_values)) = machine.eval_as_array(values)? {
                         let new_row = row.transform(df.get_columns(), &my_fields, &my_values.get_values())?;
-                        overwritten += df.overwrite_row(row.get_id(), new_row).to_result(|v| v.to_i64())?;
+                        overwritten += df.overwrite_row(row.get_id(), new_row)?;
                     }
                 }
             }
         }
-        Ok((df, Number(RowsAffected(overwritten))))
+        Ok((df, Number(I64Value(overwritten))))
     }
 
     pub fn to_model(self) -> ModelRowCollection {
@@ -119,7 +119,7 @@ impl Dataframe {
                 }
             }
         }
-        Ok(Number(RowsAffected(restored)))
+        Ok(Number(I64Value(restored)))
     }
 
     /// Returns an aggregate collection of unique columns
@@ -190,7 +190,7 @@ impl Dataframe {
                 }
             }
         }
-        Ok(Number(RowsAffected(updated)))
+        Ok(Number(I64Value(updated)))
     }
 }
 
@@ -239,7 +239,7 @@ impl RowCollection for Dataframe {
         }
     }
 
-    fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> TypedValue {
+    fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> std::io::Result<i64> {
         match self {
             Self::Binary(df) => df.overwrite_field(id, column_id, new_value),
             Self::Disk(df) => df.overwrite_field(id, column_id, new_value),
@@ -250,7 +250,7 @@ impl RowCollection for Dataframe {
         }
     }
 
-    fn overwrite_field_metadata(&mut self, id: usize, column_id: usize, metadata: FieldMetadata) -> TypedValue {
+    fn overwrite_field_metadata(&mut self, id: usize, column_id: usize, metadata: FieldMetadata) -> std::io::Result<i64> {
         match self {
             Self::Binary(df) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::Disk(df) => df.overwrite_field_metadata(id, column_id, metadata),
@@ -261,7 +261,7 @@ impl RowCollection for Dataframe {
         }
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
+    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         match self {
             Self::Binary(df) => df.overwrite_row(id, row),
             Self::Disk(df) => df.overwrite_row(id, row),
@@ -272,7 +272,7 @@ impl RowCollection for Dataframe {
         }
     }
 
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<i64> {
         match self {
             Self::Binary(df) => df.overwrite_row_metadata(id, metadata),
             Self::Disk(df) => df.overwrite_row_metadata(id, metadata),
@@ -327,7 +327,7 @@ impl RowCollection for Dataframe {
         }
     }
 
-    fn resize(&mut self, new_size: usize) -> TypedValue {
+    fn resize(&mut self, new_size: usize) -> std::io::Result<bool> {
         match self {
             Self::Binary(df) => df.resize(new_size),
             Self::Disk(df) => df.resize(new_size),

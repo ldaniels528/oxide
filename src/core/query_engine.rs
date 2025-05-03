@@ -11,7 +11,7 @@ use crate::data_types::DataType::TableType;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::*;
 use crate::errors::Errors::*;
-use crate::errors::TypeMismatchErrors::{CollectionExpected, FunctionArgsExpected, NamespaceExpected, QueryableExpected, TableExpected, UnsupportedType};
+use crate::errors::TypeMismatchErrors::{CollectionExpected, FunctionArgsExpected, NamespaceExpected, TableExpected, UnsupportedType};
 use crate::errors::{throw, SyntaxErrors, TypeMismatchErrors};
 use crate::expression::Conditions::True;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity};
@@ -25,7 +25,7 @@ use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
-use crate::numbers::Numbers::RowsAffected;
+use crate::numbers::Numbers::I64Value;
 use crate::object_config::{HashIndexConfig, ObjectConfig};
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
@@ -147,12 +147,8 @@ pub fn eval_into_ns(
     // write the rows to the target
     let mut inserted = 0;
     let mut rc = expect_row_collection(&machine, table)?;
-    match rc.append_rows(rows) {
-        ErrorValue(err) => return throw(err),
-        Number(oc) => inserted += oc.to_i64(),
-        _ => {}
-    }
-    Ok((machine, Number(RowsAffected(inserted))))
+    inserted += rc.append_rows(rows)?;
+    Ok((machine, Number(I64Value(inserted))))
 }
 
 pub fn eval_iter(
@@ -162,18 +158,14 @@ pub fn eval_iter(
 ) -> std::io::Result<(Machine, TypedValue)> {
     // todo tables need an iterable indexer
     let (ms, result) = ms.evaluate(source)?;
-    match result.to_table()? {
-        TableValue(mut df) => {
-            let offset = df.len()?;
-            let response = df.read_one(if offset > 0 { offset - 1 } else { offset })?
-                .map(|r| Structured(Structures::Firm(r, df.get_parameters())))
-                .unwrap_or(Undefined);
-            match container {
-                Variable(name) => Ok((ms.with_variable(name, response), Boolean(true))),
-                other => throw(Exact(other.to_code()))
-            }
-        }
-        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
+    let mut df = result.to_dataframe()?;
+    let offset = df.len()?;
+    let response = df.read_one(if offset > 0 { offset - 1 } else { offset })?
+        .map(|r| Structured(Structures::Firm(r, df.get_parameters())))
+        .unwrap_or(Undefined);
+    match container {
+        Variable(name) => Ok((ms.with_variable(name, response), Boolean(true))),
+        other => throw(Exact(other.to_code()))
     }
 }
 
@@ -390,20 +382,15 @@ fn do_table_row_append(
 ) -> std::io::Result<(Machine, TypedValue)> {
     // evaluate the table expression (table_expr)
     let (ms, table) = ms.evaluate(table_expr)?;
-    match table.to_table()? {
-        TableValue(mut df) => {
-            // evaluate the query expression (from_expr)
-            let (ms, result) = ms.evaluate(from_expr)?;
-            match result.to_table()? {
-                TableValue(src) => {
-                    // write the rows to the dataframe
-                    Ok((ms, df.append_rows(src.read_active_rows()?)))
-                }
-                _ => throw(TypeMismatch(QueryableExpected(from_expr.to_code())))
-            }
-        }
-        _ => throw(TypeMismatch(QueryableExpected(table_expr.to_code())))
-    }
+    let mut df = table.to_dataframe()?;
+
+    // evaluate the query expression (from_expr)
+    let (ms, result) = ms.evaluate(from_expr)?;
+    let src = result.to_dataframe()?;
+
+    // write the rows to the dataframe
+    df.append_rows(src.read_active_rows()?)
+        .map(|n| (ms, Number(I64Value(n))))
 }
 
 fn do_table_row_delete(
@@ -414,10 +401,8 @@ fn do_table_row_delete(
 ) -> std::io::Result<(Machine, TypedValue)> {
     let (ms, limit) = ms.evaluate_opt(limit)?;
     let (ms, table) = ms.evaluate(from)?;
-    match table.to_table()? {
-        TableValue(mut rc) => Ok((ms.clone(), rc.delete_where(&ms, &condition, limit)?)),
-        other => Ok((ms, ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))))
-    }
+    let mut df = table.to_dataframe()?;
+    Ok((ms.clone(), df.delete_where(&ms, &condition, limit)?))
 }
 
 fn do_table_row_overwrite(
@@ -430,14 +415,9 @@ fn do_table_row_overwrite(
     let (machine, limit) = ms.evaluate_opt(limit)?;
     let (machine, tv_table) = machine.evaluate(table)?;
     let (fields, values) = expect_via(&ms, &table, &source)?;
-    match tv_table.to_table()? {
-        ErrorValue(err) => throw(err),
-        TableValue(rc) => {
-            let (_, overwritten) = Dataframe::overwrite_where(rc, &machine, &fields, &values, condition, limit)?;
-            Ok((machine, overwritten))
-        }
-        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
-    }
+    let df = tv_table.to_dataframe()?;
+    let (_, overwritten) = Dataframe::overwrite_where(df, &machine, &fields, &values, condition, limit)?;
+    Ok((machine, overwritten))
 }
 
 fn do_table_row_resize(
@@ -445,11 +425,10 @@ fn do_table_row_resize(
     table: &Expression,
     limit: TypedValue,
 ) -> std::io::Result<(Machine, TypedValue)> {
-    let (machine, table) = ms.evaluate(table)?;
-    match table.to_table()? {
-        TableValue(mut df) => Ok((machine, df.resize(limit.to_usize()))),
-        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
-    }
+    let (ms, table) = ms.evaluate(table)?;
+    let mut df = table.to_dataframe()?;
+    df.resize(limit.to_usize())
+        .map(|r| (ms, Boolean(r)))
 }
 
 fn do_table_row_undelete(
@@ -460,14 +439,8 @@ fn do_table_row_undelete(
 ) -> std::io::Result<(Machine, TypedValue)> {
     let (ms, limit) = ms.evaluate_opt(limit)?;
     let (ms, table) = ms.evaluate(from)?;
-    match table.to_table()? {
-        TableValue(mut rc) =>
-            match rc.undelete_where(&ms, &condition, limit) {
-                Ok(restored) => Ok((ms, restored)),
-                Err(err) => throw(Exact(err.to_string())),
-            }
-        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
-    }
+    let mut df = table.to_dataframe()?;
+    df.undelete_where(&ms, &condition, limit).map(|restored| (ms, restored))
 }
 
 fn do_table_row_update(
@@ -480,14 +453,9 @@ fn do_table_row_update(
     let (ms, limit) = ms.evaluate_opt(limit)?;
     let (ms, tv_table) = ms.evaluate(table)?;
     let (fields, values) = expect_via(&ms, &table, &source)?;
-    match tv_table.to_table()? {
-        TableValue(rc) =>
-            match Dataframe::update_where(rc, &ms, &fields, &values, &condition, limit) {
-                Ok(modified) => Ok((ms, modified)),
-                Err(err) => throw(Exact(err.to_string())),
-            }
-        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
-    }
+    let df = tv_table.to_dataframe()?;
+    Dataframe::update_where(df, &ms, &fields, &values, &condition, limit)
+        .map(|modified| (ms, modified))
 }
 
 fn do_table_rows_from_table_declaration(
@@ -691,7 +659,7 @@ fn expect_row_collection(
     table: &Expression,
 ) -> std::io::Result<Box<dyn RowCollection>> {
     let (_, v_table) = ms.evaluate(table)?;
-    v_table.to_table_impl()
+    v_table.to_table()
 }
 
 fn expect_rows(
@@ -836,60 +804,62 @@ fn column_not_found(name: &str, columns: &Vec<Column>) -> String {
 
 /// SQL tests
 #[cfg(test)]
-mod sql_tests {
+mod tests {
     use crate::columns::Column;
     use crate::dataframe::Dataframe::Model;
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::Numbers::RowsAffected;
+    use crate::numbers::Numbers::I64Value;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
 
     #[test]
     fn test_between() {
-        verify_exact_text("20 between 1 and 20", "true");
-        verify_exact_text("21 between 1 and 20", "false");
+        verify_exact_value("20 between 1 and 20", Boolean(true));
+        verify_exact_value("21 between 1 and 20", Boolean(false));
     }
 
     #[test]
     fn test_betwixt() {
-        verify_exact_text("20 betwixt 1 and 20", "false");
-        verify_exact_text("19 betwixt 1 and 20", "true");
+        verify_exact_value("20 betwixt 1 and 20", Boolean(false));
+        verify_exact_value("19 betwixt 1 and 20", Boolean(true));
     }
 
     #[test]
     fn test_like() {
-        verify_exact("'Hello' like 'H*o'", Boolean(true));
-        verify_exact("'Hello' like 'H.ll.'", Boolean(true));
-        verify_exact("'Hello' like 'H%ll%'", Boolean(false));
+        verify_exact_value("'Hello' like 'H*o'", Boolean(true));
+        verify_exact_value("'Hello' like 'H.ll.'", Boolean(true));
+        verify_exact_value("'Hello' like 'H%ll%'", Boolean(false));
     }
 
     #[test]
     fn test_table_create_ephemeral() {
-        verify_exact(r#"
+        verify_exact_value(r#"
             table(
                 symbol: String(8),
                 exchange: String(8),
                 last_sale: f64
-            )"#, TableValue(Model(ModelRowCollection::with_rows(
+            )
+        "#, TableValue(Model(ModelRowCollection::with_rows(
             make_quote_columns(), Vec::new(),
         ))))
     }
 
     #[test]
     fn test_table_create_durable() {
-        verify_exact(r#"
-                create table ns("query_engine.create.stocks") (
-                    symbol: String(8),
-                    exchange: String(8),
-                    last_sale: f64
-                )"#, Boolean(true))
+        verify_exact_value(r#"
+            create table ns("query_engine.create.stocks") (
+                symbol: String(8),
+                exchange: String(8),
+                last_sale: f64
+            )
+        "#, Boolean(true))
     }
 
     #[test]
     fn test_create_table_fn() {
         let mut interpreter = Interpreter::new();
-        interpreter = verify_exact_where(interpreter, r#"
+        interpreter = verify_exact_value_with(interpreter, r#"
             stocks := ns("query_engine.table_fn.stocks")
             drop table stocks
             create table stocks fn(
@@ -902,13 +872,13 @@ mod sql_tests {
                  }
         "#, Boolean(true));
 
-        interpreter = verify_exact_where(interpreter, r#"
+        interpreter = verify_exact_value_with(interpreter, r#"
             [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
              { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
              { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-        "#, Number(RowsAffected(3)));
+        "#, Number(I64Value(3)));
 
-        verify_exact_table_where(interpreter, "from stocks", vec![
+        verify_exact_table_with(interpreter, "from stocks", vec![
             "|-------------------------------------------|",
             "| id | symbol | exchange | last_sale | rank |",
             "|-------------------------------------------|",
@@ -920,94 +890,92 @@ mod sql_tests {
 
     #[test]
     fn test_table_crud_in_namespace() {
-        let mut interpreter = Interpreter::new();
-        let columns = make_quote_parameters();
-        let phys_columns = Column::from_parameters(&columns);
+        let params = make_quote_parameters();
+        let columns = Column::from_parameters(&params);
 
-        // set up the interpreter
-        assert_eq!(Boolean(true), interpreter.evaluate(r#"
-                stocks := ns("query_engine.crud.stocks")
-            "#).unwrap());
+        let mut interpreter = Interpreter::new();
+        interpreter = verify_exact_value_with(interpreter, r#"
+            stocks := ns("query_engine.crud.stocks")
+        "#, Boolean(true));
 
         // create the table
-        assert_eq!(Number(RowsAffected(0)), interpreter.evaluate(r#"
-                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            "#).unwrap());
+        interpreter = verify_exact_value_with(interpreter, r#"
+            table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+        "#, Number(I64Value(0)));
 
         // append a row
-        assert_eq!(Number(RowsAffected(1)), interpreter.evaluate(r#"
-                append stocks from { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
-            "#).unwrap());
+        interpreter = verify_exact_value_with(interpreter, r#"
+            append stocks from { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
+        "#, Number(I64Value(1)));
 
         // write another row
-        assert_eq!(Number(RowsAffected(1)), interpreter.evaluate(r#"
-                { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 } ~> stocks
-            "#).unwrap());
+        interpreter = verify_exact_value_with(interpreter, r#"
+            { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 } ~> stocks
+        "#, Number(I64Value(1)));
 
         // write some more rows
-        assert_eq!(Number(RowsAffected(2)), interpreter.evaluate(r#"
-                [{ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 }] ~> stocks
-            "#).unwrap());
+        interpreter = verify_exact_value_with(interpreter, r#"
+            [{ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+             { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 }] ~> stocks
+        "#, Number(I64Value(2)));
 
         // write even more rows
-        assert_eq!(Number(RowsAffected(2)), interpreter.evaluate(r#"
-                append stocks from [
-                    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 56.87 },
-                    { symbol: "TRX", exchange: "NASDAQ", last_sale: 7.9311 }
-                ]
-            "#).unwrap());
+        interpreter = verify_exact_value_with(interpreter, r#"
+            append stocks from [
+                { symbol: "BOOM", exchange: "NASDAQ", last_sale: 56.87 },
+                { symbol: "TRX", exchange: "NASDAQ", last_sale: 7.9311 }
+            ]
+        "#, Number(I64Value(2)));
 
         // remove some rows
-        assert_eq!(Number(RowsAffected(4)), interpreter.evaluate(r#"
-                delete from stocks where last_sale > 1.0
-            "#).unwrap());
+        interpreter = verify_exact_value_with(interpreter, r#"
+            delete from stocks where last_sale > 1.0
+        "#, Number(I64Value(4)));
 
         // overwrite a row
-        assert_eq!(Number(RowsAffected(1)), interpreter.evaluate(r#"
-                overwrite stocks
-                via {symbol: "GOTO", exchange: "OTC", last_sale: 0.1421}
-                where symbol is "GOTO"
-            "#).unwrap());
+        interpreter = verify_exact_value_with(interpreter, r#"
+            overwrite stocks via {symbol: "GOTO", exchange: "OTC", last_sale: 0.1421}
+            where symbol is "GOTO"
+        "#, Number(I64Value(1)));
 
         // verify the remaining rows
-        assert_eq!(
-            interpreter.evaluate("from stocks").unwrap(),
-            TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
-                make_quote(1, "UNO", "OTC", 0.2456),
-                make_quote(3, "GOTO", "OTC", 0.1421),
-            ])))
-        );
+        interpreter = verify_exact_value_with(interpreter, r#"
+            from stocks
+        "#, TableValue(Model(ModelRowCollection::from_columns_and_rows(&columns, &vec![
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(3, "GOTO", "OTC", 0.1421),
+        ]))));
 
         // restore the previously deleted rows
-        assert_eq!(Number(RowsAffected(4)), interpreter.evaluate(r#"
-                undelete from stocks where last_sale > 1.0
-            "#).unwrap());
+        interpreter = verify_exact_value_with(interpreter, r#"
+            undelete from stocks where last_sale > 1.0
+        "#, Number(I64Value(4)));
 
         // verify the existing rows
-        assert_eq!(
-            interpreter.evaluate("from stocks").unwrap(),
-            TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
-                make_quote(0, "ABC", "AMEX", 11.77),
-                make_quote(1, "UNO", "OTC", 0.2456),
-                make_quote(2, "BIZ", "NYSE", 23.66),
-                make_quote(3, "GOTO", "OTC", 0.1421),
-                make_quote(4, "BOOM", "NASDAQ", 56.87),
-                make_quote(5, "TRX", "NASDAQ", 7.9311),
-            ])))
-        );
+        verify_exact_table_with(interpreter, "from stocks", vec![
+            "|------------------------------------|",
+            "| id | symbol | exchange | last_sale |",
+            "|------------------------------------|",
+            "| 0  | ABC    | AMEX     | 11.77     |",
+            "| 1  | UNO    | OTC      | 0.2456    |",
+            "| 2  | BIZ    | NYSE     | 23.66     |",
+            "| 3  | GOTO   | OTC      | 0.1421    |",
+            "| 4  | BOOM   | NASDAQ   | 56.87     |",
+            "| 5  | TRX    | NASDAQ   | 7.9311    |",
+            "|------------------------------------|"
+        ]);
     }
 
     #[test]
     fn test_table_into_then_delete() {
-        verify_exact_table_with_ids(r#"
-                [+] stocks := ns("query_engine.into_then_delete.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] delete from stocks where last_sale < 30.0
-                [+] from stocks
+        verify_exact_table(r#"
+            [+] stocks := ns("query_engine.into_then_delete.stocks")
+            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [+] [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+            [+] delete from stocks where last_sale < 30.0
+            [+] from stocks
         "#, vec![
             "|------------------------------------|",
             "| id | symbol | exchange | last_sale |",
@@ -1024,27 +992,27 @@ mod sql_tests {
         let columns = make_quote_parameters();
         let phys_columns = Column::from_parameters(&columns);
 
-        // append some rows
+        // create a table and append some rows
         let mut interpreter = Interpreter::new();
-        assert_eq!(Number(RowsAffected(5)), interpreter.evaluate(r#"
-                stocks := ns("query_engine.select1.stocks")
-                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                append stocks from [
-                    { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
-                    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }
-                ]
-            "#).unwrap());
+        interpreter = verify_exact_value_with(interpreter,r#"
+            stocks := ns("query_engine.select1.stocks")
+            table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            append stocks from [
+                { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
+                { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }
+            ]
+        "#, Number(I64Value(5)));
 
         // compile and execute the code
-        interpreter = verify_exact_table_where(interpreter, r#"
-                select symbol, last_sale from stocks
-                where last_sale < 1.0
-                order by symbol
-                limit 2
-            "#, vec![
+        interpreter = verify_exact_table_with(interpreter, r#"
+            select symbol, last_sale from stocks
+            where last_sale < 1.0
+            order by symbol
+            limit 2
+        "#, vec![
             "|-------------------------|",
             "| id | symbol | last_sale |",
             "|-------------------------|",
@@ -1060,7 +1028,7 @@ mod sql_tests {
         let columns = Column::from_parameters(&params);
 
         // set up the interpreter
-        verify_exact_table_with_ids(r#"
+        verify_exact_table(r#"
             [+] stocks := ns("query_engine.select.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
@@ -1085,11 +1053,11 @@ mod sql_tests {
 
     #[test]
     fn test_table_embedded_describe() {
-        verify_exact_table_with_ids(r#"
-                stocks := ns("query_engine.embedded_a.stocks")
-                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
-                tools::describe(stocks)
-            "#, vec![
+        verify_exact_table(r#"
+            stocks := ns("query_engine.embedded_a.stocks")
+            table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+            tools::describe(stocks)
+        "#, vec![
             "|-------------------------------------------------------------------------------------------|",
             "| id | name     | type                                        | default_value | is_nullable |",
             "|-------------------------------------------------------------------------------------------|",
@@ -1101,13 +1069,13 @@ mod sql_tests {
 
     #[test]
     fn test_table_embedded_empty() {
-        verify_exact_table_with_ids(r#"
-                stocks := ns("query_engine.embedded_b.stocks")
-                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
-                rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
-                rows ~> stocks
-                from stocks
-            "#, vec![
+        verify_exact_table(r#"
+            stocks := ns("query_engine.embedded_b.stocks")
+            table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+            rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+            rows ~> stocks
+            from stocks
+        "#, vec![
             "|----------------------------------|",
             "| id | symbol | exchange | history |",
             "|----------------------------------|",
@@ -1118,15 +1086,15 @@ mod sql_tests {
 
     #[test]
     fn test_read_next_row() {
-        verify_exact_table_with_ids(r#"
-                stocks := ns("query_engine.read_next_row.stocks")
-                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
-                rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
-                rows ~> stocks
-                // read the last row
-                last_row <~ stocks
-                last_row
-            "#, vec![
+        verify_exact_table(r#"
+            stocks := ns("query_engine.read_next_row.stocks")
+            table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+            rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+            rows ~> stocks
+            // read the last row
+            last_row <~ stocks
+            last_row
+        "#, vec![
             "|----------------------------------|",
             "| id | symbol | exchange | history |",
             "|----------------------------------|",
@@ -1136,15 +1104,15 @@ mod sql_tests {
 
     #[test]
     fn test_table_append_rows_with_embedded_table() {
-        verify_exact_table_with_ids(r#"
-                stocks := ns("query_engine.embedded_c.stocks")
-                table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64)) ~> stocks
-                append stocks from [
-                    { symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66 } },
-                    { symbol: "GOTO", exchange: "OTC", history: [{ last_sale: 0.051 }, { last_sale: 0.048 }] }
-                ]
-                from stocks
-            "#, vec![
+        verify_exact_table(r#"
+            stocks := ns("query_engine.embedded_c.stocks")
+            table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64)) ~> stocks
+            append stocks from [
+                { symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66 } },
+                { symbol: "GOTO", exchange: "OTC", history: [{ last_sale: 0.051 }, { last_sale: 0.048 }] }
+            ]
+            from stocks
+        "#, vec![
             r#"|---------------------------------------------------------------------|"#,
             r#"| id | symbol | exchange | history                                    |"#,
             r#"|---------------------------------------------------------------------|"#,
@@ -1160,7 +1128,7 @@ mod sql_tests {
         let columns = Column::from_parameters(&params);
 
         // set up the interpreter
-        verify_exact_table_with_ids(r#"
+        verify_exact_table(r#"
             [+] stocks := ns("query-engine.select.stocks")
             [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },

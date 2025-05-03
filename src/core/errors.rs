@@ -61,7 +61,6 @@ pub enum TypeMismatchErrors {
     NamespaceExpected(String),
     ParameterExpected(String),
     QueryableExpected(String),
-    RowsAffectedExpected(String),
     StringExpected(String),
     StructExpected(String, String),
     StructsOneOrMoreExpected,
@@ -102,13 +101,11 @@ impl Display for TypeMismatchErrors {
             TypeMismatchErrors::NamespaceExpected(expr) =>
                 format!("Expected a namespace (e.g. ns(\"a.b.c\")) near {expr}"),
             TypeMismatchErrors::OutcomeExpected(expr) =>
-                format!("Expected an outcome (RowId or RowsAffected) near {expr}"),
+                format!("Expected an outcome (RowId or I64Value) near {expr}"),
             TypeMismatchErrors::ParameterExpected(expr) =>
                 format!("Expected a parameter, got \"{expr}\" instead"),
             TypeMismatchErrors::QueryableExpected(expr) =>
                 format!("Expected a queryable near {expr}"),
-            TypeMismatchErrors::RowsAffectedExpected(expr) =>
-                format!("Expected RowsAffected(..) near {expr}"),
             TypeMismatchErrors::StringExpected(expr) =>
                 format!("Expected a String near {expr}"),
             TypeMismatchErrors::StructExpected(name, expr) =>
@@ -277,13 +274,11 @@ mod tests {
         verify(TypeMismatch(FunctionArgsExpected("Tom".into())),
                "Type Mismatch: Function arguments expected, but found Tom");
         verify(TypeMismatch(OutcomeExpected("wth".into())),
-               "Type Mismatch: Expected an outcome (RowId or RowsAffected) near wth");
+               "Type Mismatch: Expected an outcome (RowId or I64Value) near wth");
         verify(TypeMismatch(ParameterExpected("@".into())),
                "Type Mismatch: Expected a parameter, got \"@\" instead");
         verify(TypeMismatch(QueryableExpected("reset".into())),
                "Type Mismatch: Expected a queryable near reset");
-        verify(TypeMismatch(RowsAffectedExpected("xyz".into())),
-               "Type Mismatch: Expected RowsAffected(..) near xyz");
         verify(TypeMismatch(StringExpected("reset".into())),
                "Type Mismatch: Expected a String near reset");
         verify(TypeMismatch(StructExpected("count".into(), "i64".into())),

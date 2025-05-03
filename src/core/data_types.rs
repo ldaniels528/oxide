@@ -148,7 +148,6 @@ impl DataType {
                 "i64" => Ok(NumberType(I64Kind)),
                 "i128" => Ok(NumberType(I128Kind)),
                 "RowId" => Ok(NumberType(RowIdKind)),
-                "RowsAffected" => Ok(NumberType(RowsAffectedKind)),
                 "String" => Ok(StringType(0)),
                 "Struct" => Ok(StructureType(vec![])),
                 "Table" => Ok(TableType(vec![], 0)),
@@ -259,11 +258,10 @@ impl DataType {
             DataType::PlatformOpsType(_) => Ok(value.encode()),
             DataType::StringType(_) => Ok(value.encode()),
             DataType::StructureType(_) => Ok(value.encode()),
-            DataType::TableType(..) =>
-                match value.to_table()? {
-                    TypedValue::TableValue(df) => Ok(ByteCodeCompiler::encode_df(&df)),
-                    z => throw(TypeMismatch(UnsupportedType(self.clone(), z.get_type())))
-                },
+            DataType::TableType(..) => {
+                let df = value.to_dataframe()?;
+                Ok(ByteCodeCompiler::encode_df(&df))
+            }
             _ => Ok(value.encode()),
         }
     }
@@ -290,7 +288,7 @@ impl DataType {
     pub fn get_type_names() -> Vec<String> {
         vec![
             "Array", "ASCII", "Binary", "Boolean", "Date", "Enum", "Error", "Fn",
-            "String", "Struct", "Table", //, "RowId", "RowsAffected",
+            "String", "Struct", "Table", //, "RowId",
             "f32", "f64", "i8", "i16", "i32", "i64", "i128",
             "u8", "u16", "u32", "u64", "u128", "UUID",
         ].iter().map(|s| s.to_string()).collect()
@@ -624,7 +622,6 @@ mod tests {
         #[test]
         fn test_outcome() {
             verify_type_construction("RowId", NumberType(RowIdKind));
-            verify_type_construction("RowsAffected", NumberType(RowsAffectedKind));
         }
 
         #[test]
@@ -800,47 +797,47 @@ mod tests {
         use crate::dataframe::Dataframe::Model;
         use crate::model_row_collection::ModelRowCollection;
         use crate::numbers::Numbers::*;
-        use crate::testdata::{make_quote_columns, verify_exact, verify_when};
+        use crate::testdata::{make_quote_columns, verify_exact_value, verify_exact_value_where};
         use crate::typed_values::TypedValue::{Number, StringValue, TableValue};
 
         #[test]
         fn test_date() {
-            verify_when(r#"
+            verify_exact_value_where(r#"
                 new Date()
             "#, |v| matches!(v, Number(DateValue(..))));
         }
 
         #[test]
         fn test_f64() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 new f64()
             "#, Number(F64Value(0.)));
         }
 
         #[test]
         fn test_i64() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 new i64()
             "#, Number(I64Value(0)));
         }
 
         #[test]
         fn test_string() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 new String(80)
             "#, StringValue(String::new()));
         }
 
         #[test]
         fn test_table() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 new Table(symbol: String(8), exchange: String(8), last_sale: f64)
             "#, TableValue(Model(ModelRowCollection::new(make_quote_columns()))));
         }
 
         #[test]
         fn test_uuid() {
-            verify_when(r#"
+            verify_exact_value_where(r#"
                 new UUID()
             "#, |v| matches!(v, Number(UUIDValue(..))));
         }

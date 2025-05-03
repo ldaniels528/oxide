@@ -57,7 +57,7 @@ use crate::structures::Row;
 use crate::structures::Structures::{Firm, Hard, Soft};
 use crate::structures::*;
 use crate::table_renderer::TableRenderer;
-use crate::testdata::verify_exact_table_where;
+use crate::testdata::verify_exact_table_with;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use shared_lib::{cnv_error, fail};
@@ -348,7 +348,7 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let (machine, a) = self.evaluate(a)?;
         let (machine, b) = machine.evaluate(b)?;
-        Ok((machine, a.contains(&b)))
+        Ok((machine, Boolean(a.contains(&b))))
     }
 
     /// Evaluates a curvy left arrow (<~)
@@ -897,11 +897,11 @@ impl Machine {
                 let values = structure.get_values();
                 if idx < values.len() { values[idx].to_owned() } else { ErrorValue(IndexOutOfRange("Structure element".to_string(), idx, values.len())) }
             }
-            TableValue(rcv) => {
+            TableValue(df) => {
                 let id = index.to_usize();
-                match rcv.read_one(id)? {
-                    Some(row) => Structured(Firm(row, rcv.get_parameters())),
-                    None => Structured(Firm(Row::create(id, rcv.get_columns()), rcv.get_parameters()))
+                match df.read_one(id)? {
+                    Some(row) => Structured(Firm(row, df.get_parameters())),
+                    None => Structured(Firm(Row::create(id, df.get_columns()), df.get_parameters()))
                 }
             }
             TupleValue(values) => {
@@ -1207,12 +1207,7 @@ impl Machine {
         expr: &Expression,
     ) -> std::io::Result<(Self, Dataframe)> {
         let (ms, value) = self.evaluate(expr)?;
-        match value.to_table()? {
-            NamespaceValue(ns) => Ok((ms, Disk(FileRowCollection::open(&ns)?))),
-            TableValue(df) => Ok((ms, df)),
-            ErrorValue(err) => throw(err),
-            other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
-        }
+        Ok((ms, value.to_dataframe()?))
     }
 
     /// evaluates expression `a` then applies function `f`. ex: f(a)
@@ -1430,7 +1425,7 @@ mod tests {
         let machine = Machine::new_platform()
             .do_import_by_name("testing");
         let (_, result) = machine.evaluate(&model).unwrap();
-        let table = result.to_table_impl().unwrap();
+        let table = result.to_table().unwrap();
         let columns = table.get_columns();
         let rows = table.read_active_rows().unwrap();
         for s in TableRenderer::from_table(&table) { println!("{}", s) }
@@ -1738,7 +1733,7 @@ mod tests {
                     ])
                 }).collect();
             let mut dfrc = FileRowCollection::create_table(&ns, &params).unwrap();
-            assert_eq!(Number(RowsAffected(5)), dfrc.append_rows(rows));
+            assert_eq!(5, dfrc.append_rows(rows).unwrap());
 
             // create the instruction model 'ns("machine.element_at.stocks")[2]'
             let model = ElementAt(
@@ -1812,9 +1807,10 @@ mod tests {
             let machine = Machine::empty();
 
             // drop table if exists ns("machine.index.stocks")
-            let (machine, _) = machine.evaluate(&DatabaseOp(Mutation(Drop(TableTarget {
+            let (machine, result) = machine.evaluate(&DatabaseOp(Mutation(Drop(TableTarget {
                 path: Box::new(Ns(Box::new(Literal(StringValue(path.into()))))),
             })))).unwrap();
+            assert!(matches!(result, Boolean(..)));
 
             // create table ns("machine.index.stocks") (...)
             let (machine, result) = machine.evaluate(&DatabaseOp(Mutation(Create {
@@ -1892,7 +1888,7 @@ mod tests {
             where last_sale > 1.0
             "#).unwrap();
             let (_, result) = machine.evaluate(&code).unwrap();
-            assert_eq!(result, Number(RowsAffected(3)));
+            assert_eq!(result, Number(I64Value(3)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -1915,7 +1911,7 @@ mod tests {
             delete from stocks where last_sale > 1.0
             "#).unwrap();
             let (machine, result) = machine.evaluate(&code).unwrap();
-            assert_eq!(result, Number(RowsAffected(3)));
+            assert_eq!(result, Number(I64Value(3)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -1929,7 +1925,7 @@ mod tests {
             undelete from stocks where last_sale > 1.0
             "#).unwrap();
             let (_, result) = machine.evaluate(&code).unwrap();
-            assert_eq!(result, Number(RowsAffected(3)));
+            assert_eq!(result, Number(I64Value(3)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -1958,7 +1954,7 @@ mod tests {
                     ("last_sale".into(), Literal(Number(F64Value(16.99)))),
                 ])))),
             }))).unwrap();
-            assert_eq!(result, Number(RowsAffected(1)));
+            assert_eq!(result, Number(I64Value(1)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -1996,7 +1992,7 @@ mod tests {
             // overwrite some rows
             let machine = Machine::empty();
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, Number(RowsAffected(1)));
+            assert_eq!(result, Number(I64Value(1)));
 
             // verify the remaining rows
             let rows = df.read_active_rows().unwrap();
@@ -2092,7 +2088,7 @@ mod tests {
             let (mrc, phys_columns) = create_memory_table();
             let machine = Machine::empty().with_variable("stocks", TableValue(Model(mrc)));
             let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, Number(RowsAffected(2)));
+            assert_eq!(result, Number(I64Value(2)));
 
             // retrieve and verify all rows
             let model = From(Box::new(Variable("stocks".into())));
@@ -2127,7 +2123,7 @@ mod tests {
 
             // update some rows
             let (_, delta) = Machine::empty().evaluate(&model).unwrap();
-            assert_eq!(delta, Number(RowsAffected(2)));
+            assert_eq!(delta, Number(I64Value(2)));
 
             // verify the rows
             let rows = df.read_active_rows().unwrap();

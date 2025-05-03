@@ -93,7 +93,7 @@ impl RowCollection for HybridRowCollection {
         id: usize,
         column_id: usize,
         new_value: TypedValue,
-    ) -> TypedValue {
+    ) -> std::io::Result<i64> {
         if id < self.dividing_line {
             self.brc.overwrite_field(id, column_id, new_value)
         } else {
@@ -106,7 +106,7 @@ impl RowCollection for HybridRowCollection {
         id: usize,
         column_id: usize,
         metadata: FieldMetadata,
-    ) -> TypedValue {
+    ) -> std::io::Result<i64> {
         if id < self.dividing_line {
             self.brc.overwrite_field_metadata(id, column_id, metadata)
         } else {
@@ -114,7 +114,7 @@ impl RowCollection for HybridRowCollection {
         }
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
+    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         if id < self.dividing_line {
             self.brc.overwrite_row(id, row)
         } else {
@@ -123,7 +123,7 @@ impl RowCollection for HybridRowCollection {
         }
     }
 
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<i64> {
         if id < self.dividing_line {
             self.brc.overwrite_row_metadata(id, metadata)
         } else {
@@ -168,7 +168,7 @@ impl RowCollection for HybridRowCollection {
         }
     }
 
-    fn resize(&mut self, new_size: usize) -> TypedValue {
+    fn resize(&mut self, new_size: usize) -> std::io::Result<bool> {
         if new_size < self.dividing_line {
             self.brc.resize(new_size);
             self.frc.resize(0)

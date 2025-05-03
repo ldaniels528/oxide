@@ -86,16 +86,16 @@ impl Compiler {
     /// compiles the entire [TokenSlice] into an [Expression]
     pub fn compile(&mut self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         // consume the entire iterator
-        let mut opcodes = Vec::new();
+        let mut models = Vec::new();
         let mut ts = ts;
         while ts.has_more() {
             let (expr, tts) = self.compile_next(ts)?;
-            opcodes.push(expr);
+            models.push(expr);
             ts = tts;
         }
 
         // return the instruction
-        match opcodes {
+        match models {
             ops if ops.len() == 1 => Ok((ops[0].to_owned(), ts)),
             ops => Ok((CodeBlock(ops), ts))
         }
@@ -1254,7 +1254,7 @@ mod tests {
     mod build_tests {
         use crate::compiler::Compiler;
         use crate::machine::Machine;
-        use crate::numbers::Numbers::RowsAffected;
+        use crate::numbers::Numbers::I64Value;
         use crate::typed_values::TypedValue::Number;
 
         #[test]
@@ -1277,7 +1277,7 @@ mod tests {
             // load the binary
             let expr = Compiler::load(src_path).unwrap();
             let (_, result) = Machine::new_platform().evaluate(&expr).unwrap();
-            assert_eq!(result, Number(RowsAffected(5)))
+            assert_eq!(result, Number(I64Value(5)))
         }
     }
 
@@ -1934,10 +1934,10 @@ mod tests {
 
         #[test]
         fn test_while_loop() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 while (x < 5) x := x + 1
             "#).unwrap();
-            assert_eq!(opcodes, While {
+            assert_eq!(model, While {
                 condition: Box::new(Condition(LessThan(
                     Box::new(Variable("x".into())),
                     Box::new(Literal(Number(I64Value(5)))),
@@ -1951,12 +1951,12 @@ mod tests {
 
         #[test]
         fn test_while_loop_fix() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 x := 0
                 while x < 7 x := x + 1
                 x
             "#).unwrap();
-            assert_eq!(opcodes, CodeBlock(vec![
+            assert_eq!(model, CodeBlock(vec![
                 SetVariable("x".into(), Box::new(Literal(Number(I64Value(0))))),
                 While {
                     condition: Box::new(Condition(LessThan(
@@ -1983,8 +1983,8 @@ mod tests {
 
         #[test]
         fn test_mathematical_addition() {
-            let opcodes = Compiler::build("n + 3").unwrap();
-            assert_eq!(opcodes, Plus(
+            let model = Compiler::build("n + 3").unwrap();
+            assert_eq!(model, Plus(
                 Box::new(Variable("n".into())),
                 Box::new(Literal(Number(I64Value(3)))),
             ));
@@ -1992,8 +1992,8 @@ mod tests {
 
         #[test]
         fn test_mathematical_division() {
-            let opcodes = Compiler::build("n / 3").unwrap();
-            assert_eq!(opcodes, Divide(
+            let model = Compiler::build("n / 3").unwrap();
+            assert_eq!(model, Divide(
                 Box::new(Variable("n".into())),
                 Box::new(Literal(Number(I64Value(3)))),
             ));
@@ -2001,8 +2001,8 @@ mod tests {
 
         #[test]
         fn test_mathematical_exponent() {
-            let opcodes = Compiler::build("5 ** 2").unwrap();
-            assert_eq!(opcodes, Pow(
+            let model = Compiler::build("5 ** 2").unwrap();
+            assert_eq!(model, Pow(
                 Box::new(Literal(Number(I64Value(5)))),
                 Box::new(Literal(Number(I64Value(2)))),
             ));
@@ -2013,8 +2013,8 @@ mod tests {
             let symbols = vec!["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"];
             let mut num = 0;
             for symbol in symbols {
-                let opcodes = Compiler::build(format!("5{}", symbol).as_str()).unwrap();
-                assert_eq!(opcodes, Pow(
+                let model = Compiler::build(format!("5{}", symbol).as_str()).unwrap();
+                assert_eq!(model, Pow(
                     Box::new(Literal(Number(I64Value(5)))),
                     Box::new(Literal(Number(I64Value(num)))),
                 ));
@@ -2024,22 +2024,22 @@ mod tests {
 
         #[test]
         fn test_mathematical_factorial() {
-            let opcodes = Compiler::build("5¡").unwrap();
-            assert_eq!(opcodes, Factorial(Box::new(Literal(Number(I64Value(5))))));
+            let model = Compiler::build("5¡").unwrap();
+            assert_eq!(model, Factorial(Box::new(Literal(Number(I64Value(5))))));
         }
 
         #[test]
         fn test_mathematical_modulus() {
-            let opcodes = Compiler::build("n % 4").unwrap();
+            let model = Compiler::build("n % 4").unwrap();
             assert_eq!(
-                opcodes,
+                model,
                 Modulo(Box::new(Variable("n".into())), Box::new(Literal(Number(I64Value(4))))));
         }
 
         #[test]
         fn test_mathematical_multiplication() {
-            let opcodes = Compiler::build("n * 10").unwrap();
-            assert_eq!(opcodes, Multiply(
+            let model = Compiler::build("n * 10").unwrap();
+            assert_eq!(model, Multiply(
                 Box::new(Variable("n".into())),
                 Box::new(Literal(Number(I64Value(10)))),
             ));
@@ -2047,8 +2047,8 @@ mod tests {
 
         #[test]
         fn test_mathematical_subtraction() {
-            let opcodes = Compiler::build("_ - 7").unwrap();
-            assert_eq!(opcodes,
+            let model = Compiler::build("_ - 7").unwrap();
+            assert_eq!(model,
                        Minus(Box::new(Variable("_".into())), Box::new(Literal(Number(I64Value(7))))));
         }
     }
@@ -2063,8 +2063,8 @@ mod tests {
 
         #[test]
         fn test_order_of_operations_1() {
-            let opcodes = Compiler::build("2 + (4 * 3)").unwrap();
-            assert_eq!(opcodes, Plus(
+            let model = Compiler::build("2 + (4 * 3)").unwrap();
+            assert_eq!(model, Plus(
                 Box::new(Literal(Number(I64Value(2)))),
                 Box::new(Multiply(
                     Box::new(Literal(Number(I64Value(4)))),
@@ -2075,8 +2075,8 @@ mod tests {
 
         #[test]
         fn test_order_of_operations_2() {
-            let opcodes = Compiler::build("(4.0 / 3.0) + (4 * 3)").unwrap();
-            assert_eq!(opcodes, Plus(
+            let model = Compiler::build("(4.0 / 3.0) + (4 * 3)").unwrap();
+            assert_eq!(model, Plus(
                 Box::new(Divide(
                     Box::new(Literal(Number(F64Value(4.0)))),
                     Box::new(Literal(Number(F64Value(3.0)))),
@@ -2090,8 +2090,8 @@ mod tests {
 
         #[test]
         fn test_order_of_operations_3() {
-            let opcodes = Compiler::build("2 - 4 * 3").unwrap();
-            assert_eq!(opcodes, Minus(
+            let model = Compiler::build("2 - 4 * 3").unwrap();
+            assert_eq!(model, Minus(
                 Box::new(Literal(Number(I64Value(2)))),
                 Box::new(Multiply(
                     Box::new(Literal(Number(I64Value(4)))),
@@ -2166,11 +2166,11 @@ mod tests {
 
         #[test]
         fn test_append_from_json_literal() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 append ns("compiler.append2.stocks")
                 from { symbol: "ABC", exchange: "NYSE", last_sale: 0.1008 }
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Append {
+            assert_eq!(model, DatabaseOp(Mutation(Mutations::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append2.stocks".to_string()))))),
                 source: Box::new(From(Box::new(StructureExpression(vec![
                     ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -2182,7 +2182,7 @@ mod tests {
 
         #[test]
         fn test_append_from_json_array() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 append ns("compiler.into.stocks")
                 from [
                     { symbol: "CAT", exchange: "NYSE", last_sale: 11.1234 },
@@ -2190,7 +2190,7 @@ mod tests {
                     { symbol: "SHARK", exchange: "AMEX", last_sale: 52.08 }
                 ]
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Append {
+            assert_eq!(model, DatabaseOp(Mutation(Mutations::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.into.stocks".to_string()))))),
                 source: Box::new(From(Box::new(
                     ArrayExpression(vec![
@@ -2216,10 +2216,10 @@ mod tests {
 
         #[test]
         fn test_append_from_variable() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 append ns("compiler.append.stocks") from stocks
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Append {
+            assert_eq!(model, DatabaseOp(Mutation(Mutations::Append {
                 path: Box::new(Ns(Box::new(Literal(StringValue("compiler.append.stocks".to_string()))))),
                 source: Box::new(From(Box::new(Variable("stocks".into())))),
             })))
@@ -2395,10 +2395,10 @@ mod tests {
 
         #[test]
         fn test_delete() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 delete from stocks
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(
+            assert_eq!(model, DatabaseOp(Mutation(
                 Mutations::Delete {
                     path: Box::new(Variable("stocks".into())),
                     condition: None,
@@ -2408,12 +2408,12 @@ mod tests {
 
         #[test]
         fn test_delete_where_limit() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 delete from stocks
                 where last_sale >= 1.0
                 limit 100
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Delete {
+            assert_eq!(model, DatabaseOp(Mutation(Mutations::Delete {
                 path: Box::new(Variable("stocks".into())),
                 condition: Some(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
@@ -2438,16 +2438,16 @@ mod tests {
 
         #[test]
         fn test_from() {
-            let opcodes = Compiler::build("from stocks").unwrap();
-            assert_eq!(opcodes, From(Box::new(Variable("stocks".into()))));
+            let model = Compiler::build("from stocks").unwrap();
+            assert_eq!(model, From(Box::new(Variable("stocks".into()))));
         }
 
         #[test]
         fn test_from_where_limit() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 from stocks where last_sale >= 1.0 limit 20
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Queryable(Queryables::Limit {
+            assert_eq!(model, DatabaseOp(Queryable(Queryables::Limit {
                 from: Box::new(
                     DatabaseOp(Queryable(Queryables::Where {
                         from: Box::new(From(Box::new(Variable("stocks".into())))),
@@ -2481,13 +2481,13 @@ mod tests {
 
         #[test]
         fn test_overwrite() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 overwrite stocks
                 via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
                 where symbol == "ABCQ"
                 limit 5
             "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Overwrite {
+            assert_eq!(model, DatabaseOp(Mutation(Mutations::Overwrite {
                 path: Box::new(Variable("stocks".into())),
                 source: Box::new(Via(Box::new(StructureExpression(vec![
                     ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -2504,10 +2504,10 @@ mod tests {
 
         #[test]
         fn test_select_from_variable() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 select symbol, exchange, last_sale from stocks
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Queryable(Queryables::Select {
+            assert_eq!(model, DatabaseOp(Queryable(Queryables::Select {
                 fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                 from: Some(Box::new(Variable("stocks".into()))),
                 condition: None,
@@ -2520,11 +2520,11 @@ mod tests {
 
         #[test]
         fn test_select_from_where() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 select symbol, exchange, last_sale from stocks
                 where last_sale >= 1.0
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Queryable(
+            assert_eq!(model, DatabaseOp(Queryable(
                 Queryables::Select {
                     fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                     from: Some(Box::new(Variable("stocks".into()))),
@@ -2541,12 +2541,12 @@ mod tests {
 
         #[test]
         fn test_select_from_where_limit() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 select symbol, exchange, last_sale from stocks
                 where last_sale <= 1.0
                 limit 5
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Queryable(Queryables::Select {
+            assert_eq!(model, DatabaseOp(Queryable(Queryables::Select {
                 fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
                 from: Some(Box::new(Variable("stocks".into()))),
                 condition: Some(LessOrEqual(
@@ -2584,10 +2584,10 @@ mod tests {
 
         #[test]
         fn test_undelete() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 undelete from stocks
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Undelete {
+            assert_eq!(model, DatabaseOp(Mutation(Mutations::Undelete {
                 path: Box::new(Variable("stocks".into())),
                 condition: None,
                 limit: None,
@@ -2596,12 +2596,12 @@ mod tests {
 
         #[test]
         fn test_undelete_where_limit() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 undelete from stocks
                 where last_sale >= 1.0
                 limit 100
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Undelete {
+            assert_eq!(model, DatabaseOp(Mutation(Mutations::Undelete {
                 path: Box::new(Variable("stocks".into())),
                 condition: Some(GreaterOrEqual(
                     Box::new(Variable("last_sale".into())),
@@ -2613,13 +2613,13 @@ mod tests {
 
         #[test]
         fn test_update() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 update stocks
                 via { last_sale: 0.1111 }
                 where symbol == "ABC"
                 limit 10
                 "#).unwrap();
-            assert_eq!(opcodes, DatabaseOp(Mutation(Mutations::Update {
+            assert_eq!(model, DatabaseOp(Mutation(Mutations::Update {
                 path: Box::new(Variable("stocks".into())),
                 source: Box::new(Via(Box::new(StructureExpression(vec![
                     ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
@@ -2634,13 +2634,13 @@ mod tests {
 
         #[test]
         fn test_write_json_into_namespace() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
                         ~> ns("interpreter.into.stocks")
                 "#).unwrap();
-            assert_eq!(opcodes, CurvyArrowRight(
+            assert_eq!(model, CurvyArrowRight(
                 Box::new(ArrayExpression(vec![
                     StructureExpression(vec![
                         ("symbol".into(), Literal(StringValue("ABC".into()))),
@@ -2673,10 +2673,10 @@ mod tests {
 
         #[test]
         fn test_simple_type_declaration() {
-            let opcodes = Compiler::build(r#"
+            let model = Compiler::build(r#"
                 typedef(String(32))
             "#).unwrap();
-            assert_eq!(opcodes, TypeDef(
+            assert_eq!(model, TypeDef(
                 Box::new(FunctionCall {
                     fx: Box::new(Variable("String".into())),
                     args: vec![

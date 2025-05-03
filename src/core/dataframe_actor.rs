@@ -42,8 +42,8 @@ impl DataframeActor {
         self.get_or_create_dataframe(ns, cfg)
     }
 
-    fn delete_row(&mut self, ns: &Namespace, id: usize) -> std::io::Result<usize> {
-        Ok(self.get_or_load_dataframe(ns)?.delete_row(id).to_usize())
+    fn delete_row(&mut self, ns: &Namespace, id: usize) -> std::io::Result<i64> {
+        self.get_or_load_dataframe(ns)?.delete_row(id)
     }
 
     fn get_columns(&mut self, ns: &Namespace) -> std::io::Result<&Vec<Column>> {
@@ -73,8 +73,8 @@ impl DataframeActor {
         }
     }
 
-    fn overwrite_row(&mut self, ns: &Namespace, row: Row) -> std::io::Result<usize> {
-        Ok(self.get_or_load_dataframe(ns)?.overwrite_row(row.get_id(), row).to_usize())
+    fn overwrite_row(&mut self, ns: &Namespace, row: Row) -> std::io::Result<i64> {
+        self.get_or_load_dataframe(ns)?.overwrite_row(row.get_id(), row)
     }
 
     fn read_fully(
@@ -132,8 +132,8 @@ impl DataframeActor {
         &mut self,
         ns: &Namespace,
         row: Row,
-    ) -> std::io::Result<usize> {
-        Ok(self.get_or_load_dataframe(ns)?.update_row(row.get_id(), row).to_usize())
+    ) -> std::io::Result<i64> {
+        self.get_or_load_dataframe(ns)?.update_row(row.get_id(), row)
     }
 }
 

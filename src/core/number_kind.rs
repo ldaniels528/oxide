@@ -17,7 +17,6 @@ use uuid::Uuid;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum NumberKind {
     RowIdKind = 15,
-    RowsAffectedKind = 16,
     DateKind = 0,
     F32Kind = 1,
     F64Kind = 2,
@@ -39,7 +38,7 @@ impl NumberKind {
     pub fn compute_fixed_size(&self) -> usize {
         use NumberKind::*;
         match self {
-            RowIdKind | RowsAffectedKind => 2,
+            RowIdKind  => 2,
             I8Kind | U8Kind => 1,
             I16Kind | U16Kind => 2,
             F32Kind | I32Kind | U32Kind => 4,
@@ -53,7 +52,6 @@ impl NumberKind {
     pub fn decode(&self, buffer: &Vec<u8>, offset: usize) -> Numbers {
         match self {
             NumberKind::RowIdKind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| RowId(u64::from_be_bytes(b))),
-            NumberKind::RowsAffectedKind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| RowsAffected(i64::from_be_bytes(b))),
             NumberKind::DateKind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
             NumberKind::F32Kind => ByteCodeCompiler::decode_u8x4(buffer, offset, |b| F32Value(f32::from_be_bytes(b))),
             NumberKind::F64Kind => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| F64Value(f64::from_be_bytes(b))),
@@ -75,7 +73,6 @@ impl NumberKind {
     pub fn decode_buffer(&self, bcc: &mut ByteCodeCompiler) -> std::io::Result<Numbers> {
         let result = match self {
             NumberKind::RowIdKind => RowId(bcc.next_u64()),
-            NumberKind::RowsAffectedKind => RowsAffected(bcc.next_i64()),
             NumberKind::DateKind => DateValue(bcc.next_i64()),
             NumberKind::F32Kind => F32Value(bcc.next_f32()),
             NumberKind::F64Kind => F64Value(bcc.next_f64()),
@@ -98,7 +95,6 @@ impl NumberKind {
     pub fn get_default_value(&self) -> Numbers {
         match self {
             NumberKind::RowIdKind => RowId(0),
-            NumberKind::RowsAffectedKind => RowsAffected(0),
             NumberKind::DateKind => DateValue(Local::now().timestamp_millis()),
             NumberKind::F32Kind => F32Value(0.),
             NumberKind::F64Kind => F64Value(0.),
@@ -121,7 +117,6 @@ impl NumberKind {
         use NumberKind::*;
         let name = match self {
             RowIdKind => "RowId",
-            RowsAffectedKind => "RowsAffected",
             DateKind => "Date",
             F32Kind => "f32",
             F64Kind => "f64",

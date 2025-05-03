@@ -104,43 +104,17 @@ pub fn start_test_server(port: u16) {
     thread::sleep(Duration::from_millis(100));
 }
 
-pub fn verify_data_type(code: &str, expected: DataType) {
-    let model = Compiler::build(code).unwrap();
-    assert_eq!(Inferences::infer(&model), expected);
-}
-
 pub fn verify_bit_operator(op: &str) {
     verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
     verify_data_type(format!("a {} b", op).as_str(), DynamicType);
 }
 
-pub fn verify_math_operator(op: &str) {
-    verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
-    verify_data_type(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
-    verify_data_type(format!("a {} b", op).as_str(), DynamicType);
+pub fn verify_data_type(code: &str, expected: DataType) {
+    let model = Compiler::build(code).unwrap();
+    assert_eq!(Inferences::infer(&model), expected);
 }
 
-pub fn verify_exact(code: &str, expected: TypedValue) {
-    let mut interpreter = Interpreter::new();
-    match interpreter.evaluate(code) {
-        Ok(actual) => assert_eq!(actual, expected),
-        Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected),
-    }
-}
-
-pub fn verify_exact_where(
-    mut interpreter: Interpreter,
-    code: &str,
-    expected: TypedValue
-) -> Interpreter {
-    match interpreter.evaluate(code) {
-        Ok(actual) => assert_eq!(actual, expected),
-        Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected),
-    }
-    interpreter
-}
-
-pub fn verify_exact_text(code: &str, expected: &str) {
+pub fn verify_exact_code(code: &str, expected: &str) {
     let mut interpreter = Interpreter::new();
     let actual = interpreter.evaluate(code).unwrap();
     assert_eq!(actual.to_code(), expected);
@@ -152,45 +126,28 @@ pub fn verify_exact_json(code: &str, expected: Value) {
     assert_eq!(actual.to_json(), expected);
 }
 
-pub fn verify_exact_table_with_ids(code: &str, expected: Vec<&str>) {
-    let mut interpreter = Interpreter::new();
-    let result = interpreter.evaluate(code)
-        .unwrap().to_table_impl().unwrap();
-    let actual = TableRenderer::from_table_with_ids(&result).unwrap();
-    for s in &actual { println!("{}", s) }
-    assert_eq!(actual, expected);
+pub fn verify_exact_table(code: &str, expected: Vec<&str>) {
+    verify_exact_table_with(Interpreter::new(), code, expected);
 }
 
-pub fn verify_exact_table_where(
+pub fn verify_exact_table_with(
     mut interpreter: Interpreter,
     code: &str,
     expected: Vec<&str>,
 ) -> Interpreter {
     let result = interpreter.evaluate(code)
-        .unwrap().to_table_impl().unwrap();
+        .unwrap().to_table().unwrap();
     let actual = TableRenderer::from_table_with_ids(&result).unwrap();
     for s in &actual { println!("{}", s) }
     assert_eq!(actual, expected);
     interpreter
 }
 
-pub fn verify_outcome(
-    mut interpreter: Interpreter,
-    code: &str,
-    f: fn(std::io::Result<TypedValue>) -> bool,
-) -> Interpreter {
-    assert!(f(interpreter.evaluate(code)));
-    interpreter
+pub fn verify_exact_value(code: &str, expected: TypedValue) {
+    verify_exact_value_with(Interpreter::new(), code, expected);
 }
 
-pub fn verify_when(code: &str, f: fn(TypedValue) -> bool) {
-    let mut interpreter = Interpreter::new();
-    let actual = TypedValue::from_result(interpreter.evaluate(code));
-    println!("when {} -> {}", code, actual);
-    assert!(f(actual));
-}
-
-pub fn verify_whence(
+pub fn verify_exact_value_whence(
     interpreter: Interpreter,
     code: &str,
     f: fn(TypedValue) -> bool,
@@ -201,11 +158,37 @@ pub fn verify_whence(
     my_interpreter
 }
 
-pub fn verify_where(mut interpreter: Interpreter, code: &str, expected: TypedValue) -> Interpreter {
+pub fn verify_exact_value_where(code: &str, f: fn(TypedValue) -> bool) {
+    let mut interpreter = Interpreter::new();
+    let actual = TypedValue::from_result(interpreter.evaluate(code));
+    println!("verify: {} -> {}", code, actual);
+    assert!(f(actual));
+}
+
+pub fn verify_exact_value_with(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: TypedValue,
+) -> Interpreter {
     match interpreter.evaluate(code) {
         Ok(actual) => assert_eq!(actual, expected),
-        Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected)
+        Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected),
     }
+    interpreter
+}
+
+pub fn verify_math_operator(op: &str) {
+    verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
+    verify_data_type(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
+    verify_data_type(format!("a {} b", op).as_str(), DynamicType);
+}
+
+pub fn verify_outcome_whence(
+    mut interpreter: Interpreter,
+    code: &str,
+    f: fn(std::io::Result<TypedValue>) -> bool,
+) -> Interpreter {
+    assert!(f(interpreter.evaluate(code)));
     interpreter
 }
 

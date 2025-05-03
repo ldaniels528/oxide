@@ -74,7 +74,7 @@ impl Inferences {
                 DatabaseOps::Queryable(_) => TableType(vec![], 0),
                 DatabaseOps::Mutation(m) => match m {
                     Mutations::Append { .. } => NumberType(NumberKind::RowIdKind),
-                    _ => NumberType(NumberKind::RowsAffectedKind),
+                    _ => NumberType(NumberKind::I64Kind),
                 }
             }
             Directive(..) => BooleanType,

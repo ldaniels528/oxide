@@ -912,7 +912,7 @@ mod tests {
 
         #[test]
         fn test_array_of_soft_structures() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 [{ last_sale: 0.051 }, { last_sale: 0.048 }]
             "#, ArrayValue(Array::from(vec![
                 Structured(Soft(SoftStructure::new(&vec![
@@ -926,7 +926,7 @@ mod tests {
 
         #[test]
         fn test_firm_structure_from_table() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 [+] stocks := ns("interpreter.struct.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
@@ -978,7 +978,7 @@ mod tests {
 
         #[test]
         fn test_hard_structure_field() {
-            verify_exact(r#"
+            verify_exact_value(r#"
             stock := Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
@@ -990,7 +990,7 @@ mod tests {
 
         #[test]
         fn test_hard_structure_field_assignment() {
-            verify_exact(r#"
+            verify_exact_value(r#"
             stock := Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
@@ -1003,7 +1003,7 @@ mod tests {
 
         #[test]
         fn test_hard_structure_module_method() {
-            verify_exact(r#"
+            verify_exact_value(r#"
             stock := Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
@@ -1058,7 +1058,7 @@ mod tests {
                     ]))),
                 ])))
             ])));
-            verify_exact(code, model.clone());
+            verify_exact_value(code, model.clone());
             assert_eq!(
                 model.to_code().chars().filter(|c| !c.is_whitespace())
                     .collect::<String>(),
@@ -1068,7 +1068,7 @@ mod tests {
 
         #[test]
         fn test_soft_structure_field() {
-            verify_exact_text(r#"
+            verify_exact_code(r#"
             stock := { symbol:"AAA", price:123.45 }
             stock::symbol
         "#, "\"AAA\"".into());
@@ -1076,7 +1076,7 @@ mod tests {
 
         #[test]
         fn test_soft_structure_field_assignment() {
-            verify_exact_text(r#"
+            verify_exact_code(r#"
             stock := { symbol:"AAA", price:123.45 }
             stock::price := 124.11
             stock::price
@@ -1085,7 +1085,7 @@ mod tests {
 
         #[test]
         fn test_soft_structure_method() {
-            verify_exact_text(r#"
+            verify_exact_code(r#"
             stock := {
                 symbol:"ABC",
                 price:123.45,
@@ -1098,7 +1098,7 @@ mod tests {
 
         #[test]
         fn test_soft_structure_module_method() {
-            verify_exact_text(r#"
+            verify_exact_code(r#"
             stock := {
                 symbol: "ABC",
                 exchange: "NYSE",
@@ -1164,7 +1164,7 @@ mod tests {
 
         #[test]
         fn test_soft_structure_json_literal_2() {
-            verify_exact(r#"
+            verify_exact_value(r#"
             {
               columns: [{
                   name: "symbol",
@@ -1203,7 +1203,7 @@ mod tests {
 
         #[test]
         fn test_structure_module() {
-            verify_exact(r#"
+            verify_exact_value(r#"
             mod abc {
                 fn hello(name) => str::format("hello {}", name)
             }

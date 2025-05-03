@@ -9,10 +9,10 @@ use crate::columns::Column;
 use crate::data_types::DataType::NumberType;
 use crate::sequences::Array;
 
-use crate::errors::Errors;
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
-use crate::errors::TypeMismatchErrors::{OutcomeExpected, RowsAffectedExpected};
+use crate::errors::TypeMismatchErrors::OutcomeExpected;
+use crate::errors::{throw, Errors};
 use crate::field::FieldMetadata;
 use crate::machine;
 use crate::machine::Machine;
@@ -183,24 +183,23 @@ impl HashTableRowCollection {
         &mut self,
         data_row_id: usize,
         key_value: &TypedValue,
-    ) -> TypedValue {
+    ) -> std::io::Result<i64> {
         let keys_columns = self.keys_table.get_columns();
         for keys_row_id in self.convert_key_to_row_id_range(key_value) {
             let my_keys_row_id = keys_row_id as usize;
-            match self.keys_table.read_one(keys_row_id as usize) {
-                Ok(Some(row)) if &row[0] == key_value =>
+            match self.keys_table.read_one(keys_row_id as usize)? {
+                Some(row) if &row[0] == key_value =>
                     return self.keys_table.overwrite_row(
                         my_keys_row_id,
                         Self::create_hash_keys_row(data_row_id, my_keys_row_id, keys_columns, key_value)),
-                Ok(Some(_)) => {}
-                Ok(None) =>
+                Some(_) => {}
+                None =>
                     return self.keys_table.overwrite_row(
                         my_keys_row_id,
-                        Self::create_hash_keys_row(data_row_id, my_keys_row_id, keys_columns, key_value), ),
-                Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
+                        Self::create_hash_keys_row(data_row_id, my_keys_row_id, keys_columns, key_value)),
             }
         }
-        ErrorValue(HashTableOverflow(data_row_id, key_value.unwrap_value()))
+        throw(HashTableOverflow(data_row_id, key_value.unwrap_value()))
     }
 
     fn move_key_value(
@@ -208,33 +207,25 @@ impl HashTableRowCollection {
         data_row_id: usize,
         prev_value: &TypedValue,
         new_value: TypedValue,
-    ) -> TypedValue {
+    ) -> std::io::Result<i64> {
         let keys_columns = self.keys_table.get_columns();
         let keys_row_prev_id = self.convert_key_to_row_id(&prev_value);
         let keys_row_new_id = self.convert_key_to_row_id(&new_value);
         let keys_row = Self::create_hash_keys_row(data_row_id, keys_row_new_id, keys_columns, &new_value);
-        let a = self.keys_table.overwrite_row(keys_row_new_id, keys_row);
-        if matches!(a, ErrorValue(..)) { return a; }
-        let b = self.keys_table.delete_row(keys_row_prev_id);
-        if matches!(b, ErrorValue(..)) { return b; }
-        a + b
+        let a = self.keys_table.overwrite_row(keys_row_new_id, keys_row)?;
+        let b = self.keys_table.delete_row(keys_row_prev_id)?;
+        Ok(a + b)
     }
 
     /// (Re)builds the hash key table
-    pub fn rebuild(&mut self) -> TypedValue {
+    pub fn rebuild(&mut self) -> std::io::Result<i64> {
         let keys_columns = self.keys_table.get_columns();
-        let mut keys_table = match self.create_related_structure(keys_columns.to_owned(), self.key_column_index.to_string().as_str()) {
-            Ok(table) => table,
-            Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
-        };
-        if keys_table.resize(0) != Boolean(true) {
+        let mut keys_table = self.create_related_structure(keys_columns.to_owned(), self.key_column_index.to_string().as_str())?;
+        if !keys_table.resize(0)? {
             warn!("Failed to truncate index for column {}", self.get_key_column().get_name());
         }
         let mut inserted_rows = 0;
-        let data_table_len = match self.data_table.len() {
-            Ok(len) => len,
-            Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
-        };
+        let data_table_len = self.data_table.len()?;
         for data_row_id in 0..data_table_len {
             // attempt to read a row ...
             if let Ok(Some(row)) = self.data_table.read_one(data_row_id) {
@@ -244,33 +235,27 @@ impl HashTableRowCollection {
                 let keys_row = Self::create_hash_keys_row(data_row_id, keys_row_id, keys_columns, key);
 
                 // attempt to overwrite the row
-                match keys_table.overwrite_row(keys_row_id, keys_row) {
-                    ErrorValue(message) => return ErrorValue(message),
-                    Number(oc) => inserted_rows += oc.to_usize(),
-                    _ => {}
-                }
+                inserted_rows += keys_table.overwrite_row(keys_row_id, keys_row)?;
             }
         }
         self.keys_table = keys_table;
-        Number(Numbers::RowsAffected(inserted_rows as i64))
+        Ok(inserted_rows)
     }
 }
 
 impl RowCollection for HashTableRowCollection {
-    fn delete_row(&mut self, id: usize) -> TypedValue {
+    fn delete_row(&mut self, id: usize) -> std::io::Result<i64> {
         let key_value = self.read_field(id, self.key_column_index);
         let keys_row_id = self.convert_key_to_row_id(&key_value);
         match key_value {
-            ErrorValue(msg) => ErrorValue(msg),
+            ErrorValue(msg) => throw(msg),
             // no previous key value to delete
             TypedValue::Undefined => self.data_table.delete_row(keys_row_id),
             // delete the hash key value
-            _ =>
-                match self.keys_table.delete_row(keys_row_id) {
-                    Number(..) => self.data_table.delete_row(id),
-                    ErrorValue(msg) => ErrorValue(msg),
-                    other => ErrorValue(TypeMismatch(OutcomeExpected(other.to_code())))
-                }
+            _ => {
+                self.keys_table.delete_row(keys_row_id)?;
+                self.data_table.delete_row(id)
+            }
         }
     }
 
@@ -295,12 +280,9 @@ impl RowCollection for HashTableRowCollection {
         id: usize,
         column_id: usize,
         new_value: TypedValue,
-    ) -> TypedValue {
-        match self.link_key_value(id, &new_value) {
-            Number(..) => self.data_table.overwrite_field(id, column_id, new_value),
-            ErrorValue(msg) => ErrorValue(msg),
-            other => ErrorValue(TypeMismatch(OutcomeExpected(other.to_code())))
-        }
+    ) -> std::io::Result<i64> {
+        self.link_key_value(id, &new_value)?;
+        self.data_table.overwrite_field(id, column_id, new_value)
     }
 
     fn overwrite_field_metadata(
@@ -308,21 +290,17 @@ impl RowCollection for HashTableRowCollection {
         id: usize,
         column_id: usize,
         metadata: FieldMetadata,
-    ) -> TypedValue {
+    ) -> std::io::Result<i64> {
         self.data_table.overwrite_field_metadata(id, column_id, metadata)
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
+    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         let new_value = &row[self.key_column_index];
-        match self.link_key_value(id, new_value) {
-            Number(oc) if oc.to_usize() > 0 => self.data_table.overwrite_row(id, row),
-            Number(oc) => Number(oc),
-            ErrorValue(err) => ErrorValue(err),
-            other => ErrorValue(TypeMismatch(OutcomeExpected(other.to_code())))
-        }
+        let oc = self.link_key_value(id, new_value)?;
+        if oc > 0 { self.data_table.overwrite_row(id, row) } else { Ok(oc) }
     }
 
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<i64> {
         self.data_table.overwrite_row_metadata(id, metadata)
     }
 
@@ -350,7 +328,7 @@ impl RowCollection for HashTableRowCollection {
         self.data_table.read_row_metadata(id)
     }
 
-    fn resize(&mut self, new_size: usize) -> TypedValue {
+    fn resize(&mut self, new_size: usize) -> std::io::Result<bool> {
         self.data_table.resize(new_size)
     }
 
@@ -370,18 +348,15 @@ impl RowCollection for HashTableRowCollection {
         }
     }
 
-    fn update_row(&mut self, id: usize, row: Row) -> TypedValue {
+    fn update_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         let new_value = row[self.key_column_index].to_owned();
         let old_value = self.read_field(id, self.key_column_index);
         match old_value {
-            ErrorValue(msg) => ErrorValue(msg),
-            Undefined => self.data_table.update_row(id, row),
-            _ =>
-                match self.move_key_value(id, &old_value, new_value) {
-                    Number(..) => self.data_table.update_row(id, row),
-                    ErrorValue(err) => ErrorValue(err),
-                    other => ErrorValue(TypeMismatch(RowsAffectedExpected(other.to_code())))
-                }
+            TypedValue::Undefined => self.data_table.update_row(id, row),
+            _ => {
+                self.move_key_value(id, &old_value, new_value)?;
+                self.data_table.update_row(id, row)
+            }
         }
     }
 }
@@ -391,7 +366,7 @@ mod tests {
     use super::*;
     use crate::file_row_collection::FileRowCollection;
     use crate::namespaces::Namespace;
-    use crate::numbers::Numbers::{F64Value, RowsAffected};
+    use crate::numbers::Numbers::F64Value;
     use crate::row_collection::RowCollection;
     use crate::sequences::{Array, Sequence};
     use crate::structures::Row;
@@ -439,10 +414,10 @@ mod tests {
 
         // overwrite 'CRT' with 'CRT.Q' in the hash index
         assert_eq!(
-            Number(Numbers::RowsAffected(1)),
+            1,
             hkrc.overwrite_row(2, Row::new(2, vec![
                 StringValue("CRT.Q".into()), StringValue("OTC_BB".into()), Number(F64Value(1.2598)),
-            ])));
+            ])).unwrap());
 
         // verify the modified record (data table)
         // |-------------------------------|
@@ -482,7 +457,7 @@ mod tests {
         let bucket_count = max_count / 10;
         let bucket_depth = bucket_count / 10;
         let mut stocks = build_hash_key_table(&ns, 0, bucket_count, bucket_depth);
-        assert_eq!(Boolean(true), stocks.resize(0));
+        assert_eq!(true, stocks.resize(0).unwrap());
 
         let mut timings = Vec::new();
         for n in 0..max_count {
@@ -493,9 +468,9 @@ mod tests {
                     StringValue(q.symbol.to_owned()),
                     StringValue(q.exchange.to_owned()),
                     Number(F64Value(q.last_sale)),
-                ])));
+                ])).unwrap());
             timings.push(msec);
-            assert_eq!(Number(RowsAffected(1)), outcome);
+            assert_eq!(1, outcome);
         }
 
         let (msec_min, msec_max, msec_total) = timings.iter()
@@ -585,7 +560,7 @@ mod tests {
         let params = make_quote_parameters();
         let frc = FileRowCollection::create_table(&ns, &params).unwrap();
         let mut hkrc = HashTableRowCollection::create_with_options(column_index, bucket_count, bucket_depth, Box::new(frc)).unwrap();
-        //assert_eq!(RowsAffected(9), hkrc.rebuild());
+        //assert_eq!(I64Value(9), hkrc.rebuild());
         hkrc
     }
 
@@ -611,7 +586,7 @@ mod tests {
                     Number(F64Value(*last_sale)),
                 ])
             }).collect();
-        assert_eq!(Number(Numbers::RowsAffected(9)), frc.append_rows(rows));
+        assert_eq!(9, frc.append_rows(rows).unwrap());
         // show the contents of the table
         // |-------------------------------|
         // | symbol | exchange | last_sale |
@@ -630,7 +605,7 @@ mod tests {
 
         // create and query the hash index
         let mut hkrc = HashTableRowCollection::new(column_index, Box::new(frc)).unwrap();
-        assert_eq!(Number(Numbers::RowsAffected(9)), hkrc.rebuild());
+        assert_eq!(9, hkrc.rebuild().unwrap());
 
         // show the contents of the hash table
         // |---------------------|

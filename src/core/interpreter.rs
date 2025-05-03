@@ -71,31 +71,31 @@ mod tests {
     #[test]
     fn test_math_pi() {
         let pi = std::f64::consts::PI;
-        verify_exact("2 * π", Number(F64Value(2. * pi)))
+        verify_exact_value("2 * π", Number(F64Value(2. * pi)))
     }
 
     #[test]
     fn test_basic_state_manipulation() {
         let mut interpreter = Interpreter::new();
-        assert_eq!(interpreter.evaluate("x := 5").unwrap(), Boolean(true));
-        assert_eq!(interpreter.evaluate("$x").unwrap(), Number(I64Value(5)));
-        assert_eq!(interpreter.evaluate("-x").unwrap(), Number(I64Value(-5)));
-        assert_eq!(interpreter.evaluate("x¡").unwrap(), Number(U128Value(120)));
-        assert_eq!(interpreter.evaluate("x := x + 1").unwrap(), Boolean(true));
-        assert_eq!(interpreter.evaluate("x").unwrap(), Number(I64Value(6)));
-        assert_eq!(interpreter.evaluate("x < 7").unwrap(), Boolean(true));
-        assert_eq!(interpreter.evaluate("x := x ** 2").unwrap(), Boolean(true));
-        assert_eq!(interpreter.evaluate("x").unwrap(), Number(F64Value(36.)));
-        assert_eq!(interpreter.evaluate("x / 0").unwrap(), Number(NaNValue));
-        assert_eq!(interpreter.evaluate("x := x - 1").unwrap(), Boolean(true));
-        assert_eq!(interpreter.evaluate("x % 5").unwrap(), Number(F64Value(0.)));
-        assert_eq!(interpreter.evaluate("x < 35").unwrap(), Boolean(false));
-        assert_eq!(interpreter.evaluate("x >= 35").unwrap(), Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "x := 5", Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "$x", Number(I64Value(5)));
+        interpreter = verify_exact_value_with(interpreter, "-x", Number(I64Value(-5)));
+        interpreter = verify_exact_value_with(interpreter, "x¡", Number(U128Value(120)));
+        interpreter = verify_exact_value_with(interpreter, "x := x + 1", Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "x", Number(I64Value(6)));
+        interpreter = verify_exact_value_with(interpreter, "x < 7", Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "x := x ** 2", Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "x", Number(F64Value(36.)));
+        interpreter = verify_exact_value_with(interpreter, "x / 0", Number(NaNValue));
+        interpreter = verify_exact_value_with(interpreter, "x := x - 1", Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "x % 5", Number(F64Value(0.)));
+        interpreter = verify_exact_value_with(interpreter, "x < 35", Boolean(false));
+        interpreter = verify_exact_value_with(interpreter, "x >= 35", Boolean(true));
     }
 
     #[test]
     fn test_feature_with_scenarios() {
-        verify_exact_table_with_ids(r#"
+        verify_exact_table(r#"
             import testing
             Feature "Matches function" {
                 Scenario "Compare Array contents: Equal" {
@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn test_tuple_assignment() {
-        verify_exact(r#"
+        verify_exact_value(r#"
             (a, b, c) := (3, 5, 7)
             a + b + c
         "#, Number(I64Value(15)))
@@ -155,11 +155,11 @@ mod tests {
 
         #[test]
         fn test_foreach_item_in_an_array() {
-            verify_exact(r#"
+            verify_exact_code(r#"
                 foreach item in [1, 5, 6, 11, 17] {
                     oxide::println(item)
                }
-            "#, Boolean(true));
+            "#, "true");
             // 1
             // 5
             // 6
@@ -169,11 +169,11 @@ mod tests {
 
         #[test]
         fn test_foreach_row_in_a_table() {
-            verify_exact(r#"
+            verify_exact_code(r#"
                 foreach row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
                     oxide::println(row)
                }
-            "#, Boolean(true));
+            "#, "true");
             // {"value":"apple"}
             // {"value":"berry"}
             // {"value":"kiwi"}
@@ -182,15 +182,15 @@ mod tests {
 
         #[test]
         fn test_if_when_result_is_defined() {
-            verify_exact(r#"
+            verify_exact_code(r#"
                 x := 7
                 if(x > 5) "Yes"
-            "#, StringValue("Yes".into()));
+            "#, "\"Yes\"");
         }
 
         #[test]
         fn test_if_when_result_is_undefined() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 x := 4
                 if(x > 5) "Yes"
             "#, Undefined);
@@ -198,31 +198,31 @@ mod tests {
 
         #[test]
         fn test_if_else_expression() {
-            verify_exact(r#"
+            verify_exact_code(r#"
                 x := 4
                 if(x > 5) "Yes"
                 else if(x < 5) "Maybe"
                 else "No"
-            "#, StringValue("Maybe".into()));
+            "#, "\"Maybe\"");
         }
 
         #[test]
         fn test_if_function() {
-            verify_exact(r#"
+            verify_exact_code(r#"
                 x := 4
                 iff(x > 5, "Yes", iff(x < 5, "Maybe", "No"))
-            "#, StringValue("Maybe".into()));
+            "#, "\"Maybe\"");
         }
 
         #[test]
         fn test_while_loop() {
             let mut interpreter = Interpreter::new();
-            assert_eq!(Boolean(true), interpreter.evaluate("x := 0").unwrap());
-            assert_eq!(Boolean(true), interpreter.evaluate(r#"
+            interpreter = verify_exact_value_with(interpreter, "x := 0", Boolean(true));
+            interpreter = verify_exact_value_with(interpreter, r#"
                 while (x < 5)
                     x := x + 1
-            "#).unwrap());
-            assert_eq!(Number(I64Value(5)), interpreter.evaluate("x").unwrap());
+            "#, Boolean(true));
+            interpreter = verify_exact_value_with(interpreter, "x", Number(I64Value(5)));
         }
     }
 
@@ -235,7 +235,7 @@ mod tests {
 
         #[test]
         fn test_directive_die() {
-            verify_outcome(
+            verify_outcome_whence(
                 Interpreter::new(),
                 r#"[!] "Kaboom!!!""#,
                 |r| r.is_err_and(|err| err.to_string() == "Kaboom!!!".to_string()),
@@ -244,20 +244,20 @@ mod tests {
 
         #[test]
         fn test_directive_ignore_failure() {
-            verify_exact_text(r#"[~] 7 / 0"#, "true");
+            verify_exact_code(r#"[~] 7 / 0"#, "true");
         }
 
         #[test]
         fn test_directive_must_be_false() {
-            verify_exact(r#"
+            verify_exact_code(r#"
                 [+] x := 67
                 [-] x < 67
-            "#, Boolean(false));
+            "#, "false");
         }
 
         #[test]
         fn test_directive_must_be_true() {
-            verify_exact_text("[+] x := 67", "true");
+            verify_exact_code("[+] x := 67", "true");
         }
     }
 
@@ -272,30 +272,28 @@ mod tests {
         #[test]
         fn test_function_lambda() {
             let mut interpreter = Interpreter::new();
-            assert_eq!(interpreter.evaluate(r#"
+            interpreter = verify_exact_value_with(interpreter, r#"
                 product := fn (a, b) => a * b
-            "#).unwrap(), Boolean(true));
-
-            assert_eq!(interpreter.evaluate(r#"
+            "#, Boolean(true));
+            interpreter = verify_exact_value_with(interpreter, r#"
                 product(2, 5)
-            "#).unwrap(), Number(I64Value(10)))
+            "#, Number(I64Value(10)))
         }
 
         #[test]
         fn test_function_named() {
             let mut interpreter = Interpreter::new();
-            assert_eq!(interpreter.evaluate(r#"
+            interpreter = verify_exact_value_with(interpreter,r#"
                 fn product(a, b) => a * b
-            "#).unwrap(), Boolean(true));
-
-            assert_eq!(interpreter.evaluate(r#"
+            "#, Boolean(true));
+            interpreter = verify_exact_value_with(interpreter,r#"
                 product(3, 7)
-            "#).unwrap(), Number(I64Value(21)))
+            "#, Number(I64Value(21)))
         }
 
         #[test]
         fn test_function_recursion_1() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 f := fn(n: i64) => if(n <= 1) 1 else n * f(n - 1)
                 f(5)
             "#, Number(I64Value(120)))
@@ -303,7 +301,7 @@ mod tests {
 
         #[test]
         fn test_function_recursion_2() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 f := fn(n) => iff(n <= 1, 1, n * f(n - 1))
                 f(6)
             "#, Number(I64Value(720)))

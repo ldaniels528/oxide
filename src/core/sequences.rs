@@ -74,7 +74,7 @@ impl Sequence for Sequences {
             Sequences::TheArray(array) => array.contains(item),
             Sequences::TheDataframe(df) =>
                 match item {
-                    TypedValue::Structured(s) => df.contains(&s.to_row()).is_true(),
+                    TypedValue::Structured(s) => df.contains(&s.to_row()),
                     _ => false
                 }
             Sequences::TheTuple(tuple) => tuple.contains(item),
@@ -671,7 +671,7 @@ mod tests {
 
         #[test]
         fn test_array_assignment() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 [a, b, c, d] := [2, 3, 5, 7]
                 a + b + c + d
             "#, Number(I64Value(17)))
@@ -679,61 +679,61 @@ mod tests {
 
         #[test]
         fn test_array_literal() {
-            verify_exact_text("[0, 1, 3, 5]", "[0, 1, 3, 5]");
+            verify_exact_code("[0, 1, 3, 5]", "[0, 1, 3, 5]");
         }
 
         #[test]
         fn test_array_element_at_index() {
-            verify_exact_text("[-0.01, 8.25, 3.8, -4.5][2]", "3.8");
+            verify_exact_code("[-0.01, 8.25, 3.8, -4.5][2]", "3.8");
         }
 
         #[test]
         fn test_array_addition_numbers() {
-            verify_exact_text("[13, 2, 56, 12, 67, 2] + 1",
+            verify_exact_code("[13, 2, 56, 12, 67, 2] + 1",
                               "[14, 3, 57, 13, 68, 3]");
         }
 
         #[test]
         fn test_array_plus_array_with_numbers() {
-            verify_exact_text(
+            verify_exact_code(
                 "[13, 2, 56, 12] + [0, 1, 3, 5]",
                 "[[13, 14, 16, 18], [2, 3, 5, 7], [56, 57, 59, 61], [12, 13, 15, 17]]");
         }
 
         #[test]
         fn test_array_times_array_with_numbers() {
-            verify_exact_text(
+            verify_exact_code(
                 "[13, 2, 56, 12] * [0, 1, 3, 5]",
                 "[[0, 13, 39, 65], [0, 2, 6, 10], [0, 56, 168, 280], [0, 12, 36, 60]]");
         }
 
         #[test]
         fn test_array_addition_string() {
-            verify_exact_text("['cat', 'dog'] + ['mouse', 'rat']",
+            verify_exact_code("['cat', 'dog'] + ['mouse', 'rat']",
                               r#"[["mousecat", "ratcat"], ["mousedog", "ratdog"]]"#);
         }
 
         #[test]
         fn test_array_concatenation() {
-            verify_exact_text("['cat', 'dog'] ++ ['mouse', 'rat']",
+            verify_exact_code("['cat', 'dog'] ++ ['mouse', 'rat']",
                               r#"["cat", "dog", "mouse", "rat"]"#);
         }
 
         #[test]
         fn test_array_multiplication_numbers() {
-            verify_exact_text("[13, 2, 56, 12, 67, 2] * 2",
+            verify_exact_code("[13, 2, 56, 12, 67, 2] * 2",
                               "[26, 4, 112, 24, 134, 4]");
         }
 
         #[test]
         fn test_array_multiplication_strings() {
-            verify_exact_text("['cat', 'dog'] * 3",
+            verify_exact_code("['cat', 'dog'] * 3",
                               r#"["catcatcat", "dogdogdog"]"#);
         }
 
         #[test]
         fn test_array_ranges() {
-            verify_exact_text("0..4", r#"[0, 1, 2, 3]"#);
+            verify_exact_code("0..4", r#"[0, 1, 2, 3]"#);
         }
     }
 
@@ -745,7 +745,7 @@ mod tests {
         use crate::number_kind::NumberKind;
         use crate::numbers::Numbers::F32Value;
         use crate::sequences::{Array, Sequence, Tuple};
-        use crate::testdata::verify_exact_text;
+        use crate::testdata::verify_exact_code;
         use crate::typed_values::TypedValue::{Number, StringValue};
 
         #[test]
@@ -839,7 +839,7 @@ mod tests {
 
         #[test]
         fn test_tuple_assignment() {
-            verify_exact_text(r#"
+            verify_exact_code(r#"
                 (a, b, c) := (3, 5, 7)
                 a + b + c
             "#, "15")
@@ -847,72 +847,72 @@ mod tests {
 
         #[test]
         fn test_tuple_addition() {
-            verify_exact_text("(1, 1, 1) + (3, 5, 7)", "(4, 6, 8)")
+            verify_exact_code("(1, 1, 1) + (3, 5, 7)", "(4, 6, 8)")
         }
 
         #[test]
         fn test_tuple_bitwise_and() {
-            verify_exact_text("(0b111, 0b101, 0b001) & (0b111, 0b010, 0b111)", "(7, 0, 1)")
+            verify_exact_code("(0b111, 0b101, 0b001) & (0b111, 0b010, 0b111)", "(7, 0, 1)")
         }
 
         #[test]
         fn test_tuple_bitwise_or() {
-            verify_exact_text("(0b111, 0b101, 0b001) | (0b111, 0b010, 0b000)", "(7, 7, 1)")
+            verify_exact_code("(0b111, 0b101, 0b001) | (0b111, 0b010, 0b000)", "(7, 7, 1)")
         }
 
         #[test]
         fn test_tuple_bitwise_shl() {
-            verify_exact_text("(3, 5, 7) << (1, 1, 1)", "(6, 10, 14)")
+            verify_exact_code("(3, 5, 7) << (1, 1, 1)", "(6, 10, 14)")
         }
 
         #[test]
         fn test_tuple_bitwise_shr() {
-            verify_exact_text("(3, 5, 7) >> (1, 1, 1)", "(1, 2, 3)")
+            verify_exact_code("(3, 5, 7) >> (1, 1, 1)", "(1, 2, 3)")
         }
 
         #[test]
         fn test_tuple_bitwise_xor() {
-            verify_exact_text("(0b111, 0b101, 0b001) ^ (0b111, 0b010, 0b100)", "(0, 7, 5)")
+            verify_exact_code("(0b111, 0b101, 0b001) ^ (0b111, 0b010, 0b100)", "(0, 7, 5)")
         }
 
         #[test]
         fn test_tuple_division() {
-            verify_exact_text("(50, 20, 12) / (2, 4, 6)", "(25, 5, 2)")
+            verify_exact_code("(50, 20, 12) / (2, 4, 6)", "(25, 5, 2)")
         }
 
         #[test]
         fn test_tuple_exponent() {
-            verify_exact_text("(2, 3, 4) ** (2, 2, 2)", "(4, 9, 16)")
+            verify_exact_code("(2, 3, 4) ** (2, 2, 2)", "(4, 9, 16)")
         }
 
         #[test]
         fn test_tuple_element_at_index() {
-            verify_exact_text("(-0.01, 8.25, 3.8, -4.5)[2]", "3.8");
+            verify_exact_code("(-0.01, 8.25, 3.8, -4.5)[2]", "3.8");
         }
 
         #[test]
         fn test_tuple_multiplication() {
-            verify_exact_text("(1, 0, 1) * (4, 3, 9)", "(4, 0, 9)")
+            verify_exact_code("(1, 0, 1) * (4, 3, 9)", "(4, 0, 9)")
         }
 
         #[test]
         fn test_tuple_neg() {
-            verify_exact_text("-(4, 3, 9)", "(-4, -3, -9)")
+            verify_exact_code("-(4, 3, 9)", "(-4, -3, -9)")
         }
 
         #[test]
         fn test_tuple_not() {
-            verify_exact_text("!(true, false, false)", "(false, true, true)")
+            verify_exact_code("!(true, false, false)", "(false, true, true)")
         }
 
         #[test]
         fn test_tuple_remainder() {
-            verify_exact_text("(20, 7, 54) % (3, 3, 9)", "(2, 1, 0)")
+            verify_exact_code("(20, 7, 54) % (3, 3, 9)", "(2, 1, 0)")
         }
 
         #[test]
         fn test_tuple_subtraction() {
-            verify_exact_text("(3, 1, 7) - (1, 5, 1)", "(2, -4, 6)")
+            verify_exact_code("(3, 1, 7) - (1, 5, 1)", "(2, -4, 6)")
         }
 
         fn create_tuple() -> Tuple {

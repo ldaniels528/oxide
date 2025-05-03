@@ -15,6 +15,11 @@ use crate::parameter::Parameter;
 /// Oxide Object Configuration
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum ObjectConfig {
+    EventSourceConfig {
+        columns: Vec<Parameter>,
+        indices: Vec<HashIndexConfig>,
+        partitions: Vec<String>,
+    },
     TableConfig {
         columns: Vec<Parameter>,
         indices: Vec<HashIndexConfig>,
@@ -58,6 +63,7 @@ impl ObjectConfig {
 
     pub fn get_columns(&self) -> Vec<Parameter> {
         match self {
+            ObjectConfig::EventSourceConfig { columns, .. } |
             ObjectConfig::TableConfig { columns, .. } |
             ObjectConfig::TableFnConfig { columns, .. } => columns.clone(),
         }
@@ -65,6 +71,7 @@ impl ObjectConfig {
 
     pub fn get_indices(&self) -> Vec<HashIndexConfig> {
         match self {
+            ObjectConfig::EventSourceConfig { indices, .. } |
             ObjectConfig::TableConfig { indices, .. } |
             ObjectConfig::TableFnConfig { indices, .. } => indices.clone(),
         }
@@ -72,6 +79,7 @@ impl ObjectConfig {
 
     pub fn get_partitions(&self) -> Option<&Vec<String>> {
         match self {
+            ObjectConfig::EventSourceConfig { partitions, .. } |
             ObjectConfig::TableConfig { partitions, .. } |
             ObjectConfig::TableFnConfig { partitions, .. } => Some(partitions),
         }
@@ -92,6 +100,12 @@ impl ObjectConfig {
 
     pub fn with_indices(self, indices: Vec<HashIndexConfig>) -> Self {
         match self {
+            ObjectConfig::EventSourceConfig { columns, partitions, .. } =>
+                ObjectConfig::EventSourceConfig {
+                    columns,
+                    indices,
+                    partitions,
+                },
             ObjectConfig::TableConfig { columns, partitions, .. } =>
                 ObjectConfig::TableConfig {
                     columns,
@@ -110,6 +124,12 @@ impl ObjectConfig {
 
     pub fn with_partitions(self, partitions: Vec<String>) -> Self {
         match self {
+            ObjectConfig::EventSourceConfig { columns, indices, .. } =>
+                ObjectConfig::EventSourceConfig {
+                    columns,
+                    indices,
+                    partitions,
+                },
             ObjectConfig::TableConfig { columns, indices, .. } =>
                 ObjectConfig::TableConfig {
                     columns,

@@ -28,7 +28,7 @@ use crate::row_metadata::RowMetadata;
 use crate::sequences::{Array, Sequence};
 use crate::structures::{Row, Structure};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, ErrorValue, Function, Number, StringValue};
+use crate::typed_values::TypedValue::{ArrayValue, Function, Number, StringValue};
 use actix::ActorTryFutureExt;
 use chrono::Local;
 use num_traits::ToPrimitive;
@@ -179,7 +179,7 @@ impl Journaling for EventSourceRowCollection {
                 }
             }
         }
-        Number(Numbers::RowsAffected(rows_affected))
+        Number(Numbers::I64Value(rows_affected))
     }
 }
 
@@ -202,14 +202,10 @@ impl PartialOrd for EventSourceRowCollection {
 }
 
 impl RowCollection for EventSourceRowCollection {
-    fn delete_row(&mut self, id: usize) -> TypedValue {
-        match self.read_row(id) {
-            Ok((row, _)) => {
-                self.events.append_row(Self::make_row_action(id, 0, "DR", &row));
-                self.state.delete_row(id)
-            }
-            Err(err) => ErrorValue(Exact(err.to_string()))
-        }
+    fn delete_row(&mut self, id: usize) -> std::io::Result<i64> {
+        let (row, _) = self.read_row(id)?;
+        self.events.append_row(Self::make_row_action(id, 0, "DR", &row));
+        self.state.delete_row(id)
     }
 
     fn get_columns(&self) -> &Vec<Column> {
@@ -228,21 +224,21 @@ impl RowCollection for EventSourceRowCollection {
         self.state.len()
     }
 
-    fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> TypedValue {
+    fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> std::io::Result<i64> {
         self.events.append_row(Self::make_field_action(id, column_id, "CF", &new_value));
         self.state.overwrite_field(id, column_id, new_value)
     }
 
-    fn overwrite_field_metadata(&mut self, id: usize, column_id: usize, metadata: FieldMetadata) -> TypedValue {
+    fn overwrite_field_metadata(&mut self, id: usize, column_id: usize, metadata: FieldMetadata) -> std::io::Result<i64> {
         self.state.overwrite_field_metadata(id, column_id, metadata)
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
+    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         self.events.append_row(Self::make_row_action(id, 0, "CR", &row));
         self.state.overwrite_row(id, row)
     }
 
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<i64> {
         self.state.overwrite_row_metadata(id, metadata)
     }
 
@@ -262,7 +258,7 @@ impl RowCollection for EventSourceRowCollection {
         self.state.read_row_metadata(id)
     }
 
-    fn resize(&mut self, new_size: usize) -> TypedValue {
+    fn resize(&mut self, new_size: usize) -> std::io::Result<bool> {
         self.state.resize(new_size)
     }
 }
@@ -351,12 +347,7 @@ impl TableFunction {
         is_create: bool,
     ) -> std::io::Result<Self> {
         match cfg {
-            ObjectConfig::TableConfig { .. } =>
-                throw(Exact("Table configuration is invalid for this device".into())),
-            ObjectConfig::TableFnConfig {
-                columns,
-                code, ..
-            } => {
+            ObjectConfig::TableFnConfig { columns, code, .. } => {
                 // build the journal and state columns
                 let journal_columns = Column::from_parameters(&columns);
                 let state_columns = match Inferences::infer_with_hints(&code, &columns) {
@@ -389,6 +380,7 @@ impl TableFunction {
                     ms0,
                 ))
             }
+            _ => throw(Exact("Table configuration is invalid for this device".into())),
         }
     }
 
@@ -457,7 +449,7 @@ impl Journaling for TableFunction {
             rows_affected += 1;
         }
         println!("{rows_affected} event(s) replayed.");
-        Number(Numbers::RowsAffected(rows_affected))
+        Number(Numbers::I64Value(rows_affected))
     }
 }
 
@@ -478,38 +470,33 @@ impl RowCollection for TableFunction {
         self.state.len()
     }
 
-    fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> TypedValue {
+    fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> std::io::Result<i64> {
         self.state.overwrite_field(id, column_id, new_value)
     }
 
-    fn overwrite_field_metadata(&mut self, id: usize, column_id: usize, metadata: FieldMetadata) -> TypedValue {
+    fn overwrite_field_metadata(&mut self, id: usize, column_id: usize, metadata: FieldMetadata) -> std::io::Result<i64> {
         self.state.overwrite_field_metadata(id, column_id, metadata)
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
-        match self.journal.overwrite_row(id, row.clone()) {
-            Number(..) => {
-                let ms = self.ms0
-                    .with_variable(machine::FX_SELF, self.fx.clone())
-                    .with_row(self.get_columns(), &row);
-                let fx_call = FunctionCall {
-                    fx: Box::new(Variable(machine::FX_SELF.into())),
-                    args: row.get_values().iter().map(|v| Literal(v.clone())).collect(),
-                };
-                match ms.evaluate(&fx_call).map(|(_, v)| v) {
-                    Ok(TypedValue::Structured(s)) => {
-                        let new_row = s.to_row().with_row_id(id);
-                        self.state.overwrite_row(id, new_row)
-                    }
-                    Ok(value) => ErrorValue(TypeMismatch(TypeMismatchErrors::UnsupportedType(StructureType(self.get_parameters()), value.get_type()))),
-                    Err(err) => ErrorValue(Exact(err.to_string()))
-                }
+    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
+        self.journal.overwrite_row(id, row.clone())?;
+        let ms = self.ms0
+            .with_variable(machine::FX_SELF, self.fx.clone())
+            .with_row(self.get_columns(), &row);
+        let fx_call = FunctionCall {
+            fx: Box::new(Variable(machine::FX_SELF.into())),
+            args: row.get_values().iter().map(|v| Literal(v.clone())).collect(),
+        };
+        match ms.evaluate(&fx_call).map(|(_, v)| v)? {
+            TypedValue::Structured(s) => {
+                let new_row = s.to_row().with_row_id(id);
+                self.state.overwrite_row(id, new_row)
             }
-            other => other
+            value => throw(TypeMismatch(TypeMismatchErrors::UnsupportedType(StructureType(self.get_parameters()), value.get_type()))),
         }
     }
 
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<i64> {
         self.state.overwrite_row_metadata(id, metadata)
     }
 
@@ -529,7 +516,7 @@ impl RowCollection for TableFunction {
         self.state.read_row_metadata(id)
     }
 
-    fn resize(&mut self, new_size: usize) -> TypedValue {
+    fn resize(&mut self, new_size: usize) -> std::io::Result<bool> {
         self.state.resize(new_size)
     }
 }
@@ -566,13 +553,13 @@ mod tests {
             jrc.state.resize(0);
 
             // insert some rows
-            assert_eq!(Number(Numbers::RowsAffected(5)), jrc.append_rows(vec![
+            assert_eq!(5, jrc.append_rows(vec![
                 make_quote(0, "ABC", "AMEX", 11.77),
                 make_quote(1, "UNO", "OTC", 0.2456),
                 make_quote(2, "BIZ", "NYSE", 23.66),
                 make_quote(3, "GOTO", "OTC", 0.1428),
                 make_quote(4, "BOOM", "NASDAQ", 56.87),
-            ]));
+            ]).unwrap());
 
             // display the initial state
             // |------------------------------------|
@@ -587,17 +574,13 @@ mod tests {
             show(&jrc.state, "initial state");
 
             // replace a row
-            assert_eq!(
-                jrc.update_row(3, make_quote(3, "GOAT", "OTC", 0.1432)),
-                Number(Numbers::RowsAffected(1)));
+            assert_eq!(1, jrc.update_row(3, make_quote(3, "GOAT", "OTC", 0.1432)).unwrap());
 
             // replace a field
-            assert_eq!(
-                jrc.overwrite_field(0, 2, Number(F64Value(11.88))),
-                Number(Numbers::RowsAffected(1)));
+            assert_eq!(1, jrc.overwrite_field(0, 2, Number(F64Value(11.88))).unwrap());
 
             // delete a row
-            assert_eq!(jrc.delete_row(1), Number(Numbers::RowsAffected(1)));
+            assert_eq!(1, jrc.delete_row(1).unwrap());
 
             // display the current state
             // |------------------------------------|
@@ -635,7 +618,7 @@ mod tests {
 
             // replay the events (after truncating the current state)
             jrc.state.resize(0);
-            assert_eq!(jrc.replay(), Number(Numbers::RowsAffected(7)));
+            assert_eq!(jrc.replay(), Number(Numbers::I64Value(7)));
 
             // display the reconstituted state
             // |------------------------------------|
@@ -692,7 +675,7 @@ mod tests {
                 StringValue("ABC".into()),
                 StringValue("NYSE".into()),
                 Number(F64Value(3.25)),
-            ]));
+            ])).unwrap();
 
             // display the source data
             // |-------------------------------|
@@ -719,7 +702,7 @@ mod tests {
                     Number(I64Value(1)),
                 ])
             ]);
-            assert_eq!(result, Number(Numbers::RowsAffected(1)))
+            assert_eq!(result, 1)
         }
 
         #[test]
@@ -731,16 +714,16 @@ mod tests {
             tfrc.state.resize(0);
 
             // insert some rows
-            assert_eq!(Number(Numbers::RowsAffected(5)), tfrc.append_rows(vec![
+            assert_eq!(5, tfrc.append_rows(vec![
                 make_quote(0, "ABC", "AMEX", 11.77),
                 make_quote(1, "UNO", "OTC", 0.2456),
                 make_quote(2, "BIZ", "NYSE", 23.66),
                 make_quote(3, "GOTO", "OTC", 0.1428),
                 make_quote(4, "BOOM", "NASDAQ", 56.87),
-            ]));
+            ]).unwrap());
 
             // replay the outputs
-            assert_eq!(tfrc.replay(), Number(Numbers::RowsAffected(5)));
+            assert_eq!(tfrc.replay(), Number(Numbers::I64Value(5)));
 
             // verify the rows
             assert_eq!(tfrc.read_active_rows().unwrap(), vec![

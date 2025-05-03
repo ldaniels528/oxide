@@ -7,12 +7,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::data_types::DataType;
 
+use crate::errors::throw;
 use crate::errors::Errors::TypeMismatch;
 use crate::errors::TypeMismatchErrors::ArgumentsMismatched;
 use crate::parameter::Parameter;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Boolean, ErrorValue, Number};
+use crate::typed_values::TypedValue::Number;
 
 /// Represents a column in a table
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -94,12 +95,10 @@ impl Column {
             self.get_default_value().clone())
     }
 
-    pub fn validate_compatibility(cs0: &Vec<Self>, cs1: &Vec<Self>) -> TypedValue {
+    pub fn validate_compatibility(cs0: &Vec<Self>, cs1: &Vec<Self>) -> std::io::Result<bool> {
         match (cs0, cs1) {
-            (a, b) if a.len() != b.len() =>
-                ErrorValue(TypeMismatch(ArgumentsMismatched(cs0.len(), cs1.len()))),
-            _ =>
-                Boolean(true)
+            (a, b) if a.len() != b.len() => throw(TypeMismatch(ArgumentsMismatched(cs0.len(), cs1.len()))),
+            _ => Ok(true)
         }
     }
 }

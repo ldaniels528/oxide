@@ -15,12 +15,26 @@ fn generate_readme() -> std::io::Result<File> {
     let file = OpenOptions::new()
         .truncate(true).create(true).read(true).write(true)
         .open("../../README.md")?;
+
+    println!("generate title...");
     let file = generate_title(file)?;
+
+    println!("generate project status...");
     let file = generate_project_status(file)?;
+
+    println!("generate development...");
     let file = generate_development(file)?;
+
+    println!("generate run tests...");
     let file = generate_run_tests(file)?;
+
+    println!("generate getting started...");
     let file = generate_getting_started(file)?;
+
+    println!("generate examples...");
     let file = generate_examples(file)?;
+
+    println!("generate rpc...");
     let file = generate_rpc(file)?;
     Ok(file)
 }
@@ -93,9 +107,13 @@ fn generate_examples(mut file: File) -> std::io::Result<File> {
                  op.get_package_name(), op.get_name(), op.get_description())?;
 
         // write the example body
-        let src_lines = op.get_example().split(|c| c == '\n')
-            .map(|s| s.trim().to_string()).collect::<Vec<_>>();
-        file = print_text_block(file, src_lines)?;
+        let example_body = format!("
+<pre>
+{}
+</pre>",
+            op.get_example().trim()
+        );
+        writeln!(file, "{}", example_body)?;
 
         // write the results body
         match generate_example_results(op) {
@@ -110,7 +128,7 @@ fn generate_examples(mut file: File) -> std::io::Result<File> {
 
 fn generate_example_results(op: PlatformOps) -> std::io::Result<Vec<String>> {
     let value = Interpreter::new().evaluate(op.get_example().as_str())?;
-    match value.to_table()? {
+    match value.to_table_or_value() {
         TableValue(df) => {
             let rc: Box<dyn RowCollection> = Box::new(df);
             TableRenderer::from_table_with_ids(&rc)
@@ -189,7 +207,7 @@ true
 
 oxide.public[2]> append ns("interpreter.reverse.stocks")
                  from { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
-[2] RowsAffected in 9.2 millis
+[2] i64 in 9.2 millis
 1
 
 oxide.public[3]> append ns("interpreter.reverse.stocks")
@@ -198,7 +216,7 @@ oxide.public[3]> append ns("interpreter.reverse.stocks")
                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
                  ]
-[3] RowsAffected in 13.8 millis
+[3] i64 in 13.8 millis
 3
 
 oxide.public[4]> reverse from ns("interpreter.reverse.stocks")
@@ -338,7 +356,7 @@ fn generate_run_tests(mut file: File) -> std::io::Result<File> {
     file.write(r#"
 #### Run the tests
 
-To run the tests (~ 330 tests at the time of writing):
+To run the tests (~ 800 tests at the time of writing):
 
 ```bash
 cargo test
@@ -385,7 +403,17 @@ fn print_text_block(mut file: File, lines: Vec<String>) -> std::io::Result<File>
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::readme::generate_readme;
+    use crate::readme::{generate_examples, generate_readme};
+    use std::fs::OpenOptions;
+
+    #[test]
+    fn test_generate_examples() {
+        let file = OpenOptions::new()
+            .truncate(true).create(true).read(true).write(true)
+            .open("../../examples.md")
+            .unwrap();
+        generate_examples(file).unwrap();
+    }
 
     #[test]
     fn test_generate_readme() {

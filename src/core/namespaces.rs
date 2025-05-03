@@ -8,8 +8,9 @@ use std::fmt::Display;
 use serde::{Deserialize, Serialize};
 
 use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::EventSource;
 use crate::file_row_collection::FileRowCollection;
-use crate::journaling::TableFunction;
+use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::object_config::ObjectConfig;
 use shared_lib::fail;
@@ -101,6 +102,8 @@ impl Namespace {
 
     pub fn load_table(&self) -> std::io::Result<Dataframe> {
         match ObjectConfig::load(self)? {
+            ObjectConfig::EventSourceConfig { columns, .. } =>
+                EventSourceRowCollection::new(self, &columns).map(|es| EventSource(es)),
             ObjectConfig::TableConfig { .. } =>
                 FileRowCollection::open(self).map(|frc| Dataframe::Disk(frc)),
             ObjectConfig::TableFnConfig { .. } =>

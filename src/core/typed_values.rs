@@ -9,7 +9,7 @@ use std::fmt::Display;
 use std::fs::File;
 use std::hash::{DefaultHasher, Hasher};
 use std::i32;
-use std::io::Read;
+use std::io::{Error, Read};
 use std::ops::*;
 
 use chrono::DateTime;
@@ -27,7 +27,7 @@ use crate::data_types::DataType::*;
 
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Disk, Model, TableFn};
+use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
 
 use crate::errors::Errors::{CannotSubtract, Exact, IncompatibleParameters, Multiple, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CannotBeNegated, StructsOneOrMoreExpected, UnsupportedType};
@@ -36,7 +36,7 @@ use crate::expression::Expression;
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::inferences::Inferences;
-use crate::journaling::TableFunction;
+use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -226,30 +226,30 @@ impl TypedValue {
     /// 1. the host value is an array, and the item value is found within it,
     /// 2. the host value is a table, and the item value matches a row found within it,
     /// 3. the host value is a struct, and the item value matches a name (key) found within it,
-    pub fn contains(&self, value: &TypedValue) -> TypedValue {
+    pub fn contains(&self, value: &TypedValue) -> bool {
         match &self {
-            ArrayValue(items) => Boolean(items.contains(value)),
-            Sequenced(items) => Boolean(items.contains(value)),
+            ArrayValue(items) => items.contains(value),
+            Sequenced(items) => items.contains(value),
             Structured(Hard(hard)) => match value {
-                StringValue(name) => Boolean(hard.contains(name)),
-                _ => Boolean(false)
+                StringValue(name) => hard.contains(name),
+                _ => false
             },
             Structured(Soft(soft)) => match value {
-                StringValue(name) => Boolean(soft.contains(name)),
-                _ => Boolean(false)
+                StringValue(name) => soft.contains(name),
+                _ => false
             },
             TableValue(Model(mrc)) => match value {
                 Structured(Soft(soft)) => mrc.contains(&soft.to_row()),
                 Structured(Hard(hard)) => mrc.contains(&hard.to_row()),
-                _ => Boolean(false)
+                _ => false
             }
-            _ => Boolean(false)
+            _ => false
         }
     }
 
     pub fn convert_to(&self, data_type: DataType) -> std::io::Result<TypedValue> {
         Ok(match data_type {
-            ArrayType(max_len) => Undefined,
+            ArrayType(..) => Undefined,
             ASCIIType(max_len) => ASCII(self.unwrap_as_string(max_len).chars().collect()),
             BinaryType(max_len) => Binary(self.unwrap_as_bytes(max_len)?),
             BooleanType => match self {
@@ -257,7 +257,7 @@ impl TypedValue {
                 StringValue(s) => Boolean(s == "true"),
                 _ => Undefined
             },
-            EnumType(params) => Undefined,
+            EnumType(..) => Undefined,
             ErrorType => ErrorValue(Exact(self.unwrap_value())),
             FunctionType(my_params, my_returns) =>
                 match self {
@@ -279,9 +279,9 @@ impl TypedValue {
             }
             PlatformOpsType(_kind) => Undefined,
             StringType(max_len) => StringValue(self.unwrap_as_string(max_len)),
-            StructureType(params) => Undefined,
+            StructureType(..) => Undefined,
             TableType(params, ..) => self.to_table_with_schema(&params)?,
-            TupleType(params) => Undefined,
+            TupleType(..) => Undefined,
         })
     }
 
@@ -409,6 +409,16 @@ impl TypedValue {
         }
     }
 
+    pub fn to_dataframe(&self) -> std::io::Result<Dataframe> {
+        match self {
+            ArrayValue(items) => self.convert_array_to_table(&items.get_values()),
+            NamespaceValue(ns) => ns.load_table(),
+            Structured(s) => Ok(s.to_dataframe()),
+            TableValue(df) => Ok(df.to_owned()),
+            z => throw(TypeMismatch(TypeMismatchErrors::TableExpected(z.to_code(), z.to_code())))
+        }
+    }
+
     pub fn to_f32(&self) -> f32 {
         match self {
             Boolean(true) => 1.,
@@ -465,24 +475,6 @@ impl TypedValue {
         }
     }
 
-    pub fn to_result<A>(&self, f: fn(&TypedValue) -> A) -> std::io::Result<A> {
-        match self {
-            ErrorValue(err) => fail(err.to_string()),
-            other => Ok(f(other))
-        }
-    }
-
-    pub fn to_dataframe(&self) -> std::io::Result<Dataframe> {
-        match self {
-            ArrayValue(items) => self.convert_array_to_table(&items.get_values()),
-            ErrorValue(err) => throw(err.to_owned()),
-            NamespaceValue(ns) => Ok(Disk(FileRowCollection::open(ns)?)),
-            Structured(s) => Ok(Model(s.to_table())),
-            TableValue(df) => Ok(df.to_owned()),
-            z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
-        }
-    }
-
     pub fn to_json(&self) -> serde_json::Value {
         match self {
             ArrayValue(items) => serde_json::json!(items.iter()
@@ -520,6 +512,13 @@ impl TypedValue {
         }
     }
 
+    pub fn to_result<A>(&self, f: fn(&TypedValue) -> A) -> std::io::Result<A> {
+        match self {
+            ErrorValue(err) => fail(err.to_string()),
+            other => Ok(f(other))
+        }
+    }
+
     pub fn to_sequence(&self) -> std::io::Result<Sequences> {
         match self {
             ArrayValue(array) => Ok(Sequences::TheArray(array.clone())),
@@ -530,42 +529,23 @@ impl TypedValue {
         }
     }
 
-    pub fn to_table(&self) -> std::io::Result<TypedValue> {
-        match self {
-            ArrayValue(items) =>
-                self.convert_array_to_table(&items.get_values()).map(|df| TableValue(df)),
-            NamespaceValue(ns) =>
-                match ObjectConfig::load(ns)? {
-                    ObjectConfig::TableConfig { .. } =>
-                        FileRowCollection::open(ns).map(|frc| TableValue(Disk(frc))),
-                    ObjectConfig::TableFnConfig { .. } =>
-                        TableFunction::from_namespace(ns, Machine::new_platform())
-                            .map(|tf| TableValue(TableFn(Box::new(tf)))),
-                }
-            Structured(s) => Ok(TableValue(s.to_dataframe())),
-            TableValue(df) => Ok(TableValue(df.to_owned())),
-            z => Ok(z.to_owned())
-        }
+    pub fn to_table(&self) -> std::io::Result<Box<dyn RowCollection>> {
+        Ok(Box::new(self.to_dataframe()?))
     }
 
-    pub fn to_table_impl(&self) -> std::io::Result<Box<dyn RowCollection>> {
-        match self.to_table()? {
-            ErrorValue(error) => throw(error),
-            TableValue(df) => Ok(Box::new(df)),
-            z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
+    pub fn to_table_or_value(&self) -> TypedValue {
+        match self.to_dataframe() {
+            Ok(df) => TableValue(df),
+            Err(_) => self.clone()
         }
     }
 
     pub fn to_table_with_schema(&self, params: &Vec<Parameter>) -> std::io::Result<TypedValue> {
-        match self.to_table()? {
-            TableValue(df) => {
-                let my_params = df.get_parameters();
-                match Parameter::are_compatible(params, &my_params) {
-                    true => Ok(TableValue(df)),
-                    false => throw(IncompatibleParameters(my_params))
-                }
-            }
-            other => Ok(other)
+        let df = self.to_dataframe()?;
+        let my_params = df.get_parameters();
+        match Parameter::are_compatible(params, &my_params) {
+            true => Ok(TableValue(df)),
+            false => throw(IncompatibleParameters(my_params))
         }
     }
 
@@ -1120,7 +1100,7 @@ mod core_tests {
             StringValue("123".into()),
             StringValue("Hello".into()),
         ]));
-        assert_eq!(array.contains(&StringValue("123".into())), Boolean(true))
+        assert_eq!(array.contains(&StringValue("123".into())), true)
     }
 
     #[test]
@@ -1141,7 +1121,7 @@ mod core_tests {
             StringValue("NASDAQ".into()),
             Number(F64Value(304.69)),
         ])));
-        assert_eq!(structure.contains(&StringValue("symbol".into())), Boolean(true))
+        assert_eq!(structure.contains(&StringValue("symbol".into())), true)
     }
 
     #[test]
@@ -1151,7 +1131,7 @@ mod core_tests {
             ("param_type", StringValue("String(8)".into())),
             ("default_value", Null),
         ])));
-        assert_eq!(structure.contains(&StringValue("name".into())), Boolean(true))
+        assert_eq!(structure.contains(&StringValue("name".into())), true)
     }
 
     #[test]
@@ -1170,7 +1150,7 @@ mod core_tests {
             StringValue("OTC".into()),
             Number(F64Value(0.1421)),
         ])));
-        assert_eq!(table.contains(&hs), Boolean(true))
+        assert_eq!(table.contains(&hs), true)
     }
 
     #[test]
@@ -1189,7 +1169,7 @@ mod core_tests {
             ("exchange", StringValue("NYSE".into())),
             ("last_sale", Number(F64Value(23.67))),
         ])));
-        assert_eq!(table.contains(&ss), Boolean(true))
+        assert_eq!(table.contains(&ss), true)
     }
 
     #[test]
@@ -1279,7 +1259,7 @@ mod core_tests {
     #[test]
     fn test_outcomes() {
         verify_encode_decode(&Number(Numbers::RowId(1013)));
-        verify_encode_decode(&Number(Numbers::RowsAffected(19)));
+        verify_encode_decode(&Number(Numbers::I64Value(19)));
     }
 
     #[test]

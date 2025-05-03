@@ -12,7 +12,7 @@ use crate::sequences::{Array, Sequence, Sequences};
 use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
 use crate::errors::throw;
 use crate::errors::Errors::*;
-use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CollectionExpected, DateExpected, StringExpected, StructExpected, TableExpected, UnsupportedType};
+use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CollectionExpected, DateExpected, StringExpected, StructExpected, UnsupportedType};
 use crate::expression::Expression::{CodeBlock, Literal, Multiply, Scenario};
 use crate::file_row_collection::FileRowCollection;
 use crate::formatting::DataFormats;
@@ -45,7 +45,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub const MAJOR_VERSION: u8 = 0;
-pub const MINOR_VERSION: u8 = 3;
+pub const MINOR_VERSION: u8 = 35;
 pub const VERSION: &str = "0.35";
 
 // duration unit constants
@@ -275,7 +275,7 @@ impl PlatformOps {
             PlatformOps::StrStartsWith => Ok(self.adapter_fn2(ms, args, Self::do_str_start_with)),
             PlatformOps::StrSubstring => Ok(self.adapter_fn3(ms, args, Self::do_str_substring)),
             PlatformOps::StrToString => Ok(self.adapter_fn1(ms, args, Self::do_str_to_string)),
-            PlatformOps::ToolsCompact => Ok(self.adapter_fn1(ms, args, Self::do_tools_compact)),
+            PlatformOps::ToolsCompact => self.adapter_fn1_ok(ms, args, Self::do_tools_compact),
             PlatformOps::ToolsDescribe => self.adapter_fn1_ok(ms, args, Self::do_tools_describe),
             PlatformOps::ToolsFetch => self.adapter_fn2_ok(ms, args, Self::do_tools_fetch),
             PlatformOps::ToolsJournal => self.adapter_fn1_ok(ms, args, Self::do_tools_journal),
@@ -422,311 +422,321 @@ impl PlatformOps {
     }
 
     pub fn get_example(&self) -> String {
-        let result = match self {
+        match self {
             // cal
-            PlatformOps::CalNow => "cal::now()",
-            PlatformOps::CalDateDay => r#"
-                import cal
-                now():::day_of()
-            "#,
-            PlatformOps::CalDateHour12 => r#"
-                import cal
-                now():::hour12()
-            "#,
-            PlatformOps::CalDateHour24 => r#"
-                import cal
-                now():::hour24()
-            "#,
-            PlatformOps::CalDateMinute => r#"
-                import cal
-                now():::minute_of()
-            "#,
-            PlatformOps::CalDateMonth => r#"
-                import cal
-                now():::month_of()
-            "#,
-            PlatformOps::CalDateSecond => r#"
-                import cal
-                now():::second_of()
-            "#,
-            PlatformOps::CalDateYear => r#"
-                import cal
-                now():::year_of()
-            "#,
+            PlatformOps::CalNow => "cal::now()".to_string(),
+            PlatformOps::CalDateDay => strip_margin(r#"
+                |import cal
+                |now():::day_of()
+            "#, '|'),
+            PlatformOps::CalDateHour12 => strip_margin(r#"
+                |import cal
+                |now():::hour12()
+            "#, '|'),
+            PlatformOps::CalDateHour24 => strip_margin(r#"
+                |import cal
+                |now():::hour24()
+            "#, '|'),
+            PlatformOps::CalDateMinute => strip_margin(r#"
+                |import cal
+                |now():::minute_of()
+            "#, '|'),
+            PlatformOps::CalDateMonth => strip_margin(r#"
+                |import cal
+                |now():::month_of()
+            "#, '|'),
+            PlatformOps::CalDateSecond => strip_margin(r#"
+                |import cal
+                |now():::second_of()
+            "#, '|'),
+            PlatformOps::CalDateYear => strip_margin(r#"
+                |import cal
+                |now():::year_of()
+            "#, '|'),
             // durations
-            PlatformOps::DurationsDays => r#"
-                import durations
-                3::days()
-            "#,
-            PlatformOps::DurationsHours => r#"
-                import durations
-                8::hours()
-            "#,
-            PlatformOps::DurationsMillis => r#"
-                import durations
-                8::millis()
-            "#,
-            PlatformOps::DurationsMinutes => r#"
-                import durations
-                30::minutes()
-            "#,
-            PlatformOps::DurationsSeconds => r#"
-                import durations
-                30::seconds()
-            "#,
+            PlatformOps::DurationsDays => strip_margin(r#"
+                |import durations
+                |3:::days()
+            "#, '|'),
+            PlatformOps::DurationsHours => strip_margin(r#"
+                |import durations
+                |8:::hours()
+            "#, '|'),
+            PlatformOps::DurationsMillis => strip_margin(r#"
+                |import durations
+                |8:::millis()
+            "#, '|'),
+            PlatformOps::DurationsMinutes => strip_margin(r#"
+                |import durations
+                |30:::minutes()
+            "#, '|'),
+            PlatformOps::DurationsSeconds => strip_margin(r#"
+                |import durations
+                |30:::seconds()
+            "#, '|'),
             // io
-            PlatformOps::IoFileCreate => r#"
-                io::create_file("quote.json", { symbol: "TRX", exchange: "NYSE", last_sale: 45.32 })
-            "#,
-            PlatformOps::IoFileExists => r#"
-                io::exists("quote.json")
-            "#,
-            PlatformOps::IoFileReadText => r#"
-                import io, util
-                file := "temp_secret.txt"
-                file:::create_file(md5("**keep**this**secret**"))
-                file:::read_text_file()
-            "#,
-            PlatformOps::IoStdErr => r#"io::stderr("Goodbye Cruel World")"#,
-            PlatformOps::IoStdOut => r#"io::stdout("Hello World")"#,
+            PlatformOps::IoFileCreate => strip_margin(r#"
+                |io::create_file("quote.json", {
+                |   symbol: "TRX",
+                |   exchange: "NYSE",
+                |   last_sale: 45.32
+                |})
+            "#, '|'),
+            PlatformOps::IoFileExists => r#"io::exists("quote.json")"#.to_string(),
+            PlatformOps::IoFileReadText => strip_margin(r#"
+                |import io, util
+                |file := "temp_secret.txt"
+                |file:::create_file(md5("**keep**this**secret**"))
+                |file:::read_text_file()
+            "#, '|'),
+            PlatformOps::IoStdErr => r#"io::stderr("Goodbye Cruel World")"#.to_string(),
+            PlatformOps::IoStdOut => r#"io::stdout("Hello World")"#.to_string(),
             // testing
-            PlatformOps::TestingAssert => r#"
-                import testing
-                assert(matches([ 1 "a" "b" "c" ], [ 1 "a" "b" "c" ]))
-            "#,
-            PlatformOps::TestingFeature => r#"
-            import testing
-            feature("Matches function", {
-                "Compare Array contents: Equal": fn(ctx) => {
-                    assert(matches(
-                        [ 1 "a" "b" "c" ],
-                        [ 1 "a" "b" "c" ]))
-                },
-                "Compare Array contents: Not Equal": fn(ctx) => {
-                    assert(!matches(
-                        [ 1 "a" "b" "c" ],
-                        [ 0 "x" "y" "z" ]))
-                },
-                "Compare JSON contents (in sequence)": fn(ctx) => {
-                    assert(matches(
-                        { first: "Tom" last: "Lane" },
-                        { first: "Tom" last: "Lane" }))
-                },
-                "Compare JSON contents (out of sequence)": fn(ctx) => {
-                    assert(matches(
-                        { scores: [82 78 99], id: "A1537" },
-                        { id: "A1537", scores: [82 78 99] }))
-                }
-            })"#,
-            PlatformOps::TestingMatches => r#"
-                import testing::matches
-                a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-                b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
-                matches(a, b)
-            "#,
-            PlatformOps::TestingTypeOf => "testing::type_of([12, 76, 444])",
-            PlatformOps::OsCall => r#"
-                create table ns("platform.os.call") (
-                    symbol: String(8),
-                    exchange: String(8),
-                    last_sale: f64
-                )
-                os::call("chmod", "777", oxide::home())
-            "#,
-            PlatformOps::OsClear => "os::clear()",
-            PlatformOps::OsCurrentDir => r#"
-                import str
-                cur_dir := os::current_dir()
-                prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
-                path_str := prefix + "/demoes/language/include_file.oxide"
-                include path_str
-            "#,
-            PlatformOps::OsEnv => "os::env()",
-            PlatformOps::OxideCompile => r#"
-                code := oxide::compile("2 ** 4")
-                code()
-            "#,
-            PlatformOps::OxideDebug => r#"oxide::debug("2 ** 4")"#,
-            PlatformOps::OxidePrintln => r#"oxide::println("Hello World")"#,
-            PlatformOps::OxideEval => r#"
-                a := 'Hello '
-                b := 'World'
-                oxide::eval("a + b")
-            "#,
-            PlatformOps::OxideHelp => r#"from oxide::help() limit 3"#,
-            PlatformOps::OxideHistory => "from oxide::history() limit 3",
-            PlatformOps::OxideHome => "oxide::home()",
-            PlatformOps::OxideReset => "oxide::reset()",
-            PlatformOps::OxideUUID => "oxide::uuid()",
-            PlatformOps::OxideVersion => "oxide::version()",
-            PlatformOps::StrEndsWith => r#"str::ends_with('Hello World', 'World')"#,
-            PlatformOps::StrFormat => r#"str::format("This {} the {}", "is", "way")"#,
-            PlatformOps::StrIndexOf => r#"str::index_of('The little brown fox', 'brown')"#,
-            PlatformOps::StrJoin => r#"str::join(['1', 5, 9, '13'], ', ')"#,
-            PlatformOps::StrLeft => r#"str::left('Hello World', 5)"#,
-            PlatformOps::StrLen => r#"str::len('The little brown fox')"#,
-            PlatformOps::StrRight => "str::right('Hello World', 5)",
-            PlatformOps::StrSplit => r#"str::split('Hello,there World', ' ,')"#,
-            PlatformOps::StrStartsWith => "str::starts_with('Hello World', 'World')",
-            PlatformOps::StrSubstring => "str::substring('Hello World', 0, 5)",
-            PlatformOps::StrToString => "str::to_string(125.75)",
-            PlatformOps::ToolsCompact => r#"
-                [+] stocks := ns("platform.compact.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
-                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                     { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] delete from stocks where last_sale > 1.0
-                [+] from stocks
-            "#,
-            PlatformOps::ToolsDescribe => r#"
-                tools::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
-            "#,
-            PlatformOps::ToolsFetch => r#"
-                [+] stocks := ns("platform.fetch.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] tools::fetch(stocks, 2)
-            "#,
-            PlatformOps::ToolsJournal => r#"
-                import tools
-                stocks := ns("platform.journal.stocks")
-                drop table stocks
-                create table stocks fn(
-                   symbol: String(8), exchange: String(8), last_sale: f64
-                ) => {
-                    symbol: symbol,
-                    exchange: exchange,
-                    last_sale: last_sale,
-                    ingest_time: cal::now()
-                }
-                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                stocks:::journal()
-            "#,
-            PlatformOps::ToolsPop => r#"
-                import tools
-                [+] stocks := ns("platform.pop.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] stocks::pop(stocks)
-            "#,
-            PlatformOps::ToolsPush => r#"
-                import tools
-                [+] stocks := ns("platform.push.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] stocks::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
-                [+] stocks
-            "#,
-            PlatformOps::ToolsReplay => r#"
-                import tools
-                stocks := ns("platform.table_fn.stocks")
-                drop table stocks
-                create table stocks fn(
-                   symbol: String(8), exchange: String(8), last_sale: f64
-                ) => {
-                    symbol: symbol,
-                    exchange: exchange,
-                    last_sale: last_sale * 2.0,
-                    rank: __row_id__ + 1
-                }
-                [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                stocks:::replay()
-            "#,
-            PlatformOps::ToolsReverse => r#"
-                import tools
-                to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
-            "#,
-            PlatformOps::ToolsRowId => r#"
+            PlatformOps::TestingAssert => strip_margin(r#"
+                |import testing
+                |assert(matches(
+                |   [ 1 "a" "b" "c" ],
+                |   [ 1 "a" "b" "c" ]
+                |))
+            "#, '|'),
+            PlatformOps::TestingFeature => strip_margin(r#"
+                |import testing
+                |feature("Matches function", {
+                |    "Compare Array contents: Equal": fn(ctx) => {
+                |        assert(matches(
+                |            [ 1 "a" "b" "c" ],
+                |            [ 1 "a" "b" "c" ]))
+                |    },
+                |    "Compare Array contents: Not Equal": fn(ctx) => {
+                |        assert(!matches(
+                |            [ 1 "a" "b" "c" ],
+                |            [ 0 "x" "y" "z" ]))
+                |    },
+                |    "Compare JSON contents (in sequence)": fn(ctx) => {
+                |        assert(matches(
+                |            { first: "Tom" last: "Lane" },
+                |            { first: "Tom" last: "Lane" }))
+                |    },
+                |    "Compare JSON contents (out of sequence)": fn(ctx) => {
+                |        assert(matches(
+                |            { scores: [82 78 99], id: "A1537" },
+                |            { id: "A1537", scores: [82 78 99] }))
+                |    }
+                })"#, '|'),
+            PlatformOps::TestingMatches => strip_margin(r#"
+                |import testing::matches
+                |a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
+                |b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
+                |matches(a, b)
+            "#, '|'),
+            PlatformOps::TestingTypeOf => "testing::type_of([12, 76, 444])".to_string(),
+            PlatformOps::OsCall => strip_margin(r#"
+                |create table ns("platform.os.call") (
+                |    symbol: String(8),
+                |    exchange: String(8),
+                |    last_sale: f64
+                |)
+                |os::call("chmod", "777", oxide::home())
+            "#, '|'),
+            PlatformOps::OsClear => "os::clear()".to_string(),
+            PlatformOps::OsCurrentDir => strip_margin(r#"
+                |import str
+                |cur_dir := os::current_dir()
+                |prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
+                |path_str := prefix + "/demoes/language/include_file.oxide"
+                |include path_str
+            "#, '|'),
+            PlatformOps::OsEnv => "os::env()".to_string(),
+            PlatformOps::OxideCompile => strip_margin(r#"
+                |code := oxide::compile("2 ** 4")
+                |code()
+            "#, '|'),
+            PlatformOps::OxideDebug => r#"oxide::debug("2 ** 4")"#.to_string(),
+            PlatformOps::OxidePrintln => r#"oxide::println("Hello World")"#.to_string(),
+            PlatformOps::OxideEval => strip_margin(r#"
+                |a := 'Hello '
+                |b := 'World'
+                |oxide::eval("a + b")
+            "#, '|'),
+            PlatformOps::OxideHelp => r#"from oxide::help() limit 3"#.to_string(),
+            PlatformOps::OxideHistory => "from oxide::history() limit 3".to_string(),
+            PlatformOps::OxideHome => "oxide::home()".to_string(),
+            PlatformOps::OxideReset => "oxide::reset()".to_string(),
+            PlatformOps::OxideUUID => "oxide::uuid()".to_string(),
+            PlatformOps::OxideVersion => "oxide::version()".to_string(),
+            PlatformOps::StrEndsWith => r#"str::ends_with('Hello World', 'World')"#.to_string(),
+            PlatformOps::StrFormat => r#"str::format("This {} the {}", "is", "way")"#.to_string(),
+            PlatformOps::StrIndexOf => r#"str::index_of('The little brown fox', 'brown')"#.to_string(),
+            PlatformOps::StrJoin => r#"str::join(['1', 5, 9, '13'], ', ')"#.to_string(),
+            PlatformOps::StrLeft => r#"str::left('Hello World', 5)"#.to_string(),
+            PlatformOps::StrLen => r#"str::len('The little brown fox')"#.to_string(),
+            PlatformOps::StrRight => "str::right('Hello World', 5)".to_string(),
+            PlatformOps::StrSplit => r#"str::split('Hello,there World', ' ,')"#.to_string(),
+            PlatformOps::StrStartsWith => "str::starts_with('Hello World', 'World')".to_string(),
+            PlatformOps::StrSubstring => "str::substring('Hello World', 0, 5)".to_string(),
+            PlatformOps::StrToString => "str::to_string(125.75)".to_string(),
+            PlatformOps::ToolsCompact => strip_margin(r#"
+                |[+] stocks := ns("platform.compact.stocks")
+                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |[+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+                |     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                |     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                |     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                |     { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                |     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                |[+] delete from stocks where last_sale > 1.0
+                |[+] from stocks
+            "#, '|'),
+            PlatformOps::ToolsDescribe => strip_margin(r#"
+                |tools::describe({
+                |   symbol: "BIZ",
+                |   exchange: "NYSE",
+                |   last_sale: 23.66
+                |})
+            "#, '|'),
+            PlatformOps::ToolsFetch => strip_margin(r#"
+                |[+] stocks := ns("platform.fetch.stocks")
+                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                |     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                |[+] tools::fetch(stocks, 2)
+            "#, '|'),
+            PlatformOps::ToolsJournal => strip_margin(r#"
+                |import tools
+                |stocks := ns("platform.journal.stocks")
+                |drop table stocks
+                |create table stocks fn(
+                |   symbol: String(8), exchange: String(8), last_sale: f64
+                |) => {
+                |    symbol: symbol,
+                |    exchange: exchange,
+                |    last_sale: last_sale,
+                |    ingest_time: cal::now()
+                |}
+                |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                |stocks:::journal()
+            "#, '|'),
+            PlatformOps::ToolsPop => strip_margin(r#"
+                |import tools
+                |[+] stocks := ns("platform.pop.stocks")
+                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                |     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                |[+] stocks::pop(stocks)
+            "#, '|'),
+            PlatformOps::ToolsPush => strip_margin(r#"
+                |import tools
+                |[+] stocks := ns("platform.push.stocks")
+                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                |     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                |[+] stocks::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
+                |[+] stocks
+            "#, '|'),
+            PlatformOps::ToolsReplay => strip_margin(r#"
+                |import tools
+                |stocks := ns("platform.table_fn.stocks")
+                |drop table stocks
+                |create table stocks fn(
+                |   symbol: String(8), exchange: String(8), last_sale: f64
+                |) => {
+                |    symbol: symbol,
+                |    exchange: exchange,
+                |    last_sale: last_sale * 2.0,
+                |    rank: __row_id__ + 1
+                |}
+                |[{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                | { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                |stocks:::replay()
+            "#, '|'),
+            PlatformOps::ToolsReverse => strip_margin(r#"
+                |import tools
+                |to_table(reverse(
+                |   ['cat', 'dog', 'ferret', 'mouse']
+                |))
+            "#, '|'),
+            PlatformOps::ToolsRowId => strip_margin(r#"
                 tools::row_id()
-            "#,
-            PlatformOps::ToolsScan => r#"
-                [+] import tools
-                [+] stocks := ns("platform.scan.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
-                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                     { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
-                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
-                     { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
-                [+] delete from stocks where last_sale > 1.0
-                [+] stocks:::scan()
-            "#,
-            PlatformOps::ToolsToArray => r#"tools::to_array("Hello")"#,
-            PlatformOps::ToolsToCSV => r#"
-                import tools::to_csv
-                [+] stocks := ns("platform.csv.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-                stocks:::to_csv()
-            "#,
-            PlatformOps::ToolsToJSON => r#"
-                import tools::to_json
-                [+] stocks := ns("platform.json.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-                stocks:::to_json()
-            "#,
-            PlatformOps::ToolsToTable => r#"
-                tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
-            "#,
-            PlatformOps::UtilBase64 => "util::base64('Hello World')",
-            PlatformOps::UtilBinary => "util::to_binary(0b1011 & 0b1101)",
-            PlatformOps::UtilGzip => "util::gzip('Hello World')",
-            PlatformOps::UtilGunzip => "util::gunzip('Hello World')", // TODO
-            PlatformOps::UtilHex => "util::hex('Hello World')",
-            PlatformOps::UtilMD5 => "util::md5('Hello World')",
-            PlatformOps::UtilToASCII => "util::to_ascii(177)",
-            PlatformOps::UtilToDate => "util::to_date(177)",
-            PlatformOps::UtilToF32 => "util::to_f32(4321)",
-            PlatformOps::UtilToF64 => "util::to_f64(4321)",
-            PlatformOps::UtilToI8 => "util::to_i8(88)",
-            PlatformOps::UtilToI16 => "util::to_i16(88)",
-            PlatformOps::UtilToI32 => "util::to_i32(88)",
-            PlatformOps::UtilToI64 => "util::to_i64(88)",
-            PlatformOps::UtilToI128 => "util::to_i128(88)",
-            PlatformOps::UtilToU8 => "util::to_u8(88)",
-            PlatformOps::UtilToU16 => "util::to_u16(88)",
-            PlatformOps::UtilToU32 => "util::to_u32(88)",
-            PlatformOps::UtilToU64 => "util::to_u64(88)",
-            PlatformOps::UtilToU128 => "util::to_u128(88)",
-            PlatformOps::WwwServe => r#"
-                [+] www::serve(8822)
-                [+] stocks := ns("platform.www.quotes")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
-                     { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
-                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
-                GET http://localhost:8822/platform/www/quotes/1/4
-            "#,
-            PlatformOps::WwwURLDecode => "www::url_decode('http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998')",
-            PlatformOps::WwwURLEncode => "www::url_encode('http://shocktrade.com?name=the hero&t=9998')",
-        };
-        result.to_string()
+            "#, '|'),
+            PlatformOps::ToolsScan => strip_margin(r#"
+                |[+] import tools
+                |[+] stocks := ns("platform.scan.stocks")
+                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+                |     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                |     { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+                |     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
+                |     { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
+                |[+] delete from stocks where last_sale > 1.0
+                |[+] stocks:::scan()
+            "#, '|'),
+            PlatformOps::ToolsToArray => r#"tools::to_array("Hello")"#.to_string(),
+            PlatformOps::ToolsToCSV => strip_margin(r#"
+                |import tools::to_csv
+                |[+] stocks := ns("platform.csv.stocks")
+                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                |     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                |     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                |     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                |     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                |stocks:::to_csv()
+            "#, '|'),
+            PlatformOps::ToolsToJSON => strip_margin(r#"
+                |import tools::to_json
+                |[+] stocks := ns("platform.json.stocks")
+                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                |     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                |     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                |     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                |     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                |stocks:::to_json()
+            "#, '|'),
+            PlatformOps::ToolsToTable => strip_margin(r#"
+                |tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
+            "#, '|'),
+            PlatformOps::UtilBase64 => "util::base64('Hello World')".to_string(),
+            PlatformOps::UtilBinary => "util::to_binary(0b1011 & 0b1101)".to_string(),
+            PlatformOps::UtilGzip => "util::gzip('Hello World')".to_string(),
+            PlatformOps::UtilGunzip => "util::gunzip(util::gzip('Hello World'))".to_string(),
+            PlatformOps::UtilHex => "util::hex('Hello World')".to_string(),
+            PlatformOps::UtilMD5 => "util::md5('Hello World')".to_string(),
+            PlatformOps::UtilToASCII => "util::to_ascii(177)".to_string(),
+            PlatformOps::UtilToDate => "util::to_date(177)".to_string(),
+            PlatformOps::UtilToF32 => "util::to_f32(4321)".to_string(),
+            PlatformOps::UtilToF64 => "util::to_f64(4321)".to_string(),
+            PlatformOps::UtilToI8 => "util::to_i8(88)".to_string(),
+            PlatformOps::UtilToI16 => "util::to_i16(88)".to_string(),
+            PlatformOps::UtilToI32 => "util::to_i32(88)".to_string(),
+            PlatformOps::UtilToI64 => "util::to_i64(88)".to_string(),
+            PlatformOps::UtilToI128 => "util::to_i128(88)".to_string(),
+            PlatformOps::UtilToU8 => "util::to_u8(88)".to_string(),
+            PlatformOps::UtilToU16 => "util::to_u16(88)".to_string(),
+            PlatformOps::UtilToU32 => "util::to_u32(88)".to_string(),
+            PlatformOps::UtilToU64 => "util::to_u64(88)".to_string(),
+            PlatformOps::UtilToU128 => "util::to_u128(88)".to_string(),
+            PlatformOps::WwwServe => strip_margin(r#"
+                |[+] www::serve(8822)
+                |[+] stocks := ns("platform.www.quotes")
+                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |[+] [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
+                |     { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
+                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
+                |     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                |     { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
+                |GET http://localhost:8822/platform/www/quotes/1/4
+            "#, '|'),
+            PlatformOps::WwwURLDecode => "www::url_decode('http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998')".to_string(),
+            PlatformOps::WwwURLEncode => "www::url_encode('http://shocktrade.com?name=the hero&t=9998')".to_string(),
+        }
     }
 
     pub fn get_info(&self) -> PlatformFunction {
@@ -1248,57 +1258,6 @@ impl PlatformOps {
         Ok((ms, Boolean(true)))
     }
 
-    fn do_testing_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        match value {
-            ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
-            Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
-            z => (ms, z.to_owned())
-        }
-    }
-
-    fn do_testing_feature(
-        ms: Machine,
-        title: &TypedValue,
-        body: &TypedValue,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        // get the feature title
-        let title = match title {
-            StringValue(s) => Literal(StringValue(s.to_string())),
-            other => return throw(TypeMismatch(UnsupportedType(StringType(0), other.get_type())))
-        };
-
-        // get the feature scenarios
-        let scenarios = match body {
-            Structured(Soft(ss)) => {
-                ss.to_name_values().iter().map(|(title, tv)| match tv {
-                    Function { body: code, .. } =>
-                        Scenario {
-                            title: Box::new(Literal(StringValue(title.to_string()))),
-                            verifications: match code.deref() {
-                                CodeBlock(ops) => ops.clone(),
-                                other => vec![other.clone()]
-                            },
-                        },
-                    other => Literal(other.clone())
-                }).collect::<Vec<_>>()
-            }
-            other => return throw(TypeMismatch(UnsupportedType(
-                ArrayType(0), other.get_type())
-            ))
-        };
-
-        // execute the feature
-        ms.do_feature(&Box::from(title), &scenarios)
-    }
-
-    fn do_testing_matches(ms: Machine, a: &TypedValue, b: &TypedValue) -> (Machine, TypedValue) {
-        (ms, a.matches(b))
-    }
-
-    fn do_testing_type_of(ms: Machine, a: &TypedValue) -> (Machine, TypedValue) {
-        (ms, StringValue(a.get_type_name()))
-    }
-
     fn do_os_call(
         ms: Machine,
         args: Vec<TypedValue>,
@@ -1682,36 +1641,70 @@ impl PlatformOps {
         (ms, StringValue(a.unwrap_value()))
     }
 
-    fn do_tools_compact(ms: Machine, table: &TypedValue) -> (Machine, TypedValue) {
-        match table {
-            ErrorValue(err) => (ms, ErrorValue(err.to_owned())),
-            NamespaceValue(ns) => {
-                match FileRowCollection::open(&ns) {
-                    Ok(mut frc) => (ms, frc.compact()),
-                    Err(err) => (ms, ErrorValue(Exact(err.to_string())))
-                }
-            }
-            TableValue(rcv) => (ms, rcv.to_owned().compact()),
-            z => (ms, ErrorValue(TypeMismatch(CollectionExpected(z.to_code()))))
+    fn do_testing_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        match value {
+            ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
+            Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
+            z => (ms, z.to_owned())
         }
+    }
+
+    fn do_testing_feature(
+        ms: Machine,
+        title: &TypedValue,
+        body: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        // get the feature title
+        let title = match title {
+            StringValue(s) => Literal(StringValue(s.to_string())),
+            other => return throw(TypeMismatch(UnsupportedType(StringType(0), other.get_type())))
+        };
+
+        // get the feature scenarios
+        let scenarios = match body {
+            Structured(Soft(ss)) => {
+                ss.to_name_values().iter().map(|(title, tv)| match tv {
+                    Function { body: code, .. } =>
+                        Scenario {
+                            title: Box::new(Literal(StringValue(title.to_string()))),
+                            verifications: match code.deref() {
+                                CodeBlock(ops) => ops.clone(),
+                                other => vec![other.clone()]
+                            },
+                        },
+                    other => Literal(other.clone())
+                }).collect::<Vec<_>>()
+            }
+            other => return throw(TypeMismatch(UnsupportedType(
+                ArrayType(0), other.get_type())
+            ))
+        };
+
+        // execute the feature
+        ms.do_feature(&Box::from(title), &scenarios)
+    }
+
+    fn do_testing_matches(ms: Machine, a: &TypedValue, b: &TypedValue) -> (Machine, TypedValue) {
+        (ms, a.matches(b))
+    }
+
+    fn do_testing_type_of(ms: Machine, a: &TypedValue) -> (Machine, TypedValue) {
+        (ms, StringValue(a.get_type_name()))
+    }
+
+    fn do_tools_compact(
+        ms: Machine,
+        table: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let mut df = table.to_dataframe()?;
+        Ok((ms, Number(I64Value(df.compact()?))))
     }
 
     fn do_tools_describe(
         ms: Machine,
         item: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match item {
-            ErrorValue(message) => throw(message.to_owned()),
-            NamespaceValue(ns) => {
-                let frc = FileRowCollection::open(&ns)?;
-                Ok((ms, frc.describe()))
-            }
-            Structured(Hard(sh)) => Ok((ms, sh.to_table().describe())),
-            Structured(Soft(ss)) => Ok((ms, ss.to_table().describe())),
-            TableValue(rcv) => Ok((ms, rcv.describe())),
-            other =>
-                throw(TypeMismatch(TableExpected("table or struct".to_string(), other.to_code())))
-        }
+        item.to_dataframe().map(|df| (ms, df.describe()))
     }
 
     /// Retrieves a raw structure from a table
@@ -1723,36 +1716,22 @@ impl PlatformOps {
         row_offset: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
         let offset = row_offset.to_usize();
-        match table {
-            NamespaceValue(ns) => {
-                let frc = FileRowCollection::open(&ns)?;
-                let (row, _) = frc.read_row(offset)?;
-                Ok((ms, TableValue(Model(ModelRowCollection::from_columns_and_rows(
-                    frc.get_columns(), &vec![row])
-                ))))
-            }
-            TableValue(df) => {
-                let columns = df.get_columns();
-                let (row, _) = df.read_row(offset)?;
-                Ok((ms, TableValue(Model(ModelRowCollection::from_columns_and_rows(
-                    columns, &vec![row])
-                ))))
-            }
-            other =>
-                throw(TypeMismatch(TableExpected("[Table, Struct()]".to_string(), other.to_code())))
-        }
+        let df = table.to_dataframe()?;
+        let columns = df.get_columns();
+        let (row, _) = df.read_row(offset)?;
+        Ok((ms, TableValue(Model(ModelRowCollection::from_columns_and_rows(
+            columns, &vec![row])
+        ))))
     }
 
     fn do_tools_journal(
         ms: Machine,
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match value.clone() {
-            NamespaceValue(ns) => Self::do_tools_journal(ms, &TableValue(ns.load_table()?)),
-            TableValue(EventSource(mut df)) => Ok((ms, TableValue(df.get_journal()))),
-            TableValue(TableFn(mut df)) => Ok((ms, TableValue(df.get_journal()))),
-            TableValue(..) => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), value.get_type()))),
-            other => throw(TypeMismatch(UnsupportedType(DynamicType, other.get_type())))
+        match value.to_dataframe()? {
+            EventSource(mut df) => Ok((ms, TableValue(df.get_journal()))),
+            TableFn(mut df) => Ok((ms, TableValue(df.get_journal()))),
+            _ => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), value.get_type()))),
         }
     }
 
@@ -1763,7 +1742,8 @@ impl PlatformOps {
         let seq = value.to_sequence()?;
         match seq {
             Sequences::TheDataframe(mut df) =>
-                df.pop_row(df.get_parameters()).to_table().map(|tv| (ms, tv)),
+                df.pop_row(df.get_parameters()).to_dataframe()
+                    .map(|df| (ms, TableValue(df))),
             Sequences::TheArray(..) => throw(NotImplemented("Array::pop()".into())),
             Sequences::TheTuple(..) => throw(NotImplemented("Tuple::pop()".into())),
         }
@@ -1819,12 +1799,10 @@ impl PlatformOps {
         ms: Machine,
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match value.clone() {
-            NamespaceValue(ns) => Self::do_tools_replay(ms, &TableValue(ns.load_table()?)),
-            TableValue(EventSource(mut df)) => Ok((ms, df.replay())),
-            TableValue(TableFn(mut df)) => Ok((ms, df.replay())),
-            TableValue(..) => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), value.get_type()))),
-            other => throw(TypeMismatch(UnsupportedType(DynamicType, other.get_type())))
+        match value.to_dataframe()? {
+            EventSource(mut df) => Ok((ms, df.replay())),
+            TableFn(mut df) => Ok((ms, df.replay())),
+            _ => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), value.get_type()))),
         }
     }
 
@@ -1834,11 +1812,7 @@ impl PlatformOps {
     ) -> std::io::Result<(Machine, TypedValue)> {
         match value {
             ArrayValue(a) => Ok((ms, ArrayValue(a.rev()))),
-            NamespaceValue(ns) =>
-                Ok((ms.clone(), match Self::open_namespace(&ns) {
-                    TableValue(rcv) => rcv.reverse_table_value(),
-                    other => ErrorValue(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
-                })),
+            NamespaceValue(ns) => Ok((ms, ns.load_table()?.reverse_table_value())),
             StringValue(s) => Ok((ms, StringValue(s.chars().rev().collect()))),
             TableValue(df) => Ok((ms, df.reverse_table_value())),
             other => throw(TypeMismatch(UnsupportedType(DynamicType, other.get_type())))
@@ -1854,17 +1828,13 @@ impl PlatformOps {
         ms: Machine,
         tv_table: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match tv_table.to_table()? {
-            TableValue(df) => {
-                let rows = df.examine_rows()?;
-                let columns = rows.first()
-                    .map(|row| df.get_columns().to_owned())
-                    .unwrap_or(Vec::new());
-                let mrc = ModelRowCollection::from_columns_and_rows(&columns, &rows);
-                Ok((ms, TableValue(Model(mrc))))
-            }
-            other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type())))
-        }
+        let df = tv_table.to_dataframe()?;
+        let rows = df.examine_rows()?;
+        let columns = rows.first()
+            .map(|row| df.get_columns().to_owned())
+            .unwrap_or(Vec::new());
+        let mrc = ModelRowCollection::from_columns_and_rows(&columns, &rows);
+        Ok((ms, TableValue(Model(mrc))))
     }
 
     fn do_tools_to_array(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
@@ -1890,15 +1860,8 @@ impl PlatformOps {
         value: &TypedValue,
         format: DataFormats,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        /// convert the value into a [RowCollection]
-        let rc: Box<dyn RowCollection> = match value {
-            NamespaceValue(ns) => Box::new(FileRowCollection::open(&ns)?),
-            TableValue(df) => Box::new(df.to_owned()),
-            other => return throw(Exact(format!("Cannot convert {} to {}",
-                                                other.get_type().to_code(), format.get_name())))
-        };
-
         /// transform the [RowCollection] into CSV or JSON
+        let rc: Box<dyn RowCollection> = value.to_table()?;
         match format {
             DataFormats::CSV =>
                 Ok((ms, ArrayValue(Array::from(rc.iter()
@@ -1915,7 +1878,7 @@ impl PlatformOps {
         ms: Machine,
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        let rc = value.to_table_impl()?;
+        let rc = value.to_table()?;
         let columns = rc.get_columns();
         let rows = rc.read_active_rows()?;
         let mrc = ModelRowCollection::from_columns_and_rows(columns, &rows);
@@ -2101,6 +2064,20 @@ impl PlatformOps {
     }
 }
 
+fn strip_margin(input: &str, margin_char: char) -> String {
+    input
+        .lines()
+        .map(|line| {
+            if let Some(pos) = line.find(margin_char) {
+                line[pos + 1..].to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Unit tests
 #[cfg(test)]
 mod tests {
@@ -2219,17 +2196,18 @@ mod tests {
         assert_eq!(CalDateMonth.to_code(), "cal::month_of(n: Date)");
         assert_eq!(CalDateSecond.to_code(), "cal::second_of(n: Date)");
         assert_eq!(CalDateYear.to_code(), "cal::year_of(n: Date)");
+        // durations
+        assert_eq!(DurationsDays.to_code(), "durations::days()");
+        assert_eq!(DurationsHours.to_code(), "durations::hours()");
+        assert_eq!(DurationsMillis.to_code(), "durations::millis()");
+        assert_eq!(DurationsMinutes.to_code(), "durations::minutes()");
+        assert_eq!(DurationsSeconds.to_code(), "durations::seconds()");
         // io
         assert_eq!(IoFileCreate.to_code(), "io::create_file(a: String, b: String)");
         assert_eq!(IoFileExists.to_code(), "io::exists(s: String)");
         assert_eq!(IoFileReadText.to_code(), "io::read_text_file(s: String)");
         assert_eq!(IoStdErr.to_code(), "io::stderr(s: String)");
         assert_eq!(IoStdOut.to_code(), "io::stdout(s: String)");
-        // testing
-        assert_eq!(TestingAssert.to_code(), "testing::assert(b: Boolean)");
-        assert_eq!(TestingFeature.to_code(), "testing::feature(a: String, b: Struct)");
-        assert_eq!(TestingMatches.to_code(), "testing::matches(a, b)");
-        assert_eq!(TestingTypeOf.to_code(), "testing::type_of(a)");
         // os
         assert_eq!(OsCall.to_code(), "os::call(s: String)");
         assert_eq!(OsClear.to_code(), "os::clear()");
@@ -2258,13 +2236,21 @@ mod tests {
         assert_eq!(StrStartsWith.to_code(), "str::starts_with(a: String, b: String)");
         assert_eq!(StrSubstring.to_code(), "str::substring(s: String, m: i64, n: i64)");
         assert_eq!(StrToString.to_code(), "str::to_string(a)");
+        // testing
+        assert_eq!(TestingAssert.to_code(), "testing::assert(b: Boolean)");
+        assert_eq!(TestingFeature.to_code(), "testing::feature(a: String, b: Struct)");
+        assert_eq!(TestingMatches.to_code(), "testing::matches(a, b)");
+        assert_eq!(TestingTypeOf.to_code(), "testing::type_of(a)");
         // tools
         assert_eq!(ToolsCompact.to_code(), "tools::compact(t: Table)");
         assert_eq!(ToolsDescribe.to_code(), "tools::describe(t: Table)");
         assert_eq!(ToolsFetch.to_code(), "tools::fetch(t: Table, n: u64)");
+        assert_eq!(ToolsJournal.to_code(), "tools::journal(t: Table)");
         assert_eq!(ToolsPop.to_code(), "tools::pop(t: Table)");
         assert_eq!(ToolsPush.to_code(), "tools::push(a, b)");
+        assert_eq!(ToolsReplay.to_code(), "tools::replay()");
         assert_eq!(ToolsReverse.to_code(), "tools::reverse(t: Table)");
+        assert_eq!(ToolsRowId.to_code(), "tools::row_id()");
         assert_eq!(ToolsScan.to_code(), "tools::scan(t: Table)");
         assert_eq!(ToolsToArray.to_code(), "tools::to_array(t: Table)");
         assert_eq!(ToolsToCSV.to_code(), "tools::to_csv(t: Table)");
@@ -2273,6 +2259,8 @@ mod tests {
         // util
         assert_eq!(UtilBase64.to_code(), "util::base64(a)");
         assert_eq!(UtilBinary.to_code(), "util::to_binary(a)");
+        assert_eq!(UtilGzip.to_code(), "util::gzip(a)");
+        assert_eq!(UtilGunzip.to_code(), "util::gunzip(a)");
         assert_eq!(UtilHex.to_code(), "util::hex(a)");
         assert_eq!(UtilMD5.to_code(), "util::md5(a)");
         assert_eq!(UtilToASCII.to_code(), "util::to_ascii(n: u32)");
@@ -2298,21 +2286,20 @@ mod tests {
     /// Package "cal" tests
     #[cfg(test)]
     mod cal_tests {
-        use crate::interpreter::Interpreter;
         use crate::numbers::Numbers::*;
-        use crate::testdata::verify_whence;
+        use crate::testdata::verify_exact_value_where;
         use crate::typed_values::TypedValue::Number;
 
         #[test]
         fn test_cal_now() {
-            verify_whence(Interpreter::new(), r#"
+            verify_exact_value_where(r#"
                 cal::now()
             "#, |n| matches!(n, Number(DateValue(..))));
         }
 
         #[test]
         fn test_cal_day_of() {
-            verify_whence(Interpreter::new(), r#"
+            verify_exact_value_where(r#"
                 import cal
                 now():::day_of()
             "#, |n| matches!(n, Number(U32Value(..))));
@@ -2320,7 +2307,7 @@ mod tests {
 
         #[test]
         fn test_cal_hour24() {
-            verify_whence(Interpreter::new(), r#"
+            verify_exact_value_where(r#"
                 import cal
                 now():::hour24()
             "#, |n| matches!(n, Number(U32Value(..))));
@@ -2328,7 +2315,7 @@ mod tests {
 
         #[test]
         fn test_cal_hour12() {
-            verify_whence(Interpreter::new(), r#"
+            verify_exact_value_where(r#"
                 import cal
                 now():::hour12()
             "#, |n| matches!(n, Number(U32Value(..))));
@@ -2336,7 +2323,7 @@ mod tests {
 
         #[test]
         fn test_cal_minute_of() {
-            verify_whence(Interpreter::new(), r#"
+            verify_exact_value_where(r#"
                 import cal
                 now():::minute_of()
             "#, |n| matches!(n, Number(U32Value(..))));
@@ -2344,7 +2331,7 @@ mod tests {
 
         #[test]
         fn test_cal_month_of() {
-            verify_whence(Interpreter::new(), r#"
+            verify_exact_value_where(r#"
                 import cal
                 now():::month_of()
             "#, |n| matches!(n, Number(U32Value(..))));
@@ -2352,7 +2339,7 @@ mod tests {
 
         #[test]
         fn test_cal_second_of() {
-            verify_whence(Interpreter::new(), r#"
+            verify_exact_value_where(r#"
                 import cal
                 now():::second_of()
             "#, |n| matches!(n, Number(U32Value(..))));
@@ -2360,7 +2347,7 @@ mod tests {
 
         #[test]
         fn test_cal_year_of() {
-            verify_whence(Interpreter::new(), r#"
+            verify_exact_value_where(r#"
                 import cal
                 now():::year_of()
             "#, |n| matches!(n, Number(I32Value(..))));
@@ -2372,12 +2359,12 @@ mod tests {
     mod duration_tests {
         use super::*;
         use crate::numbers::Numbers::I64Value;
-        use crate::testdata::verify_exact;
+        use crate::testdata::verify_exact_value;
         use crate::typed_values::TypedValue::Number;
 
         #[test]
         fn test_durations_days() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import durations
                 3:::days()
             "#, Number(I64Value(3 * DAYS)));
@@ -2385,7 +2372,7 @@ mod tests {
 
         #[test]
         fn test_durations_hours() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import durations
                 8:::hours()
             "#, Number(I64Value(8 * HOURS)));
@@ -2393,7 +2380,7 @@ mod tests {
 
         #[test]
         fn test_durations_hours_f64() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import durations
                 0.5:::hours()
             "#, Number(F64Value(30.0 * MINUTES.to_f64().unwrap())));
@@ -2401,7 +2388,7 @@ mod tests {
 
         #[test]
         fn test_durations_millis() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import durations
                 1000:::millis()
             "#, Number(I64Value(1 * SECONDS)));
@@ -2409,7 +2396,7 @@ mod tests {
 
         #[test]
         fn test_durations_minutes() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import durations
                 30:::minutes()
             "#, Number(I64Value(30 * MINUTES)));
@@ -2417,7 +2404,7 @@ mod tests {
 
         #[test]
         fn test_durations_seconds() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import durations
                 20:::seconds()
             "#, Number(I64Value(20 * SECONDS)));
@@ -2434,18 +2421,18 @@ mod tests {
 
         #[test]
         fn test_io_create_file_qualified() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 io::create_file("quote.json", { symbol: "TRX", exchange: "NYSE", last_sale: 45.32 })
             "#, Number(U64Value(52)));
 
-            verify_exact(r#"
+            verify_exact_value(r#"
                 io::exists("quote.json")
             "#, Boolean(true));
         }
 
         #[test]
         fn test_io_create_file_postfix() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import io
                 "quote.json":::create_file({
                     symbol: "TRX",
@@ -2454,7 +2441,7 @@ mod tests {
                 })
             "#, Number(U64Value(52)));
 
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import io
                 "quote.json":::exists()
             "#, Boolean(true));
@@ -2462,7 +2449,7 @@ mod tests {
 
         #[test]
         fn test_io_file_exists() {
-            verify_exact(r#"
+            verify_exact_value(r#"
             import io
             path_str := oxide::home()
             path_str:::exists()
@@ -2471,7 +2458,7 @@ mod tests {
 
         #[test]
         fn test_io_create_and_read_text_file() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import io, util
                 file := "temp_secret.txt"
                 file:::create_file(md5("**keep**this**secret**"))
@@ -2481,12 +2468,12 @@ mod tests {
 
         #[test]
         fn test_io_stderr() {
-            verify_exact(r#"io::stderr("Goodbye Cruel World")"#, Boolean(true));
+            verify_exact_value(r#"io::stderr("Goodbye Cruel World")"#, Boolean(true));
         }
 
         #[test]
         fn test_io_stdout() {
-            verify_exact(r#"io::stdout("Hello World")"#, Boolean(true));
+            verify_exact_value(r#"io::stdout("Hello World")"#, Boolean(true));
         }
     }
 
@@ -2500,7 +2487,7 @@ mod tests {
 
         #[test]
         fn test_os_call() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 create table ns("platform.os.call") (
                     symbol: String(8),
                     exchange: String(8),
@@ -2512,13 +2499,13 @@ mod tests {
 
         #[test]
         fn test_os_clear() {
-            verify_exact("os::clear()", Boolean(true))
+            verify_exact_value("os::clear()", Boolean(true))
         }
 
         #[test]
         fn test_os_current_dir() {
             let phys_columns = make_quote_columns();
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 import str
                 cur_dir := os::current_dir()
                 prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
@@ -2537,7 +2524,7 @@ mod tests {
 
         #[test]
         fn test_os_env() {
-            verify_when("os::env()", |v| matches!(v, TableValue(..)))
+            verify_exact_value_where("os::env()", |v| matches!(v, TableValue(..)))
         }
     }
 
@@ -2551,7 +2538,7 @@ mod tests {
 
         #[test]
         fn test_oxide_compile() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 code := oxide::compile("2 ** 4")
                 code()
             "#, Number(F64Value(16.)));
@@ -2559,7 +2546,7 @@ mod tests {
 
         #[test]
         fn test_oxide_compile_closure() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 n := 5
                 code := oxide::compile("n¡")
                 code()
@@ -2568,7 +2555,7 @@ mod tests {
 
         #[test]
         fn test_oxide_eval_closure() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 a := 'Hello '
                 b := 'World'
                 oxide::eval("a + b")
@@ -2577,25 +2564,25 @@ mod tests {
 
         #[test]
         fn test_oxide_eval_qualified() {
-            verify_exact("oxide::eval('2 ** 4')", Number(F64Value(16.)));
-            verify_exact("oxide::eval(123)", ErrorValue(Exact("Type Mismatch: Expected a String near i64".into())));
+            verify_exact_value("oxide::eval('2 ** 4')", Number(F64Value(16.)));
+            verify_exact_value("oxide::eval(123)", ErrorValue(Exact("Type Mismatch: Expected a String near i64".into())));
         }
 
         #[test]
         fn test_oxide_eval_postfix() {
             let mut interpreter = Interpreter::new();
-            interpreter.evaluate("import oxide").unwrap();
-            interpreter = verify_where(interpreter, "'2 ** 4':::eval()", Number(F64Value(16.)));
-            interpreter = verify_where(interpreter, "123:::eval()", ErrorValue(Exact("Type Mismatch: Expected a String near i64".into())));
+            interpreter = verify_exact_value_with(interpreter, "import oxide", Boolean(true));
+            interpreter = verify_exact_value_with(interpreter, "'2 ** 4':::eval()", Number(F64Value(16.)));
+            interpreter = verify_exact_value_with(interpreter, "123:::eval()", ErrorValue(Exact("Type Mismatch: Expected a String near i64".into())));
         }
 
         #[test]
         fn test_oxide_help() {
             // fully-qualified
-            verify_when("oxide::help()", |v| matches!(v, TableValue(..)));
+            verify_exact_value_where("oxide::help()", |v| matches!(v, TableValue(..)));
 
             // postfix
-            verify_when(r#"
+            verify_exact_value_where(r#"
                 import oxide
                 help()
             "#, |v| matches!(v, TableValue(..)));
@@ -2610,17 +2597,17 @@ mod tests {
 
         #[test]
         fn test_oxide_home() {
-            verify_exact("oxide::home()", StringValue(Machine::oxide_home()));
+            verify_exact_value("oxide::home()", StringValue(Machine::oxide_home()));
         }
 
         #[test]
         fn test_oxide_println() {
-            verify_exact(r#"oxide::println("Hello World")"#, Boolean(true));
+            verify_exact_value(r#"oxide::println("Hello World")"#, Boolean(true));
         }
 
         #[test]
         fn test_oxide_version() {
-            verify_exact(
+            verify_exact_value(
                 "oxide::version()",
                 StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))
         }
@@ -2637,7 +2624,7 @@ mod tests {
 
         #[test]
         fn test_str_ends_with_postfix_true() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str
                 'Hello World':::ends_with('World')
             "#, Boolean(true));
@@ -2645,7 +2632,7 @@ mod tests {
 
         #[test]
         fn test_str_ends_with_postfix_false() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str
                 'Hello World':::ends_with('Hello')
             "#, Boolean(false));
@@ -2653,28 +2640,28 @@ mod tests {
 
         #[test]
         fn test_str_ends_with_qualified_true() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::ends_with('Hello World', 'World')
             "#, Boolean(true));
         }
 
         #[test]
         fn test_str_ends_with_qualified_false() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::ends_with('Hello World', 'Hello')
             "#, Boolean(false))
         }
 
         #[test]
         fn test_str_format_qualified() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::format("This {} the {}", "is", "way")
             "#, StringValue("This is the way".into()));
         }
 
         #[test]
         fn test_str_format_postfix() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str::format
                 "This {} the {}":::format("is", "way")
             "#, StringValue("This is the way".into()));
@@ -2682,7 +2669,7 @@ mod tests {
 
         #[test]
         fn test_str_format_in_scope() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str::format
                 format("This {} the {}", "is", "way")
             "#, StringValue("This is the way".into()));
@@ -2690,14 +2677,14 @@ mod tests {
 
         #[test]
         fn test_str_index_of_qualified() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::index_of('The little brown fox', 'brown')
             "#, Number(I64Value(11)));
         }
 
         #[test]
         fn test_str_index_of_postfix() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str
                 'The little brown fox':::index_of('brown')
             "#, Number(I64Value(11)));
@@ -2705,28 +2692,28 @@ mod tests {
 
         #[test]
         fn test_str_join() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::join(['1', 5, 9, '13'], ', ')
             "#, StringValue("1, 5, 9, 13".into()));
         }
 
         #[test]
         fn test_str_left_qualified_positive() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::left('Hello World', 5)
             "#, StringValue("Hello".into()));
         }
 
         #[test]
         fn test_str_left_qualified_negative() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::left('Hello World', -5)
             "#, StringValue("World".into()));
         }
 
         #[test]
         fn test_str_left_postfix_valid() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str, util
                 'Hello World':::left(5)
             "#, StringValue("Hello".into()));
@@ -2735,7 +2722,7 @@ mod tests {
         #[test]
         fn test_str_left_postfix_invalid() {
             // postfix - invalid case
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str, util
                 12345:::left(5)
             "#, Undefined);
@@ -2744,21 +2731,21 @@ mod tests {
         #[test]
         fn test_str_left_in_scope() {
             // attempt a non-import function from the same package
-            verify_when(r#"
+            verify_exact_value_where(r#"
                 left('Hello World', 5)
             "#, |v| matches!(v, ErrorValue(..)));
         }
 
         #[test]
         fn test_str_len_qualified() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::len('The little brown fox')
             "#, Number(I64Value(20)));
         }
 
         #[test]
         fn test_str_len_postfix() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str
                 'The little brown fox':::len()
             "#, Number(I64Value(20)));
@@ -2766,28 +2753,28 @@ mod tests {
 
         #[test]
         fn test_str_right_qualified_string_positive() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::right('Hello World', 5)
             "#, StringValue("World".into()));
         }
 
         #[test]
         fn test_str_right_qualified_string_negative() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::right('Hello World', -5)
             "#, StringValue("Hello".into()));
         }
 
         #[test]
         fn test_str_right_qualified_not_string_is_undefined() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::right(7779311, 5)
             "#, Undefined);
         }
 
         #[test]
         fn test_str_right_postfix_string_negative() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str, util
                 'Hello World':::right(-5)
             "#, StringValue("Hello".into()));
@@ -2795,7 +2782,7 @@ mod tests {
 
         #[test]
         fn test_str_split_qualified() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::split('Hello,there World', ' ,')
             "#, ArrayValue(Array::from(vec![
                 StringValue("Hello".into()),
@@ -2806,7 +2793,7 @@ mod tests {
 
         #[test]
         fn test_str_split_postfix() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str
                 'Hello World':::split(' ')
             "#, ArrayValue(Array::from(vec![
@@ -2818,7 +2805,7 @@ mod tests {
         #[test]
         fn test_str_split_in_scope() {
             // in-scope
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str
                 split('Hello,there World;Yeah!', ' ,;')
             "#, ArrayValue(Array::from(vec![
@@ -2831,7 +2818,7 @@ mod tests {
 
         #[test]
         fn test_str_starts_with_postfix_true() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str
                 'Hello World':::starts_with('Hello')
             "#, Boolean(true));
@@ -2839,14 +2826,14 @@ mod tests {
 
         #[test]
         fn test_str_starts_with_qualified_true() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::starts_with('Hello World', 'Hello')
             "#, Boolean(true));
         }
 
         #[test]
         fn test_str_starts_with_qualified_false() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::starts_with('Hello World', 'World')
             "#, Boolean(false))
         }
@@ -2854,7 +2841,7 @@ mod tests {
         #[test]
         fn test_str_substring_defined() {
             // fully-qualified
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::substring('Hello World', 0, 5)
             "#, StringValue("Hello".into()));
         }
@@ -2862,21 +2849,21 @@ mod tests {
         #[test]
         fn test_str_substring_undefined() {
             // fully-qualified (negative case)
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::substring(8888, 0, 5)
             "#, Undefined)
         }
 
         #[test]
         fn test_str_to_string_qualified() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 str::to_string(125.75)
             "#, StringValue("125.75".into()));
         }
 
         #[test]
         fn test_str_to_string_postfix() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import str::to_string
                 123:::to_string()
             "#, StringValue("123".into()));
@@ -2886,12 +2873,12 @@ mod tests {
     /// Package "testing" tests
     #[cfg(test)]
     mod testing_tests {
-        use crate::testdata::{verify_exact, verify_exact_table_with_ids, verify_exact_text};
+        use crate::testdata::{verify_exact_code, verify_exact_table, verify_exact_value};
         use crate::typed_values::TypedValue::Boolean;
 
         #[test]
         fn test_testing_feature() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
             import testing
             feature("Matches function", {
                 "Compare Array contents: Equal": fn(ctx) => {
@@ -2934,7 +2921,7 @@ mod tests {
         #[test]
         fn test_testing_matches_exact() {
             // test a perfect match
-            verify_exact(r#"
+            verify_exact_value(r#"
                 a := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
                 b := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
                 testing::matches(a, b)
@@ -2944,7 +2931,7 @@ mod tests {
         #[test]
         fn test_testing_matches_unordered() {
             // test an unordered match
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import testing::matches
                 a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
                 b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
@@ -2955,7 +2942,7 @@ mod tests {
         #[test]
         fn test_testing_matches_not_match_1() {
             // test when things do not match 1
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import testing
                 a := { first: "Tom", last: "Lane" }
                 b := { first: "Jerry", last: "Lane" }
@@ -2966,7 +2953,7 @@ mod tests {
         #[test]
         fn test_testing_matches_not_match_2() {
             // test when things do not match 2
-            verify_exact(r#"
+            verify_exact_value(r#"
                 a := { key: "123", values: [1, 74, 88] }
                 b := { key: "123", values: [1, 74, 88, 0] }
                 testing::matches(a, b)
@@ -2975,101 +2962,101 @@ mod tests {
 
         #[test]
         fn test_testing_type_of_array_bool() {
-            verify_exact_text_q("testing::type_of([true, false])", "Array(2)");
+            verify_exact_string("testing::type_of([true, false])", "Array(2)");
         }
 
         #[test]
         fn test_testing_type_of_array_i64() {
-            verify_exact_text_q("testing::type_of([12, 76, 444])", "Array(3)");
+            verify_exact_string("testing::type_of([12, 76, 444])", "Array(3)");
         }
 
         #[test]
         fn test_testing_type_of_array_str() {
-            verify_exact_text_q("testing::type_of(['ciao', 'hello', 'world'])", "Array(3)");
+            verify_exact_string("testing::type_of(['ciao', 'hello', 'world'])", "Array(3)");
         }
 
         #[test]
         fn test_testing_type_of_array_f64() {
-            verify_exact_text_q("testing::type_of([12, 'hello', 76.78])", "Array(3)");
+            verify_exact_string("testing::type_of([12, 'hello', 76.78])", "Array(3)");
         }
 
         #[test]
         fn test_testing_type_of_bool() {
-            verify_exact_text_q("testing::type_of(false)", "Boolean");
-            verify_exact_text_q("testing::type_of(true)", "Boolean");
+            verify_exact_string("testing::type_of(false)", "Boolean");
+            verify_exact_string("testing::type_of(true)", "Boolean");
         }
 
         #[test]
         fn test_testing_type_of_date() {
-            verify_exact_text_q("testing::type_of(cal::now())", "Date");
+            verify_exact_string("testing::type_of(cal::now())", "Date");
         }
 
         #[test]
         fn test_testing_type_of_fn() {
-            verify_exact_text_q("testing::type_of(fn(a, b) => a + b)", "fn(a, b)");
+            verify_exact_string("testing::type_of(fn(a, b) => a + b)", "fn(a, b)");
         }
 
         #[test]
         fn test_testing_type_of_i64() {
-            verify_exact_text_q("testing::type_of(1234)", "i64");
+            verify_exact_string("testing::type_of(1234)", "i64");
         }
 
         #[test]
         fn test_testing_type_of_f64() {
-            verify_exact_text_q("testing::type_of(12.394)", "f64");
+            verify_exact_string("testing::type_of(12.394)", "f64");
         }
 
         #[test]
         fn test_testing_type_of_string() {
-            verify_exact_text_q("testing::type_of('1234')", "String(4)");
-            verify_exact_text_q(r#"testing::type_of("abcde")"#, "String(5)");
+            verify_exact_string("testing::type_of('1234')", "String(4)");
+            verify_exact_string(r#"testing::type_of("abcde")"#, "String(5)");
         }
 
         #[test]
         fn test_testing_type_of_structure_hard() {
-            verify_exact_text_q(r#"testing::type_of(Struct(symbol: String(3) = "ABC"))"#,
+            verify_exact_string(r#"testing::type_of(Struct(symbol: String(3) = "ABC"))"#,
                                 r#"Struct(symbol: String(3) := "ABC")"#);
         }
 
         #[test]
         fn test_testing_type_of_structure_soft() {
-            verify_exact_text_q(r#"testing::type_of({symbol:"ABC"})"#,
+            verify_exact_string(r#"testing::type_of({symbol:"ABC"})"#,
                                 r#"Struct(symbol: String(3) := "ABC")"#);
         }
 
         #[test]
         fn test_testing_type_of_namespace() {
-            verify_exact_text_q(r#"testing::type_of(ns("a.b.c"))"#, "Table");
+            verify_exact_string(r#"testing::type_of(ns("a.b.c"))"#, "Table");
         }
 
         #[test]
         fn test_testing_type_of_table() {
-            verify_exact_text_q(r#"testing::type_of(table(symbol: String(8), exchange: String(8), last_sale: f64))"#,
+            verify_exact_string(r#"testing::type_of(table(symbol: String(8), exchange: String(8), last_sale: f64))"#,
                                 "Table(symbol: String(8), exchange: String(8), last_sale: f64)");
         }
 
         #[test]
         fn test_testing_type_of_uuid() {
-            verify_exact_text_q("testing::type_of(oxide::uuid())", "UUID");
+            verify_exact_string("testing::type_of(oxide::uuid())", "UUID");
         }
 
         #[test]
         fn test_testing_type_of_variable() {
-            verify_exact_text_q("testing::type_of(my_var)", "");
+            verify_exact_string("testing::type_of(my_var)", "");
         }
 
         #[test]
         fn test_testing_type_of_null() {
-            verify_exact_text_q("testing::type_of(null)", "");
+            verify_exact_string("testing::type_of(null)", "");
         }
 
         #[test]
         fn test_testing_type_of_undefined() {
-            verify_exact_text_q("testing::type_of(undefined)", "");
+            verify_exact_string("testing::type_of(undefined)", "");
         }
 
-        fn verify_exact_text_q(code: &str, expected: &str) {
-            verify_exact_text(code, format!("\"{}\"", expected).as_str())
+        fn verify_exact_string(code: &str, expected: &str) {
+            verify_exact_code(code, format!("\"{}\"", expected).as_str())
         }
     }
 
@@ -3088,7 +3075,7 @@ mod tests {
         #[test]
         fn test_tools_compact() {
             let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_table_where(interpreter, r#"
+            interpreter = verify_exact_table_with(interpreter, r#"
                 [+] stocks := ns("platform.compact.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
@@ -3110,7 +3097,7 @@ mod tests {
                 "|------------------------------------|"
             ]);
 
-            verify_exact_table_where(interpreter, r#"
+            verify_exact_table_with(interpreter, r#"
                 [+] import tools
                 [+] stocks:::compact()
                 [+] from stocks
@@ -3128,7 +3115,7 @@ mod tests {
         #[test]
         fn test_tools_describe() {
             // fully-qualified
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 tools::describe({ symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 })
             "#, vec![
                 "|----------------------------------------------------------|",
@@ -3141,7 +3128,7 @@ mod tests {
             ]);
 
             // postfix
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 [+] import tools
                 [+] stocks := ns("platform.describe.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
@@ -3160,7 +3147,7 @@ mod tests {
         #[test]
         fn test_tools_fetch() {
             // fully-qualified
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 [+] stocks := ns("platform.fetch.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -3176,7 +3163,7 @@ mod tests {
             ]);
 
             // postfix
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 [+] import tools
                 [+] stocks := to_table([
                         { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -3195,7 +3182,7 @@ mod tests {
 
         #[test]
         fn test_tools_journal() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 stocks := ns("platform.journal.stocks")
                 drop table stocks
 
@@ -3226,7 +3213,7 @@ mod tests {
 
         #[test]
         fn test_tools_pop() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 [+] import tools
                 [+] stocks := ns("platform.pop.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
@@ -3241,7 +3228,7 @@ mod tests {
                 "| 2  | JET    | NASDAQ   | 32.12     |",
                 "|------------------------------------|"
             ]);
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 [+] stocks := ns("platform.pop.stocks")
                 [+] tools::pop(stocks)
             "#, vec![
@@ -3275,7 +3262,7 @@ mod tests {
 
         #[test]
         fn test_tools_push_array_evaluate() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 [+] stocks := [
                         { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                         { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -3297,7 +3284,7 @@ mod tests {
 
         #[test]
         fn test_tools_push_table_evaluate() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 [+] stocks := ns("platform.push.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -3319,7 +3306,7 @@ mod tests {
 
         #[test]
         fn test_tools_push_tuple_evaluate() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 [+] stocks := [
                         ("ABC", "AMEX", 12.49),
                         ("BOOM", "NYSE", 56.88),
@@ -3341,7 +3328,7 @@ mod tests {
 
         #[test]
         fn test_tools_replay() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 stocks := ns("platform.table_fn.stocks")
                 drop table stocks
 
@@ -3374,7 +3361,7 @@ mod tests {
 
         #[test]
         fn test_tools_reverse_arrays() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 import tools
                 to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
             "#, vec![
@@ -3391,7 +3378,7 @@ mod tests {
 
         #[test]
         fn test_tools_reverse_strings() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 fn backwards(a) => tools::reverse(a)
                 "Hello World":::backwards()
             "#, StringValue("dlroW olleH".into()));
@@ -3400,7 +3387,7 @@ mod tests {
         #[test]
         fn test_tools_reverse_tables_function() {
             // fully-qualified (ephemeral)
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 import tools
                 stocks := to_table([
                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
@@ -3422,7 +3409,7 @@ mod tests {
         #[test]
         fn test_tools_reverse_tables_method() {
             // postfix (durable)
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 [+] import tools
                 [+] stocks := ns("platform.reverse.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
@@ -3456,7 +3443,7 @@ mod tests {
                 [+] delete from stocks where last_sale > 1.0
                 [+] stocks:::scan()
             "#).unwrap();
-            assert_eq!(result.to_table_impl().unwrap().read_active_rows().unwrap(), vec![
+            assert_eq!(result.to_table().unwrap().read_active_rows().unwrap(), vec![
                 make_scan_quote(0, "ABC", "AMEX", 12.33, false),
                 make_scan_quote(1, "UNO", "OTC", 0.2456, true),
                 make_scan_quote(2, "BIZ", "NYSE", 9.775, false),
@@ -3467,14 +3454,14 @@ mod tests {
 
         #[test]
         fn test_tools_to_array_with_tuples_qualified() {
-            verify_exact_text(r#"
+            verify_exact_code(r#"
                  tools::to_array(("a", "b", "c"))
             "#, r#"["a", "b", "c"]"#);
         }
 
         #[test]
         fn test_tools_to_array_with_strings_qualified() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                  tools::to_array("Hello")
             "#, ArrayValue(Array::from(vec![
                 StringValue("H".into()), StringValue("e".into()),
@@ -3485,7 +3472,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_array_with_strings_postfix() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import tools
                 "World":::to_array()
             "#, ArrayValue(Array::from(vec![
@@ -3522,7 +3509,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_csv() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import tools::to_csv
                 [+] stocks := ns("platform.csv.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
@@ -3543,7 +3530,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_json() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 import tools::to_json
                 [+] stocks := ns("platform.json.stocks")
                 [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
@@ -3564,7 +3551,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_table_with_arrays() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
             "#, vec![
                 "|-------------|",
@@ -3580,7 +3567,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_table_with_hard_structures() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 tools::to_table(Struct(
                     symbol: String(8) = "ABC",
                     exchange: String(8) = "NYSE",
@@ -3597,7 +3584,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_table_with_soft_and_hard_structures() {
-            verify_exact_table_with_ids(r#"
+            verify_exact_table(r#"
                 stocks := tools::to_table([
                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                     { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
@@ -3638,14 +3625,14 @@ mod tests {
 
         #[test]
         fn test_util_base64() {
-            verify_exact(
+            verify_exact_value(
                 "util::base64('Hello World')",
                 StringValue("SGVsbG8gV29ybGQ=".into()))
         }
 
         #[test]
         fn test_util_gzip_and_gunzip() {
-            verify_exact(r#"
+            verify_exact_value(r#"
                 compressed := util::gzip('Hello World')
                 util::gunzip(compressed)
             "#, Binary(b"Hello World".to_vec()))
@@ -3653,14 +3640,14 @@ mod tests {
 
         #[test]
         fn test_util_hex() {
-            verify_exact(
+            verify_exact_value(
                 "util::hex('Hello World')",
                 StringValue("48656c6c6f20576f726c64".into()))
         }
 
         #[test]
         fn test_util_md5() {
-            verify_exact_text(
+            verify_exact_code(
                 "util::md5('Hello World')",
                 "b10a8db164e0754105b7a99be72e3fe5")
         }
@@ -3672,14 +3659,14 @@ mod tests {
 
         #[test]
         fn test_util_to_ascii() {
-            verify_exact_text(
+            verify_exact_code(
                 "util::to_ascii(177)",
                 "\"±\"")
         }
 
         #[test]
         fn test_util_to_hex() {
-            verify_exact_text(
+            verify_exact_code(
                 "util::hex('Hello World')",
                 "\"48656c6c6f20576f726c64\"")
         }
@@ -3691,22 +3678,22 @@ mod tests {
             interpreter.evaluate("import util").unwrap();
 
             // floating-point kinds
-            interpreter = verify_whence(interpreter, "1015:::to_f32()", |n| n == Number(F32Value(1015.)));
-            interpreter = verify_whence(interpreter, "7779311:::to_f64()", |n| n == Number(F64Value(7779311.)));
+            interpreter = verify_exact_value_whence(interpreter, "1015:::to_f32()", |n| n == Number(F32Value(1015.)));
+            interpreter = verify_exact_value_whence(interpreter, "7779311:::to_f64()", |n| n == Number(F64Value(7779311.)));
 
             // signed-integer kinds
-            interpreter = verify_whence(interpreter, "12345678987.43:::to_i128()", |n| n == Number(I128Value(12345678987)));
-            interpreter = verify_whence(interpreter, "123456789.42:::to_i64()", |n| n == Number(I64Value(123456789)));
-            interpreter = verify_whence(interpreter, "-765.65:::to_i32()", |n| n == Number(I32Value(-765)));
-            interpreter = verify_whence(interpreter, "-567.311:::to_i16()", |n| n == Number(I16Value(-567)));
-            interpreter = verify_whence(interpreter, "-125.089:::to_i8()", |n| n == Number(I8Value(-125)));
+            interpreter = verify_exact_value_whence(interpreter, "12345678987.43:::to_i128()", |n| n == Number(I128Value(12345678987)));
+            interpreter = verify_exact_value_whence(interpreter, "123456789.42:::to_i64()", |n| n == Number(I64Value(123456789)));
+            interpreter = verify_exact_value_whence(interpreter, "-765.65:::to_i32()", |n| n == Number(I32Value(-765)));
+            interpreter = verify_exact_value_whence(interpreter, "-567.311:::to_i16()", |n| n == Number(I16Value(-567)));
+            interpreter = verify_exact_value_whence(interpreter, "-125.089:::to_i8()", |n| n == Number(I8Value(-125)));
 
             // unsigned-integer kinds
-            interpreter = verify_whence(interpreter, "12789.43:::to_u128()", |n| n == Number(U128Value(12789)));
-            interpreter = verify_whence(interpreter, "12.3:::to_u64()", |n| n == Number(U64Value(12)));
-            interpreter = verify_whence(interpreter, "765.65:::to_u32()", |n| n == Number(U32Value(765)));
-            interpreter = verify_whence(interpreter, "567.311:::to_u16()", |n| n == Number(U16Value(567)));
-            interpreter = verify_whence(interpreter, "125.089:::to_u8()", |n| n == Number(U8Value(125)));
+            interpreter = verify_exact_value_whence(interpreter, "12789.43:::to_u128()", |n| n == Number(U128Value(12789)));
+            interpreter = verify_exact_value_whence(interpreter, "12.3:::to_u64()", |n| n == Number(U64Value(12)));
+            interpreter = verify_exact_value_whence(interpreter, "765.65:::to_u32()", |n| n == Number(U32Value(765)));
+            interpreter = verify_exact_value_whence(interpreter, "567.311:::to_u16()", |n| n == Number(U16Value(567)));
+            interpreter = verify_exact_value_whence(interpreter, "125.089:::to_u8()", |n| n == Number(U8Value(125)));
 
             // scope checks
             let mut interpreter = Interpreter::new();
@@ -3744,14 +3731,14 @@ mod tests {
 
         #[test]
         fn test_www_url_decode() {
-            verify_exact(
+            verify_exact_value(
                 "www::url_decode('http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998')",
                 StringValue("http://shocktrade.com?name=the hero&t=9998".to_string()))
         }
 
         #[test]
         fn test_www_url_encode() {
-            verify_exact(
+            verify_exact_value(
                 "www::url_encode('http://shocktrade.com?name=the hero&t=9998')",
                 StringValue("http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998".to_string()))
         }

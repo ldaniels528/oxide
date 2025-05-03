@@ -210,7 +210,7 @@ impl RowCollection for FileRowCollection {
         id: usize,
         column_id: usize,
         new_value: TypedValue,
-    ) -> TypedValue {
+    ) -> std::io::Result<i64> {
         let column = &self.columns[column_id];
         let offset = self.convert_rowid_to_offset(id) + column.get_offset() as u64;
         let buffer = self.blobs.encode_field(&column, &new_value)
@@ -218,7 +218,7 @@ impl RowCollection for FileRowCollection {
                 error!("Failed to write to {}@({id}, {column_id}): {} ({})", column.get_name(), err, new_value);
                 Self::empty_cell(column)
             });
-        TypedValue::from_result(self.write_at(offset, &buffer).map(|n| Number(n)))
+        self.write_at(offset, &buffer)
     }
 
     fn overwrite_field_metadata(
@@ -226,16 +226,15 @@ impl RowCollection for FileRowCollection {
         id: usize,
         column_id: usize,
         metadata: FieldMetadata,
-    ) -> TypedValue {
+    ) -> std::io::Result<i64> {
         let row_offset = self.convert_rowid_to_offset(id);
         let column = &self.columns[column_id];
         let column_offset = column.get_offset() as u64;
         let cell_offset = row_offset + column_offset;
-        TypedValue::from_result(self.write_at(cell_offset, &[metadata.encode()].to_vec())
-            .map(|n| Number(n)))
+        self.write_at(cell_offset, &[metadata.encode()].to_vec())
     }
 
-    fn overwrite_row(&mut self, id: usize, row: Row) -> TypedValue {
+    fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         let row_offset = self.convert_rowid_to_offset(id);
         let capacity = self.get_record_size();
         let blobs = &self.blobs;
@@ -254,14 +253,12 @@ impl RowCollection for FileRowCollection {
         encoded.resize(capacity, 0u8);
 
         // write the row
-        TypedValue::from_result(self.write_at(row_offset, &encoded)
-            .map(|n| Number(n)))
+        self.write_at(row_offset, &encoded)
     }
 
-    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> TypedValue {
+    fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<i64> {
         let row_offset = self.convert_rowid_to_offset(id);
-        TypedValue::from_result(self.write_at(row_offset, &[metadata.encode()].to_vec())
-            .map(|n| Number(n)))
+        self.write_at(row_offset, &[metadata.encode()].to_vec())
     }
 
     fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
@@ -319,27 +316,21 @@ impl RowCollection for FileRowCollection {
         Ok(RowMetadata::decode(buffer[0]))
     }
 
-    fn resize(&mut self, new_size: usize) -> TypedValue {
+    fn resize(&mut self, new_size: usize) -> std::io::Result<bool> {
         let new_length = new_size as u64 * self.record_size as u64;
-        match self.file.set_len(new_length) {
-            Ok(..) => Boolean(true),
-            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
-        }
+        self.file.set_len(new_length).map(|_| true)
     }
 }
 
 impl RowEncoding for FileRowCollection {
     fn read_at(&self, offset: u64, count: usize) -> std::io::Result<Vec<u8>> {
         let mut buffer: Vec<u8> = vec![0u8; count];
-        match self.file.read_at(&mut buffer, offset) {
-            Ok(_n_bytes) => Ok(buffer),
-            Err(err) => throw(Errors::Exact(err.to_string()))
-        }
+        self.file.read_at(&mut buffer, offset).map(|_| buffer)
     }
 
-    fn write_at(&self, offset: u64, bytes: &Vec<u8>) -> std::io::Result<Numbers> {
+    fn write_at(&self, offset: u64, bytes: &Vec<u8>) -> std::io::Result<i64> {
         let _n_bytes = self.file.write_at(bytes.as_slice(), offset)?;
-        Ok(Numbers::RowsAffected(1))
+        Ok(1)
     }
 }
 
