@@ -20,7 +20,6 @@ use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::expression::Mutations::Declare;
 use crate::expression::{Conditions, DatabaseOps, Expression, Mutations, Queryables, NULL};
 use crate::file_row_collection::FileRowCollection;
-use crate::inferences::Inferences;
 use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
@@ -36,7 +35,6 @@ use crate::structures::{Row, Structures};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
-use shared_lib::fail;
 use std::collections::HashMap;
 use std::convert::From;
 use std::fs;
@@ -778,11 +776,11 @@ fn resolve_field_as_column(
                 Variable(name) =>
                     match column_dict.get(name) {
                         Some(dt) => Ok(Column::new(label, dt.clone(), Null, offset)),
-                        None => fail(column_not_found(name, columns)),
+                        None => throw(Exact(column_not_found(name, columns))),
                     }
                 // md5sum: util::md5(sku)
                 other =>
-                    match Inferences::infer(other) {
+                    match Expression::infer(other) {
                         dt => Ok(Column::new(label, dt.clone(), Null, offset)),
                     }
             }
@@ -790,7 +788,7 @@ fn resolve_field_as_column(
         Variable(name) =>
             match column_dict.get(name) {
                 Some(dt) => Ok(Column::new(name, dt.clone(), Null, offset)),
-                None => fail(column_not_found(name, columns)),
+                None => throw(Exact(column_not_found(name, columns))),
             }
         other =>
             throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))

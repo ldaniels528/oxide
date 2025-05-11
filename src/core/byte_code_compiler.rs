@@ -19,9 +19,9 @@ use crate::structures::HardStructure;
 use crate::structures::Row;
 use crate::typed_values::TypedValue::ErrorValue;
 use crate::typed_values::*;
-use shared_lib::fail;
 use std::ops::Index;
 use uuid::Uuid;
+use crate::errors::throw;
 
 /// A JVM-inspired ByteBuffer-like utility (Big Endian)
 pub struct ByteCodeCompiler {
@@ -141,7 +141,7 @@ impl ByteCodeCompiler {
     pub fn unwrap_as_result<T>(result: bincode::Result<T>) -> std::io::Result<T> {
         match result {
             Ok(bytes) => Ok(bytes),
-            Err(err) => fail(err.to_string())
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 
@@ -203,7 +203,7 @@ impl ByteCodeCompiler {
     pub fn decode_uuid(uuid_str: &str) -> std::io::Result<u128> {
         match Uuid::parse_str(uuid_str) {
             Ok(uuid) => Ok(uuid.as_u128()),
-            Err(err) => fail(err.to_string())
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 

@@ -7,7 +7,7 @@ use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
 use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe::Model;
-use crate::errors::Errors::{InvalidNamespace, TypeMismatch};
+use crate::errors::Errors::{Exact, InvalidNamespace, TypeMismatch};
 use crate::errors::TypeMismatchErrors::TableExpected;
 use crate::errors::{throw, Errors};
 use crate::expression::Conditions;
@@ -27,7 +27,6 @@ use crate::table_scan::{TableScanPlan, TableScanTypes};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
-use shared_lib::fail;
 use std::fmt::Debug;
 use std::fs::File;
 use std::ops::Range;
@@ -417,7 +416,7 @@ pub trait RowCollection: Debug {
     fn get_indices_with_limit(&self, limit: TypedValue) -> std::io::Result<Range<usize>> {
         match limit {
             Number(n) => Ok(0..n.to_usize()),
-            ErrorValue(err) => fail(err.to_string()),
+            ErrorValue(err) => throw(Exact(err.to_string())),
             _ => Ok(0..self.len()?)
         }
     }
@@ -577,8 +576,8 @@ pub trait RowCollection: Debug {
     fn reverse(&self) -> std::io::Result<Box<dyn RowCollection>> {
         match self.reverse_table_value() {
             TableValue(rcv) => Ok(Box::new(rcv)),
-            ErrorValue(err) => fail(err.to_string()),
-            z => fail(format!("Expected table value near {}", z.unwrap_value()))
+            ErrorValue(err) => throw(Exact(err.to_string())),
+            z => throw(Exact(format!("Expected table value near {}", z.unwrap_value())))
         }
     }
 

@@ -66,6 +66,20 @@ pub fn compute_time_millis(dt: TimeDelta) -> f64 {
     }
 }
 
+pub fn strip_margin(input: &str, margin_char: char) -> String {
+    input
+        .lines()
+        .map(|line| {
+            if let Some(pos) = line.find(margin_char) {
+                line[pos + 1..].to_string()
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Transforms the cells into a textual table
 pub fn tabulate_cells(
     header_cells: Vec<Vec<String>>,
@@ -134,7 +148,7 @@ pub fn tabulate_maximums(a: &Vec<usize>, b: &Vec<usize>) -> Vec<usize> {
     c
 }
 
-pub fn fail<A>(message: impl Into<String>) -> std::io::Result<A> {
+fn fail<A>(message: impl Into<String>) -> std::io::Result<A> {
     Err(std::io::Error::new(std::io::ErrorKind::Other, message.into()))
 }
 

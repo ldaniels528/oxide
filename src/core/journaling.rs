@@ -13,7 +13,6 @@ use crate::expression::Expression;
 use crate::expression::Expression::{FunctionCall, Literal, Variable};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
-use crate::inferences::Inferences;
 use crate::interpreter::Interpreter;
 use crate::machine;
 use crate::machine::Machine;
@@ -350,7 +349,7 @@ impl TableFunction {
             ObjectConfig::TableFnConfig { columns, code, .. } => {
                 // build the journal and state columns
                 let journal_columns = Column::from_parameters(&columns);
-                let state_columns = match Inferences::infer_with_hints(&code, &columns) {
+                let state_columns = match Expression::infer_with_hints(&code, &columns) {
                     StructureType(params) => Column::from_parameters(&params),
                     TableType(params, ..) => Column::from_parameters(&params),
                     z => return throw(TypeMismatch(TypeMismatchErrors::UnsupportedType(StructureType(vec![]), z)))

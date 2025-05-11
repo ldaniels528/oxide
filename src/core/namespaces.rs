@@ -9,11 +9,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::EventSource;
+use crate::errors::throw;
+use crate::errors::Errors::Exact;
 use crate::file_row_collection::FileRowCollection;
 use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::object_config::ObjectConfig;
-use shared_lib::fail;
 
 // Namespace is a logical representation of a Lollypop object namespace or path
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -37,7 +38,7 @@ impl Namespace {
         let result: Vec<&str> = text.split(".").collect();
         match result.as_slice() {
             [d, s, n] => Ok(Namespace::new(d, s, n)),
-            _ => fail(format!("Failed to parse namespace '{}'", text))
+            _ => throw(Exact(format!("Failed to parse namespace '{}'", text)))
         }
     }
 

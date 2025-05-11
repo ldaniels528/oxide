@@ -3,11 +3,15 @@
 // Oxide README.md Generation
 ////////////////////////////////////////////////////////////////////
 
+use crate::data_types::DataType;
+use crate::expression::{Conditions, Expression};
 use crate::interpreter::Interpreter;
 use crate::platform::{PlatformOps, PLATFORM_OPCODES};
 use crate::row_collection::RowCollection;
 use crate::table_renderer::TableRenderer;
+use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::TableValue;
+use shared_lib::strip_margin;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 
@@ -31,8 +35,11 @@ fn generate_readme() -> std::io::Result<File> {
     println!("generate getting started...");
     let file = generate_getting_started(file)?;
 
-    println!("generate examples...");
-    let file = generate_examples(file)?;
+    println!("generate language examples...");
+    let file = generate_language_examples(file)?;
+
+    println!("generate platform examples...");
+    let file = generate_platform_examples(file)?;
 
     println!("generate rpc...");
     let file = generate_rpc(file)?;
@@ -93,7 +100,32 @@ You'll find the executables in `./target/release/`:
     Ok(file)
 }
 
-fn generate_examples(mut file: File) -> std::io::Result<File> {
+fn generate_language_examples(mut file: File) -> std::io::Result<File> {
+    writeln!(file, "<a name=\"examples\"></a>\n#### Basic Syntax")?;
+    for (name, examples) in get_language_examples() {
+        // header section
+        // ex: "oxide::version - ..."
+        writeln!(file, "<hr>")?;
+        writeln!(file, "<h4>{}</h4>", name)?;
+
+        // write the example bodies
+        for example in examples {
+            let example_body = format!("<pre>{}</pre>", example.trim());
+            writeln!(file, "{}", example_body)?;
+
+            // write the results body
+            match generate_language_results(example.as_str()) {
+                Ok(out_lines) => file = print_text_block(file, out_lines)?,
+                Err(err) => {
+                    writeln!(file, "ERROR: {}", err.to_string())?;
+                }
+            }
+        }
+    }
+    Ok(file)
+}
+
+fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
     writeln!(file, r#"
 <a name="examples"></a>
 #### Platform Examples
@@ -107,12 +139,7 @@ fn generate_examples(mut file: File) -> std::io::Result<File> {
                  op.get_package_name(), op.get_name(), op.get_description())?;
 
         // write the example body
-        let example_body = format!("
-<pre>
-{}
-</pre>",
-            op.get_example().trim()
-        );
+        let example_body = format!("<pre>{}</pre>", op.get_example().trim());
         writeln!(file, "{}", example_body)?;
 
         // write the results body
@@ -124,6 +151,18 @@ fn generate_examples(mut file: File) -> std::io::Result<File> {
         }
     }
     Ok(file)
+}
+
+
+fn generate_language_results(example: &str) -> std::io::Result<Vec<String>> {
+    let value = Interpreter::new().evaluate(example)?;
+    match value {
+        TableValue(df) => {
+            let rc: Box<dyn RowCollection> = Box::new(df);
+            TableRenderer::from_table_with_ids(&rc)
+        }
+        other => Ok(vec![other.unwrap_value()]),
+    }
 }
 
 fn generate_example_results(op: PlatformOps) -> std::io::Result<Vec<String>> {
@@ -391,6 +430,351 @@ server response:
     Ok(file)
 }
 
+pub fn get_examples(model: &Expression) -> Vec<String> {
+    match model {
+        Expression::ArrayExpression(..) => vec![
+            strip_margin(r#"
+                |arr := [1, 4, 2, 8, 5, 7]
+                |tools::reverse(arr)
+            "#, '|')],
+        Expression::AsValue(..) => vec!["name: 'Tom'".into()],
+        Expression::BitwiseAnd(..) => vec!["0b1111 & 0b0101".into()],
+        Expression::BitwiseOr(..) => vec!["0b1010 | 0b0101".into()],
+        Expression::BitwiseShiftLeft(..) => vec!["20 << 3".into()],
+        Expression::BitwiseShiftRight(..) => vec!["20 >> 3".into()],
+        Expression::BitwiseXor(..) => vec!["0b1111 ^ 0b0101".into()],
+        Expression::CodeBlock(..) => vec![
+            strip_margin(r#"
+                |result := {
+                |    (a, b, sum) := (0, 1, 0)
+                |    while sum < 10 {
+                |        sum := sum + (a + b)
+                |        t := b
+                |        b := a + b
+                |        a := t
+                |    }
+                |    sum
+                |}
+                |result
+            "#, '|')],
+        Expression::ColonColon(..) => vec![
+            strip_margin(r#"
+                |tools::to_table([
+                |    'apple', 'berry', 'kiwi', 'lime'
+                |])
+            "#, '|')],
+        Expression::ColonColonColon(..) => vec![
+            strip_margin(r#"
+                |import durations
+                |8:::hours()
+            "#, '|')],
+        Expression::Condition(..) => vec![
+            strip_margin(r#"
+                    |x := 10
+                    |x between 5 and 10
+                "#, '|'),
+            strip_margin(r#"
+                    |x := 10
+                    |x betwixt 5 and 10
+                "#, '|'),
+            strip_margin(r#"
+                    |x := 1..8
+                    |x contains 7
+                "#, '|'),
+        ],
+        Expression::CurvyArrowLeft(..) => vec![
+            strip_margin(r#"
+                |stocks := ns("expressions.read_next_row.stocks")
+                |table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+                |rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+                |rows ~> stocks
+                |// read the last row
+                |last_row <~ stocks
+                |last_row
+            "#, '|')],
+        Expression::CurvyArrowRight(..) => vec![
+            strip_margin(r#"
+                |stocks := ns("expressions.into.stocks")
+                |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |rows := [
+                |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                |]
+                |rows ~> stocks
+            "#, '|')],
+        Expression::DatabaseOp(..) => vec![],
+        Expression::Directive(..) => vec![],
+        Expression::Divide(..) => vec![
+            "20.0 / 3".into()
+        ],
+        Expression::ElementAt(..) => vec![
+            strip_margin(r#"
+                |arr := [1, 4, 2, 8, 5, 7]
+                |arr[3]
+            "#, '|')],
+        Expression::Feature { .. } => vec![
+            strip_margin(r#"
+                |import testing
+                |Feature "Matches function" {
+                |    Scenario "Compare Array contents: Equal" {
+                |        assert(matches(
+                |            [ 1 "a" "b" "c" ],
+                |            [ 1 "a" "b" "c" ]
+                |        ))
+                |    }
+                |    Scenario "Compare Array contents: Not Equal" {
+                |        assert(!matches(
+                |            [ 1 "a" "b" "c" ],
+                |            [ 0 "x" "y" "z" ]
+                |        ))
+                |    }
+                |    Scenario "Compare JSON contents (in sequence)" {
+                |        assert(matches(
+                |                { first: "Tom" last: "Lane" },
+                |                { first: "Tom" last: "Lane" }))
+                |    }
+                |    Scenario "Compare JSON contents (out of sequence)" {
+                |        assert(matches(
+                |                { scores: [82 78 99], id: "A1537" },
+                |                { id: "A1537", scores: [82 78 99] }))
+                |    }
+                |}"#, '|')],
+        Expression::FnExpression { .. } => vec![
+            strip_margin(r#"
+                |product := fn (a, b) => a * b
+                |product(2, 5)
+            "#, '|')],
+        Expression::FoldOver(..) => vec![
+            "'Hello' |> tools::reverse".to_string()
+        ],
+        Expression::ForEach(..) => vec![
+            strip_margin(r#"
+                |foreach row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
+                |    oxide::println(row)
+                |}
+            "#, '|')],
+        Expression::From(..) => vec![
+            strip_margin(r#"
+                |stocks := tools::to_table([
+                |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                |   { symbol: "GRU", exchange: "NYSE", last_sale: 56.88 },
+                |   { symbol: "APK", exchange: "NASDAQ", last_sale: 32.12 }
+                |])
+                |from stocks where last_sale > 20.0
+            "#, '|')],
+        Expression::FunctionCall { .. } => vec![],
+        Expression::HTTP { .. } => vec![
+            strip_margin(r#"
+                    |create table ns("readme.www.stocks") (
+                    |    symbol: String(8),
+                    |    exchange: String(8),
+                    |    last_sale: f64
+                    |)
+                    |www::serve(8833)
+                    "#, '|'),
+            strip_margin(r#"
+                    |POST {
+                    |    url: http://localhost:8833/platform/www/stocks/0
+                    |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
+                    |}
+                    "#, '|'),
+            strip_margin(r#"
+                    |GET http://localhost:8833/platform/www/stocks/0
+                    "#, '|'),
+            strip_margin(r#"
+                    |HEAD http://localhost:8833/platform/www/stocks/0
+                    "#, '|'),
+            strip_margin(r#"
+                    |PUT {
+                    |    url: http://localhost:8833/platform/www/stocks/0
+                    |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }
+                    |}
+                    "#, '|'),
+            strip_margin(r#"
+                    |GET http://localhost:8833/platform/www/stocks/0
+                    "#, '|'),
+            strip_margin(r#"
+                    |PATCH {
+                    |    url: http://localhost:8833/platform/www/stocks/0
+                    |    body: { last_sale: 11.81 }
+                    |}
+                    "#, '|'),
+            strip_margin(r#"
+                    |GET http://localhost:8833/platform/www/stocks/0
+                    "#, '|'),
+            strip_margin(r#"
+                    |DELETE http://localhost:8833/platform/www/stocks/0
+                    "#, '|'),
+            strip_margin(r#"
+                    |GET http://localhost:8833/platform/www/stocks/0
+                    "#, '|'),
+        ],
+        Expression::If { .. } => vec![
+            strip_margin(r#"
+                    |x := 4
+                    |if(x > 5) "Yes"
+                    |else if(x < 5) "Maybe"
+                    |else "No"
+                    "#, '|'),
+            strip_margin(r#"
+                    |fact := fn(n) => iff(n <= 1, 1, n * fact(n - 1))
+                    |fact(6)
+                    "#, '|'),
+        ],
+        Expression::Import(..) => vec![
+            strip_margin(r#"
+                |import tools
+                |stocks := to_table([
+                |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                |])
+                |stocks
+            "#, '|')],
+        Expression::Include(..) => vec![],
+        Expression::Literal(..) => vec![],
+        Expression::Minus(..) => vec![
+            "188 - 36".into(),
+            strip_margin(r#"
+                    |a := (3, 5, 7)
+                    |b := (1, 0, 1)
+                    |a - b
+                "#, '|')
+        ],
+        Expression::Module(..) => vec![],
+        Expression::Modulo(..) => vec![],
+        Expression::Multiply(..) => vec![
+            strip_margin(r#"
+                    |a := (3, 5, 7)
+                    |b := (1, 0, 1)
+                    |a * b
+                "#, '|')
+        ],
+        Expression::Neg(..) => vec![
+            strip_margin(r#"
+                |i := 75
+                |-i
+            "#, '|')],
+        Expression::New(..) => vec![
+            strip_margin(r#"
+                |new Table(symbol: String(8), exchange: String(8), last_sale: f64)
+            "#, '|')],
+        Expression::Ns(..) => vec![],
+        Expression::Parameters(..) => vec![],
+        Expression::Plus(..) => vec![
+            strip_margin(r#"
+                    |a := (2, 4, 6)
+                    |b := (1, 2, 3)
+                    |a + b
+                "#, '|'),
+        ],
+        Expression::PlusPlus(..) => vec![],
+        Expression::Pow(..) => vec![],
+        Expression::Range(..) => vec![
+            strip_margin(r#"
+                |range := 1..5
+                |tools::reverse(range)
+            "#, '|')],
+        Expression::Return(..) => vec![],
+        Expression::Scenario { .. } => vec![],
+        Expression::SetVariable(..) => vec![
+            strip_margin(r#"
+                    |a := 7
+                    |b := 5
+                    |a * b
+                "#, '|'),
+            strip_margin(r#"
+                    |(a, b, c) := (3, 5, 7)
+                    |a + b + c
+                "#, '|')
+        ],
+        Expression::SetVariables(..) => vec![],
+        Expression::StructureExpression(..) => vec![],
+        Expression::TupleExpression(..) => vec![],
+        Expression::TypeDef(..) => vec![
+            strip_margin("typedef(String(80))", '|')
+        ],
+        Expression::Variable(..) => vec![
+            strip_margin(r#"
+                |(a, b, c) := (3, 5, 7)
+                |c > b
+            "#, '|')],
+        Expression::Via(..) => vec![
+            strip_margin(r#"
+                |stocks := ns("expressions.via.stocks")
+                |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |
+                |rows := [
+                |   { symbol: "ABCQ", exchange: "AMEX", last_sale: 12.49 },
+                |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                |]
+                |rows ~> stocks
+                |
+                |overwrite stocks via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
+                |where symbol is "ABCQ"
+                |
+                |from stocks
+            "#, '|')],
+        Expression::While { .. } => vec![
+            strip_margin(r#"
+                while (x < 5) x := x + 1
+                x
+            "#, '|')],
+    }
+}
+
+fn get_language_examples() -> Vec<(String, Vec<String>)> {
+    use crate::expression::Expression::*;
+    let null = Box::new(Literal(TypedValue::Null));
+    let models = vec![
+        ("Arrays", ArrayExpression(vec![])),
+        ("Aliases", AsValue("".into(), null.clone())),
+        ("Bitwise And", BitwiseAnd(null.clone(), null.clone())),
+        ("Bitwise Or", BitwiseOr(null.clone(), null.clone())),
+        ("Bitwise Shift-Left", BitwiseShiftLeft(null.clone(), null.clone())),
+        ("Bitwise Shift-Right", BitwiseShiftRight(null.clone(), null.clone())),
+        ("Bitwise XOR", BitwiseXor(null.clone(), null.clone())),
+        ("Code Block", CodeBlock(vec![])),
+        ("Method Call", ColonColon(null.clone(), null.clone())),
+        ("Implicit Method Call", ColonColonColon(null.clone(), null.clone())),
+        ("Conditionals", Condition(Conditions::True)),
+        ("Curvy-Arrow Left", CurvyArrowLeft(null.clone(), null.clone())),
+        ("Curvy-Arrow Right", CurvyArrowRight(null.clone(), null.clone())),
+        // DatabaseOp
+        // Directive
+        //("Directives", Directive(null.clone(), null.clone())),
+        ("Mathematics: division", Divide(null.clone(), null.clone())),
+        ("Arrays: Indexing", ElementAt(null.clone(), null.clone())),
+        ("Testing", Feature { title: null.clone(), scenarios: vec![] }),
+        ("Functions", FnExpression { params: vec![], body: None, returns: DataType::BooleanType }),
+        ("Function-Call", FunctionCall { fx: null.clone(), args: vec![] }),
+        ("Iteration", ForEach("".into(), null.clone(), null.clone())),
+        ("Query", From(null.clone())),
+        ("HTTP", HTTP { method: "".into(), url_or_object: null.clone() }),
+        ("if / iff", If { condition: null.clone(), a: null.clone(), b: None }),
+        ("Imports", Import(vec![])),
+        //("Includes", Include(null.clone())),
+        ("Mathematics: subtraction", Minus(null.clone(), null.clone())),
+        ("Mathematics: multiplication", Multiply(null.clone(), null.clone())),
+        ("Negative", Neg(null.clone())),
+        ("Mathematics: addition", Plus(null.clone(), null.clone())),
+        ("New Instances", New(null.clone())),
+        ("Ranges", Range(null.clone(), null.clone())),
+        ("Variable Assignment", SetVariable("".into(), null.clone())),
+        ("Type Definitions", TypeDef(null.clone())),
+        ("Via Clause", Via(null.clone())),
+        //("Structures", StructureExpression(vec![])),
+    ];
+
+    let mut examples = models.iter()
+        .map(|(title, model)| (title.to_string(), get_examples(&model)))
+        .collect::<Vec<_>>();
+    examples.sort_by(|a, b| a.0.cmp(&b.0));
+    examples
+}
+
 fn print_text_block(mut file: File, lines: Vec<String>) -> std::io::Result<File> {
     writeln!(file, "<pre>")?;
     for line in lines {
@@ -403,16 +787,25 @@ fn print_text_block(mut file: File, lines: Vec<String>) -> std::io::Result<File>
 // Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::readme::{generate_examples, generate_readme};
+    use super::*;
     use std::fs::OpenOptions;
 
     #[test]
-    fn test_generate_examples() {
+    fn test_language_examples() {
         let file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
-            .open("../../examples.md")
+            .open("../../basics.md")
             .unwrap();
-        generate_examples(file).unwrap();
+        generate_language_examples(file).unwrap();
+    }
+
+    #[test]
+    fn test_platform_examples() {
+        let file = OpenOptions::new()
+            .truncate(true).create(true).read(true).write(true)
+            .open("../../platform.md")
+            .unwrap();
+        generate_platform_examples(file).unwrap();
     }
 
     #[test]

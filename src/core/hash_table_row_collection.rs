@@ -10,8 +10,8 @@ use crate::data_types::DataType::NumberType;
 use crate::sequences::Array;
 
 use crate::errors::Errors::*;
-use crate::errors::TypeMismatchErrors::*;
 use crate::errors::TypeMismatchErrors::OutcomeExpected;
+use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, Errors};
 use crate::field::FieldMetadata;
 use crate::machine;

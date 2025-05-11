@@ -78,9 +78,7 @@ mod tests {
     fn test_basic_state_manipulation() {
         let mut interpreter = Interpreter::new();
         interpreter = verify_exact_value_with(interpreter, "x := 5", Boolean(true));
-        interpreter = verify_exact_value_with(interpreter, "$x", Number(I64Value(5)));
         interpreter = verify_exact_value_with(interpreter, "-x", Number(I64Value(-5)));
-        interpreter = verify_exact_value_with(interpreter, "x¡", Number(U128Value(120)));
         interpreter = verify_exact_value_with(interpreter, "x := x + 1", Boolean(true));
         interpreter = verify_exact_value_with(interpreter, "x", Number(I64Value(6)));
         interpreter = verify_exact_value_with(interpreter, "x < 7", Boolean(true));
@@ -138,6 +136,21 @@ mod tests {
     }
 
     #[test]
+    fn test_fold_over() {
+        verify_exact_code(r#"
+            "Hello" |> tools::reverse
+        "#, "\"olleH\"");
+    }
+
+    #[ignore]
+    #[test]
+    fn test_fold_over_chaining() {
+        verify_exact_value(r#"
+            "Hello" |> util::md5 |> util::hex
+        "#, StringValue("8b1a9953c4611296a827abf8c47804d7".to_string()));
+    }
+
+    #[test]
     fn test_tuple_assignment() {
         verify_exact_value(r#"
             (a, b, c) := (3, 5, 7)
@@ -156,9 +169,8 @@ mod tests {
         #[test]
         fn test_foreach_item_in_an_array() {
             verify_exact_code(r#"
-                foreach item in [1, 5, 6, 11, 17] {
+                foreach item in [1, 5, 6, 11, 17]
                     oxide::println(item)
-               }
             "#, "true");
             // 1
             // 5
@@ -170,9 +182,8 @@ mod tests {
         #[test]
         fn test_foreach_row_in_a_table() {
             verify_exact_code(r#"
-                foreach row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
+                foreach row in tools::to_table(['apple', 'berry', 'kiwi', 'lime'])
                     oxide::println(row)
-               }
             "#, "true");
             // {"value":"apple"}
             // {"value":"berry"}

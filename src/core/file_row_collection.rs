@@ -7,6 +7,7 @@ use crate::blobs::{BLOBCellMetadata, BLOBStore};
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
 use crate::data_types::DataType::NumberType;
+use crate::errors::Errors::Exact;
 use crate::errors::{throw, Errors};
 use crate::field;
 use crate::field::FieldMetadata;
@@ -26,7 +27,6 @@ use log::error;
 use serde::de::Error;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use shared_lib::fail;
 use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::fs;
@@ -126,10 +126,10 @@ impl FileRowCollection {
                         cfg.save(&ns)?;
                         Self::open_file(ns, file)
                     }
-                    Err(err) => fail(err.to_string())
+                    Err(err) => throw(Exact(err.to_string()))
                 }
             }
-            Err(err) => fail(err.to_string())
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 

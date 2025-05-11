@@ -8,8 +8,8 @@ use std::ops::Index;
 
 use serde::{Deserialize, Serialize};
 
-use shared_lib::fail;
-
+use crate::errors::throw;
+use crate::errors::Errors::{Exact, ExactNear};
 use crate::tokenizer;
 use crate::tokens::Token;
 
@@ -57,6 +57,15 @@ impl TokenSlice {
         (tokens, self.copy(pos))
     }
 
+    pub fn contains(&self, text: &str) -> bool {
+        self.current().contains(text)
+    }
+
+    /// Creates a new Token Slice via a vector of tokens.
+    pub fn copy(&self, pos: isize) -> Self {
+        Self { tokens: self.tokens.to_owned(), pos }
+    }
+
     pub fn current(&self) -> Token {
         let pos = match self.pos {
             pos if pos <= 0 => 0usize,
@@ -64,11 +73,6 @@ impl TokenSlice {
             pos => pos as usize
         };
         self.tokens[pos].clone()
-    }
-
-    /// Creates a new Token Slice via a vector of tokens.
-    pub fn copy(&self, pos: isize) -> Self {
-        Self { tokens: self.tokens.to_owned(), pos }
     }
 
     pub fn exists(&self, f: fn(&Token) -> bool) -> bool {
@@ -81,10 +85,10 @@ impl TokenSlice {
     pub fn expect(&self, term: &str) -> std::io::Result<Self> {
         if let (Some(tok), ts) = self.next() {
             if tok.contains(term) { Ok(ts) } else {
-                fail(format!("Expected '{}' but found '{}'", term, tok))
+                throw(ExactNear(format!("Expected '{}' but found '{}'", term, tok.get_raw_value()), tok))
             }
         } else {
-            fail(format!("Expected '{}'", term))
+            throw(Exact(format!("Expected '{}'", term)))
         }
     }
 

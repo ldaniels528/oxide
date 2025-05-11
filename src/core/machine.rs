@@ -44,7 +44,6 @@ use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::expression::{Conditions, Expression, ImportOps, UNDEFINED};
 use crate::expression::{DatabaseOps, Directives, Mutations, Queryables};
 use crate::file_row_collection::FileRowCollection;
-use crate::inferences::Inferences;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::numbers::Numbers::*;
@@ -60,7 +59,7 @@ use crate::table_renderer::TableRenderer;
 use crate::testdata::verify_exact_table_with;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use shared_lib::{cnv_error, fail};
+use shared_lib::cnv_error;
 
 pub const ROW_ID: &str = "__row_id__";
 pub const FX_SELF: &str = "__self__";
@@ -173,9 +172,9 @@ impl Machine {
             Directive(d) => self.do_directive(d),
             Divide(a, b) => self.eval_inline_2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.do_index_of_collection(a, b),
-            Factorial(a) => self.eval_inline_1(a, |aa| aa.factorial()),
             Feature { title, scenarios } => self.do_feature(title, scenarios),
             FnExpression { params, body, returns } => self.do_fn_expression(params, body, returns),
+            FoldOver(a, b) => self.do_fold_over(a, b),
             ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
             From(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
             FunctionCall { fx, args } => self.do_function_call(fx, args),
@@ -268,12 +267,12 @@ impl Machine {
         match object {
             Variable(var_name) =>
                 match ms.get(var_name) {
-                    None => fail(format!("Variable '{}' was not found", var_name)),
+                    None => throw(Exact(format!("Variable '{}' was not found", var_name))),
                     Some(ErrorValue(err)) => Ok((ms, ErrorValue(err))),
-                    Some(Null) => fail(format!("Cannot evaluate {}::{}", Null, field.to_code())),
+                    Some(Null) => throw(Exact(format!("Cannot evaluate {}::{}", Null, field.to_code()))),
                     Some(Structured(structure)) => self.do_extraction_structure(var_name, Box::from(structure), field),
-                    Some(Undefined) => fail(format!("Cannot evaluate {}::{}", Undefined, field.to_code())),
-                    Some(z) => fail(format!("Illegal structure {}", z.to_code()))
+                    Some(Undefined) => throw(Exact(format!("Cannot evaluate {}::{}", Undefined, field.to_code()))),
+                    Some(z) => throw(Exact(format!("Illegal structure {}", z.to_code())))
                 }
             z => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(z.to_code())))
         }
@@ -299,7 +298,7 @@ impl Machine {
                         enriched_args.extend(args.to_owned());
                         self.do_function_call(fx, &enriched_args)
                     }
-                    z => fail(format!("{} is not a function call", z.to_code()))
+                    z => throw(Exact(format!("{} is not a function call", z.to_code())))
                 }
         }
     }
@@ -446,8 +445,8 @@ impl Machine {
             }
             // stock::symbol
             Variable(name) => Ok((ms, structure.get(name))),
-            z => fail(format!("Illegal field '{}' for structure {}",
-                              z.to_code(), var_name))
+            z => throw(Exact(format!("Illegal field '{}' for structure {}",
+                                     z.to_code(), var_name)))
         }
     }
 
@@ -464,7 +463,7 @@ impl Machine {
             ]));
             let count = match outcome {
                 Number(n) => n.to_usize(),
-                ErrorValue(err) => return fail(err.to_string()),
+                ErrorValue(err) => return throw(Exact(err.to_string())),
                 _ => 0
             };
             Ok((self, count))
@@ -526,6 +525,22 @@ impl Machine {
             body: body.clone().unwrap_or(Box::from(UNDEFINED)),
             returns: returns.clone(),
         }))
+    }
+
+    /// Fold over operation
+    /// ### Examples:
+    /// "Hello" |> tools::md5 |> tools::hex
+    fn do_fold_over(
+        &self,
+        expr: &Expression,
+        operation: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        self.evaluate(&FunctionCall {
+            fx: Box::new(operation.clone()),
+            args: vec![
+                expr.clone()
+            ],
+        })
     }
 
     /// foreach `name` in `items` { `block` }
@@ -1192,10 +1207,10 @@ impl Machine {
 
         // if errors occurred ...
         if !errors.is_empty() {
-            fail(errors.iter()
+            throw(Exact(errors.iter()
                 .map(|v| v.unwrap_value())
                 .collect::<Vec<_>>()
-                .join("\n"))
+                .join("\n")))
         } else {
             Ok((machine, results))
         }
@@ -1378,16 +1393,6 @@ mod tests {
     }
 
     #[test]
-    fn test_factorial() {
-        let model = Factorial(Box::new(Literal(Number(U64Value(6)))));
-        assert_eq!(model.to_code(), "6¡");
-
-        let machine = Machine::empty();
-        let (_, result) = machine.evaluate(&model).unwrap();
-        assert_eq!(result, Number(U128Value(720)))
-    }
-
-    #[test]
     fn test_index_of_array() {
         // create the instruction model for "[1, 4, 2, 8, 5, 7][5]"
         let model = ElementAt(
@@ -1480,6 +1485,31 @@ mod tests {
     mod function_tests {
         use super::*;
         use crate::data_types::DataType::DynamicType;
+
+        #[test]
+        fn test_fold_over() {
+            //  "Hello" |> util::md5 |> util::hex
+            let model = FoldOver(
+                Box::new(FoldOver(
+                    Box::new(Literal(StringValue("Hello".to_string()))),
+                    Box::new(ColonColon(
+                        Box::new(Variable("util".to_string())),
+                        Box::new(Variable("md5".to_string())),
+                    )),
+                )),
+                Box::new(ColonColon(
+                    Box::new(Variable("util".to_string())),
+                    Box::new(Variable("hex".to_string())),
+                )),
+            );
+
+            // evaluate the function
+            let (machine, result) = Machine::new()
+                .evaluate(&model)
+                .unwrap();
+            assert_eq!(result, StringValue("8b1a9953c4611296a827abf8c47804d7".to_string()));
+            assert_eq!(model.to_code(), r#""Hello" |> util::md5 |> util::hex"#)
+        }
 
         #[test]
         fn test_anonymous_function() {

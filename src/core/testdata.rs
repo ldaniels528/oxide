@@ -12,8 +12,8 @@ use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Disk;
 
 use crate::errors::Errors;
+use crate::expression::Expression;
 use crate::file_row_collection::FileRowCollection;
-use crate::inferences::Inferences;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::{F64Kind, I64Kind};
@@ -111,7 +111,7 @@ pub fn verify_bit_operator(op: &str) {
 
 pub fn verify_data_type(code: &str, expected: DataType) {
     let model = Compiler::build(code).unwrap();
-    assert_eq!(Inferences::infer(&model), expected);
+    assert_eq!(Expression::infer(&model), expected);
 }
 
 pub fn verify_exact_code(code: &str, expected: &str) {

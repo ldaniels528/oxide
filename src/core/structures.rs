@@ -10,6 +10,8 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::StructureType;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Model;
+use crate::errors::throw;
+use crate::errors::Errors::Exact;
 use crate::expression::Conditions;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
@@ -21,7 +23,6 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use shared_lib::fail;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Index;
@@ -768,7 +769,7 @@ impl Row {
         // field and value vectors must have the same length
         let src_values = self.get_values();
         if field_names.len() != field_values.len() {
-            return fail(format!("Data mismatch: fields ({}) vs values ({})", field_names.len(), field_values.len()));
+            return throw(Exact(format!("Data mismatch: fields ({}) vs values ({})", field_names.len(), field_values.len())));
         }
         // build a cache (mapping) of field names to values
         let cache = field_names.iter().zip(field_values.iter())

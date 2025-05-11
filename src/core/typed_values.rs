@@ -35,7 +35,6 @@ use crate::errors::{throw, Errors, SyntaxErrors, TypeMismatchErrors};
 use crate::expression::Expression;
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
-use crate::inferences::Inferences;
 use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
@@ -55,7 +54,6 @@ use crate::structures::Structures::{Firm, Hard, Soft};
 use crate::structures::*;
 use crate::tokens::Token;
 use crate::typed_values::TypedValue::*;
-use shared_lib::fail;
 
 const ISO_DATE_FORMAT: &str =
     r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$";
@@ -514,7 +512,7 @@ impl TypedValue {
 
     pub fn to_result<A>(&self, f: fn(&TypedValue) -> A) -> std::io::Result<A> {
         match self {
-            ErrorValue(err) => fail(err.to_string()),
+            ErrorValue(err) => throw(Exact(err.to_string())),
             other => Ok(f(other))
         }
     }
@@ -710,14 +708,6 @@ impl TypedValue {
 
     pub fn and(&self, rhs: &TypedValue) -> Option<TypedValue> {
         Some(Boolean(self.to_bool() && rhs.to_bool()))
-    }
-
-    pub fn factorial(&self) -> TypedValue {
-        fn fact_u128(n: u128) -> TypedValue {
-            fn fact_f(n: u128) -> u128 { if n <= 1 { 1 } else { n * fact_f(n - 1) } }
-            Number(U128Value(fact_f(n)))
-        }
-        fact_u128(self.to_u128())
     }
 
     pub fn ne(&self, rhs: &Self) -> Option<Self> {

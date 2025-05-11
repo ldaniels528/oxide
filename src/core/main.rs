@@ -28,7 +28,6 @@ mod file_row_collection;
 mod formatting;
 mod hash_table_row_collection;
 mod hybrid_row_collection;
-mod inferences;
 mod interpreter;
 mod journaling;
 mod machine;

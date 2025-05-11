@@ -15,7 +15,7 @@ pub enum Token {
     Backticks { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     DoubleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
-    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize, is_postfix: bool, is_barrier: bool },
+    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize, is_postfix: bool },
     SingleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     URL { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
 }
@@ -47,13 +47,9 @@ impl Token {
 
     /// creates a new operator token
     pub fn operator(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        let barrier_symbols = vec![
-            ",", ";", "[", "]", "(", ")", "{", "}", "=>",
-        ].iter().map(|s| s.to_string()).collect::<Vec<String>>();
         let precedence = Self::determine_precedence(text.as_str());
         let is_postfix = text == "¡" || text == "²" || text == "³";
-        let is_barrier = barrier_symbols.contains(&text.to_owned());
-        Operator { text, start, end, line_number, column_number, precedence, is_postfix, is_barrier }
+        Operator { text, start, end, line_number, column_number, precedence, is_postfix }
     }
 
     /// creates a new single-quoted token

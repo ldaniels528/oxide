@@ -5,25 +5,28 @@
 
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::DynamicType;
-use crate::sequences::{Array, Sequence};
-
+use crate::data_types::DataType::*;
 use crate::errors::Errors::{SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ConstantValueExpected, UnsupportedType};
 use crate::errors::{throw, SyntaxErrors};
-use crate::expression::Expression::{CodeBlock, Condition, FunctionCall, If, Literal, Return, Variable, While};
-use crate::inferences::Inferences;
+use crate::expression::Expression::*;
+use crate::machine;
+use crate::number_kind::NumberKind;
+use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
+use crate::platform::PlatformOps;
 use crate::row_collection::RowCollection;
+use crate::sequences::{Array, Sequence};
 use crate::structures::Structures::{Firm, Soft};
 use crate::structures::{SoftStructure, Structure};
 use crate::tokens::Token;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, Boolean, ErrorValue, Number, StringValue, Structured, Undefined};
+use crate::typed_values::TypedValue::{ArrayValue, Boolean, ErrorValue, Function, Number, PlatformOp, StringValue, Structured, Undefined};
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
+use std::ops::Deref;
 
 // constants
 pub const FALSE: Expression = Condition(Conditions::False);
@@ -198,13 +201,13 @@ pub enum Expression {
     Directive(Directives),
     Divide(Box<Expression>, Box<Expression>),
     ElementAt(Box<Expression>, Box<Expression>),
-    Factorial(Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
     FnExpression {
         params: Vec<Parameter>,
         body: Option<Box<Expression>>,
         returns: DataType,
     },
+    FoldOver(Box<Expression>, Box<Expression>),
     ForEach(String, Box<Expression>, Box<Expression>),
     From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
@@ -284,7 +287,6 @@ impl Expression {
                 format!("{}::{}", Self::decompile(a), Self::decompile(b)),
             Expression::ColonColonColon(a, b) =>
                 format!("{}:::{}", Self::decompile(a), Self::decompile(b)),
-            Expression::Factorial(a) => format!("{}¡", Self::decompile(a)),
             Expression::Feature { title, scenarios } =>
                 format!("feature {} {{\n{}\n}}", title.to_code(), scenarios.iter()
                     .map(|s| s.to_code())
@@ -300,6 +302,8 @@ impl Expression {
                             Some(my_body) => format!(" => {}", my_body.to_code()),
                             None => String::new()
                         }),
+            Expression::FoldOver(a, b) =>
+                format!("{} |> {}", Self::decompile(a), Self::decompile(b)),
             Expression::ForEach(a, b, c) =>
                 format!("foreach {} in {} {}", a, Self::decompile(b), Self::decompile(c)),
             Expression::From(a) => format!("from {}", Self::decompile(a)),
@@ -544,7 +548,157 @@ impl Expression {
     }
 
     pub fn infer_type(&self) -> DataType {
-        Inferences::infer(self)
+        Expression::infer(self)
+    }
+
+    /// provides type inference for the given [Expression]
+    pub fn infer(expr: &Expression) -> DataType {
+        Self::infer_with_hints(expr, &vec![])
+    }
+
+    /// provides type inference for the given [Expression] with hints
+    /// to improve the matching performance.
+    pub fn infer_with_hints(
+        expr: &Expression,
+        hints: &Vec<Parameter>,
+    ) -> DataType {
+        let data_type = Self::do_infer_with_hints(expr, hints);
+        //println!("infer_with_hints: [{}] {:?} => '{}'", if hints.is_empty() { "N" } else { "Y" }, expr, data_type);
+        data_type
+    }
+
+    /// provides type inference for the given [Expression] with hints
+    /// to improve the matching performance.
+    fn do_infer_with_hints(
+        expr: &Expression,
+        hints: &Vec<Parameter>,
+    ) -> DataType {
+        match expr {
+            ArrayExpression(items) => ArrayType(items.len()),
+            // alias functions: name: get_name()
+            AsValue(_, e) => Self::infer_with_hints(e, hints),
+            BitwiseAnd(a, b) => Self::infer_a_or_b(a, b, hints),
+            BitwiseOr(a, b) => Self::infer_a_or_b(a, b, hints),
+            BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b, hints),
+            BitwiseShiftRight(a, b) => Self::infer_a_or_b(a, b, hints),
+            BitwiseXor(a, b) => Self::infer_a_or_b(a, b, hints),
+            CodeBlock(ops) => ops.last().map(|op| Self::infer_with_hints(op, hints))
+                .unwrap_or(DynamicType),
+            // platform functions: cal::now()
+            ColonColon(a, b) | ColonColonColon(a, b) =>
+                match (a.deref(), b.deref()) {
+                    (Variable(package), FunctionCall { fx, .. }) =>
+                        match fx.deref() {
+                            Variable(name) =>
+                                PlatformOps::find_function(package, name)
+                                    .map(|pf| pf.return_type)
+                                    .unwrap_or(DynamicType),
+                            _ => DynamicType
+                        }
+                    _ => DynamicType
+                }
+            Condition(..) => BooleanType,
+            CurvyArrowLeft(..) => StructureType(vec![]),
+            CurvyArrowRight(..) => BooleanType,
+            DatabaseOp(a) => match a {
+                DatabaseOps::Queryable(_) => TableType(vec![], 0),
+                DatabaseOps::Mutation(m) => match m {
+                    Mutations::Append { .. } => NumberType(NumberKind::RowIdKind),
+                    _ => NumberType(NumberKind::I64Kind),
+                }
+            }
+            Directive(..) => BooleanType,
+            Divide(a, b) => Self::infer_a_or_b(a, b, hints),
+            ElementAt(..) => DynamicType,
+            Feature { .. } => BooleanType,
+            FnExpression { params, returns, .. } =>
+                FunctionType(params.clone(), Box::new(returns.clone())),
+            FoldOver(_, b) => Self::infer_with_hints(b, hints),
+            ForEach(..) => DynamicType,
+            From(..) => TableType(vec![], 0),
+            FunctionCall { fx, .. } => Self::infer_with_hints(fx, hints),
+            HTTP { .. } => DynamicType,
+            If { a: true_v, b: Some(false_v), .. } => Self::infer_a_or_b(true_v, false_v, hints),
+            If { a: true_v, .. } => Self::infer_with_hints(true_v, hints),
+            Import(..) => BooleanType,
+            Include(..) => BooleanType,
+            Literal(Function { body, .. }) => Self::infer_with_hints(body, hints),
+            Literal(PlatformOp(pf)) => pf.get_return_type(),
+            Literal(v) => v.get_type(),
+            Minus(a, b) => Self::infer_a_or_b(a, b, hints),
+            Module(..) => BooleanType,
+            Modulo(a, b) => Self::infer_a_or_b(a, b, hints),
+            Multiply(a, b) => Self::infer_a_or_b(a, b, hints),
+            Neg(a) => Self::infer_with_hints(a, hints),
+            New(a) => Self::infer_with_hints(a, hints),
+            Ns(..) => BooleanType,
+            Parameters(params) => ArrayType(params.len()),
+            Plus(a, b) => Self::infer_a_or_b(a, b, hints),
+            PlusPlus(a, b) => Self::infer_a_or_b(a, b, hints),
+            Pow(a, b) => Self::infer_a_or_b(a, b, hints),
+            Range(a, b) => Self::infer_a_or_b(a, b, hints),
+            Return(a) => Self::infer_with_hints(a, hints),
+            Scenario { .. } => BooleanType,
+            SetVariable(..) => BooleanType,
+            SetVariables(..) => BooleanType,
+            // structures: { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
+            StructureExpression(key_values) => {
+                let mut params = vec![];
+                let mut combined_hints = hints.clone();
+                for (name, value) in key_values {
+                    let param = Parameter::new(name.clone(), Self::infer_with_hints(value, &combined_hints));
+                    params.push(param.clone());
+                    combined_hints.push(param);
+                }
+                StructureType(params)
+            }
+            // tuples: (100, 23, 36)
+            TupleExpression(values) => TupleType(values.iter()
+                .map(|p| Self::infer_with_hints(p, hints))
+                .collect::<Vec<_>>()),
+            TypeDef(expr) => Self::infer_with_hints(expr, hints),
+            Variable(name) =>
+                match name {
+                    s if s == machine::ROW_ID => NumberType(I64Kind),
+                    _ =>
+                        match hints.iter().find(|hint| hint.get_name() == name) {
+                            Some(param) => param.get_data_type(),
+                            None => DynamicType
+                        }
+                }
+            Via(..) => TableType(vec![], 0),
+            While { .. } => DynamicType,
+        }
+    }
+
+    /// provides type inference for the given [Expression]s
+    fn infer_a_or_b(
+        a: &Expression,
+        b: &Expression,
+        hints: &Vec<Parameter>,
+    ) -> DataType {
+        Self::infer_best_fit(vec![
+            Self::infer_with_hints(a, hints),
+            Self::infer_with_hints(b, hints)
+        ])
+    }
+
+    /// provides type resolution for the given [Vec<DataType>]
+    fn infer_best_fit(types: Vec<DataType>) -> DataType {
+        fn larger(a: &usize, b: &usize) -> usize {
+            (if a > b { a } else { b }).to_owned()
+        }
+
+        match types.len() {
+            0 => DynamicType,
+            1 => types[0].to_owned(),
+            _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
+                match (agg, t) {
+                    (BinaryType(a), BinaryType(b)) => StringType(larger(&a, b)),
+                    (StringType(a), StringType(b)) => StringType(larger(&a, b)),
+                    (_, t) => t.to_owned()
+                })
+        }
     }
 
     /// Indicates whether the expression is a conditional expression
@@ -612,7 +766,6 @@ impl Expression {
                     z => ErrorValue(TypeMismatch(UnsupportedType(DynamicType, z.get_type())))
                 })
             }
-            Expression::Factorial(expr) => expr.to_pure().map(|v| v.factorial()),
             Expression::StructureExpression(items) => {
                 let mut new_items = Vec::new();
                 for (name, expr) in items {
@@ -655,9 +808,9 @@ fn to_ns(path: Expression) -> Expression {
     fx("ns", path)
 }
 
-/// Unit tests
+/// expression unit tests
 #[cfg(test)]
-mod tests {
+mod expression_tests {
     use crate::data_types::DataType::{DynamicType, NumberType, StringType};
     use crate::expression::Conditions::*;
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
@@ -933,7 +1086,7 @@ mod tests {
         }));
         assert_eq!(
             from.to_code(),
-            "from ns(\"machine.overwrite.stocks\") where last_sale >= 1.25 limit 5"
+            r#"from ns("machine.overwrite.stocks") where last_sale >= 1.25 limit 5"#
         )
     }
 
@@ -1148,114 +1301,272 @@ mod tests {
             Expression::decompile(&model),
             r#"table(symbol: String(8), exchange: String(8), last_sale: f64)"#)
     }
+}
 
-    /// Unit tests
-    #[cfg(test)]
-    mod pure_tests {
-        use crate::compiler::Compiler;
-        use crate::numbers::Numbers::{F64Value, I64Value, U128Value, U64Value};
-        use crate::sequences::Array;
-        use crate::typed_values::TypedValue;
-        use crate::typed_values::TypedValue::{ArrayValue, Boolean, Number};
+/// pure expression unit tests
+#[cfg(test)]
+mod pure_expression_tests {
+    use crate::compiler::Compiler;
+    use crate::numbers::Numbers::{F64Value, I64Value, U64Value};
+    use crate::sequences::Array;
+    use crate::typed_values::TypedValue;
+    use crate::typed_values::TypedValue::{ArrayValue, Boolean, Number};
 
-        #[test]
-        fn test_to_pure_array() {
-            verify_pure(
-                "[1, 2, 3, 4] * 2",
-                ArrayValue(Array::from(vec![
-                    Number(I64Value(2)), Number(I64Value(4)),
-                    Number(I64Value(6)), Number(I64Value(8)),
-                ])))
-        }
+    #[test]
+    fn test_to_pure_array() {
+        verify_pure(
+            "[1, 2, 3, 4] * 2",
+            ArrayValue(Array::from(vec![
+                Number(I64Value(2)), Number(I64Value(4)),
+                Number(I64Value(6)), Number(I64Value(8)),
+            ])))
+    }
 
-        #[test]
-        fn test_to_pure_as_value() {
-            verify_pure("x: 55", Number(I64Value(55)))
-        }
+    #[test]
+    fn test_to_pure_as_value() {
+        verify_pure("x: 55", Number(I64Value(55)))
+    }
 
-        #[test]
-        fn test_to_pure_bitwise_and() {
-            verify_pure("0b1011 & 0b1101", Number(U64Value(9)))
-        }
+    #[test]
+    fn test_to_pure_bitwise_and() {
+        verify_pure("0b1011 & 0b1101", Number(U64Value(9)))
+    }
 
-        #[test]
-        fn test_to_pure_bitwise_or() {
-            verify_pure("0b0110 | 0b0011", Number(U64Value(7)))
-        }
+    #[test]
+    fn test_to_pure_bitwise_or() {
+        verify_pure("0b0110 | 0b0011", Number(U64Value(7)))
+    }
 
-        #[test]
-        fn test_to_pure_bitwise_shl() {
-            verify_pure("0b0001 << 0x03", Number(U64Value(8)))
-        }
+    #[test]
+    fn test_to_pure_bitwise_shl() {
+        verify_pure("0b0001 << 0x03", Number(U64Value(8)))
+    }
 
-        #[test]
-        fn test_to_pure_bitwise_shr() {
-            verify_pure("0b1_000_000 >> 0b0010", Number(U64Value(16)))
-        }
+    #[test]
+    fn test_to_pure_bitwise_shr() {
+        verify_pure("0b1_000_000 >> 0b0010", Number(U64Value(16)))
+    }
 
-        #[test]
-        fn test_to_pure_bitwise_xor() {
-            verify_pure("0b0110 ^ 0b0011", Number(U64Value(5))) // 0b0101
-        }
+    #[test]
+    fn test_to_pure_bitwise_xor() {
+        verify_pure("0b0110 ^ 0b0011", Number(U64Value(5))) // 0b0101
+    }
 
-        #[test]
-        fn test_to_pure_conditional_false() {
-            verify_pure("false", Boolean(false))
-        }
+    #[test]
+    fn test_to_pure_conditional_false() {
+        verify_pure("false", Boolean(false))
+    }
 
-        #[test]
-        fn test_to_pure_conditional_true() {
-            verify_pure("true", Boolean(true))
-        }
+    #[test]
+    fn test_to_pure_conditional_true() {
+        verify_pure("true", Boolean(true))
+    }
 
-        #[test]
-        fn test_to_pure_conditional_and() {
-            verify_pure("true && false", Boolean(false))
-        }
+    #[test]
+    fn test_to_pure_conditional_and() {
+        verify_pure("true && false", Boolean(false))
+    }
 
-        #[test]
-        fn test_to_pure_conditional_or() {
-            verify_pure("true || false", Boolean(true))
-        }
+    #[test]
+    fn test_to_pure_conditional_or() {
+        verify_pure("true || false", Boolean(true))
+    }
 
-        #[test]
-        fn test_to_pure_math_factorial() {
-            verify_pure("6¡", Number(U128Value(720)))
-        }
+    #[test]
+    fn test_to_pure_math_add() {
+        verify_pure("237 + 91", Number(I64Value(328)))
+    }
 
-        #[test]
-        fn test_to_pure_math_add() {
-            verify_pure("237 + 91", Number(I64Value(328)))
-        }
+    #[test]
+    fn test_to_pure_math_divide() {
+        verify_pure("16 / 3", Number(I64Value(5)))
+    }
 
-        #[test]
-        fn test_to_pure_math_divide() {
-            verify_pure("16 / 3", Number(I64Value(5)))
-        }
+    #[test]
+    fn test_to_pure_math_multiply() {
+        verify_pure("81 * 33", Number(I64Value(2673)))
+    }
 
-        #[test]
-        fn test_to_pure_math_multiply() {
-            verify_pure("81 * 33", Number(I64Value(2673)))
-        }
+    #[test]
+    fn test_to_pure_math_neg() {
+        verify_pure("-(40 + 41)", Number(I64Value(-81)))
+    }
 
-        #[test]
-        fn test_to_pure_math_neg() {
-            verify_pure("-(40 + 41)", Number(I64Value(-81)))
-        }
+    #[test]
+    fn test_to_pure_math_power() {
+        verify_pure("5 ** 3", Number(F64Value(125.0)))
+    }
 
-        #[test]
-        fn test_to_pure_math_power() {
-            verify_pure("5 ** 3", Number(F64Value(125.0)))
-        }
+    #[test]
+    fn test_to_pure_math_subtract() {
+        verify_pure("237 - 91", Number(I64Value(146)))
+    }
 
-        #[test]
-        fn test_to_pure_math_subtract() {
-            verify_pure("237 - 91", Number(I64Value(146)))
-        }
+    fn verify_pure(code: &str, expected: TypedValue) {
+        let expr = Compiler::build(code).unwrap();
+        assert_eq!(expr.to_pure().unwrap(), expected)
+    }
+}
 
-        fn verify_pure(code: &str, expected: TypedValue) {
-            let expr = Compiler::build(code).unwrap();
-            assert_eq!(expr.to_pure().unwrap(), expected)
-        }
+/// inference unit tests
+#[cfg(test)]
+mod inference_tests {
+    use super::*;
+    use crate::number_kind::NumberKind::{F64Kind, I64Kind};
+    use crate::numbers::Numbers::{F64Value, I64Value};
+    use crate::testdata::{verify_bit_operator, verify_data_type, verify_math_operator};
+    use crate::typed_values::TypedValue::{Number, StringValue};
+
+    #[test]
+    fn test_infer() {
+        let kind = Expression::infer(
+            &Literal(StringValue("hello world".into()))
+        );
+        assert_eq!(kind, StringType(11))
+    }
+
+    #[test]
+    fn test_infer_a_or_b_strings() {
+        let kind = Expression::infer_a_or_b(
+            &Literal(StringValue("yes".into())),
+            &Literal(StringValue("hello".into())),
+            &vec![],
+        );
+        assert_eq!(kind, StringType(5))
+    }
+
+    #[test]
+    fn test_infer_a_or_b_numbers() {
+        let kind = Expression::infer_a_or_b(
+            &Literal(Number(I64Value(76))),
+            &Literal(Number(F64Value(76.0))),
+            &vec![],
+        );
+        assert_eq!(kind, NumberType(F64Kind))
+    }
+
+    #[test]
+    fn test_infer_best_fit() {
+        let kind = Expression::infer_best_fit(vec![
+            StringType(11),
+            StringType(110),
+            StringType(55)
+        ]);
+        assert_eq!(kind, StringType(110))
+    }
+
+    #[test]
+    fn test_infer_conditionals_and() {
+        verify_data_type("true && false", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_between() {
+        verify_data_type("20 between 1 and 20", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_betwixt() {
+        verify_data_type("20 betwixt 1 and 21", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_eq() {
+        verify_data_type("x == y", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_gt() {
+        verify_data_type("x > y", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_gte() {
+        verify_data_type("x >= y", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_is() {
+        verify_data_type("a is b", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_isnt() {
+        verify_data_type("a isnt b", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_lt() {
+        verify_data_type("x < y", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_lte() {
+        verify_data_type("x <= y", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_neq() {
+        verify_data_type("x != y", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_conditionals_or() {
+        verify_data_type("true || false", BooleanType);
+    }
+
+    #[test]
+    fn test_infer_mathematics_divide() {
+        verify_math_operator("/");
+    }
+
+    #[test]
+    fn test_infer_mathematics_minus() {
+        verify_math_operator("-");
+    }
+
+    #[test]
+    fn test_infer_mathematics_plus() {
+        verify_math_operator("+");
+    }
+
+    #[test]
+    fn test_infer_mathematics_plus_plus() {
+        verify_math_operator("++");
+    }
+
+    #[test]
+    fn test_infer_mathematics_power() {
+        verify_math_operator("**");
+    }
+
+    #[test]
+    fn test_infer_mathematics_shl() {
+        verify_bit_operator("<<");
+    }
+
+    #[test]
+    fn test_infer_mathematics_shr() {
+        verify_bit_operator(">>");
+    }
+
+    #[test]
+    fn test_infer_mathematics_times() {
+        verify_math_operator("*");
+    }
+
+    #[test]
+    fn test_infer_return() {
+        verify_data_type("return 5", NumberType(I64Kind));
+    }
+
+    #[test]
+    fn test_infer_row_id() {
+        verify_data_type("__row_id__", NumberType(I64Kind));
+    }
+
+    #[test]
+    fn test_infer_tools_row_id() {
+        verify_data_type("tools::row_id()", NumberType(I64Kind));
     }
 }

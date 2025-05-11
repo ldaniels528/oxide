@@ -4,12 +4,13 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::columns::Column;
+use crate::errors::throw;
+use crate::errors::Errors::Exact;
 use crate::field;
 use crate::namespaces::Namespace;
 use crate::typed_values::TypedValue;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use shared_lib::fail;
 use std::fs;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::FileExt;
@@ -82,7 +83,7 @@ impl BLOBStore {
     {
         match bincode::serialize(&item) {
             Ok(bytes) => self.insert_blob(bytes),
-            Err(err) => fail(err.to_string())
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 
@@ -101,7 +102,7 @@ impl BLOBStore {
                 let _ = self.file.write_at(&bytes, header.offset + header_bytes.len() as u64)?;
                 Ok(header)
             }
-            Err(err) => fail(err.to_string())
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 
@@ -113,7 +114,7 @@ impl BLOBStore {
         let (header, bytes) = self.read_blob(offset)?;
         match bincode::deserialize(&bytes) {
             Ok(item) => Ok((header, item)),
-            Err(err) => fail(err.to_string())
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 
@@ -134,7 +135,7 @@ impl BLOBStore {
         let _ = self.file.read_at(&mut header_buf, offset)?;
         match bincode::deserialize::<BLOBCellMetadata>(&header_buf) {
             Ok(header) => Ok(header),
-            Err(err) => fail(err.to_string())
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 
@@ -148,7 +149,7 @@ impl BLOBStore {
     {
         match bincode::serialize(&item) {
             Ok(bytes) => self.update_blob(offset, bytes),
-            Err(err) => fail(err.to_string())
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 
@@ -173,7 +174,7 @@ impl BLOBStore {
                 let _ = self.file.write_at(&bytes, header.offset + header_bytes.len() as u64)?;
                 Ok(header)
             }
-            Err(err) => fail(err.to_string())
+            Err(err) => throw(Exact(err.to_string()))
         }
     }
 }

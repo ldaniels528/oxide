@@ -63,121 +63,6 @@ impl DataType {
 
     /// deciphers a datatype from an expression (e.g. "String" | "String(20)")
     pub fn decipher_type(model: &Expression) -> std::io::Result<DataType> {
-        use crate::typed_values::TypedValue::*;
-
-        fn expect_size(args: &Vec<Expression>, f: fn(usize) -> DataType) -> std::io::Result<DataType> {
-            match args.as_slice() {
-                [] => Ok(f(0)),
-                [Literal(Number(n))] => Ok(f(n.to_usize())),
-                [other] => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code()))),
-                other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
-            }
-        }
-        fn expect_type(args: &Vec<Expression>, f: fn(DataType) -> DataType) -> std::io::Result<DataType> {
-            match args.as_slice() {
-                [item] => Ok(f(decode_model(item)?)),
-                other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
-            }
-        }
-        fn expect_params(args: &Vec<Expression>, f: fn(Vec<Parameter>) -> DataType) -> std::io::Result<DataType> {
-            let mut params: Vec<Parameter> = vec![];
-            for arg in args {
-                let param = match arg {
-                    AsValue(name, model) => Parameter::new(name, decode_model(model)?),
-                    SetVariable(name, expr) => Parameter::from_tuple(name, expr.to_pure()?),
-                    Variable(name) => Parameter::add(name),
-                    other => return throw(SyntaxError(SyntaxErrors::ParameterExpected(other.to_code())))
-                };
-                params.push(param);
-            }
-            Ok(f(params))
-        }
-        fn decode_model_array(items: &Vec<Expression>) -> std::io::Result<DataType> {
-            let mut kinds = vec![];
-            for item in items {
-                match decode_model(item) {
-                    Ok(kind) => kinds.push(kind),
-                    Err(err) => return throw(Exact(err.to_string()))
-                }
-            }
-            Ok(ArrayType(kinds.len()))
-        }
-        fn decode_model_function_call(
-            fx: &Expression,
-            args: &Vec<Expression>,
-        ) -> std::io::Result<DataType> {
-            match fx {
-                Variable(name) =>
-                    match name.as_str() {
-                        "Array" => expect_size(args, |size| ArrayType(size)),
-                        "ASCII" => expect_size(args, |size| ASCIIType(size)),
-                        "Binary" => expect_size(args, |size| BinaryType(size)),
-                        "Enum" => expect_params(args, |params| EnumType(params)),
-                        "fn" => expect_params(args, |params| FunctionType(params, Box::from(DynamicType))),
-                        "String" => expect_size(args, |size| StringType(size)),
-                        "Struct" => expect_params(args, |params| StructureType(params)),
-                        "Table" => expect_params(args, |params| TableType(params, 0)),
-                        type_name if args.is_empty() => decode_model_variable(type_name),
-                        type_name => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(type_name.into())))
-                    }
-                other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
-            }
-        }
-        fn decode_model_tuple(items: &Vec<Expression>) -> std::io::Result<DataType> {
-            let mut kinds = vec![];
-            for item in items {
-                match decode_model(item) {
-                    Ok(kind) => kinds.push(kind),
-                    Err(err) => return throw(Exact(err.to_string()))
-                }
-            }
-            Ok(TupleType(kinds))
-        }
-        fn decode_model_variable(name: &str) -> std::io::Result<DataType> {
-            match name {
-                "Boolean" => Ok(BooleanType),
-                "Date" => Ok(NumberType(DateKind)),
-                "Enum" => Ok(EnumType(vec![])),
-                "Error" => Ok(ErrorType),
-                "f32" => Ok(NumberType(F32Kind)),
-                "f64" => Ok(NumberType(F64Kind)),
-                "Fn" => Ok(FunctionType(vec![], Box::new(DynamicType))),
-                "i8" => Ok(NumberType(I8Kind)),
-                "i16" => Ok(NumberType(I16Kind)),
-                "i32" => Ok(NumberType(I32Kind)),
-                "i64" => Ok(NumberType(I64Kind)),
-                "i128" => Ok(NumberType(I128Kind)),
-                "RowId" => Ok(NumberType(RowIdKind)),
-                "String" => Ok(StringType(0)),
-                "Struct" => Ok(StructureType(vec![])),
-                "Table" => Ok(TableType(vec![], 0)),
-                "UUID" => Ok(NumberType(UUIDKind)),
-                "u8" => Ok(NumberType(U8Kind)),
-                "u16" => Ok(NumberType(U16Kind)),
-                "u32" => Ok(NumberType(U32Kind)),
-                "u64" => Ok(NumberType(U64Kind)),
-                "u128" => Ok(NumberType(U128Kind)),
-                type_name => throw(TypeMismatch(UnrecognizedTypeName(type_name.to_string())))
-            }
-        }
-        fn decode_model(model: &Expression) -> std::io::Result<DataType> {
-            match model {
-                // e.g. [String, String, f64]
-                ArrayExpression(params) => decode_model_array(params),
-                // e.g. fn(a, b, c)
-                FnExpression { params, returns, .. } =>
-                    Ok(FunctionType(params.clone(), Box::from(returns.clone()))),
-                // e.g. String(80)
-                FunctionCall { fx, args } => decode_model_function_call(fx, args),
-                // e.g. Structure(symbol: String, exchange: String, last_sale: f64)
-                Literal(Structured(s)) => Ok(StructureType(s.get_parameters())),
-                // e.g. (f64, f64, f64)
-                TupleExpression(params) => decode_model_tuple(params),
-                // e.g. i64
-                Variable(name) => decode_model_variable(name),
-                other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
-            }
-        }
         decode_model(model)
     }
 
@@ -402,6 +287,11 @@ impl DataType {
         }
     }
 
+    /// Indicates whether the given name represents a known type
+    pub fn is_type_name(name: &str) -> bool {
+        decode_model_variable(name).is_ok()
+    }
+
     pub fn render(types: &Vec<DataType>) -> String {
         Self::render_f(types, |t| t.to_code())
     }
@@ -469,6 +359,129 @@ impl DataType {
 impl Display for DataType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_code())
+    }
+}
+
+fn decode_model(model: &Expression) -> std::io::Result<DataType> {
+    use crate::typed_values::TypedValue::Structured;
+    match model {
+        // e.g. [String, String, f64]
+        ArrayExpression(params) => decode_model_array(params),
+        // e.g. fn(a, b, c)
+        FnExpression { params, returns, .. } =>
+            Ok(FunctionType(params.clone(), Box::from(returns.clone()))),
+        // e.g. String(80)
+        FunctionCall { fx, args } => decode_model_function_call(fx, args),
+        // e.g. Structure(symbol: String, exchange: String, last_sale: f64)
+        Literal(Structured(s)) => Ok(StructureType(s.get_parameters())),
+        // e.g. (f64, f64, f64)
+        TupleExpression(params) => decode_model_tuple(params),
+        // e.g. i64
+        Variable(name) => decode_model_variable(name),
+        other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
+    }
+}
+
+fn decode_model_array(items: &Vec<Expression>) -> std::io::Result<DataType> {
+    let mut kinds = vec![];
+    for item in items {
+        match decode_model(item) {
+            Ok(kind) => kinds.push(kind),
+            Err(err) => return throw(Exact(err.to_string()))
+        }
+    }
+    Ok(ArrayType(kinds.len()))
+}
+
+fn decode_model_function_call(
+    fx: &Expression,
+    args: &Vec<Expression>,
+) -> std::io::Result<DataType> {
+    use crate::typed_values::TypedValue::Number;
+
+    fn expect_size(args: &Vec<Expression>, f: fn(usize) -> DataType) -> std::io::Result<DataType> {
+        match args.as_slice() {
+            [] => Ok(f(0)),
+            [Literal(Number(n))] => Ok(f(n.to_usize())),
+            [other] => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code()))),
+            other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
+        }
+    }
+    fn expect_type(args: &Vec<Expression>, f: fn(DataType) -> DataType) -> std::io::Result<DataType> {
+        match args.as_slice() {
+            [item] => Ok(f(decode_model(item)?)),
+            other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
+        }
+    }
+    fn expect_params(args: &Vec<Expression>, f: fn(Vec<Parameter>) -> DataType) -> std::io::Result<DataType> {
+        let mut params: Vec<Parameter> = vec![];
+        for arg in args {
+            let param = match arg {
+                AsValue(name, model) => Parameter::new(name, decode_model(model)?),
+                SetVariable(name, expr) => Parameter::from_tuple(name, expr.to_pure()?),
+                Variable(name) => Parameter::add(name),
+                other => return throw(SyntaxError(SyntaxErrors::ParameterExpected(other.to_code())))
+            };
+            params.push(param);
+        }
+        Ok(f(params))
+    }
+
+    // decode the type
+    match fx {
+        Variable(name) =>
+            match name.as_str() {
+                "Array" => expect_size(args, |size| ArrayType(size)),
+                "ASCII" => expect_size(args, |size| ASCIIType(size)),
+                "Binary" => expect_size(args, |size| BinaryType(size)),
+                "Enum" => expect_params(args, |params| EnumType(params)),
+                "fn" => expect_params(args, |params| FunctionType(params, Box::from(DynamicType))),
+                "String" => expect_size(args, |size| StringType(size)),
+                "Struct" => expect_params(args, |params| StructureType(params)),
+                "Table" => expect_params(args, |params| TableType(params, 0)),
+                type_name if args.is_empty() => decode_model_variable(type_name),
+                type_name => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(type_name.into())))
+            }
+        other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
+    }
+}
+
+fn decode_model_tuple(items: &Vec<Expression>) -> std::io::Result<DataType> {
+    let mut kinds = vec![];
+    for item in items {
+        match decode_model(item) {
+            Ok(kind) => kinds.push(kind),
+            Err(err) => return throw(Exact(err.to_string()))
+        }
+    }
+    Ok(TupleType(kinds))
+}
+
+fn decode_model_variable(name: &str) -> std::io::Result<DataType> {
+    match name {
+        "Boolean" => Ok(BooleanType),
+        "Date" => Ok(NumberType(DateKind)),
+        "Enum" => Ok(EnumType(vec![])),
+        "Error" => Ok(ErrorType),
+        "f32" => Ok(NumberType(F32Kind)),
+        "f64" => Ok(NumberType(F64Kind)),
+        "Fn" => Ok(FunctionType(vec![], Box::new(DynamicType))),
+        "i8" => Ok(NumberType(I8Kind)),
+        "i16" => Ok(NumberType(I16Kind)),
+        "i32" => Ok(NumberType(I32Kind)),
+        "i64" => Ok(NumberType(I64Kind)),
+        "i128" => Ok(NumberType(I128Kind)),
+        "RowId" => Ok(NumberType(RowIdKind)),
+        "String" => Ok(StringType(0)),
+        "Struct" => Ok(StructureType(vec![])),
+        "Table" => Ok(TableType(vec![], 0)),
+        "UUID" => Ok(NumberType(UUIDKind)),
+        "u8" => Ok(NumberType(U8Kind)),
+        "u16" => Ok(NumberType(U16Kind)),
+        "u32" => Ok(NumberType(U32Kind)),
+        "u64" => Ok(NumberType(U64Kind)),
+        "u128" => Ok(NumberType(U128Kind)),
+        type_name => throw(TypeMismatch(UnrecognizedTypeName(type_name.to_string())))
     }
 }
 

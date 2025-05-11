@@ -31,7 +31,7 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
 use serde_json::{json, Value};
-use shared_lib::{fail, RemoteCallRequest, RemoteCallResponse};
+use shared_lib::{RemoteCallRequest, RemoteCallResponse};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{stdout, Write};
@@ -333,7 +333,7 @@ fn get_shared_state(
     req: &HttpRequest
 ) -> std::io::Result<&web::Data<SharedState>> {
     match req.app_data::<web::Data<SharedState>>() {
-        None => fail("No shared application state"),
+        None => throw(Exact("No shared application state".into())),
         Some(shared_state) => Ok(shared_state)
     }
 }

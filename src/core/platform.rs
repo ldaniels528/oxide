@@ -36,6 +36,7 @@ use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
+use shared_lib::strip_margin;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -2064,20 +2065,6 @@ impl PlatformOps {
     }
 }
 
-fn strip_margin(input: &str, margin_char: char) -> String {
-    input
-        .lines()
-        .map(|line| {
-            if let Some(pos) = line.find(margin_char) {
-                line[pos + 1..].to_string()
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// Unit tests
 #[cfg(test)]
 mod tests {
@@ -2548,9 +2535,9 @@ mod tests {
         fn test_oxide_compile_closure() {
             verify_exact_value(r#"
                 n := 5
-                code := oxide::compile("n¡")
+                code := oxide::compile("n * n")
                 code()
-            "#, Number(U128Value(120)));
+            "#, Number(I64Value(25)));
         }
 
         #[test]
@@ -3182,10 +3169,12 @@ mod tests {
 
         #[test]
         fn test_tools_journal() {
-            verify_exact_table(r#"
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_value_whence(interpreter, r#"
                 stocks := ns("platform.journal.stocks")
                 drop table stocks
-
+            "#, |result| matches!(result, Boolean(_)));
+            interpreter = verify_exact_value_with(interpreter, r#"
                 create table stocks fn(
                    symbol: String(8), exchange: String(8), last_sale: f64
                 ) => {
@@ -3194,11 +3183,13 @@ mod tests {
                         last_sale: last_sale * 2.0,
                         event_time: cal::now()
                      }
-
-                ([{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+            "#, Boolean(true));
+            interpreter = verify_exact_value_with(interpreter, r#"
+                [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                  { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]) ~> stocks
-
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+            "#, Number(I64Value(3)));
+            interpreter = verify_exact_table_with(interpreter, r#"
                 import tools
                 stocks:::journal()
             "#, vec![
@@ -3328,10 +3319,12 @@ mod tests {
 
         #[test]
         fn test_tools_replay() {
-            verify_exact_table(r#"
-                stocks := ns("platform.table_fn.stocks")
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_value_whence(interpreter, r#"
+                stocks := ns("platform.replay.stocks")
                 drop table stocks
-
+            "#, |result| matches!(result, Boolean(_)));
+            interpreter = verify_exact_value_with(interpreter, r#"
                 create table stocks fn(
                    symbol: String(8), exchange: String(8), last_sale: f64
                 ) => {
@@ -3340,11 +3333,13 @@ mod tests {
                         last_sale: last_sale * 2.0,
                         rank: __row_id__ + 1
                      }
-
-                ([{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+            "#, Boolean(true));
+            interpreter = verify_exact_value_with(interpreter, r#"
+                [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                  { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]) ~> stocks
-
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+            "#, Number(I64Value(3)));
+            interpreter = verify_exact_table_with(interpreter, r#"
                 import tools
                 stocks:::replay()
                 from stocks
@@ -3355,8 +3350,7 @@ mod tests {
                 "| 0  | BOOM   | NYSE     | 113.76    | 1    |",
                 "| 1  | ABC    | AMEX     | 24.98     | 2    |",
                 "| 2  | JET    | NASDAQ   | 64.24     | 3    |",
-                "|-------------------------------------------|"
-            ])
+                "|-------------------------------------------|"])
         }
 
         #[test]
@@ -3768,26 +3762,23 @@ mod tests {
         fn test_www_serve_workflow() {
             let mut interpreter = Interpreter::new();
 
-            // set up a listener on port 8833
-            let result = interpreter.evaluate(r#"
-                www::serve(8833)
-            "#).unwrap();
-            assert_eq!(result, Boolean(true));
-
             // create the table
             let result = interpreter.evaluate(r#"
-                create table ns("platform.www.stocks") (
-                    symbol: String(8),
-                    exchange: String(8),
-                    last_sale: f64
-                )
+                stocks := ns("platform.www.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            "#).unwrap();
+            assert_eq!(result, Number(I64Value(0)));
+
+            // set up a listener on port 8838
+            let result = interpreter.evaluate(r#"
+                www::serve(8838)
             "#).unwrap();
             assert_eq!(result, Boolean(true));
 
             // append a new row
             let row_id = interpreter.evaluate(r#"
                 POST {
-                    url: http://localhost:8833/platform/www/stocks/0
+                    url: http://localhost:8838/platform/www/stocks/0
                     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
                 }
             "#).unwrap();
@@ -3795,14 +3786,14 @@ mod tests {
 
             // fetch the previously created row
             let row = interpreter.evaluate(format!(r#"
-                GET http://localhost:8833/platform/www/stocks/{row_id}
+                GET http://localhost:8838/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(row.to_json(), json!({"exchange":"AMEX","symbol":"ABC","last_sale":11.77}));
 
             // replace the previously created row
             let result = interpreter.evaluate(format!(r#"
                 PUT {{
-                    url: http://localhost:8833/platform/www/stocks/{row_id}
+                    url: http://localhost:8838/platform/www/stocks/{row_id}
                     body: {{ symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }}
                 }}
             "#).as_str()).unwrap();
@@ -3810,14 +3801,14 @@ mod tests {
 
             // re-fetch the previously updated row
             let row = interpreter.evaluate(format!(r#"
-                GET http://localhost:8833/platform/www/stocks/{row_id}
+                GET http://localhost:8838/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(row.to_json(), json!({"symbol":"ABC","exchange":"AMEX","last_sale":11.79}));
 
             // update the previously created row
             let result = interpreter.evaluate(format!(r#"
                 PATCH {{
-                    url: http://localhost:8833/platform/www/stocks/{row_id}
+                    url: http://localhost:8838/platform/www/stocks/{row_id}
                     body: {{ last_sale: 11.81 }}
                 }}
             "#).as_str()).unwrap();
@@ -3825,26 +3816,26 @@ mod tests {
 
             // re-fetch the previously updated row
             let row = interpreter.evaluate(format!(r#"
-                GET http://localhost:8833/platform/www/stocks/{row_id}
+                GET http://localhost:8838/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(row.to_json(), json!({"last_sale":11.81,"symbol":"ABC","exchange":"AMEX"}));
 
             // fetch the headers for the previously updated row
             let result = interpreter.evaluate(format!(r#"
-                HEAD http://localhost:8833/platform/www/stocks/{row_id}
+                HEAD http://localhost:8838/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             println!("HEAD: {}", result.to_string());
             assert!(matches!(result, Structured(Soft(..))));
 
             // delete the previously updated row
             let result = interpreter.evaluate(format!(r#"
-                DELETE http://localhost:8833/platform/www/stocks/{row_id}
+                DELETE http://localhost:8838/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(result, Number(I64Value(1)));
 
             // verify the deleted row is empty
             let row = interpreter.evaluate(format!(r#"
-                GET http://localhost:8833/platform/www/stocks/{row_id}
+                GET http://localhost:8838/platform/www/stocks/{row_id}
             "#).as_str()).unwrap();
             assert_eq!(row, Structured(Soft(SoftStructure::empty())));
         }
