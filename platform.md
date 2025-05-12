@@ -6,7 +6,7 @@
 <h4>cal::now &#8212; Returns the current local date and time</h4>
 <pre>cal::now()</pre>
 <pre>
-2025-05-12T15:23:31.843Z
+2025-05-12T19:32:44.054Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -20,35 +20,35 @@ now():::day_of()</pre>
 <pre>import cal
 now():::hour12()</pre>
 <pre>
-8
+12
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
 <pre>import cal
 now():::hour24()</pre>
 <pre>
-8
+12
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
 <pre>import cal
 now():::minute_of()</pre>
 <pre>
-23
+32
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
 <pre>import cal
 now():::month_of()</pre>
 <pre>
-31
+44
 </pre>
 <hr>
 <h4>cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
 <pre>import cal
 now():::second_of()</pre>
 <pre>
-31
+44
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -245,13 +245,13 @@ Hello World
 <h4>oxide::help &#8212; Integrated help function</h4>
 <pre>from oxide::help() limit 3</pre>
 <pre>
-|------------------------------------------------------------------------------------------------|
-| id | name       | module | signature                  | description                  | returns |
-|------------------------------------------------------------------------------------------------|
-| 0  | url_encode | www    | www::url_encode(s: String) | Encodes a URL string         | String  |
-| 1  | url_decode | www    | www::url_decode(s: String) | Decodes a URL-encoded string | String  |
-| 2  | serve      | www    | www::serve(n: u32)         | Starts a local HTTP service  | Boolean |
-|------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name        | module | signature         | description                                     | returns                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
+| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String                                       |
+| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Boolean                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -286,7 +286,7 @@ true
 <h4>oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
 <pre>oxide::uuid()</pre>
 <pre>
-a9e4987e-b0f1-44fa-b337-ed8d7a66f942
+6a4cb116-8cb5-4f34-b2f8-21bfd780d9d8
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>
@@ -353,6 +353,21 @@ World
 <pre>str::starts_with('Hello World', 'World')</pre>
 <pre>
 false
+</pre>
+<hr>
+<h4>str::strip_margin &#8212; Returns the string with all characters on each line are striped up to the margin character</h4>
+<pre>str::strip_margin("
+|Code example:
+|
+|from stocks
+|where exchange is 'NYSE'
+", '|')</pre>
+<pre>
+
+Code example:
+
+from stocks
+where exchange is 'NYSE'
 </pre>
 <hr>
 <h4>str::substring &#8212; Returns a substring of string `s` from `m` to `n`</h4>

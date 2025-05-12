@@ -71,6 +71,7 @@ pub enum TypeMismatchErrors {
     ArrayExpected(String),
     BooleanExpected(String),
     CannotBeNegated(String),
+    CharExpected(String),
     CodeBlockExpected(String),
     CollectionExpected(String),
     ColumnExpected(String),
@@ -104,6 +105,8 @@ impl Display for TypeMismatchErrors {
                 format!("Boolean value expected near {a}"),
             TypeMismatchErrors::CannotBeNegated(a) =>
                 format!("{a} cannot be negated"),
+            TypeMismatchErrors::CharExpected(a) =>
+                format!("Character expected near {a}"),
             TypeMismatchErrors::CodeBlockExpected(a) =>
                 format!("Scope {{ ... }} expected near {a}"),
             TypeMismatchErrors::CollectionExpected(a) =>

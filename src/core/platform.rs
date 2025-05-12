@@ -12,7 +12,7 @@ use crate::sequences::{Array, Sequence, Sequences};
 use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
 use crate::errors::throw;
 use crate::errors::Errors::*;
-use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CollectionExpected, DateExpected, StringExpected, StructExpected, UnsupportedType};
+use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CharExpected, CollectionExpected, DateExpected, StringExpected, StructExpected, UnsupportedType};
 use crate::expression::Expression::{CodeBlock, Literal, Multiply, Scenario};
 use crate::file_row_collection::FileRowCollection;
 use crate::formatting::DataFormats;
@@ -118,6 +118,7 @@ pub enum PlatformOps {
     StrRight,
     StrSplit,
     StrStartsWith,
+    StrStripMargin,
     StrSubstring,
     StrToString,
     // testing package
@@ -167,7 +168,7 @@ pub enum PlatformOps {
     WwwURLEncode,
 }
 
-pub const PLATFORM_OPCODES: [PlatformOps; 84] = {
+pub const PLATFORM_OPCODES: [PlatformOps; 85] = {
     use PlatformOps::*;
     [
         // cal
@@ -185,7 +186,7 @@ pub const PLATFORM_OPCODES: [PlatformOps; 84] = {
         OxidePrintln, OxideReset, OxideUUID, OxideVersion,
         // str
         StrEndsWith, StrFormat, StrIndexOf, StrJoin, StrLeft, StrLen,
-        StrRight, StrSplit, StrStartsWith, StrSubstring, StrToString,
+        StrRight, StrSplit, StrStartsWith, StrStripMargin, StrSubstring, StrToString,
         // testing
         TestingAssert, TestingFeature, TestingMatches, TestingTypeOf,
         // tools
@@ -274,6 +275,7 @@ impl PlatformOps {
             PlatformOps::StrRight => Ok(self.adapter_fn2(ms, args, Self::do_str_right)),
             PlatformOps::StrSplit => Ok(self.adapter_fn2(ms, args, Self::do_str_split)),
             PlatformOps::StrStartsWith => Ok(self.adapter_fn2(ms, args, Self::do_str_start_with)),
+            PlatformOps::StrStripMargin => self.adapter_fn2_ok(ms, args, Self::do_str_strip_margin),
             PlatformOps::StrSubstring => Ok(self.adapter_fn3(ms, args, Self::do_str_substring)),
             PlatformOps::StrToString => Ok(self.adapter_fn1(ms, args, Self::do_str_to_string)),
             PlatformOps::ToolsCompact => self.adapter_fn1_ok(ms, args, Self::do_tools_compact),
@@ -371,6 +373,7 @@ impl PlatformOps {
             PlatformOps::StrRight => "Returns n-characters from right-to-left",
             PlatformOps::StrSplit => "Splits string `a` by delimiter string `b`",
             PlatformOps::StrStartsWith => "Returns true if string `a` starts with string `b`",
+            PlatformOps::StrStripMargin => "Returns the string with all characters on each line are striped up to the margin character",
             PlatformOps::StrSubstring => "Returns a substring of string `s` from `m` to `n`",
             PlatformOps::StrToString => "Converts a value to its text-based representation",
             // testing
@@ -574,6 +577,14 @@ impl PlatformOps {
             PlatformOps::StrRight => "str::right('Hello World', 5)".to_string(),
             PlatformOps::StrSplit => r#"str::split('Hello,there World', ' ,')"#.to_string(),
             PlatformOps::StrStartsWith => "str::starts_with('Hello World', 'World')".to_string(),
+            PlatformOps::StrStripMargin => strip_margin(r#"
+                ^str::strip_margin("
+                ^|Code example:
+                ^|
+                ^|from stocks
+                ^|where exchange is 'NYSE'
+                ^", '|')"#, '^',
+            ),
             PlatformOps::StrSubstring => "str::substring('Hello World', 0, 5)".to_string(),
             PlatformOps::StrToString => "str::to_string(125.75)".to_string(),
             PlatformOps::ToolsCompact => strip_margin(r#"
@@ -775,10 +786,6 @@ impl PlatformOps {
             PlatformOps::IoFileReadText => "read_text_file",
             PlatformOps::IoStdErr => "stderr",
             PlatformOps::IoStdOut => "stdout",
-            // testing
-            PlatformOps::TestingAssert => "assert",
-            PlatformOps::TestingFeature => "feature",
-            PlatformOps::TestingMatches => "matches",
             // os
             PlatformOps::OsCall => "call",
             PlatformOps::OsClear => "clear",
@@ -806,8 +813,13 @@ impl PlatformOps {
             PlatformOps::StrRight => "right",
             PlatformOps::StrSplit => "split",
             PlatformOps::StrStartsWith => "starts_with",
+            PlatformOps::StrStripMargin => "strip_margin",
             PlatformOps::StrSubstring => "substring",
             PlatformOps::StrToString => "to_string",
+            // testing
+            PlatformOps::TestingAssert => "assert",
+            PlatformOps::TestingFeature => "feature",
+            PlatformOps::TestingMatches => "matches",
             // tool
             PlatformOps::ToolsCompact => "compact",
             PlatformOps::ToolsDescribe => "describe",
@@ -872,8 +884,8 @@ impl PlatformOps {
             OsCall | OsClear | OsCurrentDir | OsEnv => "os",
             // str
             StrEndsWith | StrFormat | StrIndexOf | StrJoin |
-            StrLeft | StrLen | StrRight | StrSplit |
-            StrStartsWith | StrSubstring | StrToString => "str",
+            StrLeft | StrLen | StrRight | StrSplit | StrStartsWith |
+            StrStripMargin | StrSubstring | StrToString => "str",
             // tools
             ToolsCompact | ToolsDescribe | ToolsFetch | ToolsJournal | ToolsPop |
             ToolsPush | ToolsReplay | ToolsReverse | ToolsRowId | ToolsScan |
@@ -927,7 +939,7 @@ impl PlatformOps {
             TestingMatches | ToolsPush
             => vec![DynamicType, DynamicType],
             // two-parameter (string, string)
-            IoFileCreate | StrEndsWith | StrFormat | StrSplit | StrStartsWith
+            IoFileCreate | StrEndsWith | StrFormat | StrSplit | StrStartsWith | StrStripMargin
             => vec![StringType(0), StringType(0)],
             // two-parameter (string, i64)
             StrIndexOf | StrLeft | StrRight
@@ -1011,7 +1023,7 @@ impl PlatformOps {
             ToolsPush | WwwServe => BooleanType,
             // string
             IoStdErr | IoStdOut | TestingTypeOf | OsCall | OsCurrentDir |
-            OxideEval | OxideHome | StrFormat | StrJoin | StrLeft | StrRight |
+            OxideEval | OxideHome | StrFormat | StrJoin | StrLeft | StrRight | StrStripMargin |
             StrSubstring | StrToString | UtilBase64 | UtilBinary | UtilToASCII | UtilHex |
             WwwURLDecode | WwwURLEncode => StringType(0),
             // row|structure
@@ -1615,6 +1627,27 @@ impl PlatformOps {
                 }
             }
             z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
+        }
+    }
+
+    fn do_str_strip_margin(
+        ms: Machine,
+        string_value: &TypedValue,
+        margin_value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match string_value {
+            StringValue(src) => {
+                match margin_value {
+                    StringValue(margin)  =>
+                        if let Some(margin_char) = margin.chars().next() {
+                            Ok((ms, StringValue(strip_margin(src, margin_char))))
+                        } else {
+                            throw(TypeMismatch(CharExpected(margin.into())))
+                        }
+                    z => throw(TypeMismatch(StringExpected(z.to_code())))
+                }
+            }
+            z => throw(TypeMismatch(StringExpected(z.to_code())))
         }
     }
 
@@ -2823,6 +2856,18 @@ mod tests {
             verify_exact_value(r#"
                 str::starts_with('Hello World', 'World')
             "#, Boolean(false))
+        }
+
+        #[test]
+        fn test_str_strip_margin() {
+            verify_exact_value(strip_margin(r#"
+                ^str::strip_margin("
+                ^|Code example:
+                ^|
+                ^|from stocks
+                ^|where exchange is 'NYSE'
+                ^", '|')"#, '^',
+            ).as_str(), StringValue("\nCode example:\n\nfrom stocks\nwhere exchange is 'NYSE'".into()))
         }
 
         #[test]
