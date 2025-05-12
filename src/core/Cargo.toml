@@ -37,4 +37,5 @@ uuid = { version = "1.7.0", features = ["v4"] }
 md5 = "0.7.0"
 base64 = "0.22.1"
 urlencoding = "2.1"
+home = "0.5.11"
 #wasm-bindgen = "0.2.92"

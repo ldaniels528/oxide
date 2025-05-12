@@ -126,7 +126,11 @@ impl Machine {
     ////////////////////////////////////////////////////////////////
 
     pub fn oxide_home() -> String {
-        env::var("OXIDE_HOME").unwrap_or("./oxide_db".to_string())
+        let oxide_db = "oxide_db";
+        env::var("OXIDE_HOME")
+            .unwrap_or(home::home_dir()
+                .map(|dir| format!("{}/{oxide_db}", dir.display().to_string()))
+                .unwrap_or(format!("./{oxide_db}")))
     }
 
     ////////////////////////////////////////////////////////////////
