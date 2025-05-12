@@ -136,7 +136,7 @@ true
     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
 }</pre>
 <pre>
-6
+1
 </pre>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
@@ -144,7 +144,7 @@ true
 </pre>
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
-{"content-length":"81","content-type":"application/json","date":"Mon, 12 May 2025 15:23:32 GMT"}
+{"content-length":"81","content-type":"application/json","date":"Mon, 12 May 2025 23:16:45 GMT"}
 </pre>
 <pre>PUT {
     url: http://localhost:8833/platform/www/stocks/0

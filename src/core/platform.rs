@@ -21,6 +21,7 @@ use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::*;
+use crate::numbers::Numbers;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::platform::PlatformOps::*;
@@ -34,6 +35,7 @@ use crate::{machine, oxide_server};
 use actix::ActorStreamExt;
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
+use num_traits::real::Real;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use shared_lib::strip_margin;
@@ -92,6 +94,15 @@ pub enum PlatformOps {
     IoFileReadText,
     IoStdErr,
     IoStdOut,
+    // math
+    MathAbs,
+    MathCeil,
+    MathFloor,
+    MathMax,
+    MathMin,
+    MathPow,
+    MathRound,
+    MathSqrt,
     // os package
     OsCall,
     OsClear,
@@ -168,7 +179,7 @@ pub enum PlatformOps {
     WwwURLEncode,
 }
 
-pub const PLATFORM_OPCODES: [PlatformOps; 85] = {
+pub const PLATFORM_OPCODES: [PlatformOps; 93] = {
     use PlatformOps::*;
     [
         // cal
@@ -179,6 +190,9 @@ pub const PLATFORM_OPCODES: [PlatformOps; 85] = {
         DurationsSeconds,
         // io
         IoFileCreate, IoFileExists, IoFileReadText, IoStdErr, IoStdOut,
+        // math
+        MathAbs, MathCeil, MathFloor, MathMax, MathMin, MathPow, MathRound,
+        MathSqrt,
         // os
         OsCall, OsClear, OsCurrentDir, OsEnv,
         // oxide
@@ -230,6 +244,7 @@ impl PlatformOps {
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Machine, TypedValue)> {
         match self {
+            // cal
             PlatformOps::CalDateDay => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
             PlatformOps::CalDateHour24 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
             PlatformOps::CalDateHour12 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
@@ -238,24 +253,38 @@ impl PlatformOps {
             PlatformOps::CalDateSecond => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
             PlatformOps::CalDateYear => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
             PlatformOps::CalNow => Self::do_cal_now(ms, args),
+            // durations
             PlatformOps::DurationsDays => self.adapter_fn1_pf(ms, args, Self::do_durations),
             PlatformOps::DurationsHours => self.adapter_fn1_pf(ms, args, Self::do_durations),
             PlatformOps::DurationsMillis => self.adapter_fn1_pf(ms, args, Self::do_durations),
             PlatformOps::DurationsMinutes => self.adapter_fn1_pf(ms, args, Self::do_durations),
             PlatformOps::DurationsSeconds => self.adapter_fn1_pf(ms, args, Self::do_durations),
+            // io
             PlatformOps::IoFileCreate => self.adapter_fn2_ok(ms, args, Self::do_io_create_file),
             PlatformOps::IoFileExists => self.adapter_fn1_ok(ms, args, Self::do_io_exists),
             PlatformOps::IoFileReadText => self.adapter_fn1_ok(ms, args, Self::do_io_read_text_file),
             PlatformOps::IoStdErr => self.adapter_fn1_ok(ms, args, Self::do_io_stderr),
             PlatformOps::IoStdOut => self.adapter_fn1_ok(ms, args, Self::do_io_stdout),
+            // math
+            PlatformOps::MathAbs => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.abs())),
+            PlatformOps::MathCeil => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.ceil())),
+            PlatformOps::MathFloor => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.floor())),
+            PlatformOps::MathMax => self.adapter_fn2_ok(ms, args, |ms, a, b| Self::do_math_f2(ms, a, b, |n, m| n.max(m))),
+            PlatformOps::MathMin => self.adapter_fn2_ok(ms, args, |ms, a, b| Self::do_math_f2(ms, a, b, |n, m| n.min(m))),
+            PlatformOps::MathPow => self.adapter_fn2_ok(ms, args, |ms, a, b| Self::do_math_f2(ms, a, b, |n, m| n.pow(m))),
+            PlatformOps::MathRound => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.round())),
+            PlatformOps::MathSqrt => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.sqrt())),
+            // testing
             PlatformOps::TestingAssert => Ok(self.adapter_fn1(ms, args, Self::do_testing_assert)),
             PlatformOps::TestingFeature => self.adapter_fn2_ok(ms, args, Self::do_testing_feature),
             PlatformOps::TestingMatches => Ok(self.adapter_fn2(ms, args, Self::do_testing_matches)),
             PlatformOps::TestingTypeOf => Ok(self.adapter_fn1(ms, args, Self::do_testing_type_of)),
+            // os
             PlatformOps::OsCall => Self::do_os_call(ms, args),
             PlatformOps::OsCurrentDir => self.adapter_fn0_ok(ms, args, Self::do_os_current_dir),
             PlatformOps::OsClear => self.adapter_fn0_ok(ms, args, Self::do_os_clear_screen),
             PlatformOps::OsEnv => Ok(self.adapter_fn0(ms, args, Self::do_os_env)),
+            // oxide
             PlatformOps::OxideCompile => self.adapter_fn1_ok(ms, args, Self::do_oxide_compile),
             PlatformOps::OxideDebug => self.adapter_fn1_ok(ms, args, Self::do_oxide_debug),
             PlatformOps::OxideEval => self.adapter_fn1_ok(ms, args, Self::do_oxide_eval),
@@ -266,6 +295,7 @@ impl PlatformOps {
             PlatformOps::OxideReset => Ok(self.adapter_fn0(ms, args, Self::do_oxide_reset)),
             PlatformOps::OxideUUID => Self::do_util_uuid(ms, args),
             PlatformOps::OxideVersion => Ok(self.adapter_fn0(ms, args, Self::do_oxide_version)),
+            // str
             PlatformOps::StrEndsWith => self.adapter_fn2_ok(ms, args, Self::do_str_ends_with),
             PlatformOps::StrFormat => Ok(Self::do_str_format(ms, args)),
             PlatformOps::StrIndexOf => self.adapter_fn2_ok(ms, args, Self::do_str_index_of),
@@ -278,6 +308,7 @@ impl PlatformOps {
             PlatformOps::StrStripMargin => self.adapter_fn2_ok(ms, args, Self::do_str_strip_margin),
             PlatformOps::StrSubstring => Ok(self.adapter_fn3(ms, args, Self::do_str_substring)),
             PlatformOps::StrToString => Ok(self.adapter_fn1(ms, args, Self::do_str_to_string)),
+            // tools
             PlatformOps::ToolsCompact => self.adapter_fn1_ok(ms, args, Self::do_tools_compact),
             PlatformOps::ToolsDescribe => self.adapter_fn1_ok(ms, args, Self::do_tools_describe),
             PlatformOps::ToolsFetch => self.adapter_fn2_ok(ms, args, Self::do_tools_fetch),
@@ -292,6 +323,7 @@ impl PlatformOps {
             PlatformOps::ToolsToCSV => self.adapter_fn1_ok(ms, args, Self::do_tools_to_csv),
             PlatformOps::ToolsToJSON => self.adapter_fn1_ok(ms, args, Self::do_tools_to_json),
             PlatformOps::ToolsToTable => self.adapter_fn1_ok(ms, args, Self::do_tools_to_table),
+            // util
             PlatformOps::UtilBase64 => Ok(self.adapter_fn1(ms, args, Self::do_util_base64)),
             PlatformOps::UtilBinary => Ok(self.adapter_fn1(ms, args, Self::do_util_binary)),
             PlatformOps::UtilGzip => self.adapter_fn1_ok(ms, args, Self::do_util_gzip),
@@ -312,6 +344,7 @@ impl PlatformOps {
             PlatformOps::UtilToU32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
             PlatformOps::UtilToU64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
             PlatformOps::UtilToU128 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            // www
             PlatformOps::WwwURLDecode => self.adapter_fn1_ok(ms, args, Self::do_www_url_decode),
             PlatformOps::WwwURLEncode => self.adapter_fn1_ok(ms, args, Self::do_www_url_encode),
             PlatformOps::WwwServe => self.adapter_fn1_ok(ms, args, Self::do_www_serve),
@@ -347,6 +380,15 @@ impl PlatformOps {
             PlatformOps::IoFileReadText => "Reads the contents of a text file into memory",
             PlatformOps::IoStdErr => "Writes a string to STDERR",
             PlatformOps::IoStdOut => "Writes a string to STDOUT",
+            // math
+            PlatformOps::MathAbs => "abs(x): Returns the absolute value of x.",
+            PlatformOps::MathCeil => "ceil(x): Returns the smallest integer greater than or equal to x.",
+            PlatformOps::MathFloor => "floor(x): Returns the largest integer less than or equal to x.",
+            PlatformOps::MathMax => "max(a, b): Returns the larger of a and b",
+            PlatformOps::MathMin => "min(a, b): Returns the smaller of a and b.",
+            PlatformOps::MathPow => "pow(x, y): Returns x raised to the power of y.",
+            PlatformOps::MathRound => "round(x): Rounds x to the nearest integer.",
+            PlatformOps::MathSqrt => "sqrt(x): Returns the square root of x.",
             // os
             PlatformOps::OsCall => "Invokes an operating system application",
             PlatformOps::OsClear => "Clears the terminal/screen",
@@ -495,6 +537,15 @@ impl PlatformOps {
             "#, '|'),
             PlatformOps::IoStdErr => r#"io::stderr("Goodbye Cruel World")"#.to_string(),
             PlatformOps::IoStdOut => r#"io::stdout("Hello World")"#.to_string(),
+            // math
+            PlatformOps::MathAbs => "math::abs(-81)".into(),
+            PlatformOps::MathCeil => "math::ceil(5)".into(),
+            PlatformOps::MathFloor => "math::floor(5)".into(),
+            PlatformOps::MathMax => "math::max(81, 78)".into(),
+            PlatformOps::MathMin => "math::min(81, 78)".into(),
+            PlatformOps::MathPow => "math::pow(2, 3)".into(),
+            PlatformOps::MathRound => "math::round(5.7)".into(),
+            PlatformOps::MathSqrt => "math::sqrt(25)".into(),
             // testing
             PlatformOps::TestingAssert => strip_margin(r#"
                 |import testing
@@ -786,6 +837,15 @@ impl PlatformOps {
             PlatformOps::IoFileReadText => "read_text_file",
             PlatformOps::IoStdErr => "stderr",
             PlatformOps::IoStdOut => "stdout",
+            // math
+            PlatformOps::MathAbs => "abs",
+            PlatformOps::MathCeil => "ceil",
+            PlatformOps::MathFloor => "floor",
+            PlatformOps::MathMax => "max",
+            PlatformOps::MathMin => "min",
+            PlatformOps::MathPow => "pow",
+            PlatformOps::MathRound => "round",
+            PlatformOps::MathSqrt => "sqrt",
             // os
             PlatformOps::OsCall => "call",
             PlatformOps::OsClear => "clear",
@@ -875,6 +935,9 @@ impl PlatformOps {
             DurationsSeconds => "durations",
             // io
             IoFileCreate | IoFileExists | IoFileReadText | IoStdErr | IoStdOut => "io",
+            // math
+            MathAbs | MathCeil | MathFloor | MathMax | MathMin | MathPow | MathRound |
+            MathSqrt => "math",
             // testing
             TestingAssert | TestingFeature | TestingMatches | TestingTypeOf => "testing",
             // oxide
@@ -918,9 +981,12 @@ impl PlatformOps {
             CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
             CalDateMonth | CalDateSecond | CalDateYear
             => vec![NumberType(DateKind)],
-            // single-parameter (int)
+            // single-parameter (u32)
             UtilToASCII | WwwServe
             => vec![NumberType(U32Kind)],
+            // single-parameter (f64)
+            MathAbs | MathCeil | MathFloor | MathRound | MathSqrt
+            => vec![NumberType(F64Kind)],
             // single-parameter (dynamic)
             TestingTypeOf | StrToString | ToolsToTable | UtilBase64 | UtilBinary |
             UtilGzip | UtilGunzip | UtilHex | UtilMD5 | UtilToDate |
@@ -935,6 +1001,9 @@ impl PlatformOps {
             ToolsCompact | ToolsDescribe | ToolsJournal | ToolsPop | ToolsReverse |
             ToolsScan | ToolsToArray | ToolsToCSV | ToolsToJSON
             => vec![TableType(Vec::new(), 0)],
+            // two-parameter (f64, f64)
+            MathMax | MathMin | MathPow
+            => vec![NumberType(F64Kind), NumberType(F64Kind)],
             // two-parameter (lazy, lazy)
             TestingMatches | ToolsPush
             => vec![DynamicType, DynamicType],
@@ -1001,7 +1070,8 @@ impl PlatformOps {
             // function
             OxideCompile | OxideDebug => FunctionType(vec![], Box::from(DynamicType)),
             // i64
-            ToolsRowId => NumberType(I64Kind),
+            MathAbs | MathCeil | MathFloor | MathMax | MathMin | MathPow |
+            MathRound | MathSqrt | ToolsRowId => NumberType(I64Kind),
             // number
             StrIndexOf | StrLen => NumberType(I64Kind),
             CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
@@ -1269,6 +1339,33 @@ impl PlatformOps {
         out.write(format!("{}", value.unwrap_value()).as_bytes())?;
         out.flush()?;
         Ok((ms, Boolean(true)))
+    }
+
+    fn do_math_f(
+        ms: Machine,
+        value: &TypedValue,
+        f: fn(&Numbers) -> Numbers,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, match value {
+            Number(n) => Number(f(n)),
+            other => return throw(TypeMismatch(UnsupportedType(NumberType(F64Kind), other.get_type())))
+        }))
+    }
+
+    fn do_math_f2(
+        ms: Machine,
+        value0: &TypedValue,
+        value1: &TypedValue,
+        f: fn(&Numbers, &Numbers) -> Numbers,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, match value0 {
+            Number(n) =>
+                match value1 {
+                    Number(m) => Number(f(n, m)),
+                    other => return throw(TypeMismatch(UnsupportedType(NumberType(F64Kind), other.get_type())))
+                }
+            other => return throw(TypeMismatch(UnsupportedType(NumberType(F64Kind), other.get_type())))
+        }))
     }
 
     fn do_os_call(
@@ -1638,7 +1735,7 @@ impl PlatformOps {
         match string_value {
             StringValue(src) => {
                 match margin_value {
-                    StringValue(margin)  =>
+                    StringValue(margin) =>
                         if let Some(margin_char) = margin.chars().next() {
                             Ok((ms, StringValue(strip_margin(src, margin_char))))
                         } else {
@@ -2494,6 +2591,70 @@ mod tests {
         #[test]
         fn test_io_stdout() {
             verify_exact_value(r#"io::stdout("Hello World")"#, Boolean(true));
+        }
+    }
+
+    /// Package "math" tests
+    #[cfg(test)]
+    mod math_tests {
+        use crate::numbers::Numbers::{F64Value, I64Value};
+        use crate::testdata::verify_exact_value;
+        use crate::typed_values::TypedValue::Number;
+
+        #[test]
+        fn test_math_abs() {
+            verify_exact_value(r#"
+                math::abs(-81)
+            "#, Number(I64Value(81)))
+        }
+
+        #[test]
+        fn test_math_ceil() {
+            verify_exact_value(r#"
+                math::ceil(7.7)
+            "#, Number(F64Value(8.0)))
+        }
+
+        #[test]
+        fn test_math_floor() {
+            verify_exact_value(r#"
+                math::floor(7.7)
+            "#, Number(F64Value(7.0)))
+        }
+
+        #[test]
+        fn test_math_max() {
+            verify_exact_value(r#"
+                math::max(17, 71)
+            "#, Number(I64Value(71)))
+        }
+
+        #[test]
+        fn test_math_min() {
+            verify_exact_value(r#"
+                math::min(17, 71)
+            "#, Number(I64Value(17)))
+        }
+
+        #[test]
+        fn test_math_pow() {
+            verify_exact_value(r#"
+                math::pow(2, 3)
+            "#, Number(F64Value(8.0)))
+        }
+
+        #[test]
+        fn test_math_round() {
+            verify_exact_value(r#"
+                math::round(17.51)
+            "#, Number(F64Value(18.0)))
+        }
+
+        #[test]
+        fn test_math_sqrt() {
+            verify_exact_value(r#"
+                math::sqrt(25.0)
+            "#, Number(F64Value(5.0)))
         }
     }
 

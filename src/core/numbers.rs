@@ -14,6 +14,7 @@ use std::collections::Bound;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::ops::*;
+use num_traits::real::Real;
 
 /// Represents a numeric value
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -92,6 +93,77 @@ impl Numbers {
     //  INSTANCE METHODS
     ////////////////////////////////////////////////////////////////////
 
+    pub fn abs(&self) -> Numbers {
+        match self {
+            F32Value(n) => F32Value(n.abs()),
+            F64Value(n) => F64Value(n.abs()),
+            I8Value(n) => I8Value(n.abs()),
+            I16Value(n) => I16Value(n.abs()),
+            I32Value(n) => I32Value(n.abs()),
+            I64Value(n) => I64Value(n.abs()),
+            I128Value(n) => I128Value(n.abs()),
+            _ => self.clone()
+        }
+    }
+
+    pub fn ceil(&self) -> Numbers {
+        match self.clone() {
+            F32Value(n) => F32Value(n.ceil()),
+            F64Value(n) => F64Value(n.ceil()),
+            _ => self.clone()
+        }
+    }
+
+    pub fn floor(&self) -> Numbers {
+        match self {
+            F32Value(n) => F32Value(n.floor()),
+            F64Value(n) => F64Value(n.floor()),
+            _ => self.clone()
+        }
+    }
+
+    pub fn max(&self, other: &Self) -> Numbers {
+        match self {
+            F32Value(n) => F32Value(n.max(other.to_f32())),
+            F64Value(n) => F64Value(n.max(other.to_f64())),
+            I8Value(n) => I8Value(*n.max(&other.to_i8())),
+            I16Value(n) => I16Value(*n.max(&other.to_i16())),
+            I32Value(n) => I32Value(*n.max(&other.to_i32())),
+            I64Value(n) => I64Value(*n.max(&other.to_i64())),
+            I128Value(n) => I128Value(*n.max(&other.to_i128())),
+            _ => self.clone()
+        }
+    }
+
+    pub fn min(&self, other: &Self) -> Numbers {
+        match self {
+            F32Value(n) => F32Value(n.min(other.to_f32())),
+            F64Value(n) => F64Value(n.min(other.to_f64())),
+            I8Value(n) => I8Value(*n.min(&other.to_i8())),
+            I16Value(n) => I16Value(*n.min(&other.to_i16())),
+            I32Value(n) => I32Value(*n.min(&other.to_i32())),
+            I64Value(n) => I64Value(*n.min(&other.to_i64())),
+            I128Value(n) => I128Value(*n.min(&other.to_i128())),
+            _ => self.clone()
+        }
+    }
+
+    pub fn round(&self) -> Numbers {
+        match self.clone() {
+            F32Value(n) => F32Value(n.round()),
+            F64Value(n) => F64Value(n.round()),
+            _ => self.clone()
+        }
+    }
+
+    pub fn sqrt(&self) -> Numbers {
+        match self.clone() {
+            F32Value(n) => F32Value(n.sqrt()),
+            F64Value(n) => F64Value(n.sqrt()),
+            n => F64Value(n.to_f64().sqrt()),
+        }
+    }
+
     pub fn convert_to(&self, kind: NumberKind) -> Numbers {
         match kind {
             RowIdKind => RowId(self.to_u64()),
@@ -115,7 +187,6 @@ impl Numbers {
 
     /// encodes the numeric value
     pub fn encode(&self) -> Vec<u8> {
-        use Numbers::*;
         match self.to_owned() {
             DateValue(number) => number.to_be_bytes().to_vec(),
             F32Value(number) => number.to_be_bytes().to_vec(),
