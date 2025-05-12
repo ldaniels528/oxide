@@ -263,6 +263,14 @@ server response:
 <pre>
 Tom
 </pre>
+<pre>from { name: 'Tom' }</pre>
+<pre>
+|-----------|
+| id | name |
+|-----------|
+| 0  | Tom  |
+|-----------|
+</pre>
 <hr>
 <h4>Arrays</h4>
 <pre>arr := [1, 4, 2, 8, 5, 7]
@@ -366,8 +374,6 @@ rows ~> stocks</pre>
 3
 </pre>
 <hr>
-<h4>Function-Call</h4>
-<hr>
 <h4>Functions</h4>
 <pre>product := fn (a, b) => a * b
 product(2, 5)</pre>
@@ -376,11 +382,8 @@ product(2, 5)</pre>
 </pre>
 <hr>
 <h4>HTTP</h4>
-<pre>create table ns("readme.www.stocks") (
-    symbol: String(8),
-    exchange: String(8),
-    last_sale: f64
-)
+<pre>stocks := ns("readme.www.stocks")
+table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 www::serve(8833)</pre>
 <pre>
 true
@@ -390,7 +393,7 @@ true
     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
 }</pre>
 <pre>
-1
+6
 </pre>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
@@ -398,7 +401,7 @@ true
 </pre>
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
-{"content-length":81,"content-type":null,"date":null}
+{"content-length":"81","content-type":"application/json","date":"Mon, 12 May 2025 15:23:32 GMT"}
 </pre>
 <pre>PUT {
     url: http://localhost:8833/platform/www/stocks/0
@@ -614,7 +617,8 @@ a + b + c</pre>
 </pre>
 <hr>
 <h4>Via Clause</h4>
-<pre>stocks := ns("expressions.via.stocks")
+<pre>stocks := ns("readme.via.stocks")
+drop table stocks
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 
 rows := [
@@ -659,49 +663,49 @@ fact(6)</pre>
 <h4>cal::now &#8212; Returns the current local date and time</h4>
 <pre>cal::now()</pre>
 <pre>
-2025-05-11T21:42:50.098Z
+2025-05-12T15:23:32.281Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
 <pre>import cal
 now():::day_of()</pre>
 <pre>
-11
+12
 </pre>
 <hr>
 <h4>cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
 <pre>import cal
 now():::hour12()</pre>
 <pre>
-2
+8
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
 <pre>import cal
 now():::hour24()</pre>
 <pre>
-14
+8
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
 <pre>import cal
 now():::minute_of()</pre>
 <pre>
-42
+23
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
 <pre>import cal
 now():::month_of()</pre>
 <pre>
-50
+32
 </pre>
 <hr>
 <h4>cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
 <pre>import cal
 now():::second_of()</pre>
 <pre>
-50
+32
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -849,27 +853,28 @@ include path_str</pre>
 | 24 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 25 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 26 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 27 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:. |
-| 28 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 29 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 30 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 31 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 32 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 33 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 34 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 35 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 36 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 37 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 38 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 39 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 40 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.6To52j2ZMT/Listeners                                                                                                                                                                                                                                                                                                                                                                                    |
-| 41 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 42 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                      |
-| 43 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 44 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 45 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.58851138                                                                                                                                                                                                                                                                                                                                                                                     |
-| 46 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 47 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 27 | OXIDE_HOME                 | /Users/ldaniels/GitHub/oxide/oxide_db                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 28 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:. |
+| 29 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 30 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 31 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 32 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 33 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 34 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 35 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 36 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 37 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 38 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 39 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 40 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 41 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.6To52j2ZMT/Listeners                                                                                                                                                                                                                                                                                                                                                                                    |
+| 42 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 43 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                      |
+| 44 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 45 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 46 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.58851138                                                                                                                                                                                                                                                                                                                                                                                     |
+| 47 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 48 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                          |
 |--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
@@ -897,28 +902,30 @@ Hello World
 <h4>oxide::help &#8212; Integrated help function</h4>
 <pre>from oxide::help() limit 3</pre>
 <pre>
-|-----------------------------------------------------------------------------------------------------------|
-| id | name      | module | signature               | description                                 | returns |
-|-----------------------------------------------------------------------------------------------------------|
-| 0  | year_of   | cal    | cal::year_of(n: Date)   | Returns the year of a Date                  | i32     |
-| 1  | second_of | cal    | cal::second_of(n: Date) | Returns the seconds of the minute of a Date | u32     |
-| 2  | now       | cal    | cal::now()              | Returns the current local date and time     | Date    |
-|-----------------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------|
+| id | name           | module | signature                     | description                                   | returns |
+|------------------------------------------------------------------------------------------------------------------------|
+| 0  | stdout         | io     | io::stdout(s: String)         | Writes a string to STDOUT                     | String  |
+| 1  | stderr         | io     | io::stderr(s: String)         | Writes a string to STDERR                     | String  |
+| 2  | read_text_file | io     | io::read_text_file(s: String) | Reads the contents of a text file into memory | Array   |
+|------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
 <pre>from oxide::history() limit 3</pre>
 <pre>
-|-------------------------------------------------|
-| id | session_id | user_id | cpu_time_ms | input |
-|-------------------------------------------------|
-|-------------------------------------------------|
+|-------------------------------------------------------------------|
+| id | session_id    | user_id | cpu_time_ms | input                |
+|-------------------------------------------------------------------|
+| 0  | 1747062794617 | 501     | 0.903       | import oxide; help() |
+| 1  | 1747062794920 | 501     | 1.577       | import oxide; help() |
+|-------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::home &#8212; Returns the Oxide home directory path</h4>
 <pre>oxide::home()</pre>
 <pre>
-./oxide_db
+/Users/ldaniels/GitHub/oxide/oxide_db
 </pre>
 <hr>
 <h4>oxide::println &#8212; Print line function</h4>
@@ -936,7 +943,7 @@ true
 <h4>oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
 <pre>oxide::uuid()</pre>
 <pre>
-5bdcc5fb-5ae9-48c5-a66a-b1241b0cd1ec
+5527d510-08e1-4bf0-85e9-1028c3880709
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>

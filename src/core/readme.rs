@@ -4,7 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType;
-use crate::expression::{Conditions, Expression};
+use crate::expression::{Conditions, DatabaseOps, Directives, Expression, HttpMethodCalls};
 use crate::interpreter::Interpreter;
 use crate::platform::{PlatformOps, PLATFORM_OPCODES};
 use crate::row_collection::RowCollection;
@@ -14,12 +14,9 @@ use crate::typed_values::TypedValue::TableValue;
 use shared_lib::strip_margin;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use crate::expression::Queryables::Where;
 
-fn generate_readme() -> std::io::Result<File> {
-    let file = OpenOptions::new()
-        .truncate(true).create(true).read(true).write(true)
-        .open("../../README.md")?;
-
+fn generate_readme(mut file: File) -> std::io::Result<File> {
     println!("generate title...");
     let file = generate_title(file)?;
 
@@ -132,21 +129,24 @@ fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
 "#)?;
 
     for op in PLATFORM_OPCODES {
-        // header section
-        // ex: "oxide::version - ..."
-        writeln!(file, "<hr>")?;
-        writeln!(file, "<h4>{}::{} &#8212; {}</h4>",
-                 op.get_package_name(), op.get_name(), op.get_description())?;
+        let example = op.get_example();
+        if !example.is_empty() {
+            // header section
+            // ex: "oxide::version - ..."
+            writeln!(file, "<hr>")?;
+            writeln!(file, "<h4>{}::{} &#8212; {}</h4>",
+                     op.get_package_name(), op.get_name(), op.get_description())?;
 
-        // write the example body
-        let example_body = format!("<pre>{}</pre>", op.get_example().trim());
-        writeln!(file, "{}", example_body)?;
+            // write the example body
+            let example_body = format!("<pre>{}</pre>", op.get_example().trim());
+            writeln!(file, "{}", example_body)?;
 
-        // write the results body
-        match generate_example_results(op) {
-            Ok(out_lines) => file = print_text_block(file, out_lines)?,
-            Err(err) => {
-                writeln!(file, "ERROR: {}", err.to_string())?;
+            // write the results body
+            match generate_example_results(op) {
+                Ok(out_lines) => file = print_text_block(file, out_lines)?,
+                Err(err) => {
+                    writeln!(file, "ERROR: {}", err.to_string())?;
+                }
             }
         }
     }
@@ -437,7 +437,10 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |arr := [1, 4, 2, 8, 5, 7]
                 |tools::reverse(arr)
             "#, '|')],
-        Expression::AsValue(..) => vec!["name: 'Tom'".into()],
+        Expression::AsValue(..) => vec![
+            "name: 'Tom'".into(),
+            "from { name: 'Tom' }".into()
+        ],
         Expression::BitwiseAnd(..) => vec!["0b1111 & 0b0101".into()],
         Expression::BitwiseOr(..) => vec!["0b1010 | 0b0101".into()],
         Expression::BitwiseShiftLeft(..) => vec!["20 << 3".into()],
@@ -564,13 +567,10 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |from stocks where last_sale > 20.0
             "#, '|')],
         Expression::FunctionCall { .. } => vec![],
-        Expression::HTTP { .. } => vec![
+        Expression::HTTP(..) => vec![
             strip_margin(r#"
-                    |create table ns("readme.www.stocks") (
-                    |    symbol: String(8),
-                    |    exchange: String(8),
-                    |    last_sale: f64
-                    |)
+                    |stocks := ns("readme.www.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |www::serve(8833)
                     "#, '|'),
             strip_margin(r#"
@@ -579,36 +579,24 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                     |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
                     |}
                     "#, '|'),
-            strip_margin(r#"
-                    |GET http://localhost:8833/platform/www/stocks/0
-                    "#, '|'),
-            strip_margin(r#"
-                    |HEAD http://localhost:8833/platform/www/stocks/0
-                    "#, '|'),
+            "GET http://localhost:8833/platform/www/stocks/0".into(),
+            "HEAD http://localhost:8833/platform/www/stocks/0".into(),
             strip_margin(r#"
                     |PUT {
                     |    url: http://localhost:8833/platform/www/stocks/0
                     |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }
                     |}
                     "#, '|'),
-            strip_margin(r#"
-                    |GET http://localhost:8833/platform/www/stocks/0
-                    "#, '|'),
+            "GET http://localhost:8833/platform/www/stocks/0".into(),
             strip_margin(r#"
                     |PATCH {
                     |    url: http://localhost:8833/platform/www/stocks/0
                     |    body: { last_sale: 11.81 }
                     |}
                     "#, '|'),
-            strip_margin(r#"
-                    |GET http://localhost:8833/platform/www/stocks/0
-                    "#, '|'),
-            strip_margin(r#"
-                    |DELETE http://localhost:8833/platform/www/stocks/0
-                    "#, '|'),
-            strip_margin(r#"
-                    |GET http://localhost:8833/platform/www/stocks/0
-                    "#, '|'),
+            "GET http://localhost:8833/platform/www/stocks/0".into(),
+            "DELETE http://localhost:8833/platform/www/stocks/0".into(),
+            "GET http://localhost:8833/platform/www/stocks/0".into(),
         ],
         Expression::If { .. } => vec![
             strip_margin(r#"
@@ -657,9 +645,8 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |-i
             "#, '|')],
         Expression::New(..) => vec![
-            strip_margin(r#"
-                |new Table(symbol: String(8), exchange: String(8), last_sale: f64)
-            "#, '|')],
+            "new Table(symbol: String(8), exchange: String(8), last_sale: f64)".into()
+        ],
         Expression::Ns(..) => vec![],
         Expression::Parameters(..) => vec![],
         Expression::Plus(..) => vec![
@@ -693,7 +680,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::StructureExpression(..) => vec![],
         Expression::TupleExpression(..) => vec![],
         Expression::TypeDef(..) => vec![
-            strip_margin("typedef(String(80))", '|')
+            "typedef(String(80))".into()
         ],
         Expression::Variable(..) => vec![
             strip_margin(r#"
@@ -702,7 +689,8 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::Via(..) => vec![
             strip_margin(r#"
-                |stocks := ns("expressions.via.stocks")
+                |stocks := ns("readme.via.stocks")
+                |drop table stocks
                 |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 |
                 |rows := [
@@ -742,9 +730,8 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Conditionals", Condition(Conditions::True)),
         ("Curvy-Arrow Left", CurvyArrowLeft(null.clone(), null.clone())),
         ("Curvy-Arrow Right", CurvyArrowRight(null.clone(), null.clone())),
-        // DatabaseOp
-        // Directive
-        //("Directives", Directive(null.clone(), null.clone())),
+        ("SQL", DatabaseOp(DatabaseOps::Queryable(Where { from: null.clone(), condition: Conditions::True }))),
+        ("Directives", Directive(Directives::MustAck(null.clone()))),
         ("Mathematics: division", Divide(null.clone(), null.clone())),
         ("Arrays: Indexing", ElementAt(null.clone(), null.clone())),
         ("Testing", Feature { title: null.clone(), scenarios: vec![] }),
@@ -752,10 +739,10 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Function-Call", FunctionCall { fx: null.clone(), args: vec![] }),
         ("Iteration", ForEach("".into(), null.clone(), null.clone())),
         ("Query", From(null.clone())),
-        ("HTTP", HTTP { method: "".into(), url_or_object: null.clone() }),
+        ("HTTP", HTTP(HttpMethodCalls::GET(null.clone()))),
         ("if / iff", If { condition: null.clone(), a: null.clone(), b: None }),
         ("Imports", Import(vec![])),
-        //("Includes", Include(null.clone())),
+        ("Includes", Include(null.clone())),
         ("Mathematics: subtraction", Minus(null.clone(), null.clone())),
         ("Mathematics: multiplication", Multiply(null.clone(), null.clone())),
         ("Negative", Neg(null.clone())),
@@ -763,13 +750,14 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("New Instances", New(null.clone())),
         ("Ranges", Range(null.clone(), null.clone())),
         ("Variable Assignment", SetVariable("".into(), null.clone())),
+        ("Structures", StructureExpression(vec![])),
         ("Type Definitions", TypeDef(null.clone())),
         ("Via Clause", Via(null.clone())),
-        //("Structures", StructureExpression(vec![])),
     ];
 
     let mut examples = models.iter()
         .map(|(title, model)| (title.to_string(), get_examples(&model)))
+        .filter(|(_, examples)| !examples.is_empty())
         .collect::<Vec<_>>();
     examples.sort_by(|a, b| a.0.cmp(&b.0));
     examples
@@ -792,24 +780,31 @@ mod tests {
 
     #[test]
     fn test_language_examples() {
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
             .open("../../basics.md")
             .unwrap();
-        generate_language_examples(file).unwrap();
+        file = generate_language_examples(file).unwrap();
+        file.flush().unwrap();
     }
 
     #[test]
     fn test_platform_examples() {
-        let file = OpenOptions::new()
+        let mut file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
             .open("../../platform.md")
             .unwrap();
-        generate_platform_examples(file).unwrap();
+        file = generate_platform_examples(file).unwrap();
+        file.flush().unwrap();
     }
 
     #[test]
     fn test_generate_readme() {
-        generate_readme().unwrap();
+        let mut file = OpenOptions::new()
+            .truncate(true).create(true).read(true).write(true)
+            .open("../../README.md")
+            .unwrap();
+        file = generate_readme(file).unwrap();
+        file.flush().unwrap();
     }
 }

@@ -22,6 +22,7 @@ use std::path::Path;
 use std::process::Output;
 use std::{env, fs, thread};
 use tokio::runtime::Runtime;
+use tokio_tungstenite::tungstenite::http::Method;
 use uuid::Uuid;
 
 use crate::columns::Column;
@@ -41,7 +42,7 @@ use crate::expression::Conditions::{False, True};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
-use crate::expression::{Conditions, Expression, ImportOps, UNDEFINED};
+use crate::expression::{Conditions, Expression, HttpMethodCalls, ImportOps, UNDEFINED};
 use crate::expression::{DatabaseOps, Directives, Mutations, Queryables};
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
@@ -124,19 +125,6 @@ impl Machine {
     //  static methods
     ////////////////////////////////////////////////////////////////
 
-    fn enrich_request(
-        builder: RequestBuilder,
-        body_opt: Option<String>,
-    ) -> RequestBuilder {
-        let builder = builder
-            .header("Content-Type", "application/json");
-        let builder = match body_opt {
-            Some(body) => builder.body(body),
-            None => builder
-        };
-        builder
-    }
-
     pub fn oxide_home() -> String {
         env::var("OXIDE_HOME").unwrap_or("./oxide_db".to_string())
     }
@@ -178,7 +166,7 @@ impl Machine {
             ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
             From(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
             FunctionCall { fx, args } => self.do_function_call(fx, args),
-            HTTP { method, url_or_object } => self.do_http(method, url_or_object),
+            HTTP(method_call) => self.do_http_exec(method_call),
             If { condition, a, b } => self.do_if_then_else(condition, a, b),
             Import(ops) => Ok(self.do_imports(ops)),
             Include(path) => self.do_include(path),
@@ -603,11 +591,7 @@ impl Machine {
         }
     }
 
-    fn do_http(
-        &self,
-        method: &str,
-        url_or_object: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
+    fn do_http_exec(&self, call: &HttpMethodCalls) -> std::io::Result<(Self, TypedValue)> {
         fn create_form(structure: Box<dyn Structure>) -> Form {
             structure.to_name_values().iter().fold(Form::new(), |form, (name, value)| {
                 form.part(name.to_owned(), Part::text(value.unwrap_value()))
@@ -628,25 +612,25 @@ impl Machine {
             }
         }
 
-        // evaluate the URL or object
-        match self.evaluate(url_or_object)? {
-            // ex: GET http://localhost:9000/quotes/AAPL/NYSE
+        // evaluate the URL or configuration object
+        match self.evaluate(&call.get_url_or_config())? {
+            // GET http://localhost:9000/quotes/AAPL/NYSE
             (ms, StringValue(url)) =>
-                ms.do_http_method_call(method.to_string(), url.to_string(), None, Vec::new(), None),
+                ms.do_http_request(call, url.to_string(), None, Vec::new(), None),
             // POST {
             //     url: http://localhost:8080/machine/append/stocks
             //     body: stocks
             //     headers: { "Content-Type": "application/json" }
             // }
-            (ms, Structured(Soft(ss))) => {
-                let url = ss.get("url");
-                let maybe_body = ss.get_opt("body")
+            (ms, Structured(config)) => {
+                let url = config.get("url");
+                let maybe_body = config.get_opt("body")
                     .map(|body| body.unwrap_value());
-                let headers = match ss.get_opt("headers") {
+                let headers = match config.get_opt("headers") {
                     None => Vec::new(),
                     Some(headers) => extract_string_tuples(headers)?
                 };
-                ms.do_http_method_call(method.to_string(), url.unwrap_value(), maybe_body, headers, None)
+                ms.do_http_request(call, url.unwrap_value(), maybe_body, headers, None)
             }
             // unsupported expression
             (_ms, other) =>
@@ -654,142 +638,79 @@ impl Machine {
         }
     }
 
+    fn do_http_request(
+        &self,
+        method_call: &HttpMethodCalls,
+        url: String,
+        body: Option<String>,
+        headers: Vec<(String, String)>,
+        _multipart: Option<multipart::Form>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let client = Client::new();
+        let mut request = match method_call {
+            HttpMethodCalls::CONNECT(..) => client.request(Method::CONNECT, url),
+            HttpMethodCalls::DELETE(..) => client.delete(url),
+            HttpMethodCalls::GET(..) => client.get(url),
+            HttpMethodCalls::HEAD(..) => client.head(url),
+            HttpMethodCalls::OPTIONS(..) => client.request(Method::OPTIONS, url),
+            HttpMethodCalls::PATCH(..) => client.patch(url),
+            HttpMethodCalls::POST(..) => client.post(url),
+            HttpMethodCalls::PUT(..) => client.put(url),
+            HttpMethodCalls::TRACE(..) => client.request(Method::TRACE, url),
+        };
+
+        // enrich and submit the request
+        for (key, value) in headers {
+            request = request.header(&key, &value);
+        }
+        if let Some(body) = body {
+            request = request.header("Content-Type", "application/json");
+            request = request.body(body);
+        };
+        match request.send() {
+            Ok(response) => Ok((self.to_owned(), self.do_http_response(response, method_call.is_header_only())?)),
+            Err(err) => throw(Exact(format!("Error making request: {}", err))),
+        }
+    }
+
     /// Converts a [Response] to a [TypedValue]
-    pub fn do_http_response_conversion(
+    pub fn do_http_response(
         &self,
         response: Response,
         is_header_only: bool,
-    ) -> TypedValue {
+    ) -> std::io::Result<TypedValue> {
         if response.status().is_success() {
             if is_header_only {
-                let header_keys = response.headers().keys()
-                    .map(|k| k.to_string())
-                    .collect::<Vec<_>>();
-                let header_values = response.headers().values()
-                    .map(|hv| match hv.to_str() {
-                        Ok(s) => TypedValue::wrap_value(s).unwrap_or(Undefined),
-                        Err(e) => ErrorValue(Exact(e.to_string()))
-                    }).collect::<Vec<_>>();
-                Structured(Soft(SoftStructure::ordered(header_keys.iter().zip(header_values.iter())
-                    .map(|(k, v)| (k.to_owned(), v.to_owned()))
-                    .collect::<Vec<_>>())))
+                let mut key_values = vec![];
+                for (h_key, h_val) in response.headers().iter() {
+                    let value = match h_val.to_str() {
+                        Ok(s) => StringValue(s.into()),
+                        Err(e) => {
+                            eprintln!("do_http_response: {}", e.to_string());
+                            ErrorValue(Exact(e.to_string()))
+                        }
+                    };
+                    key_values.push((h_key.to_string(), value))
+                }
+                Ok(Structured(Soft(SoftStructure::ordered(key_values))))
             } else {
                 match response.text() {
                     Ok(body) =>
                         match Compiler::build(body.as_str()) {
                             Ok(expr) => {
-                                match self.evaluate(&expr) {
+                                Ok(match self.evaluate(&expr) {
                                     Ok((_, Undefined)) => Structured(Soft(SoftStructure::empty())),
                                     Ok((_, value)) => value,
                                     Err(_) => StringValue(body)
-                                }
+                                })
                             }
-                            _ => StringValue(body)
+                            _ => Ok(StringValue(body))
                         }
-                    Err(err) => ErrorValue(Exact(format!("Error reading response body: {}", err))),
+                    Err(err) => throw(Exact(format!("Error reading response body: {}", err))),
                 }
             }
         } else {
-            ErrorValue(Exact(format!("Request failed with status: {}", response.status())))
-        }
-    }
-
-    fn do_http_delete(
-        &self,
-        url: &str,
-        headers: Vec<(String, String)>,
-        body_opt: Option<String>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let req = Client::new().delete(url);
-        Ok((self.to_owned(), self.do_http_rest_call(req, headers, body_opt, false)))
-    }
-
-    fn do_http_get(
-        &self,
-        url: &str,
-        headers: Vec<(String, String)>,
-        body_opt: Option<String>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let req = Client::new().get(url);
-        Ok((self.to_owned(), self.do_http_rest_call(req, headers, body_opt, false)))
-    }
-
-    fn do_http_head(
-        &self,
-        url: &str,
-        headers: Vec<(String, String)>,
-        body_opt: Option<String>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let req = Client::new().head(url);
-        let value = self.do_http_rest_call(req, headers, body_opt, true);
-        Ok((self.to_owned(), value))
-    }
-
-    fn do_http_method_call(
-        &self,
-        method: String,
-        url: String,
-        body: Option<String>,
-        headers: Vec<(String, String)>,
-        multipart: Option<multipart::Form>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        match method.to_ascii_uppercase().as_str() {
-            "DELETE" => self.do_http_delete(url.as_str(), headers, body),
-            "GET" => self.do_http_get(url.as_str(), headers, body),
-            "HEAD" => self.do_http_head(url.as_str(), headers, body),
-            "PATCH" => self.do_http_patch(url.as_str(), headers, body),
-            "POST" => self.do_http_post(url.as_str(), headers, body, multipart),
-            "PUT" => self.do_http_put(url.as_str(), headers, body),
-            method => Ok((self.to_owned(), ErrorValue(Exact(format!("Invalid HTTP method '{method}'")))))
-        }
-    }
-
-    fn do_http_patch(
-        &self,
-        url: &str,
-        headers: Vec<(String, String)>,
-        body_opt: Option<String>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), self.do_http_rest_call(Client::new().patch(url), headers, body_opt, false)))
-    }
-
-    fn do_http_post(
-        &self,
-        url: &str,
-        headers: Vec<(String, String)>,
-        body_opt: Option<String>,
-        form_opt: Option<multipart::Form>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let request = match form_opt {
-            Some(form) => Client::new().post(url).multipart(form),
-            None => Client::new().post(url),
-        };
-        Ok((self.to_owned(), self.do_http_rest_call(request, headers, body_opt, false)))
-    }
-
-    fn do_http_put(
-        &self,
-        url: &str,
-        headers: Vec<(String, String)>,
-        body_opt: Option<String>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.to_owned(), self.do_http_rest_call(Client::new().put(url), headers, body_opt, false)))
-    }
-
-    fn do_http_rest_call(
-        &self,
-        request: RequestBuilder,
-        headers: Vec<(String, String)>,
-        body_opt: Option<String>,
-        is_header_only: bool,
-    ) -> TypedValue {
-        let request = Self::enrich_request(request, body_opt);
-        let request = headers.iter().fold(request, |request, (k, v)| {
-            request.header(k, v)
-        });
-        match request.send() {
-            Ok(response) => self.do_http_response_conversion(response, is_header_only),
-            Err(err) => ErrorValue(Exact(format!("Error making request: {}", err))),
+            throw(Exact(format!("Request failed with status: {}", response.status())))
         }
     }
 

@@ -92,6 +92,77 @@ pub enum CreationEntity {
     },
 }
 
+/// Represents a HTTP Method Call
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum HttpMethodCalls {
+    CONNECT(Box<Expression>),
+    DELETE(Box<Expression>),
+    GET(Box<Expression>),
+    HEAD(Box<Expression>),
+    OPTIONS(Box<Expression>),
+    PATCH(Box<Expression>),
+    POST(Box<Expression>),
+    PUT(Box<Expression>),
+    TRACE(Box<Expression>),
+}
+
+impl HttpMethodCalls {
+    /// Returns the [Option] of a [HttpMethodCalls] instance
+    /// ### Parameters
+    /// - method: the HTTP method
+    /// - config: a URL or configuration object
+    /// ### Returns
+    /// - the [Option] of a [HttpMethodCalls] instance
+    pub fn new(method: &str, config: Expression) -> Option<Self> {
+        Some(match method {
+            "CONNECT" => HttpMethodCalls::CONNECT(config.into()),
+            "DELETE" => HttpMethodCalls::DELETE(config.into()),
+            "GET" => HttpMethodCalls::GET(config.into()),
+            "HEAD" => HttpMethodCalls::HEAD(config.into()),
+            "OPTIONS" => HttpMethodCalls::OPTIONS(config.into()),
+            "PATCH" => HttpMethodCalls::PATCH(config.into()),
+            "POST" => HttpMethodCalls::POST(config.into()),
+            "PUT" => HttpMethodCalls::PUT(config.into()),
+            "TRACE" => HttpMethodCalls::TRACE(config.into()),
+            _ => return None
+        })
+    }
+
+    /// Returns the HTTP method (e.g. "POST")
+    pub fn get_method(&self) -> String {
+        match self {
+            HttpMethodCalls::CONNECT(_) => "CONNECT",
+            HttpMethodCalls::DELETE(_) => "DELETE",
+            HttpMethodCalls::GET(_) => "GET",
+            HttpMethodCalls::HEAD(_) => "HEAD",
+            HttpMethodCalls::OPTIONS(_) => "OPTIONS",
+            HttpMethodCalls::PATCH(_) => "PATCH",
+            HttpMethodCalls::POST(_) => "POST",
+            HttpMethodCalls::PUT(_) => "PUT",
+            HttpMethodCalls::TRACE(_) => "TRACE",
+        }.into()
+    }
+
+    /// Returns the URL or configuration structure/object
+    pub fn get_url_or_config(&self) -> Expression {
+        match self.clone() {
+            HttpMethodCalls::CONNECT(url_or_object) |
+            HttpMethodCalls::DELETE(url_or_object) |
+            HttpMethodCalls::GET(url_or_object) |
+            HttpMethodCalls::HEAD(url_or_object) |
+            HttpMethodCalls::OPTIONS(url_or_object) |
+            HttpMethodCalls::PATCH(url_or_object) |
+            HttpMethodCalls::POST(url_or_object) |
+            HttpMethodCalls::PUT(url_or_object) |
+            HttpMethodCalls::TRACE(url_or_object) => *url_or_object
+        }
+    }
+
+    pub fn is_header_only(&self) -> bool {
+        matches!(self, HttpMethodCalls::HEAD(..))
+    }
+}
+
 /// Represents an import definition
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum ImportOps {
@@ -211,7 +282,7 @@ pub enum Expression {
     ForEach(String, Box<Expression>, Box<Expression>),
     From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
-    HTTP { method: String, url_or_object: Box<Expression> },
+    HTTP(HttpMethodCalls),
     If {
         condition: Box<Expression>,
         a: Box<Expression>,
@@ -309,8 +380,8 @@ impl Expression {
             Expression::From(a) => format!("from {}", Self::decompile(a)),
             Expression::FunctionCall { fx, args } =>
                 format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
-            Expression::HTTP { method, url_or_object } =>
-                format!("{} {}", method, Self::decompile(url_or_object)),
+            Expression::HTTP(method) =>
+                format!("{} {}", method.get_method(), Self::decompile(&method.get_url_or_config())),
             Expression::If { condition, a, b } =>
                 format!("if {} {}{}", Self::decompile(condition), Self::decompile(a), b.to_owned()
                     .map(|x| format!(" else {}", Self::decompile(&x)))

@@ -6,6 +6,14 @@
 <pre>
 Tom
 </pre>
+<pre>from { name: 'Tom' }</pre>
+<pre>
+|-----------|
+| id | name |
+|-----------|
+| 0  | Tom  |
+|-----------|
+</pre>
 <hr>
 <h4>Arrays</h4>
 <pre>arr := [1, 4, 2, 8, 5, 7]
@@ -109,8 +117,6 @@ rows ~> stocks</pre>
 3
 </pre>
 <hr>
-<h4>Function-Call</h4>
-<hr>
 <h4>Functions</h4>
 <pre>product := fn (a, b) => a * b
 product(2, 5)</pre>
@@ -119,11 +125,8 @@ product(2, 5)</pre>
 </pre>
 <hr>
 <h4>HTTP</h4>
-<pre>create table ns("readme.www.stocks") (
-    symbol: String(8),
-    exchange: String(8),
-    last_sale: f64
-)
+<pre>stocks := ns("readme.www.stocks")
+table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 www::serve(8833)</pre>
 <pre>
 true
@@ -133,7 +136,7 @@ true
     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
 }</pre>
 <pre>
-1
+6
 </pre>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
@@ -141,7 +144,7 @@ true
 </pre>
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
-{"content-length":81,"content-type":null,"date":null}
+{"content-length":"81","content-type":"application/json","date":"Mon, 12 May 2025 15:23:32 GMT"}
 </pre>
 <pre>PUT {
     url: http://localhost:8833/platform/www/stocks/0
@@ -357,7 +360,8 @@ a + b + c</pre>
 </pre>
 <hr>
 <h4>Via Clause</h4>
-<pre>stocks := ns("expressions.via.stocks")
+<pre>stocks := ns("readme.via.stocks")
+drop table stocks
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 
 rows := [

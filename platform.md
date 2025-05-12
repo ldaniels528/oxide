@@ -6,49 +6,49 @@
 <h4>cal::now &#8212; Returns the current local date and time</h4>
 <pre>cal::now()</pre>
 <pre>
-2025-05-11T21:42:49.709Z
+2025-05-12T15:23:31.843Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
 <pre>import cal
 now():::day_of()</pre>
 <pre>
-11
+12
 </pre>
 <hr>
 <h4>cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
 <pre>import cal
 now():::hour12()</pre>
 <pre>
-2
+8
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
 <pre>import cal
 now():::hour24()</pre>
 <pre>
-14
+8
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
 <pre>import cal
 now():::minute_of()</pre>
 <pre>
-42
+23
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
 <pre>import cal
 now():::month_of()</pre>
 <pre>
-49
+31
 </pre>
 <hr>
 <h4>cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
 <pre>import cal
 now():::second_of()</pre>
 <pre>
-49
+31
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -196,27 +196,28 @@ include path_str</pre>
 | 24 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 25 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | 26 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 27 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:. |
-| 28 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 29 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 30 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 31 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 32 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 33 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 34 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 35 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 36 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 37 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 38 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 39 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 40 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.6To52j2ZMT/Listeners                                                                                                                                                                                                                                                                                                                                                                                    |
-| 41 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 42 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                      |
-| 43 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 44 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 45 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.58851138                                                                                                                                                                                                                                                                                                                                                                                     |
-| 46 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 47 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 27 | OXIDE_HOME                 | /Users/ldaniels/GitHub/oxide/oxide_db                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 28 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:. |
+| 29 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 30 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 31 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 32 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 33 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 34 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 35 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 36 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 37 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 38 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 39 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 40 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 41 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.6To52j2ZMT/Listeners                                                                                                                                                                                                                                                                                                                                                                                    |
+| 42 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 43 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                      |
+| 44 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 45 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 46 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.58851138                                                                                                                                                                                                                                                                                                                                                                                     |
+| 47 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 48 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                          |
 |--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
@@ -244,28 +245,30 @@ Hello World
 <h4>oxide::help &#8212; Integrated help function</h4>
 <pre>from oxide::help() limit 3</pre>
 <pre>
-|---------------------------------------------------------------------------------------------------|
-| id | name    | module | signature        | description                                  | returns |
-|---------------------------------------------------------------------------------------------------|
-| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
-| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
-| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
-|---------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------|
+| id | name       | module | signature                  | description                  | returns |
+|------------------------------------------------------------------------------------------------|
+| 0  | url_encode | www    | www::url_encode(s: String) | Encodes a URL string         | String  |
+| 1  | url_decode | www    | www::url_decode(s: String) | Decodes a URL-encoded string | String  |
+| 2  | serve      | www    | www::serve(n: u32)         | Starts a local HTTP service  | Boolean |
+|------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
 <pre>from oxide::history() limit 3</pre>
 <pre>
-|-------------------------------------------------|
-| id | session_id | user_id | cpu_time_ms | input |
-|-------------------------------------------------|
-|-------------------------------------------------|
+|-------------------------------------------------------------------|
+| id | session_id    | user_id | cpu_time_ms | input                |
+|-------------------------------------------------------------------|
+| 0  | 1747062794617 | 501     | 0.903       | import oxide; help() |
+| 1  | 1747062794920 | 501     | 1.577       | import oxide; help() |
+|-------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::home &#8212; Returns the Oxide home directory path</h4>
 <pre>oxide::home()</pre>
 <pre>
-./oxide_db
+/Users/ldaniels/GitHub/oxide/oxide_db
 </pre>
 <hr>
 <h4>oxide::println &#8212; Print line function</h4>
@@ -283,7 +286,7 @@ true
 <h4>oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
 <pre>oxide::uuid()</pre>
 <pre>
-fda2867d-dbe4-48a1-90e3-c5ba7c6619b6
+a9e4987e-b0f1-44fa-b337-ed8d7a66f942
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>

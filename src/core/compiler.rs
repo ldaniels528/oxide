@@ -6,9 +6,9 @@
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::DynamicType;
-use crate::errors::Errors::{Exact, ExactNear, SyntaxError, TypeMismatch};
+use crate::errors::Errors::{CompilerError, Exact, ExactNear, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ParameterExpected, VariableExpected};
-use crate::errors::{throw, SyntaxErrors};
+use crate::errors::{throw, CompileErrors, SyntaxErrors};
 use crate::expression::Conditions::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity};
 use crate::expression::DatabaseOps::{Mutation, Queryable};
@@ -339,7 +339,7 @@ impl Compiler {
         self.next_list_of_items(&ts, ")", |items| {
             let (mut is_qualified, mut expressions, mut params) = (false, vec![], vec![]);
             for (item, n) in items.iter().zip(0..items.len()) {
-                println!("next_operator_prefix: item[{n}] => {item:?}");
+                //println!("next_operator_prefix: item[{n}] => {item:?}");
                 expressions.push(item.clone());
                 match item.clone() {
                     AsValue(name, model) => {
@@ -904,15 +904,15 @@ impl Compiler {
     fn parse_keyword_http(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(Atom { text: method, .. }), ts) = ts.next() {
             match self.next_expression(None, &ts)? {
-                (None, ts) => throw(ExactNear("Unexpected end of input".into(), ts.current())),
+                (None, ts) => throw(CompilerError(CompileErrors::ExpectedEOF, ts.current())),
                 (Some(expr), ts) =>
-                    Ok((HTTP {
-                        method,
-                        url_or_object: expr.into(),
-                    }, ts))
+                    match HttpMethodCalls::new(method.as_str(), expr) {
+                        None => throw(CompilerError(CompileErrors::IllegalHttpMethod(method), ts.current())),
+                        Some(call) => Ok((HTTP(call), ts))
+                    }
             }
         } else {
-            throw(ExactNear("HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT".into(), ts.current()))
+            throw(CompilerError(CompileErrors::ExpectedHttpMethod, ts.current()))
         }
     }
 
@@ -2197,6 +2197,7 @@ mod tests {
     mod http_tests {
         use crate::compiler::Compiler;
         use crate::expression::Expression::{Literal, StructureExpression, HTTP};
+        use crate::expression::HttpMethodCalls;
         use crate::typed_values::TypedValue::StringValue;
 
         #[test]
@@ -2204,10 +2205,9 @@ mod tests {
             let model = Compiler::build(r#"
                 DELETE "http://localhost:9000/comments?id=675af"
             "#).unwrap();
-            assert_eq!(model, HTTP {
-                method: "DELETE".to_string(),
-                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
-            });
+            assert_eq!(model, HTTP(HttpMethodCalls::DELETE(
+                Literal(StringValue("http://localhost:9000/comments?id=675af".into())).into()
+            )));
         }
 
         #[test]
@@ -2215,10 +2215,9 @@ mod tests {
             let model = Compiler::build(r#"
                 GET "http://localhost:9000/comments?id=675af"
             "#).unwrap();
-            assert_eq!(model, HTTP {
-                method: "GET".to_string(),
-                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/comments?id=675af".to_string()))),
-            });
+            assert_eq!(model, HTTP(HttpMethodCalls::GET(
+                Literal(StringValue("http://localhost:9000/comments?id=675af".into())).into()
+            )));
         }
 
         #[test]
@@ -2226,10 +2225,9 @@ mod tests {
             let model = Compiler::build(r#"
                 HEAD "http://localhost:9000/quotes/AMD/NYSE"
             "#).unwrap();
-            assert_eq!(model, HTTP {
-                method: "HEAD".to_string(),
-                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".to_string()))),
-            });
+            assert_eq!(model, HTTP(HttpMethodCalls::HEAD(
+                Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".into())).into()
+            )));
         }
 
         #[test]
@@ -2237,10 +2235,9 @@ mod tests {
             let model = Compiler::build(r#"
                 PATCH "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE"
             "#).unwrap();
-            assert_eq!(model, HTTP {
-                method: "PATCH".to_string(),
-                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".to_string()))),
-            });
+            assert_eq!(model, HTTP(HttpMethodCalls::PATCH(
+                Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".into())).into()
+            )));
         }
 
         #[test]
@@ -2248,10 +2245,9 @@ mod tests {
             let model = Compiler::build(r#"
                 POST "http://localhost:9000/quotes/AMD/NASDAQ"
             "#).unwrap();
-            assert_eq!(model, HTTP {
-                method: "POST".to_string(),
-                url_or_object: Box::new(Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string()))),
-            });
+            assert_eq!(model, HTTP(HttpMethodCalls::POST(
+                Literal(StringValue("http://localhost:9000/quotes/AMD/NASDAQ".into())).into()
+            )));
         }
 
         #[test]
@@ -2262,13 +2258,12 @@ mod tests {
                     body: "Hello World"
                 }
             "#).unwrap();
-            assert_eq!(model, HTTP {
-                method: "POST".to_string(),
-                url_or_object: Box::new(StructureExpression(vec![
+            assert_eq!(model, HTTP(HttpMethodCalls::POST(
+                StructureExpression(vec![
                     ("url".to_string(), Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
                     ("body".to_string(), Literal(StringValue("Hello World".to_string()))),
-                ]))
-            });
+                ]).into()
+            )));
         }
 
         #[test]
@@ -2279,26 +2274,24 @@ mod tests {
                     body: "./demoes/language/include_file.ox"
                 }
             "#).unwrap();
-            assert_eq!(model, HTTP {
-                method: "POST".to_string(),
-                url_or_object: Box::new(StructureExpression(vec![
+            assert_eq!(model, HTTP(HttpMethodCalls::POST(
+                StructureExpression(vec![
                     ("url".to_string(), Literal(StringValue("http://localhost:8080/machine/www/stocks".to_string()))),
                     ("body".to_string(), Literal(StringValue("./demoes/language/include_file.ox".to_string()))),
-                ]))
-            });
+                ]).into()
+            )));
         }
 
         #[test]
         fn test_http_put() {
             let model = Compiler::build(r#"
-            PUT "http://localhost:9000/quotes/AMD/NASDAQ"
-        "#).unwrap();
-            assert_eq!(model, HTTP {
-                method: "PUT".to_string(),
-                url_or_object: Box::new(Literal(
+                PUT "http://localhost:9000/quotes/AMD/NASDAQ"
+            "#).unwrap();
+            assert_eq!(model, HTTP(HttpMethodCalls::PUT(
+                Literal(
                     StringValue("http://localhost:9000/quotes/AMD/NASDAQ".to_string())
-                )),
-            });
+                ).into()
+            )));
         }
     }
 

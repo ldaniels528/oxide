@@ -11,6 +11,28 @@ use crate::platform::PlatformOps;
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
 
+/// Represents an enumeration of compiler errors
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum CompileErrors {
+    ExpectedEOF,
+    ExpectedHttpMethod,
+    IllegalHttpMethod(String),
+}
+
+impl Display for CompileErrors {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            CompileErrors::ExpectedEOF =>
+                "Unexpected end of input".into(),
+            CompileErrors::ExpectedHttpMethod =>
+                "HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT".into(),
+            CompileErrors::IllegalHttpMethod(method) =>
+                format!("Illegal HTTP method '{method}'"),
+        };
+        write!(f, "Syntax error: {text}")
+    }
+}
+
 /// Represents an enumeration of syntax errors
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum SyntaxErrors {
@@ -132,6 +154,7 @@ impl Display for TypeMismatchErrors {
 pub enum Errors {
     AssertionError(String, String),
     CannotSubtract(String, String),
+    CompilerError(CompileErrors, Token),
     Empty,
     Exact(String),
     ExactNear(String, Token),
@@ -159,6 +182,9 @@ impl Display for Errors {
                 format!("Assertion Error: {a} was not {b}"),
             Errors::CannotSubtract(a, b) =>
                 format!("Cannot subtract {b} from {a}"),
+            Errors::CompilerError(e, t) =>
+                format!("Compiler error: {e} near {} on line {} column {}",
+                        t.get_raw_value(), t.get_line_number(), t.get_column_number()),
             Errors::Empty => String::from("General fault occurred"),
             Errors::Exact(message) => format!("{message}"),
             Errors::ExactNear(message, token) =>
