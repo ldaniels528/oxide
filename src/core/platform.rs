@@ -1254,7 +1254,7 @@ impl PlatformOps {
                     PlatformOps::CalDateHour12 => Ok((ms, Number(U32Value(datetime.hour12().1)))),
                     PlatformOps::CalDateHour24 => Ok((ms, Number(U32Value(datetime.hour())))),
                     PlatformOps::CalDateMinute => Ok((ms, Number(U32Value(datetime.minute())))),
-                    PlatformOps::CalDateMonth => Ok((ms, Number(U32Value(datetime.second())))),
+                    PlatformOps::CalDateMonth => Ok((ms, Number(U32Value(datetime.month())))),
                     PlatformOps::CalDateSecond => Ok((ms, Number(U32Value(datetime.second())))),
                     PlatformOps::CalDateYear => Ok((ms, Number(I32Value(datetime.year())))),
                     pf => throw(PlatformOpError(pf.to_owned()))
