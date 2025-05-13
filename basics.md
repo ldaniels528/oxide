@@ -16,8 +16,21 @@ Tom
 </pre>
 <hr>
 <h4>Arrays</h4>
-<pre>arr := [1, 4, 2, 8, 5, 7]
-tools::reverse(arr)</pre>
+<pre>// Arrays can be defined via ranges
+
+1..7</pre>
+<pre>
+[1, 2, 3, 4, 5, 6]
+</pre>
+<pre>// Arrays can be created using literals
+
+[1, 4, 2, 8, 5, 7]</pre>
+<pre>
+[1, 4, 2, 8, 5, 7]
+</pre>
+<pre>// Arrays can be transformed via the 'tools' package
+
+tools::reverse([1, 4, 2, 8, 5, 7])</pre>
 <pre>
 [7, 5, 8, 2, 4, 1]
 </pre>
@@ -27,6 +40,25 @@ tools::reverse(arr)</pre>
 arr[3]</pre>
 <pre>
 8
+</pre>
+<hr>
+<h4>Assignment</h4>
+<pre>a := 3
+b := 5
+c := 7
+a + b + c</pre>
+<pre>
+15
+</pre>
+<pre>(a, b, c) := (3, 5, 7)
+a + b + c</pre>
+<pre>
+15
+</pre>
+<pre>[a, b, c] := [3, 5, 7]
+a + b + c</pre>
+<pre>
+15
 </pre>
 <hr>
 <h4>Bitwise And</h4>
@@ -136,7 +168,7 @@ true
     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
 }</pre>
 <pre>
-1
+5
 </pre>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
@@ -144,7 +176,7 @@ true
 </pre>
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
-{"content-length":"81","content-type":"application/json","date":"Mon, 12 May 2025 23:16:45 GMT"}
+{"content-length":"81","content-type":"application/json","date":"Tue, 13 May 2025 02:41:49 GMT"}
 </pre>
 <pre>PUT {
     url: http://localhost:8833/platform/www/stocks/0
@@ -261,9 +293,10 @@ a - b</pre>
 <hr>
 <h4>Negative</h4>
 <pre>i := 75
--i</pre>
+j := -i
+j</pre>
 <pre>
-true
+-75
 </pre>
 <hr>
 <h4>New Instances</h4>
@@ -341,22 +374,10 @@ Feature "Matches function" {
 </pre>
 <hr>
 <h4>Type Definitions</h4>
-<pre>typedef(String(80))</pre>
+<pre>LabelString := typedef(String(80))
+LabelString</pre>
 <pre>
 String(80)
-</pre>
-<hr>
-<h4>Variable Assignment</h4>
-<pre>a := 7
-b := 5
-a * b</pre>
-<pre>
-35
-</pre>
-<pre>(a, b, c) := (3, 5, 7)
-a + b + c</pre>
-<pre>
-15
 </pre>
 <hr>
 <h4>Via Clause</h4>

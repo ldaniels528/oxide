@@ -309,7 +309,6 @@ pub enum Expression {
         title: Box<Expression>,
         verifications: Vec<Expression>,
     },
-    SetVariable(String, Box<Expression>),
     SetVariables(Box<Expression>, Box<Expression>),
     TupleExpression(Vec<Expression>),
     TypeDef(Box<Expression>),
@@ -432,10 +431,8 @@ impl Expression {
                     .join("\n");
                 format!("scenario {title} {{\n{verifications}\n}}")
             }
-            Expression::SetVariable(name, value) =>
-                format!("{} := {}", name, Self::decompile(value)),
-            Expression::SetVariables(name, value) =>
-                format!("{} := {}", Self::decompile(name), Self::decompile(value)),
+            Expression::SetVariables(vars, values) =>
+                format!("{} := {}", Self::decompile(vars), Self::decompile(values)),
             Expression::TupleExpression(args) => format!("({})", Self::decompile_list(args)),
             Expression::TypeDef(expr) => format!("typedef({})", expr.to_code()),
             Expression::Variable(name) => name.to_string(),
@@ -710,7 +707,6 @@ impl Expression {
             Range(a, b) => Self::infer_a_or_b(a, b, hints),
             Return(a) => Self::infer_with_hints(a, hints),
             Scenario { .. } => BooleanType,
-            SetVariable(..) => BooleanType,
             SetVariables(..) => BooleanType,
             // structures: { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
             StructureExpression(key_values) => {
@@ -886,7 +882,7 @@ mod expression_tests {
     use crate::expression::Conditions::*;
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
     use crate::expression::DatabaseOps::{Mutation, Queryable};
-    use crate::expression::Expression::{ArrayExpression, AsValue, BitwiseAnd, BitwiseOr, BitwiseShiftLeft, BitwiseShiftRight, BitwiseXor, DatabaseOp, ElementAt, FnExpression, From, Literal, Multiply, Ns, Plus, SetVariable, StructureExpression, Via};
+    use crate::expression::Expression::*;
     use crate::expression::*;
     use crate::machine::Machine;
     use crate::number_kind::NumberKind::F64Kind;
@@ -1294,7 +1290,8 @@ mod expression_tests {
 
     #[test]
     fn test_define_named_function() {
-        let model = SetVariable("add".into(), Box::new(
+        let model = SetVariables(
+            Variable("add".into()).into(),
             FnExpression {
                 params: vec![
                     Parameter::add("a"),
@@ -1306,7 +1303,7 @@ mod expression_tests {
                     Variable("b".into())
                 )))),
                 returns: DynamicType,
-            }),
+            }.into(),
         );
         assert_eq!(Expression::decompile(&model), "add := fn(a, b) => a + b")
     }

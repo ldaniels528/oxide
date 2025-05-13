@@ -10,7 +10,7 @@ use crate::dataframe::Dataframe::Model;
 use crate::errors::Errors::{Exact, InstantiationError, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, UnrecognizedTypeName, UnsupportedType};
 use crate::errors::{throw, Errors, SyntaxErrors};
-use crate::expression::Expression::{ArrayExpression, AsValue, FnExpression, FunctionCall, Literal, SetVariable, TupleExpression, Variable};
+use crate::expression::Expression::*;
 use crate::expression::{Expression, UNDEFINED};
 use crate::field::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
@@ -369,7 +369,7 @@ fn decode_model(model: &Expression) -> std::io::Result<DataType> {
         ArrayExpression(params) => decode_model_array(params),
         // e.g. fn(a, b, c)
         FnExpression { params, returns, .. } =>
-            Ok(FunctionType(params.clone(), Box::from(returns.clone()))),
+            Ok(FunctionType(params.clone(), returns.clone().into())),
         // e.g. String(80)
         FunctionCall { fx, args } => decode_model_function_call(fx, args),
         // e.g. Structure(symbol: String, exchange: String, last_sale: f64)
@@ -418,7 +418,11 @@ fn decode_model_function_call(
         for arg in args {
             let param = match arg {
                 AsValue(name, model) => Parameter::new(name, decode_model(model)?),
-                SetVariable(name, expr) => Parameter::from_tuple(name, expr.to_pure()?),
+                SetVariables(var_expr, expr) =>
+                    match var_expr.deref() {
+                        Variable(name) => Parameter::from_tuple(name, expr.to_pure()?),
+                        z => return throw(Exact(format!("Decomposition is not allowed near {}", z.to_code())))
+                    }
                 Variable(name) => Parameter::add(name),
                 other => return throw(SyntaxError(SyntaxErrors::ParameterExpected(other.to_code())))
             };
@@ -435,7 +439,7 @@ fn decode_model_function_call(
                 "ASCII" => expect_size(args, |size| ASCIIType(size)),
                 "Binary" => expect_size(args, |size| BinaryType(size)),
                 "Enum" => expect_params(args, |params| EnumType(params)),
-                "fn" => expect_params(args, |params| FunctionType(params, Box::from(DynamicType))),
+                "fn" => expect_params(args, |params| FunctionType(params, DynamicType.into())),
                 "String" => expect_size(args, |size| StringType(size)),
                 "Struct" => expect_params(args, |params| StructureType(params)),
                 "Table" => expect_params(args, |params| TableType(params, 0)),

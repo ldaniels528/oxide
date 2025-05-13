@@ -176,7 +176,7 @@ impl Machine {
             Include(path) => self.do_include(path),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
             Minus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa - bb),
-            Module(name, ops) => Ok(self.do_structure_module(name, ops)),
+            Module(name, ops) => self.do_structure_module(name, ops),
             Modulo(a, b) => self.eval_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) => self.eval_inline_2(a, b, |aa, bb| aa * bb),
             Neg(a) => Ok(self.do_negate(a)),
@@ -189,11 +189,7 @@ impl Machine {
             Range(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
             Return(a) => self.evaluate(a),
             Scenario { .. } => Ok((self.to_owned(), ErrorValue(Exact("Scenario should not be called directly".to_string())))),
-            SetVariable(name, expr) => {
-                let (machine, value) = self.evaluate(expr)?;
-                Ok((machine.set(name, value), Boolean(true)))
-            }
-            SetVariables(name, expr) => self.do_set_variables(name, expr),
+            SetVariables(vars, values) => self.do_set_variables(vars, values),
             StructureExpression(items) => self.do_structure_soft(items),
             TupleExpression(args) => self.do_tuple(args),
             TypeDef(expr) => self.do_type_decl(expr),
@@ -431,9 +427,15 @@ impl Machine {
             // math::compute(5, 8)
             FunctionCall { fx, args } => structure.pollute(ms).do_function_call(fx, args),
             // stock::last_sale := 24.11
-            SetVariable(name, expr) => {
-                let (ms, value) = ms.evaluate(expr)?;
-                Ok((ms.with_variable(var_name, Structured(structure.update_by_name(name, value))), Boolean(true)))
+            SetVariables(var_expr, value_expr) => {
+                match var_expr.deref() {
+                    Variable(name) => {
+                        let (ms, value) = ms.evaluate(value_expr)?;
+                        Ok((ms.with_variable(var_name, Structured(structure.update_by_name(name, value))), Boolean(true)))
+                    }
+                    z => throw(Exact(format!("Illegal field '{}' for structure {}",
+                                             z.to_code(), var_name)))
+                }
             }
             // stock::symbol
             Variable(name) => Ok((ms, structure.get(name))),
@@ -887,20 +889,28 @@ impl Machine {
                 ErrorValue(msg) => ErrorValue(msg),
                 Structured(Hard(structure)) =>
                     match op {
-                        SetVariable(name, expr) =>
-                            match self.evaluate(expr) {
-                                Ok((_, value)) => Structured(Hard(structure.with_variable(name, value))),
-                                Err(err) => ErrorValue(Exact(err.to_string()))
-                            },
+                        SetVariables(var_expr, value_expr) =>
+                            match var_expr.deref() {
+                                Variable(name) =>
+                                    match self.evaluate(value_expr) {
+                                        Ok((_, value)) => Structured(Hard(structure.with_variable(name, value))),
+                                        Err(err) => ErrorValue(Exact(err.to_string()))
+                                    }
+                                z => ErrorValue(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
+                            }
                         z => ErrorValue(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
                     },
                 Structured(Soft(structure)) =>
                     match op {
-                        SetVariable(name, expr) =>
-                            match self.evaluate(expr) {
-                                Ok((_, value)) => Structured(Soft(structure.with_variable(name, value))),
-                                Err(err) => ErrorValue(Exact(err.to_string()))
-                            },
+                        SetVariables(var_expr, expr) =>
+                            match var_expr.deref() {
+                                Variable(name) =>
+                                    match self.evaluate(expr) {
+                                        Ok((_, value)) => Structured(Soft(structure.with_variable(name, value))),
+                                        Err(err) => ErrorValue(Exact(err.to_string()))
+                                    }
+                                z => ErrorValue(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
+                            }
                         z => ErrorValue(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
                     },
                 z => ErrorValue(TypeMismatch(StructExpected(name.to_string(), z.to_code())))
@@ -968,18 +978,21 @@ impl Machine {
 
         let (ms, result) = self.evaluate(dest)?;
         match src.clone() {
+            // [a, b, c, d] := [1, 2, 3, 4]
             ArrayExpression(variables) =>
                 match result {
                     ArrayValue(array) =>
                         set_variables(ms, get_variables_names(&variables)?, array.get_values()),
                     other => throw(Exact(format!("Expected an array near {}", other.to_code())))
                 }
+            // (a, b, c) := (3, 6, 9)
             TupleExpression(variables) =>
                 match result {
                     TupleValue(tuple) =>
                         set_variables(ms, get_variables_names(&variables)?, tuple),
                     other => throw(Exact(format!("Expected a tuple near {}", other.to_code())))
                 }
+            // a := 7
             Variable(name) => Ok((ms.set(name.as_str(), result), Boolean(true))),
             other =>
                 throw(Exact(format!("Expected an array, tuple or variable near {}", other.to_code())))
@@ -990,15 +1003,11 @@ impl Machine {
         &self,
         name: &str,
         ops: &Vec<Expression>,
-    ) -> (Self, TypedValue) {
+    ) -> std::io::Result<(Self, TypedValue)> {
         match self.get(name) {
-            Some(Structured(structure)) =>
-                self.do_structure_module_impl(name, structure, ops),
-            Some(v) => (self.clone(), ErrorValue(TypeMismatch(StructExpected(name.into(), v.to_code())))),
-            None => match self.do_module_alone(name, ops) {
-                Ok(result) => result,
-                Err(err) => (self.to_owned(), ErrorValue(Exact(err.to_string())))
-            }
+            Some(Structured(structure)) => self.do_structure_module_impl(name, structure, ops),
+            Some(v) => throw(TypeMismatch(StructExpected(name.into(), v.to_code()))),
+            None => self.do_module_alone(name, ops)
         }
     }
 
@@ -1007,24 +1016,29 @@ impl Machine {
         name: &str,
         structure: Structures,
         ops: &Vec<Expression>,
-    ) -> (Self, TypedValue) {
+    ) -> std::io::Result<(Self, TypedValue)> {
         let result = ops.iter()
             .fold(Structured(structure), |tv, op| match tv {
                 ErrorValue(msg) => ErrorValue(msg),
                 Structured(structure) =>
                     match op {
-                        SetVariable(name, expr) =>
-                            match self.evaluate(expr) {
-                                Ok((_, value)) => Structured(structure.update_by_name(name, value)),
-                                Err(err) => ErrorValue(Exact(err.to_string()))
-                            },
+                        // name := "Hello World"
+                        SetVariables(var_expr, value_expr) =>
+                            match var_expr.deref() {
+                                Variable(name) =>
+                                    match self.evaluate(value_expr) {
+                                        Ok((_, value)) => Structured(structure.update_by_name(name, value)),
+                                        Err(err) => ErrorValue(Exact(err.to_string()))
+                                    }
+                                other => ErrorValue(Exact(format!("Decomposition is not allowed near {}", other.to_code())))
+                            }
                         z => ErrorValue(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
                     },
                 z => ErrorValue(TypeMismatch(StructExpected(name.to_string(), z.to_code())))
             });
         match result {
-            ErrorValue(err) => (self.to_owned(), ErrorValue(err)),
-            result => (self.with_variable(name, result), Boolean(true))
+            ErrorValue(err) => throw(err),
+            result => Ok((self.with_variable(name, result), Boolean(true)))
         }
     }
 
@@ -1483,7 +1497,10 @@ mod tests {
             // publish the function in scope: fn add(a, b) => a + b
             let machine = Machine::empty();
             let (machine, result) = machine.evaluate_scope(&vec![
-                SetVariable("add".to_string(), Box::new(Literal(fx.to_owned())))
+                SetVariables(
+                    Variable("add".into()).into(),
+                    Literal(fx.to_owned()).into()
+                )
             ]);
             assert_eq!(machine.get("add").unwrap(), fx);
             assert_eq!(result, Boolean(true));
@@ -1607,10 +1624,12 @@ mod tests {
                     Box::new(Literal(Number(I64Value(5)))),
                 ))),
                 // num := num + 1
-                code: Box::new(SetVariable("num".into(), Box::new(Plus(
-                    Box::new(Variable("num".into())),
-                    Box::new(Literal(Number(I64Value(1)))),
-                )))),
+                code: SetVariables(
+                    Variable("num".into()).into(),
+                    Plus(
+                        Variable("num".into()).into(),
+                        Literal(Number(I64Value(1))).into(),
+                    ).into()).into(),
             };
             assert_eq!(model.to_code(), "while num < 5 num := num + 1");
 

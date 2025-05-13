@@ -338,7 +338,7 @@ impl Compiler {
     ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
         self.next_list_of_items(&ts, ")", |items| {
             let (mut is_qualified, mut expressions, mut params) = (false, vec![], vec![]);
-            for (item, n) in items.iter().zip(0..items.len()) {
+            for item in items.iter() {
                 //println!("next_operator_prefix: item[{n}] => {item:?}");
                 expressions.push(item.clone());
                 match item.clone() {
@@ -635,7 +635,7 @@ impl Compiler {
             TupleExpression(items) =>
                 Ok((SetVariables(Box::new(TupleExpression(items)), expr1.into()), ts)),
             Variable(name) =>
-                Ok((SetVariable(name, expr1.into()), ts)),
+                Ok((SetVariables(Variable(name).into(), expr1.into()), ts)),
             _ => throw(ExactNear("an identifier name was expected".into(), ts.current()))
         }
     }
@@ -1313,7 +1313,7 @@ impl Compiler {
                         returns,
                     };
                     match name {
-                        Some(name) => Ok((SetVariable(name, Box::new(func)), ts)),
+                        Some(name) => Ok((SetVariables(Variable(name).into(), func.into()), ts)),
                         None => Ok((func, ts))
                     }
                 }
@@ -1526,6 +1526,44 @@ mod tests {
         }
 
         #[test]
+        fn test_assignment_via_array() {
+            verify_build(
+                "[a, b, c, d] := [2, 4, 6, 8]",
+                SetVariables(
+                    ArrayExpression(vec![
+                        Variable("a".into()),
+                        Variable("b".into()),
+                        Variable("c".into()),
+                        Variable("d".into()),
+                    ]).into(),
+                    ArrayExpression(vec![
+                        Literal(Number(I64Value(2))),
+                        Literal(Number(I64Value(4))),
+                        Literal(Number(I64Value(6))),
+                        Literal(Number(I64Value(8))),
+                    ]).into(),
+                ))
+        }
+
+        #[test]
+        fn test_assignment_via_tuple() {
+            verify_build(
+                "(a, b, c) := (3, 5, 7)",
+                SetVariables(
+                    TupleExpression(vec![
+                        Variable("a".into()),
+                        Variable("b".into()),
+                        Variable("c".into()),
+                    ]).into(),
+                    TupleExpression(vec![
+                        Literal(Number(I64Value(3))),
+                        Literal(Number(I64Value(5))),
+                        Literal(Number(I64Value(7))),
+                    ]).into(),
+                ))
+        }
+
+        #[test]
         fn test_betwixt() {
             verify_build(
                 "n betwixt x and y",
@@ -1592,10 +1630,12 @@ mod tests {
                 "{ x := 19 ^ 13 x }",
                 "{\nx := 19 ^ 13\nx\n}",
                 CodeBlock(vec![
-                    SetVariable("x".into(), BitwiseXor(
-                        Literal(Number(I64Value(19))).into(),
-                        Literal(Number(I64Value(13))).into()
-                    ).into()),
+                    SetVariables(
+                        Variable("x".into()).into(),
+                        BitwiseXor(
+                            Literal(Number(I64Value(19))).into(),
+                            Literal(Number(I64Value(13))).into()
+                        ).into()),
                     Variable("x".into())
                 ]));
         }
@@ -1932,7 +1972,7 @@ mod tests {
         use crate::compiler::tests::verify_build;
         use crate::compiler::Compiler;
         use crate::expression::Conditions::True;
-        use crate::expression::Expression::{Condition, Feature, FunctionCall, Literal, Scenario, SetVariables, TupleExpression, Variable};
+        use crate::expression::Expression::{Condition, Feature, FunctionCall, Literal, Scenario, Variable};
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::token_slice::TokenSlice;
         use crate::typed_values::TypedValue::{Number, StringValue};
@@ -2007,24 +2047,6 @@ mod tests {
         }
 
         #[test]
-        fn test_tuple_assignment() {
-            verify_build(
-                "(a, b, c) := (3, 5, 7)",
-                SetVariables(
-                    TupleExpression(vec![
-                        Variable("a".into()),
-                        Variable("b".into()),
-                        Variable("c".into()),
-                    ]).into(),
-                    TupleExpression(vec![
-                        Literal(Number(I64Value(3))),
-                        Literal(Number(I64Value(5))),
-                        Literal(Number(I64Value(7))),
-                    ]).into(),
-                ))
-        }
-
-        #[test]
         fn test_type_of() {
             let model = Compiler::build(r#"
                 type_of("cat")
@@ -2045,7 +2067,7 @@ mod tests {
     mod function_tests {
         use crate::compiler::Compiler;
         use crate::data_types::DataType::{DynamicType, NumberType, StringType, StructureType};
-        use crate::expression::Expression::{FnExpression, Literal, Multiply, Plus, SetVariable, StructureExpression, Variable};
+        use crate::expression::Expression::*;
         use crate::number_kind::NumberKind::{F64Kind, I32Kind, I64Kind, U64Kind};
         use crate::numbers::Numbers::F64Value;
         use crate::parameter::Parameter;
@@ -2094,7 +2116,8 @@ mod tests {
             let code = Compiler::build(r#"
                 fn add(a: i32, b: i32): i32 => a + b
             "#).unwrap();
-            assert_eq!(code, SetVariable("add".to_string(), Box::new(
+            assert_eq!(code, SetVariables(
+                Variable("add".into()).into(),
                 FnExpression {
                     params: vec![
                         Parameter::new("a", NumberType(I32Kind)),
@@ -2106,8 +2129,8 @@ mod tests {
                         Variable("b".into())
                     )))),
                     returns: NumberType(I32Kind)
-                }
-            )))
+                }.into()
+            ))
         }
 
         #[test]
@@ -2115,7 +2138,8 @@ mod tests {
             let code = Compiler::build(r#"
                 fn add(a: i32, b: i32) => a + b
             "#).unwrap();
-            assert_eq!(code, SetVariable("add".to_string(), Box::new(
+            assert_eq!(code, SetVariables(
+                Variable("add".into()).into(),
                 FnExpression {
                     params: vec![
                         Parameter::new("a", NumberType(I32Kind)),
@@ -2127,8 +2151,8 @@ mod tests {
                         Variable("b".into())
                     )))),
                     returns: NumberType(I32Kind)
-                }
-            )))
+                }.into()
+            ))
         }
 
         #[test]
@@ -2136,7 +2160,8 @@ mod tests {
             let code = Compiler::build(r#"
                 fn add(a, b) => a + b
             "#).unwrap();
-            assert_eq!(code, SetVariable("add".to_string(), Box::new(
+            assert_eq!(code, SetVariables(
+                Variable("add".into()).into(),
                 FnExpression {
                     params: vec![
                         Parameter::add("a"),
@@ -2148,8 +2173,8 @@ mod tests {
                         Variable("b".into())
                     )))),
                     returns: DynamicType
-                }
-            )))
+                }.into()
+            ))
         }
 
         #[test]
@@ -2376,7 +2401,7 @@ mod tests {
     mod logical_tests {
         use crate::compiler::Compiler;
         use crate::expression::Conditions::{GreaterThan, LessThan};
-        use crate::expression::Expression::{CodeBlock, Condition, If, Literal, Plus, SetVariable, Variable, While};
+        use crate::expression::Expression::*;
         use crate::numbers::Numbers::I64Value;
         use crate::typed_values::TypedValue::Number;
 
@@ -2405,10 +2430,13 @@ mod tests {
                     Box::new(Variable("x".into())),
                     Box::new(Literal(Number(I64Value(5)))),
                 ))),
-                code: Box::new(SetVariable("x".into(), Box::new(Plus(
-                    Box::new(Variable("x".into())),
-                    Box::new(Literal(Number(I64Value(1))))),
-                ))),
+                code: SetVariables(
+                    Variable("x".into()).into(),
+                    Plus(
+                        Variable("x".into()).into(),
+                        Literal(Number(I64Value(1))).into()
+                    ).into(),
+                ).into(),
             });
         }
 
@@ -2420,16 +2448,21 @@ mod tests {
                 x
             "#).unwrap();
             assert_eq!(model, CodeBlock(vec![
-                SetVariable("x".into(), Box::new(Literal(Number(I64Value(0))))),
+                SetVariables(
+                    Variable("x".into()).into(),
+                    Literal(Number(I64Value(0))).into()
+                ),
                 While {
                     condition: Box::new(Condition(LessThan(
                         Box::new(Variable("x".into())),
                         Box::new(Literal(Number(I64Value(7)))),
                     ))),
-                    code: Box::new(SetVariable("x".into(), Box::new(Plus(
-                        Box::new(Variable("x".into())),
-                        Box::new(Literal(Number(I64Value(1))))),
-                    ))),
+                    code: SetVariables(
+                        Variable("x".into()).into(),
+                        Plus(
+                            Variable("x".into()).into(),
+                            Literal(Number(I64Value(1))).into(),
+                        ).into()).into()
                 },
                 Variable("x".into()),
             ]));

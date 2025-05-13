@@ -273,8 +273,21 @@ Tom
 </pre>
 <hr>
 <h4>Arrays</h4>
-<pre>arr := [1, 4, 2, 8, 5, 7]
-tools::reverse(arr)</pre>
+<pre>// Arrays can be defined via ranges
+
+1..7</pre>
+<pre>
+[1, 2, 3, 4, 5, 6]
+</pre>
+<pre>// Arrays can be created using literals
+
+[1, 4, 2, 8, 5, 7]</pre>
+<pre>
+[1, 4, 2, 8, 5, 7]
+</pre>
+<pre>// Arrays can be transformed via the 'tools' package
+
+tools::reverse([1, 4, 2, 8, 5, 7])</pre>
 <pre>
 [7, 5, 8, 2, 4, 1]
 </pre>
@@ -284,6 +297,25 @@ tools::reverse(arr)</pre>
 arr[3]</pre>
 <pre>
 8
+</pre>
+<hr>
+<h4>Assignment</h4>
+<pre>a := 3
+b := 5
+c := 7
+a + b + c</pre>
+<pre>
+15
+</pre>
+<pre>(a, b, c) := (3, 5, 7)
+a + b + c</pre>
+<pre>
+15
+</pre>
+<pre>[a, b, c] := [3, 5, 7]
+a + b + c</pre>
+<pre>
+15
 </pre>
 <hr>
 <h4>Bitwise And</h4>
@@ -393,7 +425,7 @@ true
     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
 }</pre>
 <pre>
-1
+5
 </pre>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
@@ -401,7 +433,7 @@ true
 </pre>
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
-{"content-length":"81","content-type":"application/json","date":"Mon, 12 May 2025 23:16:45 GMT"}
+{"content-length":"81","content-type":"application/json","date":"Tue, 13 May 2025 02:41:49 GMT"}
 </pre>
 <pre>PUT {
     url: http://localhost:8833/platform/www/stocks/0
@@ -518,9 +550,10 @@ a - b</pre>
 <hr>
 <h4>Negative</h4>
 <pre>i := 75
--i</pre>
+j := -i
+j</pre>
 <pre>
-true
+-75
 </pre>
 <hr>
 <h4>New Instances</h4>
@@ -598,22 +631,10 @@ Feature "Matches function" {
 </pre>
 <hr>
 <h4>Type Definitions</h4>
-<pre>typedef(String(80))</pre>
+<pre>LabelString := typedef(String(80))
+LabelString</pre>
 <pre>
 String(80)
-</pre>
-<hr>
-<h4>Variable Assignment</h4>
-<pre>a := 7
-b := 5
-a * b</pre>
-<pre>
-35
-</pre>
-<pre>(a, b, c) := (3, 5, 7)
-a + b + c</pre>
-<pre>
-15
 </pre>
 <hr>
 <h4>Via Clause</h4>
@@ -663,7 +684,7 @@ fact(6)</pre>
 <h4>cal::now &#8212; Returns the current local date and time</h4>
 <pre>cal::now()</pre>
 <pre>
-2025-05-12T23:16:45.622Z
+2025-05-13T02:41:49.566Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -677,35 +698,35 @@ now():::day_of()</pre>
 <pre>import cal
 now():::hour12()</pre>
 <pre>
-4
+7
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
 <pre>import cal
 now():::hour24()</pre>
 <pre>
-16
+19
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
 <pre>import cal
 now():::minute_of()</pre>
 <pre>
-16
+41
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
 <pre>import cal
 now():::month_of()</pre>
 <pre>
-45
+5
 </pre>
 <hr>
 <h4>cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
 <pre>import cal
 now():::second_of()</pre>
 <pre>
-45
+49
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -949,13 +970,13 @@ Hello World
 <h4>oxide::help &#8212; Integrated help function</h4>
 <pre>from oxide::help() limit 3</pre>
 <pre>
-|----------------------------------------------------------------------------------------------------|
-| id | name     | module | signature                | description                          | returns |
-|----------------------------------------------------------------------------------------------------|
-| 0  | to_table | tools  | tools::to_table(a)       | Converts an object into a to_table   | Table   |
-| 1  | to_json  | tools  | tools::to_json(t: Table) | Converts a collection to JSON format | Array   |
-| 2  | to_csv   | tools  | tools::to_csv(t: Table)  | Converts a collection to CSV format  | Array   |
-|----------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name        | module | signature         | description                                     | returns                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
+| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String                                       |
+| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Boolean                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -964,8 +985,8 @@ Hello World
 |-------------------------------------------------------------------|
 | id | session_id    | user_id | cpu_time_ms | input                |
 |-------------------------------------------------------------------|
-| 0  | 1747062794617 | 501     | 0.903       | import oxide; help() |
-| 1  | 1747062794920 | 501     | 1.577       | import oxide; help() |
+| 0  | 1747102264947 | 501     | 1.647       | import oxide; help() |
+| 1  | 1747102265222 | 501     | 1.935       | import oxide; help() |
 |-------------------------------------------------------------------|
 </pre>
 <hr>
@@ -990,7 +1011,7 @@ true
 <h4>oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
 <pre>oxide::uuid()</pre>
 <pre>
-03041cbf-4737-41d4-98b5-94dca26f84ea
+4de263c8-1de0-4bd1-aa68-5e17e874ace8
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>

@@ -4,6 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType;
+use crate::expression::Queryables::Where;
 use crate::expression::{Conditions, DatabaseOps, Directives, Expression, HttpMethodCalls};
 use crate::interpreter::Interpreter;
 use crate::platform::{PlatformOps, PLATFORM_OPCODES};
@@ -14,7 +15,6 @@ use crate::typed_values::TypedValue::TableValue;
 use shared_lib::strip_margin;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use crate::expression::Queryables::Where;
 
 fn generate_readme(mut file: File) -> std::io::Result<File> {
     println!("generate title...");
@@ -434,9 +434,21 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
     match model {
         Expression::ArrayExpression(..) => vec![
             strip_margin(r#"
-                |arr := [1, 4, 2, 8, 5, 7]
-                |tools::reverse(arr)
-            "#, '|')],
+                |// Arrays can be defined via ranges
+                |
+                |1..7
+            "#, '|'),
+            strip_margin(r#"
+                |// Arrays can be created using literals
+                |
+                |[1, 4, 2, 8, 5, 7]
+            "#, '|'),
+            strip_margin(r#"
+                |// Arrays can be transformed via the 'tools' package
+                |
+                |tools::reverse([1, 4, 2, 8, 5, 7])
+            "#, '|')
+        ],
         Expression::AsValue(..) => vec![
             "name: 'Tom'".into(),
             "from { name: 'Tom' }".into()
@@ -642,7 +654,8 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::Neg(..) => vec![
             strip_margin(r#"
                 |i := 75
-                |-i
+                |j := -i
+                |j
             "#, '|')],
         Expression::New(..) => vec![
             "new Table(symbol: String(8), exchange: String(8), last_sale: f64)".into()
@@ -665,28 +678,36 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::Return(..) => vec![],
         Expression::Scenario { .. } => vec![],
-        Expression::SetVariable(..) => vec![
+        Expression::SetVariables(..) => vec![
             strip_margin(r#"
-                    |a := 7
+                    |a := 3
                     |b := 5
-                    |a * b
+                    |c := 7
+                    |a + b + c
                 "#, '|'),
             strip_margin(r#"
                     |(a, b, c) := (3, 5, 7)
                     |a + b + c
+                "#, '|'),
+            strip_margin(r#"
+                    |[a, b, c] := [3, 5, 7]
+                    |a + b + c
                 "#, '|')
         ],
-        Expression::SetVariables(..) => vec![],
         Expression::StructureExpression(..) => vec![],
         Expression::TupleExpression(..) => vec![],
         Expression::TypeDef(..) => vec![
-            "typedef(String(80))".into()
+            strip_margin(r#"
+                |LabelString := typedef(String(80))
+                |LabelString
+            "#, '|')
         ],
         Expression::Variable(..) => vec![
             strip_margin(r#"
                 |(a, b, c) := (3, 5, 7)
                 |c > b
-            "#, '|')],
+            "#, '|')
+        ],
         Expression::Via(..) => vec![
             strip_margin(r#"
                 |stocks := ns("readme.via.stocks")
@@ -749,7 +770,7 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Mathematics: addition", Plus(null.clone(), null.clone())),
         ("New Instances", New(null.clone())),
         ("Ranges", Range(null.clone(), null.clone())),
-        ("Variable Assignment", SetVariable("".into(), null.clone())),
+        ("Assignment", SetVariables(null.clone(), null.clone())),
         ("Structures", StructureExpression(vec![])),
         ("Type Definitions", TypeDef(null.clone())),
         ("Via Clause", Via(null.clone())),
