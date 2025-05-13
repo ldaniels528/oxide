@@ -425,7 +425,7 @@ true
     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
 }</pre>
 <pre>
-5
+11
 </pre>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
@@ -433,7 +433,7 @@ true
 </pre>
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
-{"content-length":"81","content-type":"application/json","date":"Tue, 13 May 2025 02:41:49 GMT"}
+{"content-length":"81","content-type":"application/json","date":"Tue, 13 May 2025 17:05:06 GMT"}
 </pre>
 <pre>PUT {
     url: http://localhost:8833/platform/www/stocks/0
@@ -511,6 +511,12 @@ a + b</pre>
 <pre>20.0 / 3</pre>
 <pre>
 6.666666666666667
+</pre>
+<pre>a := (3.0, 5.0, 9.0)
+b := (1.0, 2.0, 1.0)
+a / b</pre>
+<pre>
+(3, 2.5, 9)
 </pre>
 <hr>
 <h4>Mathematics: multiplication</h4>
@@ -684,35 +690,35 @@ fact(6)</pre>
 <h4>cal::now &#8212; Returns the current local date and time</h4>
 <pre>cal::now()</pre>
 <pre>
-2025-05-13T02:41:49.566Z
+2025-05-13T17:05:07.274Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
 <pre>import cal
 now():::day_of()</pre>
 <pre>
-12
+13
 </pre>
 <hr>
 <h4>cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
 <pre>import cal
 now():::hour12()</pre>
 <pre>
-7
+10
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
 <pre>import cal
 now():::hour24()</pre>
 <pre>
-19
+10
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
 <pre>import cal
 now():::minute_of()</pre>
 <pre>
-41
+5
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -726,7 +732,7 @@ now():::month_of()</pre>
 <pre>import cal
 now():::second_of()</pre>
 <pre>
-49
+7
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -987,6 +993,7 @@ Hello World
 |-------------------------------------------------------------------|
 | 0  | 1747102264947 | 501     | 1.647       | import oxide; help() |
 | 1  | 1747102265222 | 501     | 1.935       | import oxide; help() |
+| 2  | 1747106351999 | 501     | 2.134       | import oxide; help() |
 |-------------------------------------------------------------------|
 </pre>
 <hr>
@@ -1011,7 +1018,7 @@ true
 <h4>oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
 <pre>oxide::uuid()</pre>
 <pre>
-4de263c8-1de0-4bd1-aa68-5e17e874ace8
+1fde318c-520c-4e90-b145-c5de7ef6718c
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>
@@ -1225,6 +1232,20 @@ Array(3)
 |------------------------------------|
 </pre>
 <hr>
+<h4>tools::filter &#8212; Filters a collection based on a function</h4>
+<pre>tools::filter(1..11, fn(n) => (n % 2) == 0)</pre>
+<pre>
+|------------|
+| id | value |
+|------------|
+| 0  | 2     |
+| 1  | 4     |
+| 2  | 6     |
+| 3  | 8     |
+| 4  | 10    |
+|------------|
+</pre>
+<hr>
 <h4>tools::journal &#8212; Retrieves the journal for an event-source or table function</h4>
 <pre>import tools
 stocks := ns("platform.journal.stocks")
@@ -1249,6 +1270,29 @@ stocks:::journal()</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+</pre>
+<hr>
+<h4>tools::map &#8212; Transform a collection based on a function</h4>
+<pre>stocks := ns("platform.map_over_table.stocks")
+table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+ { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+ { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
+import tools
+stocks:::map(fn(row) => {
+    symbol: symbol,
+    exchange: exchange,
+    last_sale: last_sale,
+    processed_time: cal::now()
+})</pre>
+<pre>
+|---------------------------------------------------------------|
+| id | symbol | exchange | last_sale | processed_time           |
+|---------------------------------------------------------------|
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-13T17:05:07.628Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-13T17:05:07.628Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-13T17:05:07.629Z |
+|---------------------------------------------------------------|
 </pre>
 <hr>
 <h4>tools::pop &#8212; Removes and returns a value or object from a Sequence</h4>

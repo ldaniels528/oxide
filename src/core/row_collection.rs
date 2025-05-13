@@ -1758,7 +1758,7 @@ mod tests {
     #[test]
     fn test_performance() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            rc.resize(0);
+            rc.resize(0).unwrap();
             test_write_performance(label, &mut rc, &columns, 20_000).unwrap();
             test_read_performance(label, &rc).unwrap();
             rc.len().unwrap() as u64
@@ -1892,7 +1892,7 @@ mod tests {
         let ns = Namespace::new("journaled", name, "stocks");
         let params = Parameter::from_columns(&columns);
         let mut jrc = EventSourceRowCollection::new(&ns, &params).unwrap();
-        jrc.resize(0);
+        jrc.resize(0).unwrap();
         test_variant(kind, Box::new(jrc), columns.to_owned())
     }
 

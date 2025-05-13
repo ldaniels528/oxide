@@ -48,6 +48,7 @@ mod sequences;
 mod server;
 mod structures;
 mod table_renderer;
+mod table_scan;
 mod template;
 mod terminal;
 mod testdata;
@@ -56,8 +57,6 @@ mod tokenizer;
 mod tokens;
 mod typed_values;
 mod websockets;
-mod table_options;
-mod table_scan;
 
 const LOCAL_HOST: &str = "0.0.0.0";
 

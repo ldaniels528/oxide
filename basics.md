@@ -176,7 +176,7 @@ true
 </pre>
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <pre>
-{"content-length":"81","content-type":"application/json","date":"Tue, 13 May 2025 02:41:49 GMT"}
+{"content-length":"81","content-type":"application/json","date":"Tue, 13 May 2025 06:18:54 GMT"}
 </pre>
 <pre>PUT {
     url: http://localhost:8833/platform/www/stocks/0

@@ -521,7 +521,12 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::DatabaseOp(..) => vec![],
         Expression::Directive(..) => vec![],
         Expression::Divide(..) => vec![
-            "20.0 / 3".into()
+            "20.0 / 3".into(),
+            strip_margin(r#"
+                |a := (3.0, 5.0, 9.0)
+                |b := (1.0, 2.0, 1.0)
+                |a / b
+                "#, '|')
         ],
         Expression::ElementAt(..) => vec![
             strip_margin(r#"

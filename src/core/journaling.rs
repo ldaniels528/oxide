@@ -47,7 +47,7 @@ pub trait Journaling: RowCollection {
     fn get_journal(&self) -> Dataframe;
 
     /// replays the journal to rebuild the current state
-    fn replay(&mut self) -> TypedValue;
+    fn replay(&mut self) -> std::io::Result<TypedValue>;
 }
 
 ////////////////////////////////////////////////////////////////////
@@ -127,13 +127,13 @@ impl Journaling for EventSourceRowCollection {
         Disk(self.events.clone())
     }
 
-    fn replay(&mut self) -> TypedValue {
+    fn replay(&mut self) -> std::io::Result<TypedValue> {
         let mut rows_affected = 0;
         let empty_values = self.state.get_columns().iter().map(|_| TypedValue::Null).collect::<Vec<_>>();
         let mut interpreter = Interpreter::new();
 
         // rebuild the current state
-        self.state.resize(0);
+        self.state.resize(0)?;
         for row in self.events.iter() {
             match row.get_values().as_slice() {
                 [row_id, column_id, action, new_value, _date] => {
@@ -147,7 +147,7 @@ impl Journaling for EventSourceRowCollection {
                                         self.state.append_row(Row::new(id, empty_values.clone()));
                                         rows_affected += 1;
                                     };
-                                    self.state.overwrite_field(id, column_id.to_usize(), value);
+                                    self.state.overwrite_field(id, column_id.to_usize(), value)?;
                                 }
                                 Err(err) => eprintln!("{}", err)
                             }
@@ -156,7 +156,7 @@ impl Journaling for EventSourceRowCollection {
                             match interpreter.evaluate(new_value.unwrap_value().as_str()) {
                                 Ok(ArrayValue(value)) => {
                                     let id = row_id.to_usize();
-                                    self.state.overwrite_row(id, Row::new(id, value.get_values().clone()));
+                                    self.state.overwrite_row(id, Row::new(id, value.get_values().clone()))?;
                                     rows_affected += 1;
                                 }
                                 Ok(value) => eprintln!("Expected array value: {}", value.to_code()),
@@ -164,7 +164,7 @@ impl Journaling for EventSourceRowCollection {
                             }
                         // delete row action
                         "DR" => {
-                            self.state.delete_row(row_id.to_usize());
+                            self.state.delete_row(row_id.to_usize())?;
                             rows_affected += 1;
                         }
                         // unhandled action
@@ -178,7 +178,7 @@ impl Journaling for EventSourceRowCollection {
                 }
             }
         }
-        Number(Numbers::I64Value(rows_affected))
+        Ok(Number(Numbers::I64Value(rows_affected)))
     }
 }
 
@@ -440,15 +440,15 @@ impl Journaling for TableFunction {
         self.journal.clone()
     }
 
-    fn replay(&mut self) -> TypedValue {
+    fn replay(&mut self) -> std::io::Result<TypedValue> {
         let mut rows_affected = 0;
-        self.state.resize(0);
+        self.state.resize(0)?;
         for row in self.journal.get_rows() {
-            self.overwrite_row(row.get_id(), row);
+            self.overwrite_row(row.get_id(), row)?;
             rows_affected += 1;
         }
         println!("{rows_affected} event(s) replayed.");
-        Number(Numbers::I64Value(rows_affected))
+        Ok(Number(Numbers::I64Value(rows_affected)))
     }
 }
 
@@ -548,8 +548,8 @@ mod tests {
             ).unwrap();
 
             // ensure row collection is completely empty
-            jrc.events.resize(0);
-            jrc.state.resize(0);
+            jrc.events.resize(0).unwrap();
+            jrc.state.resize(0).unwrap();
 
             // insert some rows
             assert_eq!(5, jrc.append_rows(vec![
@@ -616,8 +616,8 @@ mod tests {
             ]);
 
             // replay the events (after truncating the current state)
-            jrc.state.resize(0);
-            assert_eq!(jrc.replay(), Number(Numbers::I64Value(7)));
+            jrc.state.resize(0).unwrap();
+            assert_eq!(jrc.replay().unwrap(), Number(Numbers::I64Value(7)));
 
             // display the reconstituted state
             // |------------------------------------|
@@ -709,8 +709,8 @@ mod tests {
             let mut tfrc = make_table_function();
 
             // ensure row collection is completely empty
-            tfrc.journal.resize(0);
-            tfrc.state.resize(0);
+            tfrc.journal.resize(0).unwrap();
+            tfrc.state.resize(0).unwrap();
 
             // insert some rows
             assert_eq!(5, tfrc.append_rows(vec![
@@ -722,7 +722,7 @@ mod tests {
             ]).unwrap());
 
             // replay the outputs
-            assert_eq!(tfrc.replay(), Number(Numbers::I64Value(5)));
+            assert_eq!(tfrc.replay().unwrap(), Number(Numbers::I64Value(5)));
 
             // verify the rows
             assert_eq!(tfrc.read_active_rows().unwrap(), vec![

@@ -61,6 +61,24 @@ impl DataType {
         types_a.iter().zip(types_b.iter()).all(|(a, b)| a.is_compatible(b))
     }
 
+    /// provides type resolution for the given [Vec<DataType>]
+    pub fn best_fit(types: Vec<DataType>) -> DataType {
+        fn larger(a: &usize, b: &usize) -> usize {
+            (if a > b { a } else { b }).to_owned()
+        }
+
+        match types.len() {
+            0 => DynamicType,
+            1 => types[0].to_owned(),
+            _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
+                match (agg, t) {
+                    (BinaryType(a), BinaryType(b)) => StringType(larger(&a, b)),
+                    (StringType(a), StringType(b)) => StringType(larger(&a, b)),
+                    (_, t) => t.to_owned()
+                })
+        }
+    }
+
     /// deciphers a datatype from an expression (e.g. "String" | "String(20)")
     pub fn decipher_type(model: &Expression) -> std::io::Result<DataType> {
         decode_model(model)
@@ -509,6 +527,16 @@ mod tests {
             verify_compatibility(ASCIIType(0), StringType(8000));
             verify_compatibility(StringType(0), ASCIIType(8000));
             verify_compatibility(StringType(80), StringType(0));
+        }
+
+        #[test]
+        fn test_best_fit() {
+            let kind = DataType::best_fit(vec![
+                StringType(11),
+                StringType(110),
+                StringType(55)
+            ]);
+            assert_eq!(kind, StringType(110))
         }
 
         #[test]

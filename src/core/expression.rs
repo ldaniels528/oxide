@@ -744,28 +744,10 @@ impl Expression {
         b: &Expression,
         hints: &Vec<Parameter>,
     ) -> DataType {
-        Self::infer_best_fit(vec![
+        DataType::best_fit(vec![
             Self::infer_with_hints(a, hints),
             Self::infer_with_hints(b, hints)
         ])
-    }
-
-    /// provides type resolution for the given [Vec<DataType>]
-    fn infer_best_fit(types: Vec<DataType>) -> DataType {
-        fn larger(a: &usize, b: &usize) -> usize {
-            (if a > b { a } else { b }).to_owned()
-        }
-
-        match types.len() {
-            0 => DynamicType,
-            1 => types[0].to_owned(),
-            _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
-                match (agg, t) {
-                    (BinaryType(a), BinaryType(b)) => StringType(larger(&a, b)),
-                    (StringType(a), StringType(b)) => StringType(larger(&a, b)),
-                    (_, t) => t.to_owned()
-                })
-        }
     }
 
     /// Indicates whether the expression is a conditional expression
@@ -1511,16 +1493,6 @@ mod inference_tests {
             &vec![],
         );
         assert_eq!(kind, NumberType(F64Kind))
-    }
-
-    #[test]
-    fn test_infer_best_fit() {
-        let kind = Expression::infer_best_fit(vec![
-            StringType(11),
-            StringType(110),
-            StringType(55)
-        ]);
-        assert_eq!(kind, StringType(110))
     }
 
     #[test]

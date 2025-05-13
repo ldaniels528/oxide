@@ -84,6 +84,7 @@ pub enum TypeMismatchErrors {
     NamespaceExpected(String),
     ParameterExpected(String),
     QueryableExpected(String),
+    SequenceExpected(DataType),
     StringExpected(String),
     StructExpected(String, String),
     StructsOneOrMoreExpected,
@@ -131,6 +132,8 @@ impl Display for TypeMismatchErrors {
                 format!("Expected a parameter, got \"{expr}\" instead"),
             TypeMismatchErrors::QueryableExpected(expr) =>
                 format!("Expected a queryable near {expr}"),
+            TypeMismatchErrors::SequenceExpected(data_type) =>
+                format!("Expected a sequence, found a {}", data_type.to_code()),
             TypeMismatchErrors::StringExpected(expr) =>
                 format!("Expected a String near {expr}"),
             TypeMismatchErrors::StructExpected(name, expr) =>

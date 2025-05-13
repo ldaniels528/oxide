@@ -170,7 +170,7 @@ impl RowCollection for HybridRowCollection {
 
     fn resize(&mut self, new_size: usize) -> std::io::Result<bool> {
         if new_size < self.dividing_line {
-            self.brc.resize(new_size);
+            self.brc.resize(new_size)?;
             self.frc.resize(0)
         } else {
             self.frc.resize(self.localize(new_size))
@@ -272,8 +272,8 @@ mod tests {
     fn create_hybrid_row_collection(ns_path: &str) -> HybridRowCollection {
         let ns = Namespace::parse(ns_path).unwrap();
         let mut hrc = HybridRowCollection::new(&ns, &make_quote_parameters(), 4).unwrap();
-        hrc.resize(0);
-        hrc.append_rows(create_data_set());
+        hrc.resize(0).unwrap();
+        hrc.append_rows(create_data_set()).unwrap();
         hrc
     }
 

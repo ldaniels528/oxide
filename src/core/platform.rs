@@ -9,11 +9,12 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::sequences::{Array, Sequence, Sequences};
 
+use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
-use crate::errors::throw;
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CharExpected, CollectionExpected, DateExpected, StringExpected, StructExpected, UnsupportedType};
-use crate::expression::Expression::{CodeBlock, Literal, Multiply, Scenario};
+use crate::errors::{throw, TypeMismatchErrors};
+use crate::expression::Expression::{CodeBlock, FunctionCall, Literal, Multiply, Scenario, StructureExpression};
 use crate::file_row_collection::FileRowCollection;
 use crate::formatting::DataFormats;
 use crate::journaling::Journaling;
@@ -24,11 +25,11 @@ use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
-use crate::platform::PlatformOps::*;
 use crate::row_collection::RowCollection;
-use crate::structures::Row;
+use crate::sequences::Sequences::{TheArray, TheDataframe};
 use crate::structures::Structure;
 use crate::structures::Structures::{Hard, Soft};
+use crate::structures::{Row, SoftStructure};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use crate::{machine, oxide_server};
@@ -73,7 +74,7 @@ pub struct PlatformFunction {
 /// Represents an enumeration of Oxide Platform Functions
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum PlatformOps {
-    // cal package
+    // cal
     CalDateDay,
     CalDateHour12,
     CalDateHour24,
@@ -88,7 +89,7 @@ pub enum PlatformOps {
     DurationsMillis,
     DurationsMinutes,
     DurationsSeconds,
-    // io package
+    // io
     IoFileCreate,
     IoFileExists,
     IoFileReadText,
@@ -103,12 +104,12 @@ pub enum PlatformOps {
     MathPow,
     MathRound,
     MathSqrt,
-    // os package
+    // os
     OsCall,
     OsClear,
     OsCurrentDir,
     OsEnv,
-    // oxide package
+    // oxide
     OxideCompile,
     OxideDebug,
     OxideEval,
@@ -119,7 +120,7 @@ pub enum PlatformOps {
     OxideReset,
     OxideUUID,
     OxideVersion,
-    // str package
+    // str
     StrEndsWith,
     StrFormat,
     StrJoin,
@@ -132,16 +133,18 @@ pub enum PlatformOps {
     StrStripMargin,
     StrSubstring,
     StrToString,
-    // testing package
+    // testing
     TestingAssert,
     TestingFeature,
     TestingMatches,
     TestingTypeOf,
-    // tools package
+    // tools
     ToolsCompact,
     ToolsDescribe,
     ToolsFetch,
+    ToolsFilter,
     ToolsJournal,
+    ToolsMap,
     ToolsPop,
     ToolsPush,
     ToolsReplay,
@@ -152,7 +155,7 @@ pub enum PlatformOps {
     ToolsToCSV,
     ToolsToJSON,
     ToolsToTable,
-    // util package
+    // util
     UtilBase64,
     UtilBinary,
     UtilGzip,
@@ -173,13 +176,13 @@ pub enum PlatformOps {
     UtilToU32,
     UtilToU64,
     UtilToU128,
-    // www package
+    // www
     WwwServe,
     WwwURLDecode,
     WwwURLEncode,
 }
 
-pub const PLATFORM_OPCODES: [PlatformOps; 93] = {
+pub const PLATFORM_OPCODES: [PlatformOps; 95] = {
     use PlatformOps::*;
     [
         // cal
@@ -204,9 +207,9 @@ pub const PLATFORM_OPCODES: [PlatformOps; 93] = {
         // testing
         TestingAssert, TestingFeature, TestingMatches, TestingTypeOf,
         // tools
-        ToolsCompact, ToolsDescribe, ToolsFetch, ToolsJournal, ToolsPop, ToolsPush,
-        ToolsReplay, ToolsReverse, ToolsRowId, ToolsScan, ToolsToArray, ToolsToCSV,
-        ToolsToJSON, ToolsToTable,
+        ToolsCompact, ToolsDescribe, ToolsFetch, ToolsFilter, ToolsJournal, ToolsMap,
+        ToolsPop, ToolsPush, ToolsReplay, ToolsReverse, ToolsRowId, ToolsScan,
+        ToolsToArray, ToolsToCSV, ToolsToJSON, ToolsToTable,
         // util
         UtilBase64, UtilBinary, UtilGzip, UtilGunzip, UtilHex, UtilMD5,
         UtilToASCII, UtilToDate, UtilToF32, UtilToF64,
@@ -218,6 +221,11 @@ pub const PLATFORM_OPCODES: [PlatformOps; 93] = {
 };
 
 impl PlatformOps {
+
+    /////////////////////////////////////////////////////////
+    //      STATIC METHODS
+    /////////////////////////////////////////////////////////
+
     /// Builds a mapping of package name to function vector
     pub fn build_packages() -> HashMap<String, Vec<PlatformOps>> {
         PLATFORM_OPCODES.iter()
@@ -232,6 +240,16 @@ impl PlatformOps {
     pub fn decode(bytes: Vec<u8>) -> std::io::Result<PlatformOps> {
         ByteCodeCompiler::unwrap_as_result(bincode::deserialize(bytes.as_slice()))
     }
+
+    pub fn find_function(package: &str, name: &str) -> Option<PlatformFunction> {
+        PLATFORM_OPCODES.iter()
+            .map(|pf| pf.get_info())
+            .find(|pfi| pfi.package_name == package && pfi.name == name)
+    }
+
+    /////////////////////////////////////////////////////////
+    //      INSTANCE METHODS
+    /////////////////////////////////////////////////////////
 
     pub fn encode(&self) -> std::io::Result<Vec<u8>> {
         ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
@@ -266,19 +284,14 @@ impl PlatformOps {
             PlatformOps::IoStdErr => self.adapter_fn1_ok(ms, args, Self::do_io_stderr),
             PlatformOps::IoStdOut => self.adapter_fn1_ok(ms, args, Self::do_io_stdout),
             // math
-            PlatformOps::MathAbs => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.abs())),
-            PlatformOps::MathCeil => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.ceil())),
-            PlatformOps::MathFloor => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.floor())),
+            PlatformOps::MathAbs => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.abs())),
+            PlatformOps::MathCeil => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.ceil())),
+            PlatformOps::MathFloor => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.floor())),
             PlatformOps::MathMax => self.adapter_fn2_ok(ms, args, |ms, a, b| Self::do_math_f2(ms, a, b, |n, m| n.max(m))),
             PlatformOps::MathMin => self.adapter_fn2_ok(ms, args, |ms, a, b| Self::do_math_f2(ms, a, b, |n, m| n.min(m))),
             PlatformOps::MathPow => self.adapter_fn2_ok(ms, args, |ms, a, b| Self::do_math_f2(ms, a, b, |n, m| n.pow(m))),
-            PlatformOps::MathRound => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.round())),
-            PlatformOps::MathSqrt => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f(ms, value, |n| n.sqrt())),
-            // testing
-            PlatformOps::TestingAssert => Ok(self.adapter_fn1(ms, args, Self::do_testing_assert)),
-            PlatformOps::TestingFeature => self.adapter_fn2_ok(ms, args, Self::do_testing_feature),
-            PlatformOps::TestingMatches => Ok(self.adapter_fn2(ms, args, Self::do_testing_matches)),
-            PlatformOps::TestingTypeOf => Ok(self.adapter_fn1(ms, args, Self::do_testing_type_of)),
+            PlatformOps::MathRound => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.round())),
+            PlatformOps::MathSqrt => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.sqrt())),
             // os
             PlatformOps::OsCall => Self::do_os_call(ms, args),
             PlatformOps::OsCurrentDir => self.adapter_fn0_ok(ms, args, Self::do_os_current_dir),
@@ -308,11 +321,18 @@ impl PlatformOps {
             PlatformOps::StrStripMargin => self.adapter_fn2_ok(ms, args, Self::do_str_strip_margin),
             PlatformOps::StrSubstring => Ok(self.adapter_fn3(ms, args, Self::do_str_substring)),
             PlatformOps::StrToString => Ok(self.adapter_fn1(ms, args, Self::do_str_to_string)),
+            // testing
+            PlatformOps::TestingAssert => Ok(self.adapter_fn1(ms, args, Self::do_testing_assert)),
+            PlatformOps::TestingFeature => self.adapter_fn2_ok(ms, args, Self::do_testing_feature),
+            PlatformOps::TestingMatches => Ok(self.adapter_fn2(ms, args, Self::do_testing_matches)),
+            PlatformOps::TestingTypeOf => Ok(self.adapter_fn1(ms, args, Self::do_testing_type_of)),
             // tools
             PlatformOps::ToolsCompact => self.adapter_fn1_ok(ms, args, Self::do_tools_compact),
             PlatformOps::ToolsDescribe => self.adapter_fn1_ok(ms, args, Self::do_tools_describe),
             PlatformOps::ToolsFetch => self.adapter_fn2_ok(ms, args, Self::do_tools_fetch),
+            PlatformOps::ToolsFilter => self.adapter_fn2_ok(ms, args, Self::do_tools_filter),
             PlatformOps::ToolsJournal => self.adapter_fn1_ok(ms, args, Self::do_tools_journal),
+            PlatformOps::ToolsMap => self.adapter_fn2_ok(ms, args, Self::do_tools_map),
             PlatformOps::ToolsPop => self.adapter_fn1_ok(ms, args, Self::do_tools_pop),
             PlatformOps::ToolsPush => Self::do_tools_push(ms, args),
             PlatformOps::ToolsReplay => self.adapter_fn1_ok(ms, args, Self::do_tools_replay),
@@ -349,12 +369,6 @@ impl PlatformOps {
             PlatformOps::WwwURLEncode => self.adapter_fn1_ok(ms, args, Self::do_www_url_encode),
             PlatformOps::WwwServe => self.adapter_fn1_ok(ms, args, Self::do_www_serve),
         }
-    }
-
-    pub fn find_function(package: &str, name: &str) -> Option<PlatformFunction> {
-        PLATFORM_OPCODES.iter()
-            .map(|pf| pf.get_info())
-            .find(|pfi| pfi.package_name == package && pfi.name == name)
     }
 
     pub fn get_description(&self) -> String {
@@ -427,7 +441,9 @@ impl PlatformOps {
             PlatformOps::ToolsCompact => "Shrinks a table by removing deleted rows",
             PlatformOps::ToolsDescribe => "Describes a table or structure",
             PlatformOps::ToolsFetch => "Retrieves a raw structure from a table",
+            PlatformOps::ToolsFilter => "Filters a collection based on a function",
             PlatformOps::ToolsJournal => "Retrieves the journal for an event-source or table function",
+            PlatformOps::ToolsMap => "Transform a collection based on a function",
             PlatformOps::ToolsPop => "Removes and returns a value or object from a Sequence",
             PlatformOps::ToolsPush => "Appends a value or object to a Sequence",
             PlatformOps::ToolsReplay => "Reconstructs the state of a journaled table",
@@ -666,6 +682,9 @@ impl PlatformOps {
                 |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                 |[+] tools::fetch(stocks, 2)
             "#, '|'),
+            PlatformOps::ToolsFilter => strip_margin(r#"
+                |tools::filter(1..11, fn(n) => (n % 2) == 0)
+            "#, '|'),
             PlatformOps::ToolsJournal => strip_margin(r#"
                 |import tools
                 |stocks := ns("platform.journal.stocks")
@@ -682,6 +701,20 @@ impl PlatformOps {
                 | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                 | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                 |stocks:::journal()
+            "#, '|'),
+            PlatformOps::ToolsMap => strip_margin(r#"
+                |stocks := ns("platform.map_over_table.stocks")
+                |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                |[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+                | { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+                | { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
+                |import tools
+                |stocks:::map(fn(row) => {
+                |    symbol: symbol,
+                |    exchange: exchange,
+                |    last_sale: last_sale,
+                |    processed_time: cal::now()
+                |})
             "#, '|'),
             PlatformOps::ToolsPop => strip_margin(r#"
                 |import tools
@@ -884,7 +917,9 @@ impl PlatformOps {
             PlatformOps::ToolsCompact => "compact",
             PlatformOps::ToolsDescribe => "describe",
             PlatformOps::ToolsFetch => "fetch",
+            PlatformOps::ToolsFilter => "filter",
             PlatformOps::ToolsJournal => "journal",
+            PlatformOps::ToolsMap => "map",
             PlatformOps::ToolsPop => "pop",
             PlatformOps::ToolsPush => "push",
             PlatformOps::ToolsReplay => "replay",
@@ -938,8 +973,6 @@ impl PlatformOps {
             // math
             MathAbs | MathCeil | MathFloor | MathMax | MathMin | MathPow | MathRound |
             MathSqrt => "math",
-            // testing
-            TestingAssert | TestingFeature | TestingMatches | TestingTypeOf => "testing",
             // oxide
             OxideCompile | OxideDebug | OxideEval | OxideHelp | OxideHistory |
             OxideHome | OxidePrintln | OxideReset | OxideUUID | OxideVersion => "oxide",
@@ -949,10 +982,12 @@ impl PlatformOps {
             StrEndsWith | StrFormat | StrIndexOf | StrJoin |
             StrLeft | StrLen | StrRight | StrSplit | StrStartsWith |
             StrStripMargin | StrSubstring | StrToString => "str",
+            // testing
+            TestingAssert | TestingFeature | TestingMatches | TestingTypeOf => "testing",
             // tools
-            ToolsCompact | ToolsDescribe | ToolsFetch | ToolsJournal | ToolsPop |
-            ToolsPush | ToolsReplay | ToolsReverse | ToolsRowId | ToolsScan |
-            ToolsToArray | ToolsToCSV | ToolsToJSON | ToolsToTable => "tools",
+            ToolsCompact | ToolsDescribe | ToolsFetch | ToolsFilter | ToolsJournal |
+            ToolsMap | ToolsPop | ToolsPush | ToolsReplay | ToolsReverse | ToolsRowId |
+            ToolsScan | ToolsToArray | ToolsToCSV | ToolsToJSON | ToolsToTable => "tools",
             // util
             UtilBase64 | UtilBinary | UtilGzip | UtilGunzip | UtilHex | UtilMD5 |
             UtilToASCII | UtilToDate | UtilToF32 | UtilToF64 |
@@ -1005,7 +1040,7 @@ impl PlatformOps {
             MathMax | MathMin | MathPow
             => vec![NumberType(F64Kind), NumberType(F64Kind)],
             // two-parameter (lazy, lazy)
-            TestingMatches | ToolsPush
+            TestingMatches | ToolsFilter | ToolsMap | ToolsPush
             => vec![DynamicType, DynamicType],
             // two-parameter (string, string)
             IoFileCreate | StrEndsWith | StrFormat | StrSplit | StrStartsWith | StrStripMargin
@@ -1052,7 +1087,7 @@ impl PlatformOps {
         use PlatformOps::*;
         match self {
             // array
-            ToolsToArray => ArrayType(0),
+            ToolsFilter | ToolsMap | ToolsToArray => ArrayType(0),
             IoFileReadText | StrSplit | ToolsToCSV | ToolsToJSON => ArrayType(0),
             // boolean
             IoFileExists | StrEndsWith | StrStartsWith | TestingMatches |
@@ -1270,11 +1305,11 @@ impl PlatformOps {
         plat: &PlatformOps,
     ) -> std::io::Result<(Machine, TypedValue)> {
         let factor = match plat {
-            DurationsDays => Number(I64Value(24 * 60 * 60 * 1000)),
-            DurationsHours => Number(I64Value(60 * 60 * 1000)),
-            DurationsMillis => Number(I64Value(1)),
-            DurationsMinutes => Number(I64Value(60 * 1000)),
-            DurationsSeconds => Number(I64Value(1000)),
+            PlatformOps::DurationsDays => Number(I64Value(24 * 60 * 60 * 1000)),
+            PlatformOps::DurationsHours => Number(I64Value(60 * 60 * 1000)),
+            PlatformOps::DurationsMillis => Number(I64Value(1)),
+            PlatformOps::DurationsMinutes => Number(I64Value(60 * 1000)),
+            PlatformOps::DurationsSeconds => Number(I64Value(1000)),
             _ => Undefined
         };
         let op = Multiply(Box::new(Literal(value.clone())), Box::new(Literal(factor)));
@@ -1341,7 +1376,7 @@ impl PlatformOps {
         Ok((ms, Boolean(true)))
     }
 
-    fn do_math_f(
+    fn do_math_f1(
         ms: Machine,
         value: &TypedValue,
         f: fn(&Numbers) -> Numbers,
@@ -1855,6 +1890,147 @@ impl PlatformOps {
         ))))
     }
 
+    fn apply_fn_over_array(
+        ms: Machine,
+        array: &Array,
+        function: &TypedValue,
+        logic: fn(TypedValue, TypedValue) -> std::io::Result<Option<TypedValue>>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let mut new_arr = vec![];
+        // apply the function over all items in the array
+        for item in array.get_values() {
+            // apply the function on the current item
+            let (_, result) = ms.evaluate(&FunctionCall {
+                fx: Literal(function.clone()).into(),
+                args: vec![
+                    Literal(item.clone())
+                ],
+            })?;
+            // if an outcome was produced, capture it
+            if let Some(outcome) = logic(item, result)? {
+                new_arr.push(outcome)
+            }
+        }
+        Ok((ms, ArrayValue(Array::from(new_arr))))
+    }
+
+    fn apply_fn_over_table(
+        ms: Machine,
+        df: &Dataframe,
+        function: &TypedValue,
+        logic: fn(TypedValue, TypedValue) -> std::io::Result<Option<TypedValue>>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        // cache the columns and column names
+        let columns = df.get_columns();
+        let column_names = columns.iter()
+            .map(|col| col.get_name().to_string())
+            .collect::<Vec<_>>();
+
+        // apply the function over all rows of the table
+        let (mut new_arr, mut new_params, mut is_table) = (vec![], vec![], true);
+        for row in df.get_rows() {
+            // build the typed-value version of the row
+            let tuple_val = column_names.iter().zip(row.get_values())
+                .map(|(key, value)| (key.to_string(), value))
+                .collect::<Vec<_>>();
+            // build the expression version of the row
+            let tuple_expr = tuple_val.iter()
+                .map(|(key, value)| (key.to_string(), Literal(value.clone())))
+                .collect::<Vec<_>>();
+            // apply the function on the current row
+            let ms1 = ms.with_row(columns, &row);
+            let (_, result) = ms1.evaluate(&FunctionCall {
+                fx: Literal(function.clone()).into(),
+                args: vec![
+                    StructureExpression(tuple_expr)
+                ],
+            })?;
+            // if an outcome was produced, capture it
+            if let Some(outcome) = logic(Structured(Soft(SoftStructure::from_tuples(tuple_val))), result)? {
+                let outcome_params = match &outcome {
+                    Structured(s) => s.get_parameters(),
+                    TableValue(df) => df.get_parameters(),
+                    _ => {
+                        is_table = false;
+                        vec![]
+                    }
+                };
+                new_params = Self::merge_parameters(new_params, outcome_params);
+                new_arr.push(outcome)
+            }
+        }
+
+        // return a table (preferably) or an array
+        if is_table {
+            Ok((ms, TableValue(Model({
+                let mut rows = vec![];
+                for item in new_arr {
+                    let transformed_rows = match item {
+                        Structured(s) => vec![s.to_row()],
+                        TableValue(df) => df.get_rows(),
+                        z => return throw(TypeMismatch(StructExpected(z.to_code(), z.to_code())))
+                    };
+                    rows.extend(transformed_rows)
+                }
+                let mut rc = ModelRowCollection::from_parameters(&new_params);
+                rc.append_rows(rows)?;
+                rc
+            }))))
+        } else {
+            Ok((ms, ArrayValue(Array::from(new_arr))))
+        }
+    }
+
+    fn merge_parameters(
+        mut current_params: Vec<Parameter>,
+        incoming_params: Vec<Parameter>,
+    ) -> Vec<Parameter> {
+        for incoming_param in incoming_params {
+            let name = incoming_param.get_name();
+            match current_params.iter().position(|p| p.get_name() == name) {
+                // Not found — add the new parameter
+                None => current_params.push(incoming_param),
+                // Found — normalize the types and replace
+                Some(index) => {
+                    let existing_param = &current_params[index];
+                    let new_param = Parameter::new(
+                        name,
+                        DataType::best_fit(vec![
+                            existing_param.get_data_type(),
+                            incoming_param.get_data_type(),
+                        ]),
+                    );
+                    current_params[index] = new_param;
+                }
+            }
+        }
+        current_params
+    }
+
+    fn do_tools_filter(
+        ms: Machine,
+        items: &TypedValue,
+        function: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match function {
+            Function { .. } => {
+                // define the filtering function
+                let filter = |item: TypedValue, result: TypedValue| match result {
+                    Boolean(is_true) => Ok(if is_true { Some(item) } else { None }),
+                    z => throw(TypeMismatch(TypeMismatchErrors::BooleanExpected(z.to_code()))),
+                };
+
+                // apply the function to every element in the array
+                match items.to_sequence()? {
+                    TheArray(array) => Self::apply_fn_over_array(ms, &array, function, filter),
+                    TheDataframe(df) => Self::apply_fn_over_table(ms, &df, function, filter),
+                    z => throw(TypeMismatch(TypeMismatchErrors::SequenceExpected(z.get_type())))
+                }
+            }
+            z => throw(TypeMismatch(TypeMismatchErrors::FunctionExpected(z.to_code())))
+        }
+    }
+
     fn do_tools_journal(
         ms: Machine,
         value: &TypedValue,
@@ -1863,6 +2039,24 @@ impl PlatformOps {
             EventSource(mut df) => Ok((ms, TableValue(df.get_journal()))),
             TableFn(mut df) => Ok((ms, TableValue(df.get_journal()))),
             _ => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), value.get_type()))),
+        }
+    }
+
+    fn do_tools_map(
+        ms: Machine,
+        items: &TypedValue,
+        function: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match function {
+            Function { .. } =>
+                match items.to_sequence()? {
+                    TheArray(array) =>
+                        Self::apply_fn_over_array(ms, &array, function, |item, result| Ok(Some(result))),
+                    TheDataframe(df) =>
+                        Self::apply_fn_over_table(ms, &df, function, |item, result| Ok(Some(result))),
+                    z => throw(TypeMismatch(TypeMismatchErrors::SequenceExpected(z.get_type())))
+                }
+            z => throw(TypeMismatch(TypeMismatchErrors::FunctionExpected(z.to_code())))
         }
     }
 
@@ -1931,8 +2125,8 @@ impl PlatformOps {
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
         match value.to_dataframe()? {
-            EventSource(mut df) => Ok((ms, df.replay())),
-            TableFn(mut df) => Ok((ms, df.replay())),
+            EventSource(mut df) => Ok((ms, df.replay()?)),
+            TableFn(mut df) => Ok((ms, df.replay()?)),
             _ => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), value.get_type()))),
         }
     }
@@ -2205,6 +2399,7 @@ mod tests {
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
     use serde_json::json;
+    use PlatformOps::*;
 
     #[test]
     fn test_encode_decode() {
@@ -3374,6 +3569,35 @@ mod tests {
         }
 
         #[test]
+        fn test_tools_filter_over_array() {
+            verify_exact_value(r#"
+                tools::filter(1..7, fn(n) => (n % 2) == 0)
+           "#, ArrayValue(Array::from(vec![
+                Number(I64Value(2)),
+                Number(I64Value(4)),
+                Number(I64Value(6)),
+            ])))
+        }
+
+        #[test]
+        fn test_tools_filter_over_table() {
+            verify_exact_table(r#"
+                stocks := ns("platform.filter_over_table.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+                     { symbol: "ACDC", exchange: "AMEX", last_sale: 37.43 },
+                     { symbol: "UELO", exchange: "NYSE", last_sale: 91.82 }] ~> stocks
+                import tools
+                stocks:::filter(fn(row) => exchange is "AMEX")
+           "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | ACDC   | AMEX     | 37.43     |",
+                "|------------------------------------|"])
+        }
+
+        #[test]
         fn test_tools_journal() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_value_whence(interpreter, r#"
@@ -3406,6 +3630,42 @@ mod tests {
                 "| 1  | ABC    | AMEX     | 12.49     |",
                 "| 2  | JET    | NASDAQ   | 32.12     |",
                 "|------------------------------------|"])
+        }
+
+        #[test]
+        fn test_tools_map_over_array() {
+            verify_exact_value(r#"
+                tools::map([1, 2, 3], fn(n) => n * 2)
+           "#, ArrayValue(Array::from(vec![
+                Number(I64Value(2)),
+                Number(I64Value(4)),
+                Number(I64Value(6)),
+            ])))
+        }
+
+        #[test]
+        fn test_tools_map_over_table() {
+            verify_exact_table(r#"
+                stocks := ns("platform.map_over_table.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+                 { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+                 { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
+                import tools
+                stocks:::map(fn(row) => {
+                    symbol: symbol,
+                    exchange: exchange,
+                    last_sale: last_sale,
+                    magnitude: last_sale * 2.0
+                })
+           "#, vec![
+                "|------------------------------------------------|",
+                "| id | symbol | exchange | last_sale | magnitude |",
+                "|------------------------------------------------|",
+                "| 0  | WKRP   | NYSE     | 11.11     | 22.22     |",
+                "| 1  | ACDC   | AMEX     | 35.11     | 70.22     |",
+                "| 2  | UELO   | NYSE     | 90.12     | 180.24    |",
+                "|------------------------------------------------|"])
         }
 
         #[test]

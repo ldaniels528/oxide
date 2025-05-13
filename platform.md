@@ -6,35 +6,35 @@
 <h4>cal::now &#8212; Returns the current local date and time</h4>
 <pre>cal::now()</pre>
 <pre>
-2025-05-13T02:41:49.099Z
+2025-05-13T17:06:22.584Z
 </pre>
 <hr>
 <h4>cal::day_of &#8212; Returns the day of the month of a Date</h4>
 <pre>import cal
 now():::day_of()</pre>
 <pre>
-12
+13
 </pre>
 <hr>
 <h4>cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
 <pre>import cal
 now():::hour12()</pre>
 <pre>
-7
+10
 </pre>
 <hr>
 <h4>cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
 <pre>import cal
 now():::hour24()</pre>
 <pre>
-19
+10
 </pre>
 <hr>
 <h4>cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
 <pre>import cal
 now():::minute_of()</pre>
 <pre>
-41
+6
 </pre>
 <hr>
 <h4>cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -48,7 +48,7 @@ now():::month_of()</pre>
 <pre>import cal
 now():::second_of()</pre>
 <pre>
-49
+22
 </pre>
 <hr>
 <h4>cal::year_of &#8212; Returns the year of a Date</h4>
@@ -292,13 +292,13 @@ Hello World
 <h4>oxide::help &#8212; Integrated help function</h4>
 <pre>from oxide::help() limit 3</pre>
 <pre>
-|------------------------------------------------------------------------------------------------------------------------|
-| id | name           | module | signature                     | description                                   | returns |
-|------------------------------------------------------------------------------------------------------------------------|
-| 0  | stdout         | io     | io::stdout(s: String)         | Writes a string to STDOUT                     | String  |
-| 1  | stderr         | io     | io::stderr(s: String)         | Writes a string to STDERR                     | String  |
-| 2  | read_text_file | io     | io::read_text_file(s: String) | Reads the contents of a text file into memory | Array   |
-|------------------------------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name        | module | signature         | description                                     | returns                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
+| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String                                       |
+| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Boolean                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -309,6 +309,7 @@ Hello World
 |-------------------------------------------------------------------|
 | 0  | 1747102264947 | 501     | 1.647       | import oxide; help() |
 | 1  | 1747102265222 | 501     | 1.935       | import oxide; help() |
+| 2  | 1747106351999 | 501     | 2.134       | import oxide; help() |
 |-------------------------------------------------------------------|
 </pre>
 <hr>
@@ -333,7 +334,7 @@ true
 <h4>oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
 <pre>oxide::uuid()</pre>
 <pre>
-13340cd0-c7fa-4286-bc84-808d83d79278
+07b4c6db-cf77-493c-817f-09ede2989702
 </pre>
 <hr>
 <h4>oxide::version &#8212; Returns the Oxide version</h4>
@@ -547,6 +548,20 @@ Array(3)
 |------------------------------------|
 </pre>
 <hr>
+<h4>tools::filter &#8212; Filters a collection based on a function</h4>
+<pre>tools::filter(1..11, fn(n) => (n % 2) == 0)</pre>
+<pre>
+|------------|
+| id | value |
+|------------|
+| 0  | 2     |
+| 1  | 4     |
+| 2  | 6     |
+| 3  | 8     |
+| 4  | 10    |
+|------------|
+</pre>
+<hr>
 <h4>tools::journal &#8212; Retrieves the journal for an event-source or table function</h4>
 <pre>import tools
 stocks := ns("platform.journal.stocks")
@@ -571,6 +586,29 @@ stocks:::journal()</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+</pre>
+<hr>
+<h4>tools::map &#8212; Transform a collection based on a function</h4>
+<pre>stocks := ns("platform.map_over_table.stocks")
+table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+ { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+ { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
+import tools
+stocks:::map(fn(row) => {
+    symbol: symbol,
+    exchange: exchange,
+    last_sale: last_sale,
+    processed_time: cal::now()
+})</pre>
+<pre>
+|---------------------------------------------------------------|
+| id | symbol | exchange | last_sale | processed_time           |
+|---------------------------------------------------------------|
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-13T17:06:22.944Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-13T17:06:22.945Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-13T17:06:22.946Z |
+|---------------------------------------------------------------|
 </pre>
 <hr>
 <h4>tools::pop &#8212; Removes and returns a value or object from a Sequence</h4>
