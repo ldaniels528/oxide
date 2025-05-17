@@ -395,11 +395,6 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::Directive(..) => vec![],
         Expression::Divide(..) => vec![
             "20.0 / 3".into(),
-            strip_margin(r#"
-                |a := (3.0, 5.0, 9.0)
-                |b := (1.0, 2.0, 1.0)
-                |a / b
-                "#, '|')
         ],
         Expression::ElementAt(..) => vec![
             strip_margin(r#"
@@ -438,9 +433,6 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |product := fn (a, b) => a * b
                 |product(2, 5)
             "#, '|')],
-        Expression::Pipeline(..) => vec![
-            "'Hello' |> tools::reverse".to_string()
-        ],
         Expression::ForEach { .. } => vec![
             strip_margin(r#"
                 |foreach row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
@@ -490,12 +482,16 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::If { .. } => vec![
             strip_margin(r#"
+                    |// Oxide provides an if-else statement
+                    |
                     |x := 4
                     |if(x > 5) "Yes"
                     |else if(x < 5) "Maybe"
                     |else "No"
                     "#, '|'),
             strip_margin(r#"
+                    |// Oxide also provides iff - a ternary-operator-like if function
+                    |
                     |fact := fn(n) => iff(n <= 1, 1, n * fact(n - 1))
                     |fact(6)
                     "#, '|'),
@@ -519,26 +515,17 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |   n: 100 ~> "Accepted",
                 |   n: 101..104 ~> 'Escalated',
                 |   n: n > 0 && n < 100 ~> "Pending",
-                |   _ ~> "Rejected"
+                |   n ~> "Rejected: code {n}"
                 |]
             "#, '|')
         ],
         Expression::Minus(..) => vec![
             "188 - 36".into(),
-            strip_margin(r#"
-                |a := (3, 5, 7)
-                |b := (1, 0, 1)
-                |a - b
-            "#, '|')
         ],
         Expression::Module(..) => vec![],
         Expression::Modulo(..) => vec![],
         Expression::Multiply(..) => vec![
-            strip_margin(r#"
-                |a := (3, 5, 7)
-                |b := (1, 0, 1)
-                |a * b
-            "#, '|')
+            "5 * 6".into()
         ],
         Expression::Neg(..) => vec![
             strip_margin(r#"
@@ -551,15 +538,16 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::Ns(..) => vec![],
         Expression::Parameters(..) => vec![],
+        Expression::Pipeline(..) => vec![
+            "'Hello' |> tools::reverse".to_string()
+        ],
         Expression::Plus(..) => vec![
-            strip_margin(r#"
-                |a := (2, 4, 6)
-                |b := (1, 2, 3)
-                |a + b
-            "#, '|'),
+            "5 + 6".into()
         ],
         Expression::PlusPlus(..) => vec![],
-        Expression::Pow(..) => vec![],
+        Expression::Pow(..) => vec![
+            "2 ** 3".into()
+        ],
         Expression::Range(..) => vec![
             strip_margin(r#"
                 |range := 1..5
@@ -575,16 +563,54 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |a + b + c
             "#, '|'),
             strip_margin(r#"
-                |(a, b, c) := (3, 5, 7)
-                |a + b + c
-            "#, '|'),
-            strip_margin(r#"
                 |[a, b, c] := [3, 5, 7]
                 |a + b + c
             "#, '|')
         ],
         Expression::StructureExpression(..) => vec![],
-        Expression::TupleExpression(..) => vec![],
+        Expression::TupleExpression(..) => vec![
+            strip_margin(r#"
+                |// Tuples may be use to assign multiple variables
+                |
+                |(a, b, c) := (3, 5, 7)
+                |a + b + c
+            "#, '|'),
+            strip_margin(r#"
+                |// Tuples support addition
+                |
+                |a := (2, 4, 6)
+                |b := (1, 2, 3)
+                |a + b
+            "#, '|'),
+            strip_margin(r#"
+                |// Tuples support subtraction
+                |
+                |a := (3, 5, 7)
+                |b := (1, 0, 1)
+                |a - b
+            "#, '|'),
+            strip_margin(r#"
+                |// Tuples support multiplication
+                |
+                |a := (3, 5, 7)
+                |b := (1, 0, 1)
+                |a * b
+            "#, '|'),
+            strip_margin(r#"
+                |// Tuples support division
+                |
+                |a := (3.0, 5.0, 9.0)
+                |b := (1.0, 2.0, 1.0)
+                |a / b
+                "#, '|'),
+            strip_margin(r#"
+                |// Tuples support exponents
+                |
+                |a := (2, 4, 6)
+                |b := (1, 2, 3)
+                |a ** b
+            "#, '|'),
+        ],
         Expression::TypeDef(..) => vec![
             strip_margin(r#"
                 |LabelString := typedef(String(80))
@@ -650,7 +676,7 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Iteration", ForEach { item: null.clone(), items: null.clone(), op: null.clone() }),
         ("Query", From(null.clone())),
         ("HTTP", HTTP(HttpMethodCalls::GET(null.clone()))),
-        ("if / iff", If { condition: null.clone(), a: null.clone(), b: None }),
+        ("IF expression", If { condition: null.clone(), a: null.clone(), b: None }),
         ("Imports", Import(vec![])),
         ("Includes", Include(null.clone())),
         ("Mathematics: subtraction", Minus(null.clone(), null.clone())),
@@ -661,6 +687,7 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Ranges", Range(null.clone(), null.clone())),
         ("Assignment", SetVariables(null.clone(), null.clone())),
         ("Structures", StructureExpression(vec![])),
+        ("Tuples", TupleExpression(vec![])),
         ("Type Definitions", TypeDef(null.clone())),
         ("Via Clause", Via(null.clone())),
     ];

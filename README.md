@@ -161,13 +161,6 @@ a + b + c</pre>
 15
 </pre>
 <h5>example²</h5>
-<pre>(a, b, c) := (3, 5, 7)
-a + b + c</pre>
-<h5>results</h5>
-<pre>
-15
-</pre>
-<h5>example³</h5>
 <pre>[a, b, c] := [3, 5, 7]
 a + b + c</pre>
 <h5>results</h5>
@@ -310,7 +303,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-46
+60
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -322,7 +315,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 17:12:56 GMT"}
+{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 17:42:58 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -367,6 +360,28 @@ true
 {}
 </pre>
 <hr>
+<h4>▶️ IF expression</h4>
+<h5>example¹</h5>
+<pre>// Oxide provides an if-else statement
+
+x := 4
+if(x > 5) "Yes"
+else if(x < 5) "Maybe"
+else "No"</pre>
+<h5>results</h5>
+<pre>
+"Maybe"
+</pre>
+<h5>example²</h5>
+<pre>// Oxide also provides iff - a ternary-operator-like if function
+
+fact := fn(n) => iff(n <= 1, 1, n * fact(n - 1))
+fact(6)</pre>
+<h5>results</h5>
+<pre>
+720
+</pre>
+<hr>
 <h4>▶️ Implicit Method Call</h4>
 <h5>example¹</h5>
 <pre>import durations
@@ -408,12 +423,10 @@ true
 <hr>
 <h4>▶️ Mathematics: addition</h4>
 <h5>example¹</h5>
-<pre>a := (2, 4, 6)
-b := (1, 2, 3)
-a + b</pre>
+<pre>5 + 6</pre>
 <h5>results</h5>
 <pre>
-(3, 6, 9)
+11
 </pre>
 <hr>
 <h4>▶️ Mathematics: division</h4>
@@ -423,23 +436,13 @@ a + b</pre>
 <pre>
 6.666666666666667
 </pre>
-<h5>example²</h5>
-<pre>a := (3.0, 5.0, 9.0)
-b := (1.0, 2.0, 1.0)
-a / b</pre>
-<h5>results</h5>
-<pre>
-(3, 2.5, 9)
-</pre>
 <hr>
 <h4>▶️ Mathematics: multiplication</h4>
 <h5>example¹</h5>
-<pre>a := (3, 5, 7)
-b := (1, 0, 1)
-a * b</pre>
+<pre>5 * 6</pre>
 <h5>results</h5>
 <pre>
-(3, 0, 7)
+30
 </pre>
 <hr>
 <h4>▶️ Mathematics: subtraction</h4>
@@ -448,14 +451,6 @@ a * b</pre>
 <h5>results</h5>
 <pre>
 152
-</pre>
-<h5>example²</h5>
-<pre>a := (3, 5, 7)
-b := (1, 0, 1)
-a - b</pre>
-<h5>results</h5>
-<pre>
-(2, 5, 6)
 </pre>
 <hr>
 <h4>▶️ Method Call</h4>
@@ -567,6 +562,67 @@ Feature "Matches function" {
 |--------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
+<h4>▶️ Tuples</h4>
+<h5>example¹</h5>
+<pre>// Tuples may be use to assign multiple variables
+
+(a, b, c) := (3, 5, 7)
+a + b + c</pre>
+<h5>results</h5>
+<pre>
+15
+</pre>
+<h5>example²</h5>
+<pre>// Tuples support addition
+
+a := (2, 4, 6)
+b := (1, 2, 3)
+a + b</pre>
+<h5>results</h5>
+<pre>
+(3, 6, 9)
+</pre>
+<h5>example³</h5>
+<pre>// Tuples support subtraction
+
+a := (3, 5, 7)
+b := (1, 0, 1)
+a - b</pre>
+<h5>results</h5>
+<pre>
+(2, 5, 6)
+</pre>
+<h5>example⁴</h5>
+<pre>// Tuples support multiplication
+
+a := (3, 5, 7)
+b := (1, 0, 1)
+a * b</pre>
+<h5>results</h5>
+<pre>
+(3, 0, 7)
+</pre>
+<h5>example⁵</h5>
+<pre>// Tuples support division
+
+a := (3.0, 5.0, 9.0)
+b := (1.0, 2.0, 1.0)
+a / b</pre>
+<h5>results</h5>
+<pre>
+(3, 2.5, 9)
+</pre>
+<h5>example⁶</h5>
+<pre>// Tuples support exponents
+
+a := (2, 4, 6)
+b := (1, 2, 3)
+a ** b</pre>
+<h5>results</h5>
+<pre>
+(2, 16, 216)
+</pre>
+<hr>
 <h4>▶️ Type Definitions</h4>
 <h5>example¹</h5>
 <pre>LabelString := typedef(String(80))
@@ -602,24 +658,6 @@ from stocks</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
-</pre>
-<hr>
-<h4>▶️ if / iff</h4>
-<h5>example¹</h5>
-<pre>x := 4
-if(x > 5) "Yes"
-else if(x < 5) "Maybe"
-else "No"</pre>
-<h5>results</h5>
-<pre>
-"Maybe"
-</pre>
-<h5>example²</h5>
-<pre>fact := fn(n) => iff(n <= 1, 1, n * fact(n - 1))
-fact(6)</pre>
-<h5>results</h5>
-<pre>
-720
 </pre>
 
 <a name="platform_examples"></a>
@@ -707,7 +745,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T17:12:56.688Z
+2025-05-17T17:42:58.807Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -743,7 +781,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-12
+42
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -761,7 +799,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-56
+58
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -1059,13 +1097,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------------------------------|
-| id | name           | module | signature                     | description                                   | returns |
-|------------------------------------------------------------------------------------------------------------------------|
-| 0  | stdout         | io     | io::stdout(s: String)         | Writes a string to STDOUT                     | String  |
-| 1  | stderr         | io     | io::stderr(s: String)         | Writes a string to STDERR                     | String  |
-| 2  | read_text_file | io     | io::read_text_file(s: String) | Reads the contents of a text file into memory | Array   |
-|------------------------------------------------------------------------------------------------------------------------|
+|---------------------------------------------------------------------------------------------------|
+| id | name    | module | signature        | description                                  | returns |
+|---------------------------------------------------------------------------------------------------|
+| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
+| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
+| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
+|---------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1111,7 +1149,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-0f9a3911-5d94-4561-9843-decd976f4ae8
+7b7ef92a-e8ba-4f72-8bc0-8a3e803ed964
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1427,9 +1465,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T17:12:57.162Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T17:12:57.163Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T17:12:57.164Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T17:42:59.286Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T17:42:59.287Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T17:42:59.288Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>
