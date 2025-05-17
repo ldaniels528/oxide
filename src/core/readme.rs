@@ -171,9 +171,9 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
         writeln!(file, "<h4>🔣 {}</h4>", name)?;
 
         // write the example bodies
-        for example in examples {
+        for (n, example) in examples.iter().enumerate() {
             let example_body = format!("<pre>{}</pre>", example.trim());
-            writeln!(file, "<h5>Example</h5>")?;
+            writeln!(file, "<h5>Example {}</h5>", superscript(n + 1))?;
             writeln!(file, "{}", example_body)?;
 
             // write the results body
@@ -198,7 +198,7 @@ fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
     writeln!(file, "{header}")?;
 
     for op in PLATFORM_OPCODES {
-        for example in op.get_examples() {
+        for (n, example) in op.get_examples().iter().enumerate() {
             if !example.is_empty() {
                 println!("[+] {}::{}", op.get_package_name(), op.get_name());
 
@@ -209,7 +209,7 @@ fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
                          op.get_package_name(), op.get_name(), op.get_description())?;
 
                 // write the example body
-                writeln!(file, "<h5>Example</h5>")?;
+                writeln!(file, "<h5>Example {}</h5>", n + 1)?;
                 let example_body = format!("<pre>{}</pre>", example.trim());
                 writeln!(file, "{}", example_body)?;
 
@@ -234,8 +234,8 @@ fn generate_language_results(example: &str) -> std::io::Result<Vec<String>> {
     }
 }
 
-fn generate_example_results(example: String) -> std::io::Result<Vec<String>> {
-    match Interpreter::new().evaluate(example.as_str())? {
+fn generate_example_results(example: &str) -> std::io::Result<Vec<String>> {
+    match Interpreter::new().evaluate(example)? {
         NamespaceValue(ns) => {
             let df = ns.load_table()?;
             Ok(TableRenderer::from_dataframe(&df))
@@ -683,6 +683,26 @@ fn print_text_block(mut file: File, lines: Vec<String>) -> std::io::Result<File>
     }
     writeln!(file, "</pre>")?;
     Ok(file)
+}
+
+fn superscript(nth: usize) -> String {
+    match nth {
+        0 => "⁰".into(),
+        1 => "¹".into(),
+        2 => "²".into(),
+        3 => "³".into(),
+        4 => "⁴".into(),
+        5 => "⁵".into(),
+        6 => "⁶".into(),
+        7 => "⁷".into(),
+        8 => "⁸".into(),
+        9 => "⁹".into(),
+        n => {
+            let a = superscript(n / 10);
+            let b = superscript(n % 10);
+            format!("{}{}", a, b)
+        }
+    }
 }
 
 // Unit tests
