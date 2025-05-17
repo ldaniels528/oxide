@@ -711,6 +711,7 @@ mod tests {
     use super::*;
     use std::fs::OpenOptions;
 
+    #[ignore]
     #[test]
     fn test_language_examples() {
         let mut file = OpenOptions::new()
@@ -721,6 +722,7 @@ mod tests {
         file.flush().unwrap();
     }
 
+    #[ignore]
     #[test]
     fn test_platform_examples() {
         let mut file = OpenOptions::new()
@@ -731,6 +733,7 @@ mod tests {
         file.flush().unwrap();
     }
 
+    #[ignore]
     #[test]
     fn test_generate_readme() {
         let file = OpenOptions::new()
@@ -744,5 +747,12 @@ mod tests {
                 Err(err.to_string()).unwrap()
             }
         }
+    }
+
+    #[test]
+    fn test_generate_docs() {
+        test_language_examples();
+        test_platform_examples();
+        test_generate_readme();
     }
 }
