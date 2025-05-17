@@ -173,11 +173,11 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
         // write the example bodies
         for (n, example) in examples.iter().enumerate() {
             let example_body = format!("<pre>{}</pre>", example.trim());
-            writeln!(file, "<h5>Example {}</h5>", superscript(n + 1))?;
+            writeln!(file, "<h5>example{}</h5>", superscript(n + 1))?;
             writeln!(file, "{}", example_body)?;
 
             // write the results body
-            writeln!(file, "<h5>Output</h5>")?;
+            writeln!(file, "<h5>results</h5>")?;
             match generate_language_results(example.as_str()) {
                 Ok(out_lines) => file = print_text_block(file, out_lines)?,
                 Err(err) => {
@@ -209,12 +209,12 @@ fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
                          op.get_package_name(), op.get_name(), op.get_description())?;
 
                 // write the example body
-                writeln!(file, "<h5>Example {}</h5>", n + 1)?;
+                writeln!(file, "<h5>example{}</h5>", n + 1)?;
                 let example_body = format!("<pre>{}</pre>", example.trim());
                 writeln!(file, "{}", example_body)?;
 
                 // write the results body
-                writeln!(file, "<h5>Output</h5>")?;
+                writeln!(file, "<h5>results</h5>")?;
                 let out_lines = generate_example_results(example)?;
                 file = print_text_block(file, out_lines)?
             }
