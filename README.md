@@ -94,26 +94,6 @@ The remainder of this document showcases categorized usage examples across Oxide
 
 To improve navigation, consider splitting the examples into separate markdown files or auto-generating docs from code annotations using a tool like `mdBook`, `Docusaurus`, or a custom Rust doc generator.
 
-## Development
-
-#### Build the Oxide REPL and Server
-
-```bash
-cargo build --release
-```
-
-You'll find the executables in `./target/release/`:
-* `oxide_repl` is the Oxide REST client / REPL
-* `oxide_server` is the Oxide REST Server
-
-#### Run the tests
-
-To run the tests (~ 820 tests at the time of writing):
-
-```bash
-cargo test
-```
-    
 <a name="examples"></a>
 #### Core Language Examples
     
@@ -331,7 +311,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-24
+34
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -343,7 +323,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 16:40:39 GMT"}
+{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 16:54:51 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -728,7 +708,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:40:39.986Z
+2025-05-17T16:54:51.748Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -764,7 +744,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-40
+54
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -782,7 +762,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-39
+51
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -1080,13 +1060,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------|
-| id | name       | module | signature                  | description                  | returns |
-|------------------------------------------------------------------------------------------------|
-| 0  | url_encode | www    | www::url_encode(s: String) | Encodes a URL string         | String  |
-| 1  | url_decode | www    | www::url_decode(s: String) | Decodes a URL-encoded string | String  |
-| 2  | serve      | www    | www::serve(n: u32)         | Starts a local HTTP service  | Boolean |
-|------------------------------------------------------------------------------------------------|
+|----------------------------------------------------------------------------|
+| id | name   | module | signature       | description             | returns |
+|----------------------------------------------------------------------------|
+| 0  | to_u8  | util   | util::to_u8(a)  | Converts a value to u8  | u8      |
+| 1  | to_u64 | util   | util::to_u64(a) | Converts a value to u64 | u64     |
+| 2  | to_u32 | util   | util::to_u32(a) | Converts a value to u32 | u32     |
+|----------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1132,7 +1112,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-a0733df5-3cd4-4d80-b8b8-30f62afe25eb
+9502e864-d538-4244-a959-f1dfbe5b0407
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1448,9 +1428,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:40:40.455Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:40:40.456Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:40:40.457Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:54:52.225Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:54:52.226Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:54:52.227Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>
@@ -1813,25 +1793,3 @@ GET http://localhost:8822/examples/www/quotes/1/4</pre>
 <pre>
 [{"exchange":"NYSE","last_sale":56.88,"symbol":"BOX"}, {"exchange":"NASDAQ","last_sale":32.12,"symbol":"JET"}, {"exchange":"AMEX","last_sale":12.49,"symbol":"ABC"}]
 </pre>
-
-<a name="rpc"></a>
-#### Remote Procedure Calls
-
-Remote Procedure Call (RPC) is a feature that allows Oxide to evaluate expressions across
-remote peers.
-
-```bash
-curl -X POST \
-     -H "Content-Type: application/json" \
-     -d '{
-          "code": "5 + 5"
-         }' \
-     http://0.0.0.0:8080/rpc
-```
-
-server response:
-
-```json
-10.0
-```
-    

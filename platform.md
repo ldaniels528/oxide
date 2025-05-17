@@ -1,9 +1,5 @@
 📦 Platform Examples
 ========================================
-
-<a name="platform_examples"></a>
-#### Platform Examples
-    
 <hr>
 <h4>📦 arrays::filter &#8212; Filters an array based on a function</h4>
 <h5>example1</h5>
@@ -86,7 +82,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:40:38.587Z
+2025-05-17T16:54:50.336Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -122,7 +118,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-40
+54
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -140,7 +136,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-38
+50
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -438,13 +434,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------------------------------------------------------|
-| id | name        | module | signature         | description                                     | returns                                      |
-|------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
-| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String                                       |
-| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Boolean                                      |
-|------------------------------------------------------------------------------------------------------------------------------------------------|
+|---------------------------------------------------------------------------------------------------|
+| id | name    | module | signature        | description                                  | returns |
+|---------------------------------------------------------------------------------------------------|
+| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
+| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
+| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
+|---------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -490,7 +486,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-28d3de8f-2474-4fa0-acb7-9ee4314355f7
+fcc18b01-1b3a-45e3-aa11-26254094368b
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -806,9 +802,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:40:39.061Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:40:39.061Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:40:39.062Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:54:50.815Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:54:50.816Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:54:50.817Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

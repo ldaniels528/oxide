@@ -21,22 +21,32 @@ use std::io::Write;
 
 fn generate_readme(file: File) -> std::io::Result<File> {
     println!("generate title...");
-    let file = generate_title(file)?;
+    let mut file = generate_title(file)?;
 
-    println!("generate development...");
-    let file = generate_development(file)?;
+    // println!("generate development...");
+    // let file = generate_development(file)?;
 
-    println!("generate run tests...");
-    let file = generate_run_tests(file)?;
+    // println!("generate run tests...");
+    // let mut file = generate_run_tests(file)?;
 
     println!("generate language examples...");
-    let file = generate_language_examples(file)?;
+    let lang_header = strip_margin(r#"
+        |<a name="examples"></a>
+        |#### Core Language Examples
+    "#, '|');
+    writeln!(file, "{lang_header}")?;
+    let mut file = generate_language_examples(file)?;
 
     println!("generate platform examples...");
+    let plat_header = strip_margin(r#"
+        |<a name="platform_examples"></a>
+        |#### Platform Examples
+    "#, '|');
+    writeln!(file, "{plat_header}")?;
     let file = generate_platform_examples(file)?;
 
-    println!("generate rpc...");
-    let file = generate_rpc(file)?;
+    // println!("generate rpc...");
+    // let file = generate_rpc(file)?;
     Ok(file)
 }
 
@@ -158,12 +168,6 @@ You'll find the executables in `./target/release/`:
 }
 
 fn generate_language_examples(mut file: File) -> std::io::Result<File> {
-    let header = strip_margin(r#"
-        |<a name="examples"></a>
-        |#### Core Language Examples
-    "#, '|');
-    writeln!(file, "{header}")?;
-
     for (name, examples) in get_language_examples() {
         // header section
         // ex: "oxide::version - ..."
@@ -191,12 +195,6 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
 }
 
 fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
-    let header = strip_margin(r#"
-        |<a name="platform_examples"></a>
-        |#### Platform Examples
-    "#, '|');
-    writeln!(file, "{header}")?;
-
     for op in PLATFORM_OPCODES {
         for (n, example) in op.get_examples().iter().enumerate() {
             if !example.is_empty() {
