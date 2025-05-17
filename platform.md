@@ -84,7 +84,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:27:57.958Z
+2025-05-17T16:32:03.296Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -120,7 +120,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-27
+32
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -138,7 +138,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-57
+3
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -436,13 +436,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------|
-| id | name       | module | signature                  | description                  | returns |
-|------------------------------------------------------------------------------------------------|
-| 0  | url_encode | www    | www::url_encode(s: String) | Encodes a URL string         | String  |
-| 1  | url_decode | www    | www::url_decode(s: String) | Decodes a URL-encoded string | String  |
-| 2  | serve      | www    | www::serve(n: u32)         | Starts a local HTTP service  | Boolean |
-|------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------|
+| id | name  | module | signature                 | description                                    | returns |
+|------------------------------------------------------------------------------------------------------------|
+| 0  | sqrt  | math   | math::sqrt(n: f64)        | sqrt(x): Returns the square root of x.         | i64     |
+| 1  | round | math   | math::round(n: f64)       | round(x): Rounds x to the nearest integer.     | i64     |
+| 2  | pow   | math   | math::pow(a: f64, b: f64) | pow(x, y): Returns x raised to the power of y. | i64     |
+|------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -488,7 +488,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-fc62fa86-d625-40ed-8241-5e93e760e514
+29749359-df4f-4490-8132-69d39d1d611e
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -804,9 +804,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:27:58.443Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:27:58.444Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:27:58.444Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:32:03.778Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:32:03.779Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:32:03.780Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

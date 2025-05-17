@@ -118,7 +118,7 @@ cargo test
 #### Core Language Examples
     
 <hr>
-<h4>🔣 Aliases</h4>
+<h4>💡 Aliases</h4>
 <h5>example¹</h5>
 <pre>name: 'Tom'</pre>
 <h5>results</h5>
@@ -136,7 +136,7 @@ cargo test
 |-----------|
 </pre>
 <hr>
-<h4>🔣 Arrays</h4>
+<h4>💡 Arrays</h4>
 <h5>example¹</h5>
 <pre>// Arrays can be defined via ranges
 
@@ -162,7 +162,7 @@ arrays::reverse([1, 4, 2, 8, 5, 7])</pre>
 [7, 5, 8, 2, 4, 1]
 </pre>
 <hr>
-<h4>🔣 Arrays: Indexing</h4>
+<h4>💡 Arrays: Indexing</h4>
 <h5>example¹</h5>
 <pre>arr := [1, 4, 2, 8, 5, 7]
 arr[3]</pre>
@@ -171,7 +171,7 @@ arr[3]</pre>
 8
 </pre>
 <hr>
-<h4>🔣 Assignment</h4>
+<h4>💡 Assignment</h4>
 <h5>example¹</h5>
 <pre>a := 3
 b := 5
@@ -196,7 +196,7 @@ a + b + c</pre>
 15
 </pre>
 <hr>
-<h4>🔣 Bitwise And</h4>
+<h4>💡 Bitwise And</h4>
 <h5>example¹</h5>
 <pre>0b1111 & 0b0101</pre>
 <h5>results</h5>
@@ -204,7 +204,7 @@ a + b + c</pre>
 5
 </pre>
 <hr>
-<h4>🔣 Bitwise Or</h4>
+<h4>💡 Bitwise Or</h4>
 <h5>example¹</h5>
 <pre>0b1010 | 0b0101</pre>
 <h5>results</h5>
@@ -212,7 +212,7 @@ a + b + c</pre>
 15
 </pre>
 <hr>
-<h4>🔣 Bitwise Shift-Left</h4>
+<h4>💡 Bitwise Shift-Left</h4>
 <h5>example¹</h5>
 <pre>20 << 3</pre>
 <h5>results</h5>
@@ -220,7 +220,7 @@ a + b + c</pre>
 160
 </pre>
 <hr>
-<h4>🔣 Bitwise Shift-Right</h4>
+<h4>💡 Bitwise Shift-Right</h4>
 <h5>example¹</h5>
 <pre>20 >> 3</pre>
 <h5>results</h5>
@@ -228,7 +228,7 @@ a + b + c</pre>
 2
 </pre>
 <hr>
-<h4>🔣 Bitwise XOR</h4>
+<h4>💡 Bitwise XOR</h4>
 <h5>example¹</h5>
 <pre>0b1111 ^ 0b0101</pre>
 <h5>results</h5>
@@ -236,7 +236,7 @@ a + b + c</pre>
 10
 </pre>
 <hr>
-<h4>🔣 Code Block</h4>
+<h4>💡 Code Block</h4>
 <h5>example¹</h5>
 <pre>result := {
     (a, b, sum) := (0, 1, 0)
@@ -254,7 +254,7 @@ result</pre>
 11
 </pre>
 <hr>
-<h4>🔣 Conditionals</h4>
+<h4>💡 Conditionals</h4>
 <h5>example¹</h5>
 <pre>x := 10
 x between 5 and 10</pre>
@@ -277,7 +277,7 @@ x contains 7</pre>
 7
 </pre>
 <hr>
-<h4>🔣 Curvy-Arrow Left</h4>
+<h4>💡 Curvy-Arrow Left</h4>
 <h5>example¹</h5>
 <pre>stocks := ns("expressions.read_next_row.stocks")
 table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
@@ -291,7 +291,7 @@ last_row</pre>
 {"exchange":"OTC","history":null,"symbol":"GOTO"}
 </pre>
 <hr>
-<h4>🔣 Curvy-Arrow Right</h4>
+<h4>💡 Curvy-Arrow Right</h4>
 <h5>example¹</h5>
 <pre>stocks := ns("expressions.into.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
@@ -306,7 +306,7 @@ rows ~> stocks</pre>
 3
 </pre>
 <hr>
-<h4>🔣 Functions</h4>
+<h4>💡 Functions</h4>
 <h5>example¹</h5>
 <pre>product := fn (a, b) => a * b
 product(2, 5)</pre>
@@ -315,7 +315,7 @@ product(2, 5)</pre>
 10
 </pre>
 <hr>
-<h4>🔣 HTTP</h4>
+<h4>💡 HTTP</h4>
 <h5>example¹</h5>
 <pre>stocks := ns("readme.www.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
@@ -331,7 +331,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-20
+22
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -343,7 +343,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 16:27:58 GMT"}
+{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 16:32:04 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -388,7 +388,7 @@ true
 {}
 </pre>
 <hr>
-<h4>🔣 Implicit Method Call</h4>
+<h4>💡 Implicit Method Call</h4>
 <h5>example¹</h5>
 <pre>import durations
 8:::hours()</pre>
@@ -397,7 +397,7 @@ true
 28800000
 </pre>
 <hr>
-<h4>🔣 Imports</h4>
+<h4>💡 Imports</h4>
 <h5>example¹</h5>
 <pre>import tools
 stocks := to_table([
@@ -417,7 +417,7 @@ stocks</pre>
 |------------------------------------|
 </pre>
 <hr>
-<h4>🔣 Iteration</h4>
+<h4>💡 Iteration</h4>
 <h5>example¹</h5>
 <pre>foreach row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
     oxide::println(row)
@@ -427,7 +427,7 @@ stocks</pre>
 true
 </pre>
 <hr>
-<h4>🔣 Mathematics: addition</h4>
+<h4>💡 Mathematics: addition</h4>
 <h5>example¹</h5>
 <pre>a := (2, 4, 6)
 b := (1, 2, 3)
@@ -437,7 +437,7 @@ a + b</pre>
 (3, 6, 9)
 </pre>
 <hr>
-<h4>🔣 Mathematics: division</h4>
+<h4>💡 Mathematics: division</h4>
 <h5>example¹</h5>
 <pre>20.0 / 3</pre>
 <h5>results</h5>
@@ -453,7 +453,7 @@ a / b</pre>
 (3, 2.5, 9)
 </pre>
 <hr>
-<h4>🔣 Mathematics: multiplication</h4>
+<h4>💡 Mathematics: multiplication</h4>
 <h5>example¹</h5>
 <pre>a := (3, 5, 7)
 b := (1, 0, 1)
@@ -463,7 +463,7 @@ a * b</pre>
 (3, 0, 7)
 </pre>
 <hr>
-<h4>🔣 Mathematics: subtraction</h4>
+<h4>💡 Mathematics: subtraction</h4>
 <h5>example¹</h5>
 <pre>188 - 36</pre>
 <h5>results</h5>
@@ -479,7 +479,7 @@ a - b</pre>
 (2, 5, 6)
 </pre>
 <hr>
-<h4>🔣 Method Call</h4>
+<h4>💡 Method Call</h4>
 <h5>example¹</h5>
 <pre>tools::to_table([
     'apple', 'berry', 'kiwi', 'lime'
@@ -496,7 +496,7 @@ a - b</pre>
 |------------|
 </pre>
 <hr>
-<h4>🔣 Negative</h4>
+<h4>💡 Negative</h4>
 <h5>example¹</h5>
 <pre>i := 75
 j := -i
@@ -506,7 +506,7 @@ j</pre>
 -75
 </pre>
 <hr>
-<h4>🔣 New Instances</h4>
+<h4>💡 New Instances</h4>
 <h5>example¹</h5>
 <pre>new Table(symbol: String(8), exchange: String(8), last_sale: f64)</pre>
 <h5>results</h5>
@@ -517,7 +517,7 @@ j</pre>
 |------------------------------------|
 </pre>
 <hr>
-<h4>🔣 Query</h4>
+<h4>💡 Query</h4>
 <h5>example¹</h5>
 <pre>stocks := tools::to_table([
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -535,7 +535,7 @@ from stocks where last_sale > 20.0</pre>
 |------------------------------------|
 </pre>
 <hr>
-<h4>🔣 Ranges</h4>
+<h4>💡 Ranges</h4>
 <h5>example¹</h5>
 <pre>range := 1..5
 tools::reverse(range)</pre>
@@ -544,7 +544,7 @@ tools::reverse(range)</pre>
 [4, 3, 2, 1]
 </pre>
 <hr>
-<h4>🔣 Testing</h4>
+<h4>💡 Testing</h4>
 <h5>example¹</h5>
 <pre>import testing
 Feature "Matches function" {
@@ -588,7 +588,7 @@ Feature "Matches function" {
 |--------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
-<h4>🔣 Type Definitions</h4>
+<h4>💡 Type Definitions</h4>
 <h5>example¹</h5>
 <pre>LabelString := typedef(String(80))
 LabelString</pre>
@@ -597,7 +597,7 @@ LabelString</pre>
 String(80)
 </pre>
 <hr>
-<h4>🔣 Via Clause</h4>
+<h4>💡 Via Clause</h4>
 <h5>example¹</h5>
 <pre>stocks := ns("readme.via.stocks")
 drop table stocks
@@ -625,7 +625,7 @@ from stocks</pre>
 |------------------------------------|
 </pre>
 <hr>
-<h4>🔣 if / iff</h4>
+<h4>💡 if / iff</h4>
 <h5>example¹</h5>
 <pre>x := 4
 if(x > 5) "Yes"
@@ -728,7 +728,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:27:59.381Z
+2025-05-17T16:32:04.720Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -764,7 +764,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-27
+32
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -782,7 +782,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-59
+4
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -1080,13 +1080,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|-----------------------------------------------------------------------------------------------------------|
-| id | name      | module | signature               | description                                 | returns |
-|-----------------------------------------------------------------------------------------------------------|
-| 0  | year_of   | cal    | cal::year_of(n: Date)   | Returns the year of a Date                  | i32     |
-| 1  | second_of | cal    | cal::second_of(n: Date) | Returns the seconds of the minute of a Date | u32     |
-| 2  | now       | cal    | cal::now()              | Returns the current local date and time     | Date    |
-|-----------------------------------------------------------------------------------------------------------|
+|---------------------------------------------------------------------------------------------------|
+| id | name    | module | signature        | description                                  | returns |
+|---------------------------------------------------------------------------------------------------|
+| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
+| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
+| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
+|---------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1132,7 +1132,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-b701d99f-d684-4eb9-85e2-41007f802f7c
+6e3c41e9-43b4-4c36-8ac4-920359973191
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1448,9 +1448,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:27:59.859Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:27:59.860Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:27:59.860Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:32:05.198Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:32:05.199Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:32:05.199Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

@@ -168,7 +168,7 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
         // header section
         // ex: "oxide::version - ..."
         writeln!(file, "<hr>")?;
-        writeln!(file, "<h4>🔣 {}</h4>", name)?;
+        writeln!(file, "<h4>💡 {}</h4>", name)?;
 
         // write the example bodies
         for (n, example) in examples.iter().enumerate() {
