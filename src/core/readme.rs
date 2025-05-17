@@ -129,7 +129,7 @@ cargo test
 
 ---
 
-## 📦 Core Modules & Platform Examples
+## 📦 Core Modules & Platform
 
 The remainder of this document showcases categorized usage examples across Oxide's standard modules including:
 
@@ -718,6 +718,8 @@ mod tests {
             .truncate(true).create(true).read(true).write(true)
             .open("../../language.md")
             .unwrap();
+        writeln!(file, "💡 Core Language Examples").unwrap();
+        writeln!(file, "========================================").unwrap();
         file = generate_language_examples(file).unwrap();
         file.flush().unwrap();
     }
@@ -729,6 +731,8 @@ mod tests {
             .truncate(true).create(true).read(true).write(true)
             .open("../../platform.md")
             .unwrap();
+        writeln!(file, "📦 Platform Examples").unwrap();
+        writeln!(file, "========================================").unwrap();
         file = generate_platform_examples(file).unwrap();
         file.flush().unwrap();
     }

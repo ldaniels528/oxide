@@ -86,7 +86,7 @@ cargo test
 
 ---
 
-## 📦 Core Modules & Platform Examples
+## 📦 Core Modules & Platform
 
 The remainder of this document showcases categorized usage examples across Oxide's standard modules including:
 
@@ -331,7 +331,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-22
+24
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -343,7 +343,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 16:32:04 GMT"}
+{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 16:40:39 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -728,7 +728,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:32:04.720Z
+2025-05-17T16:40:39.986Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -764,7 +764,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-32
+40
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -782,7 +782,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-4
+39
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -1080,13 +1080,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|---------------------------------------------------------------------------------------------------|
-| id | name    | module | signature        | description                                  | returns |
-|---------------------------------------------------------------------------------------------------|
-| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
-| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
-| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
-|---------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------|
+| id | name       | module | signature                  | description                  | returns |
+|------------------------------------------------------------------------------------------------|
+| 0  | url_encode | www    | www::url_encode(s: String) | Encodes a URL string         | String  |
+| 1  | url_decode | www    | www::url_decode(s: String) | Decodes a URL-encoded string | String  |
+| 2  | serve      | www    | www::serve(n: u32)         | Starts a local HTTP service  | Boolean |
+|------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1132,7 +1132,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-6e3c41e9-43b4-4c36-8ac4-920359973191
+a0733df5-3cd4-4d80-b8b8-30f62afe25eb
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1448,9 +1448,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:32:05.198Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:32:05.199Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:32:05.199Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:40:40.455Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:40:40.456Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:40:40.457Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>
