@@ -94,10 +94,10 @@ The remainder of this document showcases categorized usage examples across Oxide
 To improve navigation, consider splitting the examples into separate markdown files or auto-generating docs from code annotations using a tool like `mdBook`, `Docusaurus`, or a custom Rust doc generator.
 
 <a name="examples"></a>
-#### Core Language Examples
+### 📖 Core Language Examples
     
 <hr>
-<h4>💡 Aliases</h4>
+<h4>▶️ Aliases</h4>
 <h5>example¹</h5>
 <pre>name: 'Tom'</pre>
 <h5>results</h5>
@@ -115,7 +115,7 @@ To improve navigation, consider splitting the examples into separate markdown fi
 |-----------|
 </pre>
 <hr>
-<h4>💡 Arrays</h4>
+<h4>▶️ Arrays</h4>
 <h5>example¹</h5>
 <pre>// Arrays can be defined via ranges
 
@@ -141,7 +141,7 @@ arrays::reverse([1, 4, 2, 8, 5, 7])</pre>
 [7, 5, 8, 2, 4, 1]
 </pre>
 <hr>
-<h4>💡 Arrays: Indexing</h4>
+<h4>▶️ Arrays: Indexing</h4>
 <h5>example¹</h5>
 <pre>arr := [1, 4, 2, 8, 5, 7]
 arr[3]</pre>
@@ -150,7 +150,7 @@ arr[3]</pre>
 8
 </pre>
 <hr>
-<h4>💡 Assignment</h4>
+<h4>▶️ Assignment</h4>
 <h5>example¹</h5>
 <pre>a := 3
 b := 5
@@ -175,7 +175,7 @@ a + b + c</pre>
 15
 </pre>
 <hr>
-<h4>💡 Bitwise And</h4>
+<h4>▶️ Bitwise And</h4>
 <h5>example¹</h5>
 <pre>0b1111 & 0b0101</pre>
 <h5>results</h5>
@@ -183,7 +183,7 @@ a + b + c</pre>
 5
 </pre>
 <hr>
-<h4>💡 Bitwise Or</h4>
+<h4>▶️ Bitwise Or</h4>
 <h5>example¹</h5>
 <pre>0b1010 | 0b0101</pre>
 <h5>results</h5>
@@ -191,7 +191,7 @@ a + b + c</pre>
 15
 </pre>
 <hr>
-<h4>💡 Bitwise Shift-Left</h4>
+<h4>▶️ Bitwise Shift-Left</h4>
 <h5>example¹</h5>
 <pre>20 << 3</pre>
 <h5>results</h5>
@@ -199,7 +199,7 @@ a + b + c</pre>
 160
 </pre>
 <hr>
-<h4>💡 Bitwise Shift-Right</h4>
+<h4>▶️ Bitwise Shift-Right</h4>
 <h5>example¹</h5>
 <pre>20 >> 3</pre>
 <h5>results</h5>
@@ -207,7 +207,7 @@ a + b + c</pre>
 2
 </pre>
 <hr>
-<h4>💡 Bitwise XOR</h4>
+<h4>▶️ Bitwise XOR</h4>
 <h5>example¹</h5>
 <pre>0b1111 ^ 0b0101</pre>
 <h5>results</h5>
@@ -215,7 +215,7 @@ a + b + c</pre>
 10
 </pre>
 <hr>
-<h4>💡 Code Block</h4>
+<h4>▶️ Code Block</h4>
 <h5>example¹</h5>
 <pre>result := {
     (a, b, sum) := (0, 1, 0)
@@ -233,7 +233,7 @@ result</pre>
 11
 </pre>
 <hr>
-<h4>💡 Conditionals</h4>
+<h4>▶️ Conditionals</h4>
 <h5>example¹</h5>
 <pre>x := 10
 x between 5 and 10</pre>
@@ -256,7 +256,7 @@ x contains 7</pre>
 7
 </pre>
 <hr>
-<h4>💡 Curvy-Arrow Left</h4>
+<h4>▶️ Curvy-Arrow Left</h4>
 <h5>example¹</h5>
 <pre>stocks := ns("expressions.read_next_row.stocks")
 table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
@@ -270,7 +270,7 @@ last_row</pre>
 {"exchange":"OTC","history":null,"symbol":"GOTO"}
 </pre>
 <hr>
-<h4>💡 Curvy-Arrow Right</h4>
+<h4>▶️ Curvy-Arrow Right</h4>
 <h5>example¹</h5>
 <pre>stocks := ns("expressions.into.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
@@ -285,7 +285,7 @@ rows ~> stocks</pre>
 3
 </pre>
 <hr>
-<h4>💡 Functions</h4>
+<h4>▶️ Functions</h4>
 <h5>example¹</h5>
 <pre>product := fn (a, b) => a * b
 product(2, 5)</pre>
@@ -294,7 +294,7 @@ product(2, 5)</pre>
 10
 </pre>
 <hr>
-<h4>💡 HTTP</h4>
+<h4>▶️ HTTP</h4>
 <h5>example¹</h5>
 <pre>stocks := ns("readme.www.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
@@ -310,7 +310,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-36
+46
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -322,7 +322,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 16:59:20 GMT"}
+{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 17:12:56 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -367,7 +367,7 @@ true
 {}
 </pre>
 <hr>
-<h4>💡 Implicit Method Call</h4>
+<h4>▶️ Implicit Method Call</h4>
 <h5>example¹</h5>
 <pre>import durations
 8:::hours()</pre>
@@ -376,7 +376,7 @@ true
 28800000
 </pre>
 <hr>
-<h4>💡 Imports</h4>
+<h4>▶️ Imports</h4>
 <h5>example¹</h5>
 <pre>import tools
 stocks := to_table([
@@ -396,7 +396,7 @@ stocks</pre>
 |------------------------------------|
 </pre>
 <hr>
-<h4>💡 Iteration</h4>
+<h4>▶️ Iteration</h4>
 <h5>example¹</h5>
 <pre>foreach row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
     oxide::println(row)
@@ -406,7 +406,7 @@ stocks</pre>
 true
 </pre>
 <hr>
-<h4>💡 Mathematics: addition</h4>
+<h4>▶️ Mathematics: addition</h4>
 <h5>example¹</h5>
 <pre>a := (2, 4, 6)
 b := (1, 2, 3)
@@ -416,7 +416,7 @@ a + b</pre>
 (3, 6, 9)
 </pre>
 <hr>
-<h4>💡 Mathematics: division</h4>
+<h4>▶️ Mathematics: division</h4>
 <h5>example¹</h5>
 <pre>20.0 / 3</pre>
 <h5>results</h5>
@@ -432,7 +432,7 @@ a / b</pre>
 (3, 2.5, 9)
 </pre>
 <hr>
-<h4>💡 Mathematics: multiplication</h4>
+<h4>▶️ Mathematics: multiplication</h4>
 <h5>example¹</h5>
 <pre>a := (3, 5, 7)
 b := (1, 0, 1)
@@ -442,7 +442,7 @@ a * b</pre>
 (3, 0, 7)
 </pre>
 <hr>
-<h4>💡 Mathematics: subtraction</h4>
+<h4>▶️ Mathematics: subtraction</h4>
 <h5>example¹</h5>
 <pre>188 - 36</pre>
 <h5>results</h5>
@@ -458,7 +458,7 @@ a - b</pre>
 (2, 5, 6)
 </pre>
 <hr>
-<h4>💡 Method Call</h4>
+<h4>▶️ Method Call</h4>
 <h5>example¹</h5>
 <pre>tools::to_table([
     'apple', 'berry', 'kiwi', 'lime'
@@ -475,7 +475,7 @@ a - b</pre>
 |------------|
 </pre>
 <hr>
-<h4>💡 Negative</h4>
+<h4>▶️ Negative</h4>
 <h5>example¹</h5>
 <pre>i := 75
 j := -i
@@ -485,7 +485,7 @@ j</pre>
 -75
 </pre>
 <hr>
-<h4>💡 New Instances</h4>
+<h4>▶️ New Instances</h4>
 <h5>example¹</h5>
 <pre>new Table(symbol: String(8), exchange: String(8), last_sale: f64)</pre>
 <h5>results</h5>
@@ -496,7 +496,7 @@ j</pre>
 |------------------------------------|
 </pre>
 <hr>
-<h4>💡 Query</h4>
+<h4>▶️ Query</h4>
 <h5>example¹</h5>
 <pre>stocks := tools::to_table([
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -514,7 +514,7 @@ from stocks where last_sale > 20.0</pre>
 |------------------------------------|
 </pre>
 <hr>
-<h4>💡 Ranges</h4>
+<h4>▶️ Ranges</h4>
 <h5>example¹</h5>
 <pre>range := 1..5
 tools::reverse(range)</pre>
@@ -523,7 +523,7 @@ tools::reverse(range)</pre>
 [4, 3, 2, 1]
 </pre>
 <hr>
-<h4>💡 Testing</h4>
+<h4>▶️ Testing</h4>
 <h5>example¹</h5>
 <pre>import testing
 Feature "Matches function" {
@@ -567,7 +567,7 @@ Feature "Matches function" {
 |--------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
-<h4>💡 Type Definitions</h4>
+<h4>▶️ Type Definitions</h4>
 <h5>example¹</h5>
 <pre>LabelString := typedef(String(80))
 LabelString</pre>
@@ -576,7 +576,7 @@ LabelString</pre>
 String(80)
 </pre>
 <hr>
-<h4>💡 Via Clause</h4>
+<h4>▶️ Via Clause</h4>
 <h5>example¹</h5>
 <pre>stocks := ns("readme.via.stocks")
 drop table stocks
@@ -604,7 +604,7 @@ from stocks</pre>
 |------------------------------------|
 </pre>
 <hr>
-<h4>💡 if / iff</h4>
+<h4>▶️ if / iff</h4>
 <h5>example¹</h5>
 <pre>x := 4
 if(x > 5) "Yes"
@@ -623,7 +623,7 @@ fact(6)</pre>
 </pre>
 
 <a name="platform_examples"></a>
-#### Platform Examples
+### 📦 Platform Examples
     
 <hr>
 <h4>📦 arrays::filter &#8212; Filters an array based on a function</h4>
@@ -707,7 +707,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:59:21.642Z
+2025-05-17T17:12:56.688Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -725,7 +725,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-9
+10
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -734,7 +734,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-9
+10
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -743,7 +743,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-59
+12
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -761,7 +761,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-21
+56
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -1059,13 +1059,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|-----------------------------------------------------------------------------------------------------------|
-| id | name      | module | signature               | description                                 | returns |
-|-----------------------------------------------------------------------------------------------------------|
-| 0  | year_of   | cal    | cal::year_of(n: Date)   | Returns the year of a Date                  | i32     |
-| 1  | second_of | cal    | cal::second_of(n: Date) | Returns the seconds of the minute of a Date | u32     |
-| 2  | now       | cal    | cal::now()              | Returns the current local date and time     | Date    |
-|-----------------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------|
+| id | name           | module | signature                     | description                                   | returns |
+|------------------------------------------------------------------------------------------------------------------------|
+| 0  | stdout         | io     | io::stdout(s: String)         | Writes a string to STDOUT                     | String  |
+| 1  | stderr         | io     | io::stderr(s: String)         | Writes a string to STDERR                     | String  |
+| 2  | read_text_file | io     | io::read_text_file(s: String) | Reads the contents of a text file into memory | Array   |
+|------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1111,7 +1111,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-99d76ddd-66e1-4c79-bd17-2fa3c588bf92
+0f9a3911-5d94-4561-9843-decd976f4ae8
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1427,9 +1427,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:59:22.119Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:59:22.120Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:59:22.121Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T17:12:57.162Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T17:12:57.163Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T17:12:57.164Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

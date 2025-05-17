@@ -82,7 +82,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:59:20.205Z
+2025-05-17T17:12:55.274Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -100,7 +100,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-9
+10
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -109,7 +109,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-9
+10
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -118,7 +118,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-59
+12
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -136,7 +136,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-20
+55
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -434,13 +434,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------------------------------------------------------|
-| id | name        | module | signature         | description                                     | returns                                      |
-|------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
-| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String                                       |
-| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Boolean                                      |
-|------------------------------------------------------------------------------------------------------------------------------------------------|
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name    | module  | signature                              | description                 | returns                                                                    |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | type_of | testing | testing::type_of(a)                    | Returns the type of a value | String                                                                     |
+| 1  | matches | testing | testing::matches(a, b)                 | Compares two values         | Boolean                                                                    |
+| 2  | feature | testing | testing::feature(a: String, b: Struct) | Creates a new test feature  | Table(level: u16, item: String(256), passed: Boolean, result: String(256)) |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -486,7 +486,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-6eba6817-0a07-43c1-a139-229949982848
+7bcec133-0e0c-47f5-b072-4eb8d09baa1f
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -802,9 +802,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:59:20.698Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:59:20.699Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:59:20.700Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T17:12:55.754Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T17:12:55.755Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T17:12:55.756Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

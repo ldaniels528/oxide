@@ -32,7 +32,7 @@ fn generate_readme(file: File) -> std::io::Result<File> {
     println!("generate language examples...");
     let lang_header = strip_margin(r#"
         |<a name="examples"></a>
-        |#### Core Language Examples
+        |### 📖 Core Language Examples
     "#, '|');
     writeln!(file, "{lang_header}")?;
     let mut file = generate_language_examples(file)?;
@@ -40,7 +40,7 @@ fn generate_readme(file: File) -> std::io::Result<File> {
     println!("generate platform examples...");
     let plat_header = strip_margin(r#"
         |<a name="platform_examples"></a>
-        |#### Platform Examples
+        |### 📦 Platform Examples
     "#, '|');
     writeln!(file, "{plat_header}")?;
     let file = generate_platform_examples(file)?;
@@ -171,7 +171,7 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
         // header section
         // ex: "oxide::version - ..."
         writeln!(file, "<hr>")?;
-        writeln!(file, "<h4>💡 {}</h4>", name)?;
+        writeln!(file, "<h4>▶️ {}</h4>", name)?;
 
         // write the example bodies
         for (n, example) in examples.iter().enumerate() {
@@ -715,7 +715,7 @@ mod tests {
             .truncate(true).create(true).read(true).write(true)
             .open("../../language.md")
             .unwrap();
-        writeln!(file, "💡 Core Language Examples").unwrap();
+        writeln!(file, "📖 Core Language Examples").unwrap();
         writeln!(file, "========================================").unwrap();
         file = generate_language_examples(file).unwrap();
         file.flush().unwrap();
