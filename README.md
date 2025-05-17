@@ -303,7 +303,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-60
+64
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -315,7 +315,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 17:42:58 GMT"}
+{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 17:54:24 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -564,7 +564,7 @@ Feature "Matches function" {
 <hr>
 <h4>▶️ Tuples</h4>
 <h5>example¹</h5>
-<pre>// Tuples may be use to assign multiple variables
+<pre>// Tuples may be used to assign multiple variables
 
 (a, b, c) := (3, 5, 7)
 a + b + c</pre>
@@ -593,6 +593,14 @@ a - b</pre>
 (2, 5, 6)
 </pre>
 <h5>example⁴</h5>
+<pre>// Tuples support negation
+
+-(3, 6, 9)</pre>
+<h5>results</h5>
+<pre>
+(-3, -6, -9)
+</pre>
+<h5>example⁵</h5>
 <pre>// Tuples support multiplication
 
 a := (3, 5, 7)
@@ -602,7 +610,7 @@ a * b</pre>
 <pre>
 (3, 0, 7)
 </pre>
-<h5>example⁵</h5>
+<h5>example⁶</h5>
 <pre>// Tuples support division
 
 a := (3.0, 5.0, 9.0)
@@ -612,7 +620,17 @@ a / b</pre>
 <pre>
 (3, 2.5, 9)
 </pre>
-<h5>example⁶</h5>
+<h5>example⁷</h5>
+<pre>// Tuples support modulus
+
+a := (3.0, 5.0, 9.0)
+b := (1.0, 2.0, 1.0)
+a % b</pre>
+<h5>results</h5>
+<pre>
+(0.0, 1, 0.0)
+</pre>
+<h5>example⁸</h5>
 <pre>// Tuples support exponents
 
 a := (2, 4, 6)
@@ -745,7 +763,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T17:42:58.807Z
+2025-05-17T17:54:25.068Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -781,7 +799,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-42
+54
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -799,7 +817,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-58
+25
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -1097,13 +1115,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|---------------------------------------------------------------------------------------------------|
-| id | name    | module | signature        | description                                  | returns |
-|---------------------------------------------------------------------------------------------------|
-| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
-| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
-| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
-|---------------------------------------------------------------------------------------------------|
+|----------------------------------------------------------------------------|
+| id | name   | module | signature       | description             | returns |
+|----------------------------------------------------------------------------|
+| 0  | to_u8  | util   | util::to_u8(a)  | Converts a value to u8  | u8      |
+| 1  | to_u64 | util   | util::to_u64(a) | Converts a value to u64 | u64     |
+| 2  | to_u32 | util   | util::to_u32(a) | Converts a value to u32 | u32     |
+|----------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1149,7 +1167,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-7b7ef92a-e8ba-4f72-8bc0-8a3e803ed964
+26436ce9-c017-42fa-951d-bad17b66e313
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1465,9 +1483,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T17:42:59.286Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T17:42:59.287Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T17:42:59.288Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T17:54:25.531Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T17:54:25.532Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T17:54:25.532Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

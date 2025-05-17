@@ -207,7 +207,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-59
+63
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -219,7 +219,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 17:42:56 GMT"}
+{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 17:54:23 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -468,7 +468,7 @@ Feature "Matches function" {
 <hr>
 <h4>▶️ Tuples</h4>
 <h5>example¹</h5>
-<pre>// Tuples may be use to assign multiple variables
+<pre>// Tuples may be used to assign multiple variables
 
 (a, b, c) := (3, 5, 7)
 a + b + c</pre>
@@ -497,6 +497,14 @@ a - b</pre>
 (2, 5, 6)
 </pre>
 <h5>example⁴</h5>
+<pre>// Tuples support negation
+
+-(3, 6, 9)</pre>
+<h5>results</h5>
+<pre>
+(-3, -6, -9)
+</pre>
+<h5>example⁵</h5>
 <pre>// Tuples support multiplication
 
 a := (3, 5, 7)
@@ -506,7 +514,7 @@ a * b</pre>
 <pre>
 (3, 0, 7)
 </pre>
-<h5>example⁵</h5>
+<h5>example⁶</h5>
 <pre>// Tuples support division
 
 a := (3.0, 5.0, 9.0)
@@ -516,7 +524,17 @@ a / b</pre>
 <pre>
 (3, 2.5, 9)
 </pre>
-<h5>example⁶</h5>
+<h5>example⁷</h5>
+<pre>// Tuples support modulus
+
+a := (3.0, 5.0, 9.0)
+b := (1.0, 2.0, 1.0)
+a % b</pre>
+<h5>results</h5>
+<pre>
+(0.0, 1, 0.0)
+</pre>
+<h5>example⁸</h5>
 <pre>// Tuples support exponents
 
 a := (2, 4, 6)

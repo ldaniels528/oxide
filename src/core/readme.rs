@@ -570,7 +570,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::StructureExpression(..) => vec![],
         Expression::TupleExpression(..) => vec![
             strip_margin(r#"
-                |// Tuples may be use to assign multiple variables
+                |// Tuples may be used to assign multiple variables
                 |
                 |(a, b, c) := (3, 5, 7)
                 |a + b + c
@@ -590,6 +590,11 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |a - b
             "#, '|'),
             strip_margin(r#"
+                |// Tuples support negation
+                |
+                |-(3, 6, 9)
+            "#, '|'),
+            strip_margin(r#"
                 |// Tuples support multiplication
                 |
                 |a := (3, 5, 7)
@@ -602,6 +607,13 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |a := (3.0, 5.0, 9.0)
                 |b := (1.0, 2.0, 1.0)
                 |a / b
+                "#, '|'),
+            strip_margin(r#"
+                |// Tuples support modulus
+                |
+                |a := (3.0, 5.0, 9.0)
+                |b := (1.0, 2.0, 1.0)
+                |a % b
                 "#, '|'),
             strip_margin(r#"
                 |// Tuples support exponents

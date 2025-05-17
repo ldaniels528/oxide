@@ -82,7 +82,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T17:42:57.361Z
+2025-05-17T17:54:23.648Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -118,7 +118,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-42
+54
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -136,7 +136,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-57
+23
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -434,13 +434,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|----------------------------------------------------------------------------------------------------|
-| id | name     | module | signature                | description                          | returns |
-|----------------------------------------------------------------------------------------------------|
-| 0  | to_table | tools  | tools::to_table(a)       | Converts an object into a to_table   | Table   |
-| 1  | to_json  | tools  | tools::to_json(t: Table) | Converts a collection to JSON format | Array   |
-| 2  | to_csv   | tools  | tools::to_csv(t: Table)  | Converts a collection to CSV format  | Array   |
-|----------------------------------------------------------------------------------------------------|
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name         | module | signature                                 | description                                                                                | returns |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | to_string    | str    | str::to_string(a)                         | Converts a value to its text-based representation                                          | String  |
+| 1  | substring    | str    | str::substring(s: String, m: i64, n: i64) | Returns a substring of string `s` from `m` to `n`                                          | String  |
+| 2  | strip_margin | str    | str::strip_margin(a: String, b: String)   | Returns the string with all characters on each line are striped up to the margin character | String  |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -486,7 +486,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-d4bbf4f9-da53-4865-b330-ed0d7a2f1107
+825bb987-ed75-4dbf-8506-287ffc18adda
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -802,9 +802,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T17:42:57.846Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T17:42:57.847Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T17:42:57.848Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T17:54:24.116Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T17:54:24.117Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T17:54:24.118Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>
