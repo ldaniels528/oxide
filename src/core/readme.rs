@@ -126,8 +126,7 @@ cargo build --release
 ```
 
 Artifacts will be in `./target/release/`:
-- `oxide_repl` – Oxide REPL + REST client
-- `oxide_server` – Oxide RESTful server
+- `oxide` – Oxide REPL / Server
 
 ### ✅ Run the Tests
 

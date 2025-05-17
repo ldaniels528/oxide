@@ -73,8 +73,7 @@ cargo build --release
 ```
 
 Artifacts will be in `./target/release/`:
-- `oxide_repl` – Oxide REPL + REST client
-- `oxide_server` – Oxide RESTful server
+- `oxide` – Oxide REPL / Server
 
 ### ✅ Run the Tests
 
@@ -311,7 +310,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-34
+36
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -323,7 +322,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 16:54:51 GMT"}
+{content-length: "81", content-type: "application/json", date: "Sat, 17 May 2025 16:59:20 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -708,7 +707,7 @@ from stocks</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:54:51.748Z
+2025-05-17T16:59:21.642Z
 </pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
@@ -744,7 +743,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-54
+59
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -762,7 +761,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-51
+21
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -1060,13 +1059,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|----------------------------------------------------------------------------|
-| id | name   | module | signature       | description             | returns |
-|----------------------------------------------------------------------------|
-| 0  | to_u8  | util   | util::to_u8(a)  | Converts a value to u8  | u8      |
-| 1  | to_u64 | util   | util::to_u64(a) | Converts a value to u64 | u64     |
-| 2  | to_u32 | util   | util::to_u32(a) | Converts a value to u32 | u32     |
-|----------------------------------------------------------------------------|
+|-----------------------------------------------------------------------------------------------------------|
+| id | name      | module | signature               | description                                 | returns |
+|-----------------------------------------------------------------------------------------------------------|
+| 0  | year_of   | cal    | cal::year_of(n: Date)   | Returns the year of a Date                  | i32     |
+| 1  | second_of | cal    | cal::second_of(n: Date) | Returns the seconds of the minute of a Date | u32     |
+| 2  | now       | cal    | cal::now()              | Returns the current local date and time     | Date    |
+|-----------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1112,7 +1111,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-9502e864-d538-4244-a959-f1dfbe5b0407
+99d76ddd-66e1-4c79-bd17-2fa3c588bf92
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1428,9 +1427,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:54:52.225Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:54:52.226Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:54:52.227Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-17T16:59:22.119Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-17T16:59:22.120Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-17T16:59:22.121Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>
