@@ -3,6 +3,7 @@
 // Oxide Terminal module
 ////////////////////////////////////////////////////////////////////
 
+use crate::compiler::Compiler;
 use crate::file_row_collection::FileRowCollection;
 use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
 use crate::platform::PlatformOps;
@@ -13,12 +14,12 @@ use crate::structures::Row;
 use crate::structures::Structure;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use crate::utils::compute_time_millis;
 use crate::websockets::OxideWebSocketClient;
 use chrono::Local;
 use crossterm::terminal;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use shared_lib::compute_time_millis;
 use std::io::{stdout, Read, Write};
 
 /// Terminal application state
@@ -97,9 +98,11 @@ async fn do_terminal_input(
 
     // get and process the input
     let raw_input = read_until_blank(reader())?;
-    let input = raw_input.trim();
-    if input == "q!" { state.die() } else {
-        if !input.is_empty() {
+    match raw_input.trim() {
+        "@compile" => stdout = compile_only(stdout, reader)?,
+        "q!" => state.die(),
+        input if input.is_empty() => {}
+        input => {
             let t0 = Local::now();
             match state.interpreter.evaluate(input).await {
                 Ok(result) => {
@@ -120,6 +123,29 @@ async fn do_terminal_input(
         }
     }
     Ok((stdout, state))
+}
+
+fn compile_only(
+    mut stdout: std::io::Stdout,
+    mut reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>,
+) -> std::io::Result<std::io::Stdout> {
+    let mut is_alive = true;
+    while is_alive {
+        // display the prompt
+        stdout.write(b"compile> ")?;
+        stdout.flush()?;
+
+        // compile or quit
+        match read_until_blank(reader())?.trim() {
+            "q!" => is_alive = false,
+            input => {
+                let model = Compiler::build(input)?;
+                println!("{:?}", model)
+            }
+        }
+    }
+
+    Ok(stdout)
 }
 
 async fn setup_system_variables(mut state: TerminalState, args: Vec<String>) -> TerminalState {

@@ -7,6 +7,7 @@ use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers::*;
 use crate::typed_values::TypedValue;
+use num_traits::real::Real;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -14,7 +15,6 @@ use std::collections::Bound;
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
 use std::ops::*;
-use num_traits::real::Real;
 
 /// Represents a numeric value
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -612,7 +612,7 @@ impl Add for Numbers {
         match (self, rhs) {
             (NaNValue, _) => NaNValue,
             (_, NaNValue) => NaNValue,
-            (DateValue(dt), I64Value(n)) => DateValue(dt + n),
+            (DateValue(dt), n) => DateValue(dt + n.to_i64()),
             (F32Value(a), F32Value(b)) => F32Value(a + b),
             (F64Value(a), F64Value(b)) => F64Value(a + b),
             (I128Value(a), I128Value(b)) => I128Value(a + b),

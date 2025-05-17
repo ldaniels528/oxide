@@ -805,10 +805,11 @@ mod tests {
     use crate::table_renderer::TableRenderer;
     use crate::table_scan::TableScanTypes::ColumnScan;
     use crate::testdata::*;
+    use crate::utils::compute_time_millis;
     use chrono::Local;
     use num_traits::ToPrimitive;
     use rand::{thread_rng, Rng, RngCore};
-    use shared_lib::{cnv_error, compute_time_millis};
+    use shared_lib::cnv_error;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]

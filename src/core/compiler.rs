@@ -7,7 +7,7 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::DynamicType;
 use crate::errors::Errors::{CompilerError, Exact, ExactNear, SyntaxError, TypeMismatch};
-use crate::errors::TypeMismatchErrors::{ParameterExpected, VariableExpected};
+use crate::errors::TypeMismatchErrors::ParameterExpected;
 use crate::errors::{throw, CompileErrors, SyntaxErrors};
 use crate::expression::Conditions::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity};
@@ -22,12 +22,13 @@ use crate::parameter::Parameter;
 use crate::structures::HardStructure;
 use crate::structures::Structures::Hard;
 use crate::token_slice::TokenSlice;
+use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Null, Number, StringValue, Structured};
+use crate::utils::pull_name;
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::Read;
 use std::ops::Deref;
 
 /// Oxide language compiler - converts source code into [Expression]s.
@@ -54,6 +55,7 @@ impl Compiler {
         Ok(expr)
     }
 
+    /// Converts the collection of arguments into [Parameters]
     fn convert_to_parameters(args: &[Expression]) -> std::io::Result<Expression> {
         let mut params = vec![];
         for arg in args.iter() {
@@ -128,6 +130,128 @@ impl Compiler {
             (Some(expr), ts) => Ok((expr, ts))
         }
     }
+
+    ////////////////////////////////////////////////////////////////////
+    // precedence logic
+    ////////////////////////////////////////////////////////////////////
+
+    pub fn compile_with_precedence(
+        &self,
+        token_slice: TokenSlice,
+    ) -> std::io::Result<Expression> {
+        let mut output: Vec<Expression> = Vec::new();
+        let mut operators: Vec<Token> = Vec::new();
+        let mut ts = token_slice;
+        while ts.has_more() {
+            if let (Some(token), ts0) = ts.next() {
+                println!("compile_with_precedence: ts0 '{}'", token);
+                match token {
+                    t if t.contains("(") => operators.push(t.clone()),
+                    t if t.contains(")") =>
+                        while let Some(op) = operators.pop() {
+                            if op.contains("(") {
+                                break;
+                            }
+                            let b = output.pop().unwrap();
+                            let a = output.pop().unwrap();
+                            let result = Self::apply_operator(&op, b, a)?;
+                            output.push(result);
+                        }
+                    t if t.is_operator() => {
+                        while let Some(top_op) = operators.last() {
+                            if Self::get_precedence(top_op) >= Self::get_precedence(&t) {
+                                let b = output.pop().unwrap();
+                                let a = output.pop().unwrap();
+                                let result = Self::apply_operator(top_op, b, a)?;
+                                output.push(result);
+                                operators.pop();
+                            } else {
+                                break;
+                            }
+                        }
+                        operators.push(t.clone());
+                    }
+                    t => {
+                        let (maybe_expr, ts1) = self.next_expression_atom(&ts)?;
+                        println!("compile_with_precedence: maybe_expr {:?}, t '{}'", maybe_expr, t.get_raw_value());
+                        ts = ts1;
+                        match maybe_expr {
+                            None => {}
+                            Some(expr) => {
+                                output.push(expr)
+                            }
+                        }
+                    }
+                }
+                ts = ts0.clone();
+            }
+        }
+
+        while let Some(op) = operators.pop() {
+            let b = output.pop().unwrap();
+            let a = output.pop().unwrap();
+            let result = Self::apply_operator(&op, b, a)?;
+            output.push(result);
+        }
+
+        Ok(output.pop().unwrap())
+    }
+
+    fn apply_operator(
+        op: &Token,
+        b: Expression,
+        a: Expression,
+    ) -> std::io::Result<Expression> {
+        match op.get_raw_value().as_str() {
+            "&&" => Ok(Condition(Conditions::And(a.into(), b.into()))),
+            "==" => Ok(Condition(Conditions::Equal(a.into(), b.into()))),
+            ">=" => Ok(Condition(Conditions::GreaterOrEqual(a.into(), b.into()))),
+            ">" => Ok(Condition(Conditions::GreaterThan(a.into(), b.into()))),
+            "<=" => Ok(Condition(Conditions::LessOrEqual(a.into(), b.into()))),
+            "<" => Ok(Condition(Conditions::LessThan(a.into(), b.into()))),
+            "!=" => Ok(Condition(Conditions::NotEqual(a.into(), b.into()))),
+            "||" => Ok(Condition(Conditions::Or(a.into(), b.into()))),
+            ":" => Ok(Expression::AsValue(pull_name(&a)?, b.into())),
+            "&" => Ok(Expression::BitwiseAnd(a.into(), b.into())),
+            "|" => Ok(Expression::BitwiseOr(a.into(), b.into())),
+            "<<" => Ok(Expression::BitwiseShiftLeft(a.into(), b.into())),
+            ">>" => Ok(Expression::BitwiseShiftRight(a.into(), b.into())),
+            "^" => Ok(Expression::BitwiseXor(a.into(), b.into())),
+            "?" => Ok(Expression::Coalesce(a.into(), b.into())),
+            "::" => Ok(Expression::ColonColon(a.into(), b.into())),
+            ":::" => Ok(Expression::ColonColonColon(a.into(), b.into())),
+            "<~" => Ok(Expression::CurvyArrowLeft(a.into(), b.into())),
+            "~>" => Ok(Expression::CurvyArrowRight(a.into(), b.into())),
+            "÷" | "/" => Ok(Expression::Divide(a.into(), b.into())),
+            "-" => Ok(Expression::Minus(a.into(), b.into())),
+            "%" => Ok(Expression::Modulo(a.into(), b.into())),
+            "×" | "*" => Ok(Expression::Multiply(a.into(), b.into())),
+            "|>" => Ok(Expression::Pipeline(a.into(), b.into())),
+            "+" => Ok(Expression::Plus(a.into(), b.into())),
+            "++" => Ok(Expression::PlusPlus(a.into(), b.into())),
+            "**" => Ok(Expression::Pow(a.into(), b.into())),
+            ".." => Ok(Expression::Range(a.into(), b.into())),
+            ":=" => Ok(Expression::SetVariables(a.into(), b.into())),
+            _ => throw(ExactNear(format!("Invalid operator '{}'", op.get_raw_value()), op.clone())),
+        }
+    }
+
+    fn get_precedence(op: &Token) -> usize {
+        match op.get_raw_value().as_str() {
+            "**" => 7, // Exponentiation
+            "*" | "/" => 6, // Multiplication / Division
+            "+" | "-" => 5, // Addition / Subtraction
+            "<<" | ">>" => 4, // Bitwise Shift Left/Right
+            "&" | "&&" => 3, // Bitwise/Logical AND
+            "^" | "|" | "||" => 2, // Bitwise XOR, Bitwise/Logical OR
+            ":" | "::" | ":::" => 1,
+            _ => 0, // Unknown or lowest
+        }
+    }
+
+    ////////////////////////////////////////////////////////////////////
+    // internal logic
+    ////////////////////////////////////////////////////////////////////
 
     /// compiles the next [TokenSlice] into an [Expression]
     fn next_expression(
@@ -217,6 +341,29 @@ impl Compiler {
         }
     }
 
+    /// compiles the next [TokenSlice] into an [Expression]
+    pub fn next_expression_atom(
+        &self,
+        ts: &TokenSlice,
+    ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
+        //println!("next_expression_atom: ts {:?}", &ts);
+        match ts.next() {
+            // keyword or variable
+            (Some(Atom { .. }), _) => self.parse_keyword(ts.clone()),
+            // variables
+            (Some(Backticks { text, .. }), ts) => Ok((Some(Variable(text)), ts)),
+            // double- or single-quoted or URL strings
+            (Some(DoubleQuoted { text, .. } |
+                  SingleQuoted { text, .. } |
+                  URL { text, .. }), ts) => Ok((Some(Literal(StringValue(text))), ts)),
+            // numeric values
+            (Some(Numeric { text, .. }), ts) =>
+                Ok((Some(Literal(TypedValue::from_numeric(text.as_str())?)), ts)),
+            // unrecognized token
+            _ => Ok((None, ts.clone()))
+        }
+    }
+
     /// Parses reserved words (i.e. keyword)
     fn next_keyword(
         &self,
@@ -248,6 +395,7 @@ impl Compiler {
                 "import" => self.parse_keyword_import(nts),
                 "include" => self.parse_expression_1a(nts, Expression::Include),
                 "limit" => throw(ExactNear("`from` is expected before `limit`: from stocks limit 5".into(), nts.current())),
+                "match" => self.parse_keyword_match(nts),
                 "mod" => self.parse_keyword_mod(nts),
                 "NaN" => Ok((Literal(Number(NaNValue)), nts)),
                 "new" => self.parse_expression_1a(nts, New),
@@ -447,6 +595,7 @@ impl Compiler {
             "⁷" => self.next_operator_postfix_power(expr0, 7, ts),
             "⁸" => self.next_operator_postfix_power(expr0, 8, ts),
             "⁹" => self.next_operator_postfix_power(expr0, 9, ts),
+            "?" => self.parse_expression_2a(ts, expr0, Coalesce).map(|(m, ts)| (Some(m), ts)),
             "!" => self.parse_condition_1a(ts, Not).map(|(m, ts)| (Some(m), ts)),
             "$" => self.parse_identifier(ts, Variable).map(|(m, ts)| (Some(m), ts)),
             "&" => self.parse_expression_2a(ts, expr0, BitwiseAnd).map(|(m, ts)| (Some(m), ts)),
@@ -476,7 +625,7 @@ impl Compiler {
             ":=" => self.parse_expression_set(ts, expr0).map(|(m, ts)| (Some(m), ts)),
             "<<" => self.parse_expression_2a(ts, expr0, BitwiseShiftLeft).map(|(m, ts)| (Some(m), ts)),
             ">>" => self.parse_expression_2a(ts, expr0, BitwiseShiftRight).map(|(m, ts)| (Some(m), ts)),
-            "|>" => self.parse_expression_2a(ts, expr0, FoldOver).map(|(m, ts)| (Some(m), ts)),
+            "|>" => self.parse_expression_2a(ts, expr0, Pipeline).map(|(m, ts)| (Some(m), ts)),
             "(" if ts.is_previous_adjacent() => self.next_operator_brackets_parentheses(expr0, &ts),
             "[" if ts.is_previous_adjacent() => self.next_operator_brackets_square(expr0, &ts),
             "{" if ts.is_previous_adjacent() => self.next_operator_brackets_curly(ts),
@@ -870,15 +1019,11 @@ impl Compiler {
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         // foreach [item] in [items] [block]
-        match self.compile_next(&ts)? {
-            (Variable(name), ts) => {
-                let ts = ts.expect("in")?;
-                let (items, ts) = self.compile_next(&ts)?;
-                let (block, ts) = self.compile_next(&ts)?;
-                Ok((ForEach(name, Box::new(items), Box::new(block)), ts))
-            }
-            (_, ts) => throw(TypeMismatch(VariableExpected(ts.current())))
-        }
+        let (item, ts) = self.compile_next(&ts)?;
+        let ts = ts.expect("in")?;
+        let (items, ts) = self.compile_next(&ts)?;
+        let (block, ts) = self.compile_next(&ts)?;
+        Ok((ForEach { item: item.into(), items: items.into(), op: block.into() }, ts))
     }
 
     /// Parses an HTTP expression.
@@ -985,30 +1130,50 @@ impl Compiler {
         Ok((Import(ops), ts))
     }
 
-    /// Translates a `mod` expression into an [Expression]
-    /// ### example 1
-    /// <pre>
+    /// Translates a `match` declaration into an [Expression]
+    /// #### Examples
+    /// ```
+    /// match code [
+    ///     n: 100 ~> 'Accepted',
+    ///     n: 101..104 ~> 'Escalated',
+    ///     n: n > 0 && n < 100 ~> 'Pending',
+    ///     _ ~> 'Rejected'
+    /// ]
+    /// ```
+    fn parse_keyword_match(
+        &self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (src, ts) = self.compile_next(&ts)?;
+        match self.compile_next(&ts)? {
+            (ArrayExpression(cases), ts) => {
+                Ok((MatchExpression(src.into(), cases), ts))
+            }
+            _ => throw(ExactNear("Expected an array of cases".into(), ts.current()))
+        }
+    }
+
+    /// Translates a `mod` declaration into an [Expression]
+    /// #### Examples
+    /// ```
     /// mod "abc" {
     ///     fn hello() => "hello"
     /// }
-    /// </pre>
-    /// ### example 2
-    /// <pre>
+    /// ```
+    /// ```
     /// mod abc {
     ///     fn hello() => "hello"
     /// }
     /// abc::hello()
-    /// </pre>
+    /// ```
     fn parse_keyword_mod(
         &self,
         ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         // mod "abc"
-        let (name, ts) = match self.compile_next(&ts)? {
-            (Literal(StringValue(name)), ts) => (name, ts),
-            (Variable(name), ts) => (name, ts),
-            (_, ts) => return throw(TypeMismatch(VariableExpected(ts.current())))
-        };
+        let (expr, ts) = self.compile_next(&ts)?;
+        let name = pull_name(&expr)?;
+
         // { fn hello() => "hello" }
         match self.compile_next(&ts)? {
             (CodeBlock(ops), ts) => Ok((Module(name, ops), ts)),
@@ -1472,8 +1637,9 @@ mod tests {
         use crate::expression::Expression::*;
         use crate::expression::{FALSE, TRUE};
         use crate::numbers::Numbers::{F64Value, I64Value};
+        use crate::token_slice::TokenSlice;
         use crate::typed_values::TypedValue::{Number, StringValue};
-        use shared_lib::strip_margin;
+        use crate::utils::strip_margin;
 
         #[test]
         fn test_aliasing_quoted() {
@@ -1685,6 +1851,32 @@ mod tests {
         }
 
         #[test]
+        fn test_curvy_arrow_left() {
+            let compiler = Compiler::new();
+            let ts = TokenSlice::from_string(r#"
+                n: 200 <~ "Rejected"
+            "#);
+            let model = compiler.compile_with_precedence(ts).unwrap();
+            assert_eq!(model, CurvyArrowLeft(
+                AsValue("n".into(), Literal(Number(I64Value(200))).into()).into(),
+                Literal(StringValue("Rejected".into())).into()
+            ))
+        }
+
+        #[test]
+        fn test_curvy_arrow_right() {
+            let compiler = Compiler::new();
+            let ts = TokenSlice::from_string(r#"
+                n: 100 ~> "Accepted"
+            "#);
+            let model = compiler.compile_with_precedence(ts).unwrap();
+            assert_eq!(model, CurvyArrowRight(
+                AsValue("n".into(), Literal(Number(I64Value(100))).into()).into(),
+                Literal(StringValue("Accepted".into())).into()
+            ))
+        }
+
+        #[test]
         fn test_element_at() {
             assert_eq!(
                 Compiler::build("stocks[1]").unwrap(),
@@ -1694,47 +1886,26 @@ mod tests {
                 ))
         }
 
-        #[ignore]
-        #[test]
-        fn test_fold_over_chaining() {
-            verify_build(
-                r#""Hello" |> util::md5 |> util::hex"#,
-                FoldOver(
-                    FoldOver(
-                        Literal(StringValue("Hello".into())).into(),
-                        ColonColon(
-                            Variable("util".into()).into(),
-                            Variable("md5".into()).into(),
-                        ).into(),
-                    ).into(),
-                    ColonColon(
-                        Variable("util".into()).into(),
-                        Variable("hex".into()).into(),
-                    ).into(),
-                ),
-            );
-        }
-
         #[test]
         fn test_foreach() {
             verify_build(
                 "foreach item in [1, 5, 6, 11, 17] println(item)",
-                ForEach(
-                    "item".into(),
-                    ArrayExpression(vec![
+                ForEach {
+                    item: Variable("item".into()).into(),
+                    items: ArrayExpression(vec![
                         Literal(Number(I64Value(1))),
                         Literal(Number(I64Value(5))),
                         Literal(Number(I64Value(6))),
                         Literal(Number(I64Value(11))),
                         Literal(Number(I64Value(17))),
                     ]).into(),
-                    FunctionCall {
+                    op: FunctionCall {
                         fx: Variable("println".into()).into(),
                         args: vec![
                             Variable("item".into())
                         ],
                     }.into(),
-                ));
+                });
         }
 
         #[test]
@@ -1748,6 +1919,31 @@ mod tests {
                         Literal(Number(I64Value(3))),
                     ],
                 })
+        }
+
+        #[test]
+        fn test_function_pipeline() {
+            let compiler = Compiler::new();
+            let ts = TokenSlice::from_string(r#"
+                "Hello" |> util::md5 |> util::hex
+            "#);
+            let model = compiler.compile_with_precedence(ts).unwrap();
+            assert_eq!(
+                model,
+                Pipeline(
+                    Pipeline(
+                        Literal(StringValue("Hello".into())).into(),
+                        ColonColon(
+                            Variable("util".into()).into(),
+                            Variable("md5".into()).into(),
+                        ).into(),
+                    ).into(),
+                    ColonColon(
+                        Variable("util".into()).into(),
+                        Variable("hex".into()).into(),
+                    ).into(),
+                ),
+            );
         }
 
         #[test]
@@ -1788,6 +1984,60 @@ mod tests {
                     Literal(StringValue("Hello".into())).into(),
                     Literal(StringValue("H.ll.".into())).into(),
                 )));
+        }
+
+        #[ignore]
+        #[test]
+        fn test_match() {
+            let compiler = Compiler::new();
+            let model = compiler.compile_with_precedence(TokenSlice::from_string(r#"
+                match code [
+                   n: 100 ~> "Accepted",
+                   n: 101..104 ~> "Escalated",
+                   n: n > 0 && n < 100 ~> "Pending",
+                   _ ~> "Rejected"
+                ]
+            "#)).unwrap();
+            assert_eq!(model, MatchExpression(
+                Variable("code".into()).into(),
+                vec![
+                    // n: 100 ~> "Accepted",
+                    CurvyArrowRight(
+                        AsValue("n".into(), Literal(Number(I64Value(100))).into()).into(),
+                        Literal(StringValue("Accepted".into())).into()
+                    ),
+                    // n: 101..104 ~> "Escalated",
+                    CurvyArrowRight(
+                        AsValue("n".into(), Range(
+                            Literal(Number(I64Value(101))).into(),
+                            Literal(Number(I64Value(104))).into()
+                        ).into()).into(),
+                        Literal(StringValue("Escalated".into())).into()
+                    ),
+                    // n: n > 0 && n < 100 ~> "Pending",
+                    CurvyArrowRight(
+                        AsValue(
+                            "n".into(),
+                            Condition(And(
+                                Condition(GreaterThan(
+                                    Variable("n".into()).into(),
+                                    Literal(Number(I64Value(0))).into()
+                                )).into(),
+                                Condition(LessThan(
+                                    Variable("n".into()).into(),
+                                    Literal(Number(I64Value(100))).into()
+                                )).into(),
+                            )).into(),
+                        ).into(),
+                        Literal(StringValue("Accepted".into())).into()
+                    ).into(),
+                    // _ ~> "Rejected"
+                    CurvyArrowRight(
+                        Variable("_".into()).into(),
+                        Literal(StringValue("Rejected".into())).into()
+                    ).into()
+                ]
+            ))
         }
 
         #[test]
@@ -2003,7 +2253,7 @@ mod tests {
 
         #[test]
         fn test_next_argument_list() {
-            let mut compiler = Compiler::new();
+            let compiler = Compiler::new();
             let ts = TokenSlice::from_string("(abc, 123, 'Hello')");
             let (items, _) = compiler.expect_arguments(ts).unwrap();
             assert_eq!(items, vec![
@@ -2015,7 +2265,7 @@ mod tests {
 
         #[test]
         fn test_next_expression() {
-            let mut compiler = Compiler::new();
+            let compiler = Compiler::new();
             let ts = TokenSlice::from_string("abc");
             let (expr, _) = compiler.compile_next(&ts).unwrap();
             assert_eq!(expr, Variable("abc".into()))
@@ -2023,7 +2273,7 @@ mod tests {
 
         #[test]
         fn test_next_expression_list() {
-            let mut compiler = Compiler::new();
+            let compiler = Compiler::new();
             let ts = TokenSlice::from_string("abc, 123.0, 'Hello'");
             let (items, _) = compiler.next_expression_list(ts).unwrap();
             assert_eq!(items, Some(vec![
@@ -2560,6 +2810,50 @@ mod tests {
                 Variable("b".into()),
                 Variable("c".into()),
             ]))
+        }
+    }
+
+    // Precedence tests
+    #[cfg(test)]
+    mod precedence_tests {
+        use super::*;
+        use crate::compiler::Compiler;
+        use crate::machine::Machine;
+        use crate::numbers::Numbers::F64Value;
+        use crate::token_slice::TokenSlice;
+        use crate::tokenizer;
+
+        #[test]
+        fn test_folding() {
+            let ts = TokenSlice::from_string("'Hello' |> str::reverse() |> util::md5");
+            let compiler = Compiler::new();
+
+            let model = compiler.compile_with_precedence(ts).unwrap();
+            println!("code: {}", model.to_code());
+            println!("model: {:?}", model);
+        }
+
+        #[test]
+        fn test_precedence() {
+            // parse the expression into tokens
+            let tokens = tokenizer::parse_fully("4 * (2 - 1) ** 2 + 3");
+            println!("tokens {:?}", tokens.iter().map(|t| t.get_raw_value()).collect::<Vec<_>>());
+            // tokens ["4", "*", "(", "2", "-", "1", ")", "**", "2", "+", "3"]
+
+            // setup the compiler
+            let ts = TokenSlice::new(tokens);
+            let compiler = Compiler::new();
+
+            // build the model
+            let model = compiler.compile_with_precedence(ts).unwrap();
+            println!("model: {}", model.to_code());
+            // model: 4 * (2 - 1) ** 2 + 3
+
+            // compute the result
+            let machine = Machine::new();
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, Number(F64Value(7.0)))
+            // result: 7.0
         }
     }
 

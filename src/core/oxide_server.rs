@@ -387,6 +387,18 @@ async fn update_row_by_id(
     update_row!(actor, ns, Row::from_json(&columns, &data.0).with_row_id(id))
 }
 
+pub fn ns_uri(database: &str, schema: &str, name: &str) -> String {
+    format!("/{}/{}/{}", database, schema, name)
+}
+
+pub fn range_uri(database: &str, schema: &str, name: &str, a: usize, b: usize) -> String {
+    format!("/{}/{}/{}/{}/{}", database, schema, name, a, b)
+}
+
+pub fn row_uri(database: &str, schema: &str, name: &str, id: usize) -> String {
+    format!("/{}/{}/{}/{}", database, schema, name, id)
+}
+
 /// Represents all the shared state of the application
 #[derive(Debug)]
 pub struct SharedState {
@@ -418,7 +430,6 @@ mod tests {
     use crate::testdata::make_quote_parameters;
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::StringValue;
-    use shared_lib::{ns_uri, range_uri, row_uri};
 
     #[actix::test]
     async fn test_dataframe_config_lifecycle() {

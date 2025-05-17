@@ -23,6 +23,7 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use shared_lib::cnv_error;
 use std::collections::HashMap;
 use std::fmt::{Debug, Display, Formatter};
 use std::ops::Index;
@@ -101,6 +102,11 @@ pub trait Structure {
                 m.insert(name, value);
                 m
             })
+    }
+
+    fn to_pretty_json(&self) -> std::io::Result<String> {
+        let value = self.to_json();
+        serde_json::to_string_pretty(&value).map_err(|e| cnv_error!(e))
     }
 
     fn to_row(&self) -> Row {

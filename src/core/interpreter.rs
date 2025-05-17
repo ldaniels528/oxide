@@ -136,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    fn test_fold_over() {
+    fn test_functional_pipeline() {
         verify_exact_code(r#"
             "Hello" |> tools::reverse
         "#, "\"olleH\"");
@@ -144,7 +144,7 @@ mod tests {
 
     #[ignore]
     #[test]
-    fn test_fold_over_chaining() {
+    fn test_functional_pipeline_chain() {
         verify_exact_value(r#"
             "Hello" |> util::md5 |> util::hex
         "#, StringValue("8b1a9953c4611296a827abf8c47804d7".to_string()));
@@ -177,6 +177,24 @@ mod tests {
             // 6
             // 11
             // 17
+        }
+
+        #[test]
+        fn test_foreach_array_in_an_array() {
+            verify_exact_code(r#"
+                foreach [a, b] in [[1, 5], [6, 11], [17, 21]] {
+                   b - a
+                }
+            "#, "4");
+        }
+
+        #[test]
+        fn test_foreach_tuple_in_an_array() {
+            verify_exact_code(r#"
+                foreach (a, b) in [(1, 5), (6, 11), (17, 21)] {
+                   a + b
+                }
+            "#, "38");
         }
 
         #[test]
@@ -226,12 +244,24 @@ mod tests {
         }
 
         #[test]
+        fn test_match() {
+            verify_exact_code(r#"
+                code := 100
+                match code [
+                   n: 100 ~> "Accepted",
+                   n: 101..104 ~> 'Escalated',
+                   n: n > 0 && n < 100 ~> "Pending",
+                   _ ~> "Rejected"
+                ]
+            "#, "\"Accepted\"");
+        }
+
+        #[test]
         fn test_while_loop() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_value_with(interpreter, "x := 0", Boolean(true));
             interpreter = verify_exact_value_with(interpreter, r#"
-                while (x < 5)
-                    x := x + 1
+                while (x < 5) x := x + 1
             "#, Boolean(true));
             interpreter = verify_exact_value_with(interpreter, "x", Number(I64Value(5)));
         }
@@ -294,10 +324,10 @@ mod tests {
         #[test]
         fn test_function_named() {
             let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_value_with(interpreter,r#"
+            interpreter = verify_exact_value_with(interpreter, r#"
                 fn product(a, b) => a * b
             "#, Boolean(true));
-            interpreter = verify_exact_value_with(interpreter,r#"
+            interpreter = verify_exact_value_with(interpreter, r#"
                 product(3, 7)
             "#, Number(I64Value(21)))
         }

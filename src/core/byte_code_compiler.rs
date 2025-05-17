@@ -7,6 +7,7 @@ use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::dataframe::Dataframe;
 
+use crate::errors::throw;
 use crate::errors::Errors::Exact;
 use crate::expression::Expression::Literal;
 use crate::expression::*;
@@ -21,7 +22,6 @@ use crate::typed_values::TypedValue::ErrorValue;
 use crate::typed_values::*;
 use std::ops::Index;
 use uuid::Uuid;
-use crate::errors::throw;
 
 /// A JVM-inspired ByteBuffer-like utility (Big Endian)
 pub struct ByteCodeCompiler {

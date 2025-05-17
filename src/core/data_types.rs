@@ -63,17 +63,16 @@ impl DataType {
 
     /// provides type resolution for the given [Vec<DataType>]
     pub fn best_fit(types: Vec<DataType>) -> DataType {
-        fn larger(a: &usize, b: &usize) -> usize {
-            (if a > b { a } else { b }).to_owned()
-        }
-
         match types.len() {
             0 => DynamicType,
             1 => types[0].to_owned(),
             _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
                 match (agg, t) {
-                    (BinaryType(a), BinaryType(b)) => StringType(larger(&a, b)),
-                    (StringType(a), StringType(b)) => StringType(larger(&a, b)),
+                    (ArrayType(a), ArrayType(b)) => ArrayType(a.max(*b)),
+                    (ASCIIType(a), ASCIIType(b)) => ASCIIType(a.max(*b)),
+                    (BinaryType(a), BinaryType(b)) => BinaryType(a.max(*b)),
+                    (StringType(a), StringType(b)) => StringType(a.max(*b)),
+                    (TableType(p0, a), TableType(p1, b)) if p0 == *p1 => TableType(p0, a.max(*b)),
                     (_, t) => t.to_owned()
                 })
         }
@@ -544,7 +543,6 @@ mod tests {
             verify_compatibility(NumberType(I64Kind), NumberType(I32Kind));
             verify_incompatibility(NumberType(I64Kind), BooleanType);
         }
-
 
         fn verify_compatibility(a: DataType, b: DataType) {
             assert!(a.is_compatible(&b));

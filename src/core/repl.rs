@@ -4,6 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::columns::Column;
+use crate::compiler::Compiler;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Model;
 use crate::file_row_collection::FileRowCollection;
@@ -22,15 +23,15 @@ use crate::structures::{HardStructure, SoftStructure, Structure};
 use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use crate::utils::compute_time_millis;
 use chrono::{DateTime, Local, TimeDelta};
 use crossterm::terminal;
 use log::info;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use shared_lib::{compute_time_millis, get_host_and_port};
+use shared_lib::cnv_error;
 use std::fs::File;
-use std::io;
-use std::io::{stdout, Read, Write};
+use std::io::{stdin, stdout, Read, Write};
 
 /// REPL application state
 pub struct REPLState {
@@ -102,14 +103,16 @@ fn do_terminal_input(
     mut reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>,
 ) -> std::io::Result<(std::io::Stdout, REPLState)> {
     // display the prompt
-    print!("{}", state.get_prompt());
+    stdout.write(state.get_prompt().bytes().collect::<Vec<_>>().as_slice())?;
     stdout.flush()?;
 
     // get and process the input
     let raw_input = read_until_blank(reader())?;
-    let input = raw_input.trim();
-    if input == "q!" { state.die() } else {
-        if !input.is_empty() {
+    match raw_input.trim() {
+        "@compile" => stdout = compile_only(stdout, reader)?,
+        "q!" => state.die(),
+        input if input.is_empty() => {}
+        input => {
             let t0 = Local::now();
             match state.interpreter.evaluate(input) {
                 Ok(result) => {
@@ -148,6 +151,12 @@ pub fn build_output(
             let lines = TableRenderer::from_table_with_ids(&rc)?;
             out.extend(lines)
         }
+        Structured(s) => {
+            out.extend(s.to_pretty_json()?
+                .split("\n")
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>());
+        }
         z => out.push(z.unwrap_value())
     }
     Ok(out)
@@ -180,6 +189,29 @@ pub fn cleanup(raw: &str) -> String {
         .map(|s| s.trim())
         .collect::<Vec<_>>()
         .join("; ")
+}
+
+fn compile_only(
+    mut stdout: std::io::Stdout,
+    mut reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>,
+) -> std::io::Result<std::io::Stdout> {
+    let mut is_alive = true;
+    while is_alive {
+        // display the prompt
+        stdout.write(b"compile> ")?;
+        stdout.flush()?;
+
+        // compile or quit
+        match read_until_blank(reader())?.trim() {
+            "q!" => is_alive = false,
+            input => {
+                let model = Compiler::build(input)?;
+                println!("{:?}", model)
+            }
+        }
+    }
+
+    Ok(stdout)
 }
 
 /// Generates a less verbose hard structure signature
@@ -233,7 +265,7 @@ pub fn read_line_from(lines: Vec<String>) -> Box<dyn FnMut() -> std::io::Result<
 pub fn read_line_from_stdin() -> Box<dyn FnMut() -> std::io::Result<Option<String>>> {
     Box::new(move || {
         let mut line = String::new();
-        io::stdin().read_line(&mut line)?;
+        stdin().read_line(&mut line)?;
         Ok(Some(line))
     })
 }
@@ -312,7 +344,7 @@ async fn start_server(args: Vec<String>) -> std::io::Result<()> {
     use crate::platform::{MAJOR_VERSION, MINOR_VERSION};
     use actix_web::web;
     use log::info;
-    use shared_lib::{cnv_error, get_host_and_port};
+    use shared_lib::cnv_error;
 
     // get the commandline arguments
     let (host, port) = get_host_and_port(args)?;
@@ -325,6 +357,28 @@ async fn start_server(args: Vec<String>) -> std::io::Result<()> {
         .run();
     server.await?;
     Ok(())
+}
+
+fn fail<A>(message: impl Into<String>) -> std::io::Result<A> {
+    Err(std::io::Error::new(std::io::ErrorKind::Other, message.into()))
+}
+
+/// Extracts a tuple consisting of the first two arguments from the supplied commandline arguments
+fn get_host_and_port(args: Vec<String>) -> std::io::Result<(String, String)> {
+    // args: ['./myapp', 'arg1', 'arg2', ..]
+    let (host, port) = match args.as_slice() {
+        [_, port] => (String::from("127.0.0.1"), port.to_string()),
+        [_, host, port] => (host.to_string(), port.to_string()),
+        [_, host, port, ..] => (host.to_string(), port.to_string()),
+        _ => ("127.0.0.1".to_string(), "8080".to_string())
+    };
+
+    // validate the port number
+    let port_regex = regex::Regex::new(r"^\d+$").map_err(|e| cnv_error!(e))?;
+    if !port_regex.is_match(&port) {
+        return fail(format!("Port number '{}' is invalid", port));
+    }
+    Ok((host, port))
 }
 
 fn update_history(
@@ -351,6 +405,21 @@ mod tests {
     use crate::repl::REPLState;
     use std::cmp::max;
     use std::fs;
+
+    #[test]
+    fn test_commandline_arguments() {
+        assert_eq!(get_host_and_port(Vec::new()).unwrap(),
+                   ("127.0.0.1".to_string(), "8080".to_string()));
+
+        assert_eq!(get_host_and_port(vec!["my_app".into(), "3333".into()]).unwrap(),
+                   ("127.0.0.1".to_string(), "3333".to_string()));
+
+        assert_eq!(get_host_and_port(vec!["my_app".into(), "0.0.0.0".into(), "9000".into()]).unwrap(),
+                   ("0.0.0.0".to_string(), "9000".to_string()));
+
+        assert_eq!(get_host_and_port(vec!["my_app".into(), "127.0.0.1".into(), "3333".into(), "zzz".into()]).unwrap(),
+                   ("127.0.0.1".to_string(), "3333".to_string()));
+    }
 
     #[test]
     fn test_do_terminal_input() {

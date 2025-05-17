@@ -43,10 +43,6 @@ pub trait Sequence {
 
     fn len(&self) -> usize;
 
-    //fn map(&self, f: fn(&TypedValue) -> TypedValue) -> Self;
-
-    //fn rev(&self) -> Self;
-
     fn pop(&mut self) -> Option<TypedValue>;
 
     fn push(&mut self, value: TypedValue) -> TypedValue;

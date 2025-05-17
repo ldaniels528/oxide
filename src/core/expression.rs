@@ -262,6 +262,7 @@ pub enum Expression {
     BitwiseShiftLeft(Box<Expression>, Box<Expression>),
     BitwiseShiftRight(Box<Expression>, Box<Expression>),
     BitwiseXor(Box<Expression>, Box<Expression>),
+    Coalesce(Box<Expression>, Box<Expression>),
     CodeBlock(Vec<Expression>),
     ColonColon(Box<Expression>, Box<Expression>),
     ColonColonColon(Box<Expression>, Box<Expression>),
@@ -278,8 +279,7 @@ pub enum Expression {
         body: Option<Box<Expression>>,
         returns: DataType,
     },
-    FoldOver(Box<Expression>, Box<Expression>),
-    ForEach(String, Box<Expression>, Box<Expression>),
+    ForEach { item: Box<Expression>, items: Box<Expression>, op: Box<Expression> },
     From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     HTTP(HttpMethodCalls),
@@ -290,8 +290,8 @@ pub enum Expression {
     },
     Import(Vec<ImportOps>),
     Include(Box<Expression>),
-    StructureExpression(Vec<(String, Expression)>),
     Literal(TypedValue),
+    MatchExpression(Box<Expression>, Vec<Expression>),
     Minus(Box<Expression>, Box<Expression>),
     Module(String, Vec<Expression>),
     Modulo(Box<Expression>, Box<Expression>),
@@ -300,6 +300,7 @@ pub enum Expression {
     New(Box<Expression>),
     Ns(Box<Expression>),
     Parameters(Vec<Parameter>),
+    Pipeline(Box<Expression>, Box<Expression>),
     Plus(Box<Expression>, Box<Expression>),
     PlusPlus(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
@@ -310,6 +311,7 @@ pub enum Expression {
         verifications: Vec<Expression>,
     },
     SetVariables(Box<Expression>, Box<Expression>),
+    StructureExpression(Vec<(String, Expression)>),
     TupleExpression(Vec<Expression>),
     TypeDef(Box<Expression>),
     Variable(String),
@@ -342,12 +344,19 @@ impl Expression {
                 format!("{} << {}", Self::decompile(a), Self::decompile(b)),
             Expression::BitwiseShiftRight(a, b) =>
                 format!("{} >> {}", Self::decompile(a), Self::decompile(b)),
+            Expression::Coalesce(a, b) =>
+                format!("{} ? {}", Self::decompile(a), Self::decompile(b)),
             Expression::CodeBlock(items) => Self::decompile_code_blocks(items),
             Expression::Condition(cond) => Self::decompile_cond(cond),
             Expression::CurvyArrowLeft(a, b) =>
                 format!("{} <~ {}", Self::decompile(a), Self::decompile(b)),
             Expression::CurvyArrowRight(a, b) =>
                 format!("{} ~> {}", Self::decompile(a), Self::decompile(b)),
+            Expression::DatabaseOp(op) =>
+                match op {
+                    DatabaseOps::Queryable(q) => Self::decompile_queryables(q),
+                    DatabaseOps::Mutation(m) => Self::decompile_modifications(m),
+                },
             Expression::Directive(d) => Self::decompile_directives(d),
             Expression::Divide(a, b) =>
                 format!("{} / {}", Self::decompile(a), Self::decompile(b)),
@@ -372,10 +381,9 @@ impl Expression {
                             Some(my_body) => format!(" => {}", my_body.to_code()),
                             None => String::new()
                         }),
-            Expression::FoldOver(a, b) =>
-                format!("{} |> {}", Self::decompile(a), Self::decompile(b)),
-            Expression::ForEach(a, b, c) =>
-                format!("foreach {} in {} {}", a, Self::decompile(b), Self::decompile(c)),
+            Expression::ForEach { item, items, op } =>
+                format!("foreach {} in {} {}",
+                        Self::decompile(item), Self::decompile(items), Self::decompile(op)),
             Expression::From(a) => format!("from {}", Self::decompile(a)),
             Expression::FunctionCall { fx, args } =>
                 format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
@@ -390,12 +398,9 @@ impl Expression {
                     .collect::<Vec<_>>()
                     .join(", ")),
             Expression::Include(path) => format!("include {}", Self::decompile(path)),
-            Expression::StructureExpression(items) =>
-                format!("{{{}}}", items.iter()
-                    .map(|(k, v)| format!("{}: {}", k, v))
-                    .collect::<Vec<String>>()
-                    .join(", ")),
             Expression::Literal(value) => value.to_code(),
+            Expression::MatchExpression(a, b) =>
+                format!("match {} {}", Self::decompile(a), Self::decompile(&ArrayExpression(b.clone()))),
             Expression::Minus(a, b) =>
                 format!("{} - {}", Self::decompile(a), Self::decompile(b)),
             Expression::Module(name, ops) =>
@@ -408,17 +413,14 @@ impl Expression {
             Expression::New(a) => format!("new {}", Self::decompile(a)),
             Expression::Ns(a) => format!("ns({})", Self::decompile(a)),
             Expression::Parameters(parameters) => Self::decompile_parameters(parameters),
+            Expression::Pipeline(a, b) =>
+                format!("{} |> {}", Self::decompile(a), Self::decompile(b)),
             Expression::Plus(a, b) =>
                 format!("{} + {}", Self::decompile(a), Self::decompile(b)),
             Expression::PlusPlus(a, b) =>
                 format!("{} ++ {}", Self::decompile(a), Self::decompile(b)),
             Expression::Pow(a, b) =>
                 format!("{} ** {}", Self::decompile(a), Self::decompile(b)),
-            Expression::DatabaseOp(job) =>
-                match job {
-                    DatabaseOps::Queryable(q) => Self::decompile_queryables(q),
-                    DatabaseOps::Mutation(m) => Self::decompile_modifications(m),
-                },
             Expression::Range(a, b) =>
                 format!("{}..{}", Self::decompile(a), Self::decompile(b)),
             Expression::Return(a) =>
@@ -433,6 +435,11 @@ impl Expression {
             }
             Expression::SetVariables(vars, values) =>
                 format!("{} := {}", Self::decompile(vars), Self::decompile(values)),
+            Expression::StructureExpression(items) =>
+                format!("{{{}}}", items.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<String>>()
+                    .join(", ")),
             Expression::TupleExpression(args) => format!("({})", Self::decompile_list(args)),
             Expression::TypeDef(expr) => format!("typedef({})", expr.to_code()),
             Expression::Variable(name) => name.to_string(),
@@ -650,6 +657,7 @@ impl Expression {
             BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b, hints),
             BitwiseShiftRight(a, b) => Self::infer_a_or_b(a, b, hints),
             BitwiseXor(a, b) => Self::infer_a_or_b(a, b, hints),
+            Coalesce(a, b) => Self::infer_a_or_b(a, b, hints),
             CodeBlock(ops) => ops.last().map(|op| Self::infer_with_hints(op, hints))
                 .unwrap_or(DynamicType),
             // platform functions: cal::now()
@@ -681,8 +689,8 @@ impl Expression {
             Feature { .. } => BooleanType,
             FnExpression { params, returns, .. } =>
                 FunctionType(params.clone(), Box::new(returns.clone())),
-            FoldOver(_, b) => Self::infer_with_hints(b, hints),
-            ForEach(..) => DynamicType,
+            Pipeline(_, b) => Self::infer_with_hints(b, hints),
+            ForEach { op, .. } => Self::infer_with_hints(op, hints),
             From(..) => TableType(vec![], 0),
             FunctionCall { fx, .. } => Self::infer_with_hints(fx, hints),
             HTTP { .. } => DynamicType,
@@ -693,6 +701,11 @@ impl Expression {
             Literal(Function { body, .. }) => Self::infer_with_hints(body, hints),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
+            MatchExpression(_, cases) => DataType::best_fit(
+                cases.iter()
+                    .map(|op| Self::infer_with_hints(op, hints))
+                    .collect::<Vec<_>>()
+            ),
             Minus(a, b) => Self::infer_a_or_b(a, b, hints),
             Module(..) => BooleanType,
             Modulo(a, b) => Self::infer_a_or_b(a, b, hints),
@@ -812,7 +825,7 @@ impl Expression {
                         .map(|row| Structured(Firm(row, df.get_parameters())))
                         .unwrap_or(Undefined),
                     TypedValue::Undefined => Undefined,
-                    z => ErrorValue(TypeMismatch(UnsupportedType(DynamicType, z.get_type())))
+                    z => return throw(TypeMismatch(UnsupportedType(DynamicType, z.get_type())))
                 })
             }
             Expression::StructureExpression(items) => {

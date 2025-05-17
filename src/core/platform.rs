@@ -7,12 +7,13 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
-use crate::sequences::{Array, Sequence, Sequences};
+use crate::sequences::{Array, Sequence};
+use crate::utils::*;
 
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
 use crate::errors::Errors::*;
-use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CharExpected, CollectionExpected, DateExpected, StringExpected, StructExpected, UnsupportedType};
+use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CharExpected, CollectionExpected, DateExpected, StructExpected, UnsupportedType};
 use crate::errors::{throw, TypeMismatchErrors};
 use crate::expression::Expression::{CodeBlock, FunctionCall, Literal, Multiply, Scenario, StructureExpression};
 use crate::file_row_collection::FileRowCollection;
@@ -22,16 +23,16 @@ use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::*;
-use crate::numbers::Numbers;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
-use crate::sequences::Sequences::{TheArray, TheDataframe};
+use crate::sequences::Sequences::{TheArray, TheDataframe, TheTuple};
 use crate::structures::Structure;
 use crate::structures::Structures::{Hard, Soft};
 use crate::structures::{Row, SoftStructure};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use crate::utils::strip_margin;
 use crate::{machine, oxide_server};
 use actix::ActorStreamExt;
 use chrono::{Datelike, Local, TimeZone, Timelike};
@@ -39,7 +40,7 @@ use crossterm::style::Stylize;
 use num_traits::real::Real;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
-use shared_lib::strip_margin;
+use shared_lib::cnv_error;
 use std::collections::HashMap;
 use std::env;
 use std::fs::File;
@@ -65,7 +66,7 @@ pub struct PlatformFunction {
     pub package_name: String,
     pub name: String,
     pub description: String,
-    pub example: String,
+    pub examples: Vec<String>,
     pub parameters: Vec<Parameter>,
     pub return_type: DataType,
     pub opcode: PlatformOps,
@@ -74,6 +75,14 @@ pub struct PlatformFunction {
 /// Represents an enumeration of Oxide Platform Functions
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum PlatformOps {
+    // arrays
+    ArraysFilter,
+    ArraysLen,
+    ArraysMap,
+    ArraysPop,
+    ArraysPush,
+    ArraysReverse,
+    ArraysToArray,
     // cal
     CalDateDay,
     CalDateHour12,
@@ -144,6 +153,7 @@ pub enum PlatformOps {
     ToolsFetch,
     ToolsFilter,
     ToolsJournal,
+    ToolsLen,
     ToolsMap,
     ToolsPop,
     ToolsPush,
@@ -182,9 +192,12 @@ pub enum PlatformOps {
     WwwURLEncode,
 }
 
-pub const PLATFORM_OPCODES: [PlatformOps; 95] = {
+pub const PLATFORM_OPCODES: [PlatformOps; 103] = {
     use PlatformOps::*;
     [
+        // arrays
+        ArraysFilter, ArraysLen, ArraysMap, ArraysPop, ArraysPush,
+        ArraysReverse, ArraysToArray,
         // cal
         CalNow, CalDateDay, CalDateHour12, CalDateHour24, CalDateMinute,
         CalDateMonth, CalDateSecond, CalDateYear,
@@ -194,8 +207,7 @@ pub const PLATFORM_OPCODES: [PlatformOps; 95] = {
         // io
         IoFileCreate, IoFileExists, IoFileReadText, IoStdErr, IoStdOut,
         // math
-        MathAbs, MathCeil, MathFloor, MathMax, MathMin, MathPow, MathRound,
-        MathSqrt,
+        MathAbs, MathCeil, MathFloor, MathMax, MathMin, MathPow, MathRound, MathSqrt,
         // os
         OsCall, OsClear, OsCurrentDir, OsEnv,
         // oxide
@@ -207,8 +219,8 @@ pub const PLATFORM_OPCODES: [PlatformOps; 95] = {
         // testing
         TestingAssert, TestingFeature, TestingMatches, TestingTypeOf,
         // tools
-        ToolsCompact, ToolsDescribe, ToolsFetch, ToolsFilter, ToolsJournal, ToolsMap,
-        ToolsPop, ToolsPush, ToolsReplay, ToolsReverse, ToolsRowId, ToolsScan,
+        ToolsCompact, ToolsDescribe, ToolsFetch, ToolsFilter, ToolsJournal, ToolsLen,
+        ToolsMap, ToolsPop, ToolsPush, ToolsReplay, ToolsReverse, ToolsRowId, ToolsScan,
         ToolsToArray, ToolsToCSV, ToolsToJSON, ToolsToTable,
         // util
         UtilBase64, UtilBinary, UtilGzip, UtilGunzip, UtilHex, UtilMD5,
@@ -243,7 +255,7 @@ impl PlatformOps {
 
     pub fn find_function(package: &str, name: &str) -> Option<PlatformFunction> {
         PLATFORM_OPCODES.iter()
-            .map(|pf| pf.get_info())
+            .map(|pf| pf.get_function())
             .find(|pfi| pfi.package_name == package && pfi.name == name)
     }
 
@@ -262,117 +274,135 @@ impl PlatformOps {
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Machine, TypedValue)> {
         match self {
+            // arrays
+            PlatformOps::ArraysFilter => extract_value_fn2(ms, args, Self::do_tools_filter),
+            PlatformOps::ArraysLen => extract_array_fn1(ms, args, |a| Number(I64Value(a.len() as i64))),
+            PlatformOps::ArraysMap => extract_value_fn2(ms, args, Self::do_tools_map),
+            PlatformOps::ArraysPop => extract_value_fn1(ms, args, Self::do_tools_pop),
+            PlatformOps::ArraysPush => Self::do_tools_push(ms, args),
+            PlatformOps::ArraysReverse => extract_array_fn1(ms, args, |a| ArrayValue(a.rev())),
+            PlatformOps::ArraysToArray => extract_array_fn1(ms, args, |a| ArrayValue(a)),
             // cal
-            PlatformOps::CalDateDay => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateHour24 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateHour12 => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateMinute => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateMonth => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateSecond => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalDateYear => self.adapter_fn1_pf(ms, args, Self::do_cal_date_part),
-            PlatformOps::CalNow => Self::do_cal_now(ms, args),
+            PlatformOps::CalDateDay => self.adapter_pf_fn1(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateHour24 => self.adapter_pf_fn1(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateHour12 => self.adapter_pf_fn1(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateMinute => self.adapter_pf_fn1(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateMonth => self.adapter_pf_fn1(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateSecond => self.adapter_pf_fn1(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalDateYear => self.adapter_pf_fn1(ms, args, Self::do_cal_date_part),
+            PlatformOps::CalNow => extract_value_fn0(ms, args, |ms| Ok((ms, Number(DateValue(Local::now().timestamp_millis()))))),
             // durations
-            PlatformOps::DurationsDays => self.adapter_fn1_pf(ms, args, Self::do_durations),
-            PlatformOps::DurationsHours => self.adapter_fn1_pf(ms, args, Self::do_durations),
-            PlatformOps::DurationsMillis => self.adapter_fn1_pf(ms, args, Self::do_durations),
-            PlatformOps::DurationsMinutes => self.adapter_fn1_pf(ms, args, Self::do_durations),
-            PlatformOps::DurationsSeconds => self.adapter_fn1_pf(ms, args, Self::do_durations),
+            PlatformOps::DurationsDays => self.adapter_pf_fn1(ms, args, Self::do_durations),
+            PlatformOps::DurationsHours => self.adapter_pf_fn1(ms, args, Self::do_durations),
+            PlatformOps::DurationsMillis => self.adapter_pf_fn1(ms, args, Self::do_durations),
+            PlatformOps::DurationsMinutes => self.adapter_pf_fn1(ms, args, Self::do_durations),
+            PlatformOps::DurationsSeconds => self.adapter_pf_fn1(ms, args, Self::do_durations),
             // io
-            PlatformOps::IoFileCreate => self.adapter_fn2_ok(ms, args, Self::do_io_create_file),
-            PlatformOps::IoFileExists => self.adapter_fn1_ok(ms, args, Self::do_io_exists),
-            PlatformOps::IoFileReadText => self.adapter_fn1_ok(ms, args, Self::do_io_read_text_file),
-            PlatformOps::IoStdErr => self.adapter_fn1_ok(ms, args, Self::do_io_stderr),
-            PlatformOps::IoStdOut => self.adapter_fn1_ok(ms, args, Self::do_io_stdout),
+            PlatformOps::IoFileCreate => extract_value_fn2(ms, args, Self::do_io_create_file),
+            PlatformOps::IoFileExists => extract_value_fn1(ms, args, Self::do_io_exists),
+            PlatformOps::IoFileReadText => extract_value_fn1(ms, args, Self::do_io_read_text_file),
+            PlatformOps::IoStdErr => extract_value_fn1(ms, args, Self::do_io_stderr),
+            PlatformOps::IoStdOut => extract_value_fn1(ms, args, Self::do_io_stdout),
             // math
-            PlatformOps::MathAbs => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.abs())),
-            PlatformOps::MathCeil => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.ceil())),
-            PlatformOps::MathFloor => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.floor())),
-            PlatformOps::MathMax => self.adapter_fn2_ok(ms, args, |ms, a, b| Self::do_math_f2(ms, a, b, |n, m| n.max(m))),
-            PlatformOps::MathMin => self.adapter_fn2_ok(ms, args, |ms, a, b| Self::do_math_f2(ms, a, b, |n, m| n.min(m))),
-            PlatformOps::MathPow => self.adapter_fn2_ok(ms, args, |ms, a, b| Self::do_math_f2(ms, a, b, |n, m| n.pow(m))),
-            PlatformOps::MathRound => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.round())),
-            PlatformOps::MathSqrt => self.adapter_fn1_ok(ms, args, |ms, value| Self::do_math_f1(ms, value, |n| n.sqrt())),
+            PlatformOps::MathAbs => extract_number_fn1(ms, args, |n| n.abs()),
+            PlatformOps::MathCeil => extract_number_fn1(ms, args, |n| n.ceil()),
+            PlatformOps::MathFloor => extract_number_fn1(ms, args, |n| n.floor()),
+            PlatformOps::MathMax => extract_number_fn2(ms, args, |n, m| n.max(m)),
+            PlatformOps::MathMin => extract_number_fn2(ms, args, |n, m| n.min(m)),
+            PlatformOps::MathPow => extract_number_fn2(ms, args, |n, m| n.pow(m)),
+            PlatformOps::MathRound => extract_number_fn1(ms, args, |n| n.round()),
+            PlatformOps::MathSqrt => extract_number_fn1(ms, args, |n| n.sqrt()),
             // os
             PlatformOps::OsCall => Self::do_os_call(ms, args),
-            PlatformOps::OsCurrentDir => self.adapter_fn0_ok(ms, args, Self::do_os_current_dir),
-            PlatformOps::OsClear => self.adapter_fn0_ok(ms, args, Self::do_os_clear_screen),
-            PlatformOps::OsEnv => Ok(self.adapter_fn0(ms, args, Self::do_os_env)),
+            PlatformOps::OsCurrentDir => extract_value_fn0(ms, args, Self::do_os_current_dir),
+            PlatformOps::OsClear => extract_value_fn0(ms, args, Self::do_os_clear_screen),
+            PlatformOps::OsEnv => extract_value_fn0(ms, args, Self::do_os_env),
             // oxide
-            PlatformOps::OxideCompile => self.adapter_fn1_ok(ms, args, Self::do_oxide_compile),
-            PlatformOps::OxideDebug => self.adapter_fn1_ok(ms, args, Self::do_oxide_debug),
-            PlatformOps::OxideEval => self.adapter_fn1_ok(ms, args, Self::do_oxide_eval),
-            PlatformOps::OxideHelp => Ok(self.adapter_fn0(ms, args, Self::do_oxide_help)),
+            PlatformOps::OxideCompile => extract_value_fn1(ms, args, Self::do_oxide_compile),
+            PlatformOps::OxideDebug => extract_value_fn1(ms, args, Self::do_oxide_debug),
+            PlatformOps::OxideEval => extract_value_fn1(ms, args, Self::do_oxide_eval),
+            PlatformOps::OxideHelp => extract_value_fn0(ms, args, Self::do_oxide_help),
             PlatformOps::OxideHistory => Self::do_oxide_history(ms, args),
-            PlatformOps::OxideHome => Ok(self.adapter_fn0(ms, args, Self::do_oxide_home)),
-            PlatformOps::OxidePrintln => self.adapter_fn1_ok(ms, args, Self::do_io_stdout),
-            PlatformOps::OxideReset => Ok(self.adapter_fn0(ms, args, Self::do_oxide_reset)),
+            PlatformOps::OxideHome => extract_value_fn0(ms, args, |ms| Ok((ms, StringValue(Machine::oxide_home())))),
+            PlatformOps::OxidePrintln => extract_value_fn1(ms, args, Self::do_io_stdout),
+            PlatformOps::OxideReset => extract_value_fn0(ms, args, |ms| Ok((Machine::new_platform(), Boolean(true)))),
             PlatformOps::OxideUUID => Self::do_util_uuid(ms, args),
-            PlatformOps::OxideVersion => Ok(self.adapter_fn0(ms, args, Self::do_oxide_version)),
+            PlatformOps::OxideVersion => extract_value_fn0(ms, args, Self::do_oxide_version),
             // str
-            PlatformOps::StrEndsWith => self.adapter_fn2_ok(ms, args, Self::do_str_ends_with),
-            PlatformOps::StrFormat => Ok(Self::do_str_format(ms, args)),
-            PlatformOps::StrIndexOf => self.adapter_fn2_ok(ms, args, Self::do_str_index_of),
-            PlatformOps::StrJoin => Ok(self.adapter_fn2(ms, args, Self::do_str_join)),
-            PlatformOps::StrLeft => Ok(self.adapter_fn2(ms, args, Self::do_str_left)),
-            PlatformOps::StrLen => Ok(self.adapter_fn1(ms, args, Self::do_str_len)),
-            PlatformOps::StrRight => Ok(self.adapter_fn2(ms, args, Self::do_str_right)),
-            PlatformOps::StrSplit => Ok(self.adapter_fn2(ms, args, Self::do_str_split)),
-            PlatformOps::StrStartsWith => Ok(self.adapter_fn2(ms, args, Self::do_str_start_with)),
-            PlatformOps::StrStripMargin => self.adapter_fn2_ok(ms, args, Self::do_str_strip_margin),
-            PlatformOps::StrSubstring => Ok(self.adapter_fn3(ms, args, Self::do_str_substring)),
-            PlatformOps::StrToString => Ok(self.adapter_fn1(ms, args, Self::do_str_to_string)),
+            PlatformOps::StrEndsWith => extract_value_fn2(ms, args, Self::do_str_ends_with),
+            PlatformOps::StrFormat => Self::do_str_format(ms, args),
+            PlatformOps::StrIndexOf => extract_value_fn2(ms, args, Self::do_str_index_of),
+            PlatformOps::StrJoin => extract_value_fn2(ms, args, Self::do_str_join),
+            PlatformOps::StrLeft => extract_value_fn2(ms, args, Self::do_str_left),
+            PlatformOps::StrLen => extract_value_fn1(ms, args, Self::do_str_len),
+            PlatformOps::StrRight => extract_value_fn2(ms, args, Self::do_str_right),
+            PlatformOps::StrSplit => extract_value_fn2(ms, args, Self::do_str_split),
+            PlatformOps::StrStartsWith => extract_value_fn2(ms, args, Self::do_str_start_with),
+            PlatformOps::StrStripMargin => extract_value_fn2(ms, args, Self::do_str_strip_margin),
+            PlatformOps::StrSubstring => extract_value_fn3(ms, args, Self::do_str_substring),
+            PlatformOps::StrToString => extract_value_fn1(
+                ms, args, |ms, v| Ok((ms, StringValue(v.unwrap_value())))),
             // testing
-            PlatformOps::TestingAssert => Ok(self.adapter_fn1(ms, args, Self::do_testing_assert)),
-            PlatformOps::TestingFeature => self.adapter_fn2_ok(ms, args, Self::do_testing_feature),
-            PlatformOps::TestingMatches => Ok(self.adapter_fn2(ms, args, Self::do_testing_matches)),
-            PlatformOps::TestingTypeOf => Ok(self.adapter_fn1(ms, args, Self::do_testing_type_of)),
+            PlatformOps::TestingAssert => extract_value_fn1(ms, args, Self::do_testing_assert),
+            PlatformOps::TestingFeature => extract_value_fn2(ms, args, Self::do_testing_feature),
+            PlatformOps::TestingMatches => extract_value_fn2(ms, args, Self::do_testing_matches),
+            PlatformOps::TestingTypeOf => extract_value_fn1(ms, args, Self::do_testing_type_of),
             // tools
-            PlatformOps::ToolsCompact => self.adapter_fn1_ok(ms, args, Self::do_tools_compact),
-            PlatformOps::ToolsDescribe => self.adapter_fn1_ok(ms, args, Self::do_tools_describe),
-            PlatformOps::ToolsFetch => self.adapter_fn2_ok(ms, args, Self::do_tools_fetch),
-            PlatformOps::ToolsFilter => self.adapter_fn2_ok(ms, args, Self::do_tools_filter),
-            PlatformOps::ToolsJournal => self.adapter_fn1_ok(ms, args, Self::do_tools_journal),
-            PlatformOps::ToolsMap => self.adapter_fn2_ok(ms, args, Self::do_tools_map),
-            PlatformOps::ToolsPop => self.adapter_fn1_ok(ms, args, Self::do_tools_pop),
+            PlatformOps::ToolsCompact => extract_value_fn1(ms, args, Self::do_tools_compact),
+            PlatformOps::ToolsDescribe => extract_value_fn1(ms, args, Self::do_tools_describe),
+            PlatformOps::ToolsFetch => extract_value_fn2(ms, args, Self::do_tools_fetch),
+            PlatformOps::ToolsFilter => extract_value_fn2(ms, args, Self::do_tools_filter),
+            PlatformOps::ToolsJournal => extract_value_fn1(ms, args, Self::do_tools_journal),
+            PlatformOps::ToolsLen => extract_value_fn1(ms, args, Self::do_tools_length),
+            PlatformOps::ToolsMap => extract_value_fn2(ms, args, Self::do_tools_map),
+            PlatformOps::ToolsPop => extract_value_fn1(ms, args, Self::do_tools_pop),
             PlatformOps::ToolsPush => Self::do_tools_push(ms, args),
-            PlatformOps::ToolsReplay => self.adapter_fn1_ok(ms, args, Self::do_tools_replay),
-            PlatformOps::ToolsReverse => self.adapter_fn1_ok(ms, args, Self::do_tools_reverse),
-            PlatformOps::ToolsRowId => Ok(self.adapter_fn0(ms, args, Self::do_tools_row_id)),
-            PlatformOps::ToolsScan => self.adapter_fn1_ok(ms, args, Self::do_tools_scan),
-            PlatformOps::ToolsToArray => Ok(self.adapter_fn1(ms, args, Self::do_tools_to_array)),
-            PlatformOps::ToolsToCSV => self.adapter_fn1_ok(ms, args, Self::do_tools_to_csv),
-            PlatformOps::ToolsToJSON => self.adapter_fn1_ok(ms, args, Self::do_tools_to_json),
-            PlatformOps::ToolsToTable => self.adapter_fn1_ok(ms, args, Self::do_tools_to_table),
+            PlatformOps::ToolsReplay => extract_value_fn1(ms, args, Self::do_tools_replay),
+            PlatformOps::ToolsReverse => extract_value_fn1(ms, args, Self::do_tools_reverse),
+            PlatformOps::ToolsRowId => extract_value_fn0(ms, args, Self::do_tools_row_id),
+            PlatformOps::ToolsScan => extract_value_fn1(ms, args, Self::do_tools_scan),
+            PlatformOps::ToolsToArray => extract_array_fn1(ms, args, |a| ArrayValue(a)),
+            PlatformOps::ToolsToCSV => extract_value_fn1(ms, args, Self::do_tools_to_csv),
+            PlatformOps::ToolsToJSON => extract_value_fn1(ms, args, Self::do_tools_to_json),
+            PlatformOps::ToolsToTable => extract_value_fn1(ms, args, Self::do_tools_to_table),
             // util
-            PlatformOps::UtilBase64 => Ok(self.adapter_fn1(ms, args, Self::do_util_base64)),
-            PlatformOps::UtilBinary => Ok(self.adapter_fn1(ms, args, Self::do_util_binary)),
-            PlatformOps::UtilGzip => self.adapter_fn1_ok(ms, args, Self::do_util_gzip),
-            PlatformOps::UtilGunzip => self.adapter_fn1_ok(ms, args, Self::do_util_gunzip),
-            PlatformOps::UtilMD5 => Ok(self.adapter_fn1(ms, args, Self::do_util_md5)),
-            PlatformOps::UtilToASCII => Ok(self.adapter_fn1(ms, args, Self::do_util_to_ascii)),
-            PlatformOps::UtilHex => Ok(self.adapter_fn1(ms, args, Self::do_util_to_hex)),
-            PlatformOps::UtilToDate => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToF32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToF64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI8 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI16 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToI128 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU8 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU16 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU32 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU64 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
-            PlatformOps::UtilToU128 => self.adapter_fn1_pf(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilBase64 => extract_value_fn1(ms, args, Self::do_util_base64),
+            PlatformOps::UtilBinary => extract_value_fn1(ms, args, Self::do_util_binary),
+            PlatformOps::UtilGzip => extract_value_fn1(ms, args, Self::do_util_gzip),
+            PlatformOps::UtilGunzip => extract_value_fn1(ms, args, Self::do_util_gunzip),
+            PlatformOps::UtilMD5 => extract_value_fn1(ms, args, Self::do_util_md5),
+            PlatformOps::UtilToASCII => extract_value_fn1(ms, args, Self::do_util_to_ascii),
+            PlatformOps::UtilHex => extract_value_fn1(ms, args, Self::do_util_to_hex),
+            PlatformOps::UtilToDate => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToF32 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToF64 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI8 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI16 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI32 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI64 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToI128 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU8 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU16 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU32 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU64 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            PlatformOps::UtilToU128 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
             // www
-            PlatformOps::WwwURLDecode => self.adapter_fn1_ok(ms, args, Self::do_www_url_decode),
-            PlatformOps::WwwURLEncode => self.adapter_fn1_ok(ms, args, Self::do_www_url_encode),
-            PlatformOps::WwwServe => self.adapter_fn1_ok(ms, args, Self::do_www_serve),
+            PlatformOps::WwwURLDecode => extract_value_fn1(ms, args, Self::do_www_url_decode),
+            PlatformOps::WwwURLEncode => extract_value_fn1(ms, args, Self::do_www_url_encode),
+            PlatformOps::WwwServe => extract_value_fn1(ms, args, Self::do_www_serve),
         }
     }
 
     pub fn get_description(&self) -> String {
         let result = match self {
+            // arrays
+            PlatformOps::ArraysFilter => "Filters an array based on a function",
+            PlatformOps::ArraysLen => "Returns the length of an array",
+            PlatformOps::ArraysMap => "Transform an array based on a function",
+            PlatformOps::ArraysPop => "Removes and returns a value or object from an array",
+            PlatformOps::ArraysPush => "Appends a value or object to an array",
+            PlatformOps::ArraysReverse => "Returns a reverse copy of an array",
+            PlatformOps::ArraysToArray => "Converts a collection into an array",
             // cal
             PlatformOps::CalNow => "Returns the current local date and time",
             PlatformOps::CalDateDay => "Returns the day of the month of a Date",
@@ -443,6 +473,7 @@ impl PlatformOps {
             PlatformOps::ToolsFetch => "Retrieves a raw structure from a table",
             PlatformOps::ToolsFilter => "Filters a collection based on a function",
             PlatformOps::ToolsJournal => "Retrieves the journal for an event-source or table function",
+            PlatformOps::ToolsLen => "Returns the length of a table",
             PlatformOps::ToolsMap => "Transform a collection based on a function",
             PlatformOps::ToolsPop => "Removes and returns a value or object from a Sequence",
             PlatformOps::ToolsPush => "Appends a value or object to a Sequence",
@@ -483,363 +514,522 @@ impl PlatformOps {
         result.to_string()
     }
 
-    pub fn get_example(&self) -> String {
-        match self {
+    pub fn get_examples(&self) -> Vec<String> {
+        let examples = match self {
+            // arrays
+            PlatformOps::ArraysFilter => vec![
+                strip_margin(r#"
+                    |arrays::filter(1..7, fn(n) => (n % 2) == 0)
+               "#, '|')
+            ],
+            PlatformOps::ArraysLen => vec![
+                strip_margin(r#"
+                    |arrays::len([1, 5, 2, 4, 6, 0])
+               "#, '|')
+            ],
+            PlatformOps::ArraysMap => vec![
+                strip_margin(r#"
+                    |arrays::map([1, 2, 3], fn(n) => n * 2)
+               "#, '|')
+            ],
+            PlatformOps::ArraysPop => vec![
+                strip_margin(r#"
+                    |import arrays
+                    |stocks := []
+                    |stocks:::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
+                    |stocks:::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
+                    |stocks
+                "#, '|')
+            ],
+            PlatformOps::ArraysPush => vec![
+                strip_margin(r#"
+                    |import arrays
+                    |stocks := [
+                    |    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    |    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    |    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                    |]
+                    |stocks:::push({ symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
+                    |from stocks
+                "#, '|')
+            ],
+            PlatformOps::ArraysReverse => vec![
+                strip_margin(r#"
+                    |arrays::reverse(['cat', 'dog', 'ferret', 'mouse'])
+                "#, '|')
+            ],
+            PlatformOps::ArraysToArray => vec![
+                strip_margin(r#"
+                    |arrays::to_array(tools::to_table([
+                    |   { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    |   { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
+                    |]))
+                "#, '|')
+            ],
             // cal
-            PlatformOps::CalNow => "cal::now()".to_string(),
-            PlatformOps::CalDateDay => strip_margin(r#"
-                |import cal
-                |now():::day_of()
-            "#, '|'),
-            PlatformOps::CalDateHour12 => strip_margin(r#"
-                |import cal
-                |now():::hour12()
-            "#, '|'),
-            PlatformOps::CalDateHour24 => strip_margin(r#"
-                |import cal
-                |now():::hour24()
-            "#, '|'),
-            PlatformOps::CalDateMinute => strip_margin(r#"
-                |import cal
-                |now():::minute_of()
-            "#, '|'),
-            PlatformOps::CalDateMonth => strip_margin(r#"
-                |import cal
-                |now():::month_of()
-            "#, '|'),
-            PlatformOps::CalDateSecond => strip_margin(r#"
-                |import cal
-                |now():::second_of()
-            "#, '|'),
-            PlatformOps::CalDateYear => strip_margin(r#"
-                |import cal
-                |now():::year_of()
-            "#, '|'),
+            PlatformOps::CalNow => vec!["cal::now()".to_string()],
+            PlatformOps::CalDateDay => vec![
+                strip_margin(r#"
+                    |import cal
+                    |now():::day_of()
+                "#, '|')
+            ],
+            PlatformOps::CalDateHour12 => vec![
+                strip_margin(r#"
+                    |import cal
+                    |now():::hour12()
+                "#, '|')
+            ],
+            PlatformOps::CalDateHour24 => vec![
+                strip_margin(r#"
+                    |import cal
+                    |now():::hour24()
+                "#, '|')
+            ],
+            PlatformOps::CalDateMinute => vec![
+                strip_margin(r#"
+                    |import cal
+                    |now():::minute_of()
+                "#, '|')
+            ],
+            PlatformOps::CalDateMonth => vec![
+                strip_margin(r#"
+                    |import cal
+                    |now():::month_of()
+                "#, '|')
+            ],
+            PlatformOps::CalDateSecond => vec![
+                strip_margin(r#"
+                    |import cal
+                    |now():::second_of()
+                "#, '|')
+            ],
+            PlatformOps::CalDateYear => vec![
+                strip_margin(r#"
+                    |import cal
+                    |now():::year_of()
+                "#, '|')
+            ],
             // durations
-            PlatformOps::DurationsDays => strip_margin(r#"
-                |import durations
-                |3:::days()
-            "#, '|'),
-            PlatformOps::DurationsHours => strip_margin(r#"
-                |import durations
-                |8:::hours()
-            "#, '|'),
-            PlatformOps::DurationsMillis => strip_margin(r#"
-                |import durations
-                |8:::millis()
-            "#, '|'),
-            PlatformOps::DurationsMinutes => strip_margin(r#"
-                |import durations
-                |30:::minutes()
-            "#, '|'),
-            PlatformOps::DurationsSeconds => strip_margin(r#"
-                |import durations
-                |30:::seconds()
-            "#, '|'),
+            PlatformOps::DurationsDays => vec![
+                strip_margin(r#"
+                    |import durations
+                    |3:::days()
+                "#, '|')
+            ],
+            PlatformOps::DurationsHours => vec![
+                strip_margin(r#"
+                    |import durations
+                    |8:::hours()
+                "#, '|')
+            ],
+            PlatformOps::DurationsMillis => vec![
+                strip_margin(r#"
+                    |import durations
+                    |8:::millis()
+                "#, '|')
+            ],
+            PlatformOps::DurationsMinutes => vec![
+                strip_margin(r#"
+                    |import durations
+                    |30:::minutes()
+                "#, '|')
+            ],
+            PlatformOps::DurationsSeconds => vec![
+                strip_margin(r#"
+                    |import durations
+                    |30:::seconds()
+                "#, '|')
+            ],
             // io
-            PlatformOps::IoFileCreate => strip_margin(r#"
-                |io::create_file("quote.json", {
-                |   symbol: "TRX",
-                |   exchange: "NYSE",
-                |   last_sale: 45.32
-                |})
-            "#, '|'),
-            PlatformOps::IoFileExists => r#"io::exists("quote.json")"#.to_string(),
-            PlatformOps::IoFileReadText => strip_margin(r#"
-                |import io, util
-                |file := "temp_secret.txt"
-                |file:::create_file(md5("**keep**this**secret**"))
-                |file:::read_text_file()
-            "#, '|'),
-            PlatformOps::IoStdErr => r#"io::stderr("Goodbye Cruel World")"#.to_string(),
-            PlatformOps::IoStdOut => r#"io::stdout("Hello World")"#.to_string(),
+            PlatformOps::IoFileCreate => vec![
+                strip_margin(r#"
+                    |io::create_file("quote.json", {
+                    |   symbol: "TRX",
+                    |   exchange: "NYSE",
+                    |   last_sale: 45.32
+                    |})
+                "#, '|')
+            ],
+            PlatformOps::IoFileExists => vec![
+                r#"io::exists("quote.json")"#.to_string()
+            ],
+            PlatformOps::IoFileReadText => vec![
+                strip_margin(r#"
+                    |import io, util
+                    |file := "temp_secret.txt"
+                    |file:::create_file(md5("**keep**this**secret**"))
+                    |file:::read_text_file()
+                "#, '|')
+            ],
+            PlatformOps::IoStdErr => vec![
+                r#"io::stderr("Goodbye Cruel World")"#.to_string()
+            ],
+            PlatformOps::IoStdOut => vec![
+                r#"io::stdout("Hello World")"#.to_string()
+            ],
             // math
-            PlatformOps::MathAbs => "math::abs(-81)".into(),
-            PlatformOps::MathCeil => "math::ceil(5)".into(),
-            PlatformOps::MathFloor => "math::floor(5)".into(),
-            PlatformOps::MathMax => "math::max(81, 78)".into(),
-            PlatformOps::MathMin => "math::min(81, 78)".into(),
-            PlatformOps::MathPow => "math::pow(2, 3)".into(),
-            PlatformOps::MathRound => "math::round(5.7)".into(),
-            PlatformOps::MathSqrt => "math::sqrt(25)".into(),
+            PlatformOps::MathAbs => vec!["math::abs(-81)".into()],
+            PlatformOps::MathCeil => vec!["math::ceil(5.7)".into()],
+            PlatformOps::MathFloor => vec!["math::floor(5.7)".into()],
+            PlatformOps::MathMax => vec!["math::max(81, 78)".into()],
+            PlatformOps::MathMin => vec!["math::min(81, 78)".into()],
+            PlatformOps::MathPow => vec!["math::pow(2, 3)".into()],
+            PlatformOps::MathRound => vec!["math::round(5.3)".into()],
+            PlatformOps::MathSqrt => vec!["math::sqrt(25)".into()],
+            // os
+            PlatformOps::OsCall => vec![
+                strip_margin(r#"
+                    |create table ns("examples.os.call") (
+                    |    symbol: String(8),
+                    |    exchange: String(8),
+                    |    last_sale: f64
+                    |)
+                    |os::call("chmod", "777", oxide::home())
+                "#, '|')
+            ],
+            PlatformOps::OsClear => vec!["os::clear()".into()],
+            PlatformOps::OsCurrentDir => vec![
+                strip_margin(r#"
+                    |import str
+                    |cur_dir := os::current_dir()
+                    |prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
+                    |path_str := prefix + "/demoes/language/include_file.oxide"
+                    |include path_str
+                "#, '|')
+            ],
+            PlatformOps::OsEnv => vec!["os::env()".into()],
+            PlatformOps::OxideCompile => vec![
+                strip_margin(r#"
+                    |code := oxide::compile("2 ** 4")
+                    |code()
+                "#, '|')
+            ],
+            PlatformOps::OxideDebug => vec![r#"oxide::debug("2 ** 4")"#.into()],
+            PlatformOps::OxidePrintln => vec![r#"oxide::println("Hello World")"#.into()],
+            PlatformOps::OxideEval => vec![
+                strip_margin(r#"
+                    |a := 'Hello '
+                    |b := 'World'
+                    |oxide::eval("a + b")
+                "#, '|')
+            ],
+            PlatformOps::OxideHelp => vec![r#"from oxide::help() limit 3"#.into()],
+            PlatformOps::OxideHistory => vec!["from oxide::history() limit 3".into()],
+            PlatformOps::OxideHome => vec!["oxide::home()".into()],
+            PlatformOps::OxideReset => vec!["oxide::reset()".into()],
+            PlatformOps::OxideUUID => vec!["oxide::uuid()".into()],
+            PlatformOps::OxideVersion => vec!["oxide::version()".into()],
+            // str
+            PlatformOps::StrEndsWith => vec![r#"str::ends_with('Hello World', 'World')"#.into()],
+            PlatformOps::StrFormat => vec![r#"str::format("This {} the {}", "is", "way")"#.into()],
+            PlatformOps::StrIndexOf => vec![r#"str::index_of('The little brown fox', 'brown')"#.into()],
+            PlatformOps::StrJoin => vec![r#"str::join(['1', 5, 9, '13'], ', ')"#.into()],
+            PlatformOps::StrLeft => vec![r#"str::left('Hello World', 5)"#.into()],
+            PlatformOps::StrLen => vec![r#"str::len('The little brown fox')"#.into()],
+            PlatformOps::StrRight => vec!["str::right('Hello World', 5)".into()],
+            PlatformOps::StrSplit => vec![r#"str::split('Hello,there World', ' ,')"#.into()],
+            PlatformOps::StrStartsWith => vec!["str::starts_with('Hello World', 'World')".into()],
+            PlatformOps::StrStripMargin => vec![
+                strip_margin(r#"
+                    ^str::strip_margin("
+                    ^|Code example:
+                    ^|
+                    ^|from stocks
+                    ^|where exchange is 'NYSE'
+                    ^", '|')"#, '^')
+            ],
+            PlatformOps::StrSubstring => vec![
+                "str::substring('Hello World', 0, 5)".into()
+            ],
+            PlatformOps::StrToString => vec![
+                "str::to_string(125.75)".into()
+            ],
             // testing
-            PlatformOps::TestingAssert => strip_margin(r#"
-                |import testing
-                |assert(matches(
-                |   [ 1 "a" "b" "c" ],
-                |   [ 1 "a" "b" "c" ]
-                |))
-            "#, '|'),
-            PlatformOps::TestingFeature => strip_margin(r#"
-                |import testing
-                |feature("Matches function", {
-                |    "Compare Array contents: Equal": fn(ctx) => {
-                |        assert(matches(
-                |            [ 1 "a" "b" "c" ],
-                |            [ 1 "a" "b" "c" ]))
-                |    },
-                |    "Compare Array contents: Not Equal": fn(ctx) => {
-                |        assert(!matches(
-                |            [ 1 "a" "b" "c" ],
-                |            [ 0 "x" "y" "z" ]))
-                |    },
-                |    "Compare JSON contents (in sequence)": fn(ctx) => {
-                |        assert(matches(
-                |            { first: "Tom" last: "Lane" },
-                |            { first: "Tom" last: "Lane" }))
-                |    },
-                |    "Compare JSON contents (out of sequence)": fn(ctx) => {
-                |        assert(matches(
-                |            { scores: [82 78 99], id: "A1537" },
-                |            { id: "A1537", scores: [82 78 99] }))
-                |    }
-                })"#, '|'),
-            PlatformOps::TestingMatches => strip_margin(r#"
-                |import testing::matches
-                |a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-                |b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
-                |matches(a, b)
-            "#, '|'),
-            PlatformOps::TestingTypeOf => "testing::type_of([12, 76, 444])".to_string(),
-            PlatformOps::OsCall => strip_margin(r#"
-                |create table ns("platform.os.call") (
-                |    symbol: String(8),
-                |    exchange: String(8),
-                |    last_sale: f64
-                |)
-                |os::call("chmod", "777", oxide::home())
-            "#, '|'),
-            PlatformOps::OsClear => "os::clear()".to_string(),
-            PlatformOps::OsCurrentDir => strip_margin(r#"
-                |import str
-                |cur_dir := os::current_dir()
-                |prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
-                |path_str := prefix + "/demoes/language/include_file.oxide"
-                |include path_str
-            "#, '|'),
-            PlatformOps::OsEnv => "os::env()".to_string(),
-            PlatformOps::OxideCompile => strip_margin(r#"
-                |code := oxide::compile("2 ** 4")
-                |code()
-            "#, '|'),
-            PlatformOps::OxideDebug => r#"oxide::debug("2 ** 4")"#.to_string(),
-            PlatformOps::OxidePrintln => r#"oxide::println("Hello World")"#.to_string(),
-            PlatformOps::OxideEval => strip_margin(r#"
-                |a := 'Hello '
-                |b := 'World'
-                |oxide::eval("a + b")
-            "#, '|'),
-            PlatformOps::OxideHelp => r#"from oxide::help() limit 3"#.to_string(),
-            PlatformOps::OxideHistory => "from oxide::history() limit 3".to_string(),
-            PlatformOps::OxideHome => "oxide::home()".to_string(),
-            PlatformOps::OxideReset => "oxide::reset()".to_string(),
-            PlatformOps::OxideUUID => "oxide::uuid()".to_string(),
-            PlatformOps::OxideVersion => "oxide::version()".to_string(),
-            PlatformOps::StrEndsWith => r#"str::ends_with('Hello World', 'World')"#.to_string(),
-            PlatformOps::StrFormat => r#"str::format("This {} the {}", "is", "way")"#.to_string(),
-            PlatformOps::StrIndexOf => r#"str::index_of('The little brown fox', 'brown')"#.to_string(),
-            PlatformOps::StrJoin => r#"str::join(['1', 5, 9, '13'], ', ')"#.to_string(),
-            PlatformOps::StrLeft => r#"str::left('Hello World', 5)"#.to_string(),
-            PlatformOps::StrLen => r#"str::len('The little brown fox')"#.to_string(),
-            PlatformOps::StrRight => "str::right('Hello World', 5)".to_string(),
-            PlatformOps::StrSplit => r#"str::split('Hello,there World', ' ,')"#.to_string(),
-            PlatformOps::StrStartsWith => "str::starts_with('Hello World', 'World')".to_string(),
-            PlatformOps::StrStripMargin => strip_margin(r#"
-                ^str::strip_margin("
-                ^|Code example:
-                ^|
-                ^|from stocks
-                ^|where exchange is 'NYSE'
-                ^", '|')"#, '^',
-            ),
-            PlatformOps::StrSubstring => "str::substring('Hello World', 0, 5)".to_string(),
-            PlatformOps::StrToString => "str::to_string(125.75)".to_string(),
-            PlatformOps::ToolsCompact => strip_margin(r#"
-                |[+] stocks := ns("platform.compact.stocks")
-                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |[+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
-                |     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                |     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                |     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                |     { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                |     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
-                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                |[+] delete from stocks where last_sale > 1.0
-                |[+] from stocks
-            "#, '|'),
-            PlatformOps::ToolsDescribe => strip_margin(r#"
-                |tools::describe({
-                |   symbol: "BIZ",
-                |   exchange: "NYSE",
-                |   last_sale: 23.66
-                |})
-            "#, '|'),
-            PlatformOps::ToolsFetch => strip_margin(r#"
-                |[+] stocks := ns("platform.fetch.stocks")
-                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                |     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                |[+] tools::fetch(stocks, 2)
-            "#, '|'),
-            PlatformOps::ToolsFilter => strip_margin(r#"
-                |tools::filter(1..11, fn(n) => (n % 2) == 0)
-            "#, '|'),
-            PlatformOps::ToolsJournal => strip_margin(r#"
-                |import tools
-                |stocks := ns("platform.journal.stocks")
-                |drop table stocks
-                |create table stocks fn(
-                |   symbol: String(8), exchange: String(8), last_sale: f64
-                |) => {
-                |    symbol: symbol,
-                |    exchange: exchange,
-                |    last_sale: last_sale,
-                |    ingest_time: cal::now()
-                |}
-                |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                |stocks:::journal()
-            "#, '|'),
-            PlatformOps::ToolsMap => strip_margin(r#"
-                |stocks := ns("platform.map_over_table.stocks")
-                |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
-                | { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
-                | { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
-                |import tools
-                |stocks:::map(fn(row) => {
-                |    symbol: symbol,
-                |    exchange: exchange,
-                |    last_sale: last_sale,
-                |    processed_time: cal::now()
-                |})
-            "#, '|'),
-            PlatformOps::ToolsPop => strip_margin(r#"
-                |import tools
-                |[+] stocks := ns("platform.pop.stocks")
-                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                |     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                |[+] stocks::pop(stocks)
-            "#, '|'),
-            PlatformOps::ToolsPush => strip_margin(r#"
-                |import tools
-                |[+] stocks := ns("platform.push.stocks")
-                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                |     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                |[+] stocks::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
-                |[+] stocks
-            "#, '|'),
-            PlatformOps::ToolsReplay => strip_margin(r#"
-                |import tools
-                |stocks := ns("platform.table_fn.stocks")
-                |drop table stocks
-                |create table stocks fn(
-                |   symbol: String(8), exchange: String(8), last_sale: f64
-                |) => {
-                |    symbol: symbol,
-                |    exchange: exchange,
-                |    last_sale: last_sale * 2.0,
-                |    rank: __row_id__ + 1
-                |}
-                |[{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                | { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                |stocks:::replay()
-            "#, '|'),
-            PlatformOps::ToolsReverse => strip_margin(r#"
-                |import tools
-                |to_table(reverse(
-                |   ['cat', 'dog', 'ferret', 'mouse']
-                |))
-            "#, '|'),
-            PlatformOps::ToolsRowId => strip_margin(r#"
-                tools::row_id()
-            "#, '|'),
-            PlatformOps::ToolsScan => strip_margin(r#"
-                |[+] import tools
-                |[+] stocks := ns("platform.scan.stocks")
-                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
-                |     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                |     { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
-                |     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
-                |     { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
-                |[+] delete from stocks where last_sale > 1.0
-                |[+] stocks:::scan()
-            "#, '|'),
-            PlatformOps::ToolsToArray => r#"tools::to_array("Hello")"#.to_string(),
-            PlatformOps::ToolsToCSV => strip_margin(r#"
-                |import tools::to_csv
-                |[+] stocks := ns("platform.csv.stocks")
-                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                |     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                |     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                |     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                |     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-                |stocks:::to_csv()
-            "#, '|'),
-            PlatformOps::ToolsToJSON => strip_margin(r#"
-                |import tools::to_json
-                |[+] stocks := ns("platform.json.stocks")
-                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |[+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                |     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                |     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                |     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                |     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-                |stocks:::to_json()
-            "#, '|'),
-            PlatformOps::ToolsToTable => strip_margin(r#"
-                |tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
-            "#, '|'),
-            PlatformOps::UtilBase64 => "util::base64('Hello World')".to_string(),
-            PlatformOps::UtilBinary => "util::to_binary(0b1011 & 0b1101)".to_string(),
-            PlatformOps::UtilGzip => "util::gzip('Hello World')".to_string(),
-            PlatformOps::UtilGunzip => "util::gunzip(util::gzip('Hello World'))".to_string(),
-            PlatformOps::UtilHex => "util::hex('Hello World')".to_string(),
-            PlatformOps::UtilMD5 => "util::md5('Hello World')".to_string(),
-            PlatformOps::UtilToASCII => "util::to_ascii(177)".to_string(),
-            PlatformOps::UtilToDate => "util::to_date(177)".to_string(),
-            PlatformOps::UtilToF32 => "util::to_f32(4321)".to_string(),
-            PlatformOps::UtilToF64 => "util::to_f64(4321)".to_string(),
-            PlatformOps::UtilToI8 => "util::to_i8(88)".to_string(),
-            PlatformOps::UtilToI16 => "util::to_i16(88)".to_string(),
-            PlatformOps::UtilToI32 => "util::to_i32(88)".to_string(),
-            PlatformOps::UtilToI64 => "util::to_i64(88)".to_string(),
-            PlatformOps::UtilToI128 => "util::to_i128(88)".to_string(),
-            PlatformOps::UtilToU8 => "util::to_u8(88)".to_string(),
-            PlatformOps::UtilToU16 => "util::to_u16(88)".to_string(),
-            PlatformOps::UtilToU32 => "util::to_u32(88)".to_string(),
-            PlatformOps::UtilToU64 => "util::to_u64(88)".to_string(),
-            PlatformOps::UtilToU128 => "util::to_u128(88)".to_string(),
-            PlatformOps::WwwServe => strip_margin(r#"
-                |[+] www::serve(8822)
-                |[+] stocks := ns("platform.www.quotes")
-                |[+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |[+] [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
-                |     { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
-                |     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
-                |     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                |     { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
-                |GET http://localhost:8822/platform/www/quotes/1/4
-            "#, '|'),
-            PlatformOps::WwwURLDecode => "www::url_decode('http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998')".to_string(),
-            PlatformOps::WwwURLEncode => "www::url_encode('http://shocktrade.com?name=the hero&t=9998')".to_string(),
-        }
+            PlatformOps::TestingAssert => vec![
+                strip_margin(r#"
+                    |import testing
+                    |assert(matches(
+                    |   [ 1 "a" "b" "c" ],
+                    |   [ 1 "a" "b" "c" ]
+                    |))
+                "#, '|')
+            ],
+            PlatformOps::TestingFeature => vec![
+                strip_margin(r#"
+                    |import testing
+                    |feature("Matches function", {
+                    |    "Compare Array contents: Equal": fn(ctx) => {
+                    |        assert(matches(
+                    |            [ 1 "a" "b" "c" ],
+                    |            [ 1 "a" "b" "c" ]))
+                    |    },
+                    |    "Compare Array contents: Not Equal": fn(ctx) => {
+                    |        assert(!matches(
+                    |            [ 1 "a" "b" "c" ],
+                    |            [ 0 "x" "y" "z" ]))
+                    |    },
+                    |    "Compare JSON contents (in sequence)": fn(ctx) => {
+                    |        assert(matches(
+                    |            { first: "Tom" last: "Lane" },
+                    |            { first: "Tom" last: "Lane" }))
+                    |    },
+                    |    "Compare JSON contents (out of sequence)": fn(ctx) => {
+                    |        assert(matches(
+                    |            { scores: [82 78 99], id: "A1537" },
+                    |            { id: "A1537", scores: [82 78 99] }))
+                    |    }
+                    })"#, '|')
+            ],
+            PlatformOps::TestingMatches => vec![
+                strip_margin(r#"
+                    |import testing::matches
+                    |a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
+                    |b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
+                    |matches(a, b)
+                "#, '|')
+            ],
+            PlatformOps::TestingTypeOf => vec![
+                "testing::type_of([12, 76, 444])".into()
+            ],
+            // tools
+            PlatformOps::ToolsCompact => vec![
+                strip_margin(r#"
+                    |stocks := ns("examples.compact.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+                    | { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    | { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    | { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                    | { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                    | { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+                    | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                    |delete from stocks where last_sale > 1.0
+                    |from stocks
+                "#, '|')
+            ],
+            PlatformOps::ToolsDescribe => vec![
+                strip_margin(r#"
+                    |tools::describe({
+                    |   symbol: "BIZ",
+                    |   exchange: "NYSE",
+                    |   last_sale: 23.66
+                    |})
+                "#, '|')
+            ],
+            PlatformOps::ToolsFetch => vec![
+                strip_margin(r#"
+                    |stocks := ns("examples.fetch.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                    |tools::fetch(stocks, 2)
+                "#, '|')
+            ],
+            PlatformOps::ToolsFilter => vec![
+                strip_margin(r#"
+                    |tools::filter(1..11, fn(n) => (n % 2) == 0)
+                "#, '|')
+            ],
+            PlatformOps::ToolsJournal => vec![
+                strip_margin(r#"
+                    |import tools
+                    |stocks := ns("examples.journal.stocks")
+                    |drop table stocks
+                    |create table stocks fn(
+                    |   symbol: String(8), exchange: String(8), last_sale: f64
+                    |) => {
+                    |    symbol: symbol,
+                    |    exchange: exchange,
+                    |    last_sale: last_sale,
+                    |    ingest_time: cal::now()
+                    |}
+                    |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                    |stocks:::journal()
+                "#, '|')
+            ],
+            PlatformOps::ToolsLen => vec![
+                strip_margin(r#"
+                    |stocks := ns("examples.table_len.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+                    | { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+                    | { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
+                    |tools::len(stocks)
+                "#, '|')
+            ],
+            PlatformOps::ToolsMap => vec![
+                strip_margin(r#"
+                    |stocks := ns("examples.map_over_table.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+                    | { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+                    | { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
+                    |import tools
+                    |stocks:::map(fn(row) => {
+                    |    symbol: symbol,
+                    |    exchange: exchange,
+                    |    last_sale: last_sale,
+                    |    processed_time: cal::now()
+                    |})
+                "#, '|')
+            ],
+            PlatformOps::ToolsPop => vec![
+                strip_margin(r#"
+                    |import tools
+                    |stocks := ns("examples.tools_pop.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                    |stocks:::pop()
+                "#, '|')
+            ],
+            PlatformOps::ToolsPush => vec![
+                strip_margin(r#"
+                    |import tools
+                    |stocks := ns("examples.push.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                    |stocks:::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
+                    |stocks
+                "#, '|')
+            ],
+            PlatformOps::ToolsReplay => vec![
+                strip_margin(r#"
+                    |import tools
+                    |stocks := ns("examples.table_fn.stocks")
+                    |drop table stocks
+                    |create table stocks fn(
+                    |   symbol: String(8), exchange: String(8), last_sale: f64
+                    |) => {
+                    |    symbol: symbol,
+                    |    exchange: exchange,
+                    |    last_sale: last_sale * 2.0,
+                    |    rank: __row_id__ + 1
+                    |}
+                    |[{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    | { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                    |stocks:::replay()
+                "#, '|')
+            ],
+            PlatformOps::ToolsReverse => vec![
+                strip_margin(r#"
+                    |import tools
+                    |to_table(reverse(
+                    |   ['cat', 'dog', 'ferret', 'mouse']
+                    |))
+                "#, '|')
+            ],
+            PlatformOps::ToolsRowId => vec!["tools::row_id()".into()],
+            PlatformOps::ToolsScan => vec![
+                strip_margin(r#"
+                    |import tools
+                    |stocks := ns("examples.scan.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+                    | { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    | { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+                    | { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
+                    | { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
+                    |delete from stocks where last_sale > 1.0
+                    |stocks:::scan()
+                "#, '|')
+            ],
+            PlatformOps::ToolsToArray => vec![
+                r#"tools::to_array("Hello")"#.into()
+            ],
+            PlatformOps::ToolsToCSV => vec![
+                strip_margin(r#"
+                    |import tools::to_csv
+                    |stocks := ns("examples.csv.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                    | { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    | { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    | { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                    | { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                    |stocks:::to_csv()
+                "#, '|')
+            ],
+            PlatformOps::ToolsToJSON => vec![
+                strip_margin(r#"
+                    |import tools::to_json
+                    |stocks := ns("examples.json.stocks")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                    | { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    | { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    | { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                    | { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                    |stocks:::to_json()
+                "#, '|')
+            ],
+            PlatformOps::ToolsToTable => vec![
+                strip_margin(r#"
+                    |tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
+                "#, '|')
+            ],
+            // util
+            PlatformOps::UtilBase64 => vec!["util::base64('Hello World')".into()],
+            PlatformOps::UtilBinary => vec!["util::to_binary(0b1011 & 0b1101)".into()],
+            PlatformOps::UtilGzip => vec!["util::gzip('Hello World')".into()],
+            PlatformOps::UtilGunzip => vec!["util::gunzip(util::gzip('Hello World'))".into()],
+            PlatformOps::UtilHex => vec!["util::hex('Hello World')".into()],
+            PlatformOps::UtilMD5 => vec!["util::md5('Hello World')".into()],
+            PlatformOps::UtilToASCII => vec!["util::to_ascii(177)".into()],
+            PlatformOps::UtilToDate => vec!["util::to_date(177)".into()],
+            PlatformOps::UtilToF32 => vec!["util::to_f32(4321)".into()],
+            PlatformOps::UtilToF64 => vec!["util::to_f64(4321)".into()],
+            PlatformOps::UtilToI8 => vec!["util::to_i8(88)".into()],
+            PlatformOps::UtilToI16 => vec!["util::to_i16(88)".into()],
+            PlatformOps::UtilToI32 => vec!["util::to_i32(88)".into()],
+            PlatformOps::UtilToI64 => vec!["util::to_i64(88)".into()],
+            PlatformOps::UtilToI128 => vec!["util::to_i128(88)".into()],
+            PlatformOps::UtilToU8 => vec!["util::to_u8(88)".into()],
+            PlatformOps::UtilToU16 => vec!["util::to_u16(88)".into()],
+            PlatformOps::UtilToU32 => vec!["util::to_u32(88)".into()],
+            PlatformOps::UtilToU64 => vec!["util::to_u64(88)".into()],
+            PlatformOps::UtilToU128 => vec!["util::to_u128(88)".into()],
+            // www
+            PlatformOps::WwwServe => vec![
+                strip_margin(r#"
+                    |www::serve(8822)
+                    |stocks := ns("examples.www.quotes")
+                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                    |[{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
+                    | { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
+                    | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
+                    | { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    | { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
+                    |GET http://localhost:8822/examples/www/quotes/1/4
+                "#, '|')
+            ],
+            PlatformOps::WwwURLDecode => vec![
+                "www::url_decode('http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998')".into()
+            ],
+            PlatformOps::WwwURLEncode => vec![
+                "www::url_encode('http://shocktrade.com?name=the hero&t=9998')".into()
+            ],
+        };
+
+        // trim all example code
+        examples.iter()
+            .map(|s| s.trim().to_string())
+            .collect::<Vec<_>>()
     }
 
-    pub fn get_info(&self) -> PlatformFunction {
+    pub fn get_function(&self) -> PlatformFunction {
         PlatformFunction {
             name: self.get_name(),
             description: self.get_description(),
-            example: self.get_example(),
+            examples: self.get_examples(),
             package_name: self.get_package_name(),
             parameters: self.get_parameters(),
             return_type: self.get_return_type(),
@@ -849,6 +1039,14 @@ impl PlatformOps {
 
     pub fn get_name(&self) -> String {
         let result = match self {
+            // arrays
+            PlatformOps::ArraysFilter => "filter",
+            PlatformOps::ArraysLen => "len",
+            PlatformOps::ArraysMap => "map",
+            PlatformOps::ArraysPop => "pop",
+            PlatformOps::ArraysPush => "push",
+            PlatformOps::ArraysReverse => "reverse",
+            PlatformOps::ArraysToArray => "to_array",
             // cal
             PlatformOps::CalNow => "now",
             PlatformOps::CalDateDay => "day_of",
@@ -919,6 +1117,7 @@ impl PlatformOps {
             PlatformOps::ToolsFetch => "fetch",
             PlatformOps::ToolsFilter => "filter",
             PlatformOps::ToolsJournal => "journal",
+            PlatformOps::ToolsLen => "len",
             PlatformOps::ToolsMap => "map",
             PlatformOps::ToolsPop => "pop",
             PlatformOps::ToolsPush => "push",
@@ -962,6 +1161,9 @@ impl PlatformOps {
     pub fn get_package_name(&self) -> String {
         use PlatformOps::*;
         let result = match self {
+            // arrays
+            ArraysFilter | ArraysLen | ArraysMap | ArraysPop | ArraysPush |
+            ArraysReverse | ArraysToArray => "arrays",
             // cal
             CalDateDay | CalDateHour12 | CalDateHour24 | CalDateMinute |
             CalDateMonth | CalDateSecond | CalDateYear | CalNow => "cal",
@@ -986,8 +1188,9 @@ impl PlatformOps {
             TestingAssert | TestingFeature | TestingMatches | TestingTypeOf => "testing",
             // tools
             ToolsCompact | ToolsDescribe | ToolsFetch | ToolsFilter | ToolsJournal |
-            ToolsMap | ToolsPop | ToolsPush | ToolsReplay | ToolsReverse | ToolsRowId |
-            ToolsScan | ToolsToArray | ToolsToCSV | ToolsToJSON | ToolsToTable => "tools",
+            ToolsLen | ToolsMap | ToolsPop | ToolsPush | ToolsReplay | ToolsReverse |
+            ToolsRowId | ToolsScan | ToolsToArray | ToolsToCSV | ToolsToJSON |
+            ToolsToTable => "tools",
             // util
             UtilBase64 | UtilBinary | UtilGzip | UtilGunzip | UtilHex | UtilMD5 |
             UtilToASCII | UtilToDate | UtilToF32 | UtilToF64 |
@@ -1002,6 +1205,21 @@ impl PlatformOps {
     pub fn get_parameter_types(&self) -> Vec<DataType> {
         use PlatformOps::*;
         match self {
+            // oxide::arrays
+            ArraysFilter => vec![
+                ArrayType(0), FunctionType(vec![
+                    Parameter::new("item", DynamicType)
+                ], BooleanType.into())
+            ],
+            ArraysLen => vec![ArrayType(0)],
+            ArraysMap => vec![
+                ArrayType(0), FunctionType(vec![
+                    Parameter::new("item", DynamicType)
+                ], DynamicType.into())
+            ],
+            ArraysPop | ArraysReverse => vec![ArrayType(0)],
+            ArraysPush => vec![ArrayType(0), DynamicType],
+            ArraysToArray => vec![DynamicType],
             // zero-parameter
             DurationsDays | DurationsHours | DurationsMillis | DurationsMinutes |
             DurationsSeconds |
@@ -1033,8 +1251,8 @@ impl PlatformOps {
             OxideCompile | OxideDebug | OxideEval | StrLen | WwwURLDecode | WwwURLEncode
             => vec![StringType(0)],
             // single-parameter (table)
-            ToolsCompact | ToolsDescribe | ToolsJournal | ToolsPop | ToolsReverse |
-            ToolsScan | ToolsToArray | ToolsToCSV | ToolsToJSON
+            ToolsCompact | ToolsDescribe | ToolsLen | ToolsJournal | ToolsPop |
+            ToolsReverse | ToolsScan | ToolsToArray | ToolsToCSV | ToolsToJSON
             => vec![TableType(Vec::new(), 0)],
             // two-parameter (f64, f64)
             MathMax | MathMin | MathPow
@@ -1086,6 +1304,10 @@ impl PlatformOps {
     pub fn get_return_type(&self) -> DataType {
         use PlatformOps::*;
         match self {
+            // oxide::arrays
+            ArraysFilter | ArraysMap | ArraysReverse | ArraysToArray => ArrayType(0),
+            ArraysPop | ArraysPush => BooleanType,
+            ArraysLen | ToolsLen => NumberType(I64Kind),
             // array
             ToolsFilter | ToolsMap | ToolsToArray => ArrayType(0),
             IoFileReadText | StrSplit | ToolsToCSV | ToolsToJSON => ArrayType(0),
@@ -1162,113 +1384,18 @@ impl PlatformOps {
         format!("{pkg}::{name}({params})")
     }
 
-    ////////////////////////////////////////////////////////////////////
-    //      Utility Functions
-    ////////////////////////////////////////////////////////////////////
-
-    fn adapter_fn0(
+    fn adapter_pf_fn1<F>(
         &self,
         ms: Machine,
         args: Vec<TypedValue>,
-        f: fn(Machine) -> (Machine, TypedValue),
-    ) -> (Machine, TypedValue) {
-        match args.len() {
-            0 => f(ms),
-            n => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(0, n))))
-        }
-    }
-
-    fn adapter_fn0_ok(
-        &self,
-        ms: Machine,
-        args: Vec<TypedValue>,
-        f: fn(Machine) -> std::io::Result<(Machine, TypedValue)>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        match args.len() {
-            0 => f(ms),
-            n => throw(TypeMismatch(ArgumentsMismatched(0, n)))
-        }
-    }
-
-    fn adapter_fn1(
-        &self,
-        ms: Machine,
-        args: Vec<TypedValue>,
-        f: fn(Machine, &TypedValue) -> (Machine, TypedValue),
-    ) -> (Machine, TypedValue) {
-        match args.as_slice() {
-            [value] => f(ms, value),
-            args => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(1, args.len()))))
-        }
-    }
-
-    fn adapter_fn1_ok(
-        &self,
-        ms: Machine,
-        args: Vec<TypedValue>,
-        f: fn(Machine, &TypedValue) -> std::io::Result<(Machine, TypedValue)>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        match args.as_slice() {
-            [value] => f(ms, value),
-            args => throw(TypeMismatch(ArgumentsMismatched(1, args.len())))
-        }
-    }
-
-    fn adapter_fn1_pf(
-        &self,
-        ms: Machine,
-        args: Vec<TypedValue>,
-        f: fn(Machine, &TypedValue, &PlatformOps) -> std::io::Result<(Machine, TypedValue)>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
+        f: F,
+    ) -> std::io::Result<(Machine, TypedValue)>
+    where
+        F: Fn(Machine, &TypedValue, &PlatformOps) -> std::io::Result<(Machine, TypedValue)>,
+    {
         match args.as_slice() {
             [a] => f(ms, a, self),
             args => throw(TypeMismatch(ArgumentsMismatched(1, args.len())))
-        }
-    }
-
-    fn adapter_fn2(
-        &self,
-        ms: Machine,
-        args: Vec<TypedValue>,
-        f: fn(Machine, &TypedValue, &TypedValue) -> (Machine, TypedValue),
-    ) -> (Machine, TypedValue) {
-        match args.as_slice() {
-            [a, b] => f(ms, a, b),
-            args => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(2, args.len()))))
-        }
-    }
-
-    fn adapter_fn2_ok(
-        &self,
-        ms: Machine,
-        args: Vec<TypedValue>,
-        f: fn(Machine, &TypedValue, &TypedValue) -> std::io::Result<(Machine, TypedValue)>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        match args.as_slice() {
-            [a, b] => f(ms, a, b),
-            args => throw(TypeMismatch(ArgumentsMismatched(2, args.len())))
-        }
-    }
-
-    fn adapter_fn3(
-        &self,
-        ms: Machine,
-        args: Vec<TypedValue>,
-        f: fn(Machine, &TypedValue, &TypedValue, &TypedValue) -> (Machine, TypedValue),
-    ) -> (Machine, TypedValue) {
-        match args.as_slice() {
-            [a, b, c] => f(ms, a, b, c),
-            args => (ms, ErrorValue(TypeMismatch(ArgumentsMismatched(3, args.len()))))
-        }
-    }
-
-    fn do_cal_now(
-        ms: Machine,
-        args: Vec<TypedValue>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        match !args.is_empty() {
-            true => throw(Exact(format!("No arguments expected, but found {}", args.len()))),
-            false => Ok((ms, Number(DateValue(Local::now().timestamp_millis()))))
         }
     }
 
@@ -1305,14 +1432,14 @@ impl PlatformOps {
         plat: &PlatformOps,
     ) -> std::io::Result<(Machine, TypedValue)> {
         let factor = match plat {
-            PlatformOps::DurationsDays => Number(I64Value(24 * 60 * 60 * 1000)),
-            PlatformOps::DurationsHours => Number(I64Value(60 * 60 * 1000)),
-            PlatformOps::DurationsMillis => Number(I64Value(1)),
-            PlatformOps::DurationsMinutes => Number(I64Value(60 * 1000)),
-            PlatformOps::DurationsSeconds => Number(I64Value(1000)),
-            _ => Undefined
+            PlatformOps::DurationsDays => DAYS,
+            PlatformOps::DurationsHours => HOURS,
+            PlatformOps::DurationsMillis => MILLIS,
+            PlatformOps::DurationsMinutes => MINUTES,
+            PlatformOps::DurationsSeconds => SECONDS,
+            pf => return throw(PlatformOpError(pf.to_owned()))
         };
-        let op = Multiply(Box::new(Literal(value.clone())), Box::new(Literal(factor)));
+        let op = Multiply(Literal(value.clone()).into(), Literal(Number(I64Value(factor))).into());
         ms.evaluate(&op)
     }
 
@@ -1321,39 +1448,29 @@ impl PlatformOps {
         path_v: &TypedValue,
         contents_v: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match path_v {
-            StringValue(path) => {
-                let mut file = File::create(path)?;
-                let n_bytes = file.write(contents_v.unwrap_value().as_bytes())? as u64;
-                Ok((ms, Number(U64Value(n_bytes))))
-            }
-            other => throw(TypeMismatch(StringExpected(other.to_code())))
-        }
+        let path = pull_string(path_v)?;
+        let mut file = File::create(path)?;
+        let n_bytes = file.write(contents_v.unwrap_value().as_bytes())? as u64;
+        Ok((ms, Number(U64Value(n_bytes))))
     }
 
     fn do_io_exists(
         ms: Machine,
         path_value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match path_value {
-            StringValue(path) => Ok((ms, Boolean(Path::new(path).exists()))),
-            other => throw(TypeMismatch(StringExpected(other.to_string())))
-        }
+        let path = pull_string(path_value)?;
+        Ok((ms, Boolean(Path::new(path.as_str()).exists())))
     }
 
     fn do_io_read_text_file(
         ms: Machine,
         path_v: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match path_v {
-            StringValue(path) => {
-                let mut buffer = String::new();
-                let mut file = File::open(path)?;
-                let _count = file.read_to_string(&mut buffer)?;
-                Ok((ms, StringValue(buffer)))
-            }
-            other => throw(TypeMismatch(StringExpected(other.to_code())))
-        }
+        let path = pull_string(path_v)?;
+        let mut buffer = String::new();
+        let mut file = File::open(path)?;
+        let _count = file.read_to_string(&mut buffer)?;
+        Ok((ms, StringValue(buffer)))
     }
 
     fn do_io_stderr(
@@ -1374,33 +1491,6 @@ impl PlatformOps {
         out.write(format!("{}", value.unwrap_value()).as_bytes())?;
         out.flush()?;
         Ok((ms, Boolean(true)))
-    }
-
-    fn do_math_f1(
-        ms: Machine,
-        value: &TypedValue,
-        f: fn(&Numbers) -> Numbers,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        Ok((ms, match value {
-            Number(n) => Number(f(n)),
-            other => return throw(TypeMismatch(UnsupportedType(NumberType(F64Kind), other.get_type())))
-        }))
-    }
-
-    fn do_math_f2(
-        ms: Machine,
-        value0: &TypedValue,
-        value1: &TypedValue,
-        f: fn(&Numbers, &Numbers) -> Numbers,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        Ok((ms, match value0 {
-            Number(n) =>
-                match value1 {
-                    Number(m) => Number(f(n, m)),
-                    other => return throw(TypeMismatch(UnsupportedType(NumberType(F64Kind), other.get_type())))
-                }
-            other => return throw(TypeMismatch(UnsupportedType(NumberType(F64Kind), other.get_type())))
-        }))
     }
 
     fn do_os_call(
@@ -1441,7 +1531,7 @@ impl PlatformOps {
         Ok((ms, StringValue(dir.display().to_string())))
     }
 
-    fn do_os_env(ms: Machine) -> (Machine, TypedValue) {
+    fn do_os_env(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         use std::env;
         let mut mrc = ModelRowCollection::from_parameters(&vec![
             Parameter::new("key", StringType(256)),
@@ -1451,58 +1541,45 @@ impl PlatformOps {
             if let ErrorValue(err) = mrc.append_row(Row::new(0, vec![
                 StringValue(key), StringValue(value)
             ])) {
-                return (ms, ErrorValue(err));
+                return Ok((ms, ErrorValue(err)));
             }
         }
-
-        (ms, TableValue(Model(mrc)))
+        Ok((ms, TableValue(Model(mrc))))
     }
 
     fn do_oxide_compile(
         ms: Machine,
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match value {
-            StringValue(source) => {
-                let code = Compiler::build(source)?;
-                Ok((ms, Function {
-                    params: vec![],
-                    body: Box::new(code),
-                    returns: DynamicType,
-                }))
-            }
-            z => throw(TypeMismatch(UnsupportedType(StringType(0), z.get_type())))
-        }
+        let source = pull_string(value)?;
+        let code = Compiler::build(source.as_str())?;
+        Ok((ms, Function {
+            params: vec![],
+            body: Box::new(code),
+            returns: DynamicType,
+        }))
     }
 
     fn do_oxide_debug(
         ms: Machine,
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match value {
-            StringValue(source) => {
-                let code = Compiler::build(source);
-                Ok((ms, StringValue(format!("{:?}", code))))
-            }
-            z => throw(TypeMismatch(UnsupportedType(StringType(0), z.get_type())))
-        }
+        let source = pull_string(value)?;
+        let code = Compiler::build(source.as_str());
+        Ok((ms, StringValue(format!("{:?}", code))))
     }
 
     fn do_oxide_eval(
         ms: Machine,
         query_value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match query_value {
-            StringValue(ql) => {
-                let opcode = Compiler::build(ql.as_str())?;
-                ms.evaluate(&opcode)
-            }
-            x => throw(TypeMismatch(StringExpected(x.get_type_name())))
-        }
+        let query = pull_string(query_value)?;
+        let opcode = Compiler::build(query.as_str())?;
+        ms.evaluate(&opcode)
     }
 
     /// returns a table describing all modules
-    fn do_oxide_help(ms: Machine) -> (Machine, TypedValue) {
+    fn do_oxide_help(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         let mut mrc = ModelRowCollection::from_parameters(&Self::get_oxide_help_parameters());
         for (module_name, module) in ms.get_variables().iter() {
             match module {
@@ -1530,7 +1607,7 @@ impl PlatformOps {
                 _ => {}
             }
         }
-        (ms, TableValue(Model(mrc)))
+        Ok((ms, TableValue(Model(mrc))))
     }
 
     fn do_oxide_history(
@@ -1569,16 +1646,8 @@ impl PlatformOps {
         }
     }
 
-    fn do_oxide_home(ms: Machine) -> (Machine, TypedValue) {
-        (ms, StringValue(Machine::oxide_home()))
-    }
-
-    fn do_oxide_reset(_ms: Machine) -> (Machine, TypedValue) {
-        (Machine::new_platform(), Boolean(true))
-    }
-
-    fn do_oxide_version(ms: Machine) -> (Machine, TypedValue) {
-        (ms, StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}")))
+    fn do_oxide_version(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(format!("{MAJOR_VERSION}.{MINOR_VERSION}"))))
     }
 
     fn do_str_ends_with(
@@ -1586,14 +1655,9 @@ impl PlatformOps {
         string_value: &TypedValue,
         slice_value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match string_value {
-            StringValue(src) =>
-                match slice_value {
-                    StringValue(slice) => Ok((ms, Boolean(src.ends_with(slice)))),
-                    z => throw(TypeMismatch(StringExpected(z.to_code())))
-                }
-            z => throw(TypeMismatch(StringExpected(z.to_code())))
-        }
+        let src = pull_string(string_value)?;
+        let slice = pull_string(slice_value)?;
+        Ok((ms, Boolean(src.ends_with(slice.as_str()))))
     }
 
     /// Formats a string based on a template
@@ -1601,7 +1665,7 @@ impl PlatformOps {
     fn do_str_format(
         ms: Machine,
         args: Vec<TypedValue>,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         // internal parsing function
         fn format_text(
             ms: Machine,
@@ -1625,13 +1689,10 @@ impl PlatformOps {
         }
 
         // parse the arguments
-        if args.is_empty() { (ms, StringValue(String::new())) } else {
-            match (args[0].to_owned(), args[1..].to_owned()) {
-                (StringValue(format_str), format_args) =>
-                    format_text(ms, format_str, format_args),
-                (other, ..) =>
-                    (ms, ErrorValue(TypeMismatch(StringExpected(other.to_code()))))
-            }
+        if args.is_empty() { Ok((ms, StringValue(String::new()))) } else {
+            let format_str = pull_string(&args[0])?;
+            let format_args = args[1..].to_owned();
+            Ok(format_text(ms, format_str, format_args))
         }
     }
 
@@ -1641,19 +1702,11 @@ impl PlatformOps {
         host_str: &TypedValue,
         search_str: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match host_str {
-            StringValue(host) => {
-                match search_str {
-                    StringValue(search) => {
-                        match host.find(search) {
-                            None => Ok((ms, Undefined)),
-                            Some(index) => Ok((ms, Number(I64Value(index as i64)))),
-                        }
-                    }
-                    z => throw(TypeMismatch(UnsupportedType(StringType(0), z.get_type())))
-                }
-            }
-            z => throw(TypeMismatch(UnsupportedType(StringType(0), z.get_type())))
+        let host = pull_string(host_str)?;
+        let search = pull_string(search_str)?;
+        match host.find(search.as_str()) {
+            None => Ok((ms, Undefined)),
+            Some(index) => Ok((ms, Number(I64Value(index as i64)))),
         }
     }
 
@@ -1662,66 +1715,52 @@ impl PlatformOps {
         ms: Machine,
         array: &TypedValue,
         delim: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        match array {
-            ArrayValue(items) => {
-                let mut buf = String::new();
-                for item in items.iter() {
-                    if !buf.is_empty() { buf.extend(delim.unwrap_value().chars()) }
-                    buf.extend(item.unwrap_value().chars());
-                }
-                (ms, StringValue(buf))
-            }
-            z =>
-                (ms, ErrorValue(TypeMismatch(UnsupportedType(ArrayType(0), z.get_type()))))
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let items = pull_array(array)?;
+        let mut buf = String::new();
+        for item in items.iter() {
+            if !buf.is_empty() { buf.extend(delim.unwrap_value().chars()) }
+            buf.extend(item.unwrap_value().chars());
         }
+        Ok((ms, StringValue(buf)))
     }
 
     fn do_str_left(
         ms: Machine,
         string: &TypedValue,
         n_chars: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        match string {
-            StringValue(s) =>
-                match n_chars {
-                    Number(nv) if nv.to_i64() < 0 =>
-                        Self::do_str_right(ms.to_owned(), string, &Number(I64Value(-nv.to_i64()))),
-                    Number(nv) =>
-                        (ms, StringValue(s[0..nv.to_usize()].to_string())),
-                    _ => (ms, Undefined)
-                },
-            _ => (ms, Undefined)
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let s = pull_string(string)?;
+        match n_chars {
+            Number(nv) if nv.to_i64() < 0 =>
+                Self::do_str_right(ms.to_owned(), string, &Number(I64Value(-nv.to_i64()))),
+            Number(nv) => Ok((ms, StringValue(s[0..nv.to_usize()].to_string()))),
+            _ => Ok((ms, Undefined))
         }
     }
 
     fn do_str_len(
         ms: Machine,
         string: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        match string {
-            StringValue(s) => (ms, Number(I64Value(s.len() as i64))),
-            _ => (ms, Undefined)
-        }
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let s = pull_string(string)?;
+        Ok((ms, Number(I64Value(s.len() as i64))))
     }
 
     fn do_str_right(
         ms: Machine,
         string: &TypedValue,
         n_chars: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        match string {
-            StringValue(s) =>
-                match n_chars {
-                    Number(nv) if nv.to_i64() < 0 =>
-                        Self::do_str_left(ms.to_owned(), string, &Number(I64Value(-nv.to_i64()))),
-                    Number(nv) => {
-                        let strlen = s.len();
-                        (ms, StringValue(s[(strlen - nv.to_usize())..strlen].to_string()))
-                    }
-                    _ => (ms, Undefined)
-                },
-            _ => (ms, Undefined)
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let s = pull_string(string)?;
+        match n_chars {
+            Number(nv) if nv.to_i64() < 0 =>
+                Self::do_str_left(ms.to_owned(), string, &Number(I64Value(-nv.to_i64()))),
+            Number(nv) => {
+                let strlen = s.len();
+                Ok((ms, StringValue(s[(strlen - nv.to_usize())..strlen].to_string())))
+            }
+            _ => Ok((ms, Undefined))
         }
     }
 
@@ -1729,37 +1768,23 @@ impl PlatformOps {
         ms: Machine,
         string_v: &TypedValue,
         delimiter_v: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        match string_v {
-            StringValue(src) => {
-                match delimiter_v {
-                    StringValue(delimiters) => {
-                        let pcs = src.split(|c| delimiters.contains(c))
-                            .map(|s| StringValue(s.to_string()))
-                            .collect::<Vec<_>>();
-                        (ms, ArrayValue(Array::from(pcs)))
-                    }
-                    z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
-                }
-            }
-            z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
-        }
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let src = pull_string(string_v)?;
+        let delimiters = pull_string(delimiter_v)?;
+        let pcs = src.split(|c| delimiters.contains(c))
+            .map(|s| StringValue(s.to_string()))
+            .collect::<Vec<_>>();
+        Ok((ms, ArrayValue(Array::from(pcs))))
     }
 
     fn do_str_start_with(
         ms: Machine,
         string_value: &TypedValue,
         slice_value: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        match string_value {
-            StringValue(src) => {
-                match slice_value {
-                    StringValue(slice) => (ms, Boolean(src.starts_with(slice))),
-                    z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
-                }
-            }
-            z => (ms, ErrorValue(TypeMismatch(StringExpected(z.to_code()))))
-        }
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let src = pull_string(string_value)?;
+        let slice = pull_string(slice_value)?;
+        Ok((ms, Boolean(src.starts_with(slice.as_str()))))
     }
 
     fn do_str_strip_margin(
@@ -1767,19 +1792,12 @@ impl PlatformOps {
         string_value: &TypedValue,
         margin_value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match string_value {
-            StringValue(src) => {
-                match margin_value {
-                    StringValue(margin) =>
-                        if let Some(margin_char) = margin.chars().next() {
-                            Ok((ms, StringValue(strip_margin(src, margin_char))))
-                        } else {
-                            throw(TypeMismatch(CharExpected(margin.into())))
-                        }
-                    z => throw(TypeMismatch(StringExpected(z.to_code())))
-                }
-            }
-            z => throw(TypeMismatch(StringExpected(z.to_code())))
+        let src = pull_string(string_value)?;
+        let margin = pull_string(margin_value)?;
+        if let Some(margin_char) = margin.chars().next() {
+            Ok((ms, StringValue(strip_margin(src.as_str(), margin_char))))
+        } else {
+            throw(TypeMismatch(CharExpected(margin.into())))
         }
     }
 
@@ -1788,8 +1806,8 @@ impl PlatformOps {
         string: &TypedValue,
         a: &TypedValue,
         b: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        (ms.to_owned(), match string {
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, match string {
             StringValue(s) =>
                 match (a, b) {
                     (Number(na), Number(nb)) =>
@@ -1797,21 +1815,17 @@ impl PlatformOps {
                     (..) => Undefined
                 },
             _ => Undefined
-        })
+        }))
     }
 
-    fn do_str_to_string(
+    fn do_testing_assert(
         ms: Machine,
-        a: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        (ms, StringValue(a.unwrap_value()))
-    }
-
-    fn do_testing_assert(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
         match value {
-            ErrorValue(msg) => (ms, ErrorValue(msg.to_owned())),
-            Boolean(false) => (ms, ErrorValue(AssertionError("true".to_string(), "false".to_string()))),
-            z => (ms, z.to_owned())
+            ErrorValue(msg) => throw(msg.to_owned()),
+            Boolean(false) => throw(AssertionError("true".to_string(), "false".to_string())),
+            z => Ok((ms, z.to_owned()))
         }
     }
 
@@ -1850,12 +1864,19 @@ impl PlatformOps {
         ms.do_feature(&Box::from(title), &scenarios)
     }
 
-    fn do_testing_matches(ms: Machine, a: &TypedValue, b: &TypedValue) -> (Machine, TypedValue) {
-        (ms, a.matches(b))
+    fn do_testing_matches(
+        ms: Machine,
+        a: &TypedValue,
+        b: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, a.matches(b)))
     }
 
-    fn do_testing_type_of(ms: Machine, a: &TypedValue) -> (Machine, TypedValue) {
-        (ms, StringValue(a.get_type_name()))
+    fn do_testing_type_of(
+        ms: Machine,
+        a: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(a.get_type_name())))
     }
 
     fn do_tools_compact(
@@ -1955,7 +1976,7 @@ impl PlatformOps {
                         vec![]
                     }
                 };
-                new_params = Self::merge_parameters(new_params, outcome_params);
+                new_params = Parameter::merge_parameters(new_params, outcome_params);
                 new_arr.push(outcome)
             }
         }
@@ -1979,32 +2000,6 @@ impl PlatformOps {
         } else {
             Ok((ms, ArrayValue(Array::from(new_arr))))
         }
-    }
-
-    fn merge_parameters(
-        mut current_params: Vec<Parameter>,
-        incoming_params: Vec<Parameter>,
-    ) -> Vec<Parameter> {
-        for incoming_param in incoming_params {
-            let name = incoming_param.get_name();
-            match current_params.iter().position(|p| p.get_name() == name) {
-                // Not found — add the new parameter
-                None => current_params.push(incoming_param),
-                // Found — normalize the types and replace
-                Some(index) => {
-                    let existing_param = &current_params[index];
-                    let new_param = Parameter::new(
-                        name,
-                        DataType::best_fit(vec![
-                            existing_param.get_data_type(),
-                            incoming_param.get_data_type(),
-                        ]),
-                    );
-                    current_params[index] = new_param;
-                }
-            }
-        }
-        current_params
     }
 
     fn do_tools_filter(
@@ -2042,6 +2037,18 @@ impl PlatformOps {
         }
     }
 
+    fn do_tools_length(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let result = match value.to_sequence()? {
+            TheArray(array) => Number(I64Value(array.len() as i64)),
+            TheDataframe(df) => Number(I64Value(df.len()? as i64)),
+            TheTuple(tuple) => Number(I64Value(tuple.len() as i64)),
+        };
+        Ok((ms, result))
+    }
+
     fn do_tools_map(
         ms: Machine,
         items: &TypedValue,
@@ -2064,13 +2071,12 @@ impl PlatformOps {
         ms: Machine,
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        let seq = value.to_sequence()?;
-        match seq {
-            Sequences::TheDataframe(mut df) =>
+        match value.to_sequence()? {
+            TheDataframe(mut df) =>
                 df.pop_row(df.get_parameters()).to_dataframe()
                     .map(|df| (ms, TableValue(df))),
-            Sequences::TheArray(..) => throw(NotImplemented("Array::pop()".into())),
-            Sequences::TheTuple(..) => throw(NotImplemented("Tuple::pop()".into())),
+            TheArray(mut arr) => Ok((ms, arr.pop().unwrap_or(Null))),
+            TheTuple(..) => throw(NotImplemented("Tuple::pop()".into())),
         }
     }
 
@@ -2083,9 +2089,9 @@ impl PlatformOps {
             TupleValue(vv) => {
                 let seq = seq_like.to_sequence()?;
                 let result = match seq {
-                    Sequences::TheDataframe(mut df) => df.push_row(Row::new(0, vv)),
-                    Sequences::TheArray(mut arr) => arr.push(TupleValue(vv)),
-                    Sequences::TheTuple(mut tpl) => {
+                    TheDataframe(mut df) => df.push_row(Row::new(0, vv)),
+                    TheArray(mut arr) => arr.push(TupleValue(vv)),
+                    TheTuple(mut tpl) => {
                         tpl.push(TupleValue(vv));
                         TupleValue(tpl)
                     }
@@ -2095,9 +2101,9 @@ impl PlatformOps {
             Sequenced(source) => {
                 let seq = seq_like.to_sequence()?;
                 let result = match seq {
-                    Sequences::TheDataframe(mut df) => df.push_row(Row::new(0, source.get_values())),
-                    Sequences::TheArray(mut arr) => arr.push(Sequenced(source)),
-                    Sequences::TheTuple(mut tpl) => {
+                    TheDataframe(mut df) => df.push_row(Row::new(0, source.get_values())),
+                    TheArray(mut arr) => arr.push(Sequenced(source)),
+                    TheTuple(mut tpl) => {
                         tpl.push(Sequenced(source));
                         TupleValue(tpl)
                     }
@@ -2107,9 +2113,9 @@ impl PlatformOps {
             Structured(structure) => {
                 let seq = seq_like.to_sequence()?;
                 let result = match seq {
-                    Sequences::TheDataframe(mut df) => df.push_row(structure.to_row()),
-                    Sequences::TheArray(mut arr) => arr.push(Structured(structure)),
-                    Sequences::TheTuple(mut tpl) => {
+                    TheDataframe(mut df) => df.push_row(structure.to_row()),
+                    TheArray(mut arr) => arr.push(Structured(structure)),
+                    TheTuple(mut tpl) => {
                         tpl.push(Structured(structure));
                         TupleValue(tpl)
                     }
@@ -2144,9 +2150,9 @@ impl PlatformOps {
         }
     }
 
-    fn do_tools_row_id(ms: Machine) -> (Machine, TypedValue) {
+    fn do_tools_row_id(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         let result = ms.get(machine::ROW_ID).unwrap_or_else(|| Number(U64Value(0)));
-        (ms, result)
+        Ok((ms, result))
     }
 
     fn do_tools_scan(
@@ -2160,10 +2166,6 @@ impl PlatformOps {
             .unwrap_or(Vec::new());
         let mrc = ModelRowCollection::from_columns_and_rows(&columns, &rows);
         Ok((ms, TableValue(Model(mrc))))
-    }
-
-    fn do_tools_to_array(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        (ms, value.to_array())
     }
 
     fn do_tools_to_csv(
@@ -2213,15 +2215,15 @@ impl PlatformOps {
     fn do_util_base64(
         ms: Machine,
         a: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        (ms, StringValue(base64::encode(a.to_bytes())))
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(base64::encode(a.to_bytes()))))
     }
 
     fn do_util_binary(
         ms: Machine,
         a: &TypedValue,
-    ) -> (Machine, TypedValue) {
-        (ms, StringValue(format!("{:b}", a.to_u64())))
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(format!("{:b}", a.to_u64()))))
     }
 
     fn do_util_gzip(
@@ -2272,18 +2274,21 @@ impl PlatformOps {
         Ok((ms, result))
     }
 
-    fn do_util_md5(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
+    fn do_util_md5(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
         match md5::compute(value.to_bytes()) {
-            md5::Digest(bytes) => (ms, Binary(bytes.to_vec()))
+            md5::Digest(bytes) => Ok((ms, Binary(bytes.to_vec())))
         }
     }
 
-    fn do_util_to_ascii(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        (ms, StringValue(format!("{}", value.to_u8() as char)))
+    fn do_util_to_ascii(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(format!("{}", value.to_u8() as char))))
     }
 
-    fn do_util_to_hex(ms: Machine, value: &TypedValue) -> (Machine, TypedValue) {
-        (ms, StringValue(format!("{}", StringValue(hex::encode(value.to_bytes())))))
+    fn do_util_to_hex(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(format!("{}", StringValue(hex::encode(value.to_bytes()))))))
     }
 
     fn do_util_uuid(
@@ -2308,23 +2313,18 @@ impl PlatformOps {
         ms: Machine,
         url: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match url {
-            StringValue(uri) => match urlencoding::decode(uri) {
-                Ok(decoded) => Ok((ms, StringValue(decoded.to_string()))),
-                Err(err) => throw(Exact(err.to_string()))
-            }
-            other => throw(TypeMismatch(StringExpected(other.to_code())))
-        }
+        let uri = pull_string(url)?;
+        let decoded = urlencoding::decode(uri.as_str())
+            .map_err(|e| cnv_error!(e))?;
+        Ok((ms, StringValue(decoded.to_string())))
     }
 
     fn do_www_url_encode(
         ms: Machine,
         url: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match url {
-            StringValue(uri) => Ok((ms, StringValue(urlencoding::encode(uri).to_string()))),
-            other => throw(TypeMismatch(StringExpected(other.to_code())))
-        }
+        let uri = pull_string(url)?;
+        Ok((ms, StringValue(urlencoding::encode(uri.as_str()).to_string())))
     }
 
     pub fn get_testing_feature_parameters() -> Vec<Parameter> {
@@ -2420,11 +2420,11 @@ mod tests {
     }
 
     #[test]
-    fn test_get_info_cal_now() {
-        assert_eq!(CalNow.get_info(), PlatformFunction {
+    fn test_get_function_cal_now() {
+        assert_eq!(CalNow.get_function(), PlatformFunction {
             name: "now".into(),
             description: "Returns the current local date and time".into(),
-            example: "cal::now()".into(),
+            examples: vec!["cal::now()".into()],
             package_name: "cal".into(),
             parameters: Vec::new(),
             return_type: NumberType(DateKind),
@@ -2433,11 +2433,11 @@ mod tests {
     }
 
     #[test]
-    fn test_get_info_str_left() {
-        assert_eq!(StrLeft.get_info(), PlatformFunction {
+    fn test_get_function_str_left() {
+        assert_eq!(StrLeft.get_function(), PlatformFunction {
             name: "left".into(),
             description: "Returns n-characters from left-to-right".into(),
-            example: "str::left('Hello World', 5)".into(),
+            examples: vec!["str::left('Hello World', 5)".into()],
             package_name: "str".into(),
             parameters: vec![
                 Parameter::new("s", StringType(0)),
@@ -2449,11 +2449,11 @@ mod tests {
     }
 
     #[test]
-    fn test_get_info_str_substring() {
-        assert_eq!(StrSubstring.get_info(), PlatformFunction {
+    fn test_get_function_str_substring() {
+        assert_eq!(StrSubstring.get_function(), PlatformFunction {
             name: "substring".into(),
             description: "Returns a substring of string `s` from `m` to `n`".into(),
-            example: "str::substring('Hello World', 0, 5)".into(),
+            examples: vec!["str::substring('Hello World', 0, 5)".into()],
             package_name: "str".into(),
             parameters: vec![
                 Parameter::new("s", StringType(0)),
@@ -2471,13 +2471,15 @@ mod tests {
         let mut errors = 0;
         let mut interpreter = Interpreter::new();
         for op in PLATFORM_OPCODES {
-            match interpreter.evaluate(op.get_example().as_str()) {
-                Ok(response) => assert_ne!(response, Undefined),
-                Err(err) => {
-                    println!("{}", "*".repeat(60));
-                    println!("{}", op.get_example());
-                    eprintln!("ERROR: {}", err);
-                    errors += 1
+            for example in op.get_examples() {
+                match interpreter.evaluate(example.as_str()) {
+                    Ok(response) => assert_ne!(response, Undefined),
+                    Err(err) => {
+                        println!("{}", "*".repeat(60));
+                        println!("{}", example);
+                        eprintln!("ERROR: {}", err);
+                        errors += 1
+                    }
                 }
             }
         }
@@ -2499,6 +2501,14 @@ mod tests {
 
     #[test]
     fn test_to_code() {
+        // arrays
+        assert_eq!(ArraysFilter.to_code(), "arrays::filter(a: Array, b: fn(item): Boolean)");
+        assert_eq!(ArraysLen.to_code(), "arrays::len(a: Array)");
+        assert_eq!(ArraysMap.to_code(), "arrays::map(a: Array, b: fn(item))");
+        assert_eq!(ArraysPop.to_code(), "arrays::pop(a: Array)");
+        assert_eq!(ArraysPush.to_code(), "arrays::push(a: Array, b)");
+        assert_eq!(ArraysReverse.to_code(), "arrays::reverse(a: Array)");
+        assert_eq!(ArraysToArray.to_code(), "arrays::to_array(a)");
         // cal
         assert_eq!(CalNow.to_code(), "cal::now()");
         assert_eq!(CalDateDay.to_code(), "cal::day_of(n: Date)");
@@ -2520,6 +2530,15 @@ mod tests {
         assert_eq!(IoFileReadText.to_code(), "io::read_text_file(s: String)");
         assert_eq!(IoStdErr.to_code(), "io::stderr(s: String)");
         assert_eq!(IoStdOut.to_code(), "io::stdout(s: String)");
+        // math
+        assert_eq!(MathAbs.to_code(), "math::abs(n: f64)");
+        assert_eq!(MathCeil.to_code(), "math::ceil(n: f64)");
+        assert_eq!(MathFloor.to_code(), "math::floor(n: f64)");
+        assert_eq!(MathMax.to_code(), "math::max(a: f64, b: f64)");
+        assert_eq!(MathMin.to_code(), "math::min(a: f64, b: f64)");
+        assert_eq!(MathPow.to_code(), "math::pow(a: f64, b: f64)");
+        assert_eq!(MathRound.to_code(), "math::round(n: f64)");
+        assert_eq!(MathSqrt.to_code(), "math::sqrt(n: f64)");
         // os
         assert_eq!(OsCall.to_code(), "os::call(s: String)");
         assert_eq!(OsClear.to_code(), "os::clear()");
@@ -2546,6 +2565,7 @@ mod tests {
         assert_eq!(StrRight.to_code(), "str::right(s: String, n: i64)");
         assert_eq!(StrSplit.to_code(), "str::split(a: String, b: String)");
         assert_eq!(StrStartsWith.to_code(), "str::starts_with(a: String, b: String)");
+        assert_eq!(StrStripMargin.to_code(), "str::strip_margin(a: String, b: String)");
         assert_eq!(StrSubstring.to_code(), "str::substring(s: String, m: i64, n: i64)");
         assert_eq!(StrToString.to_code(), "str::to_string(a)");
         // testing
@@ -2557,7 +2577,10 @@ mod tests {
         assert_eq!(ToolsCompact.to_code(), "tools::compact(t: Table)");
         assert_eq!(ToolsDescribe.to_code(), "tools::describe(t: Table)");
         assert_eq!(ToolsFetch.to_code(), "tools::fetch(t: Table, n: u64)");
+        assert_eq!(ToolsFilter.to_code(), "tools::filter(a, b)");
         assert_eq!(ToolsJournal.to_code(), "tools::journal(t: Table)");
+        assert_eq!(ToolsLen.to_code(), "tools::len(t: Table)");
+        assert_eq!(ToolsMap.to_code(), "tools::map(a, b)");
         assert_eq!(ToolsPop.to_code(), "tools::pop(t: Table)");
         assert_eq!(ToolsPush.to_code(), "tools::push(a, b)");
         assert_eq!(ToolsReplay.to_code(), "tools::replay()");
@@ -2593,6 +2616,66 @@ mod tests {
         assert_eq!(WwwURLDecode.to_code(), "www::url_decode(s: String)");
         assert_eq!(WwwURLEncode.to_code(), "www::url_encode(s: String)");
         assert_eq!(WwwServe.to_code(), "www::serve(n: u32)");
+    }
+
+    /// Package "array" tests
+    #[cfg(test)]
+    mod array_tests {
+        use crate::testdata::verify_exact_code;
+
+        #[test]
+        fn test_arrays_filter() {
+            verify_exact_code(r#"
+                arrays::filter(1..7, fn(n) => (n % 2) == 0)
+           "#, "[2, 4, 6]")
+        }
+
+        #[test]
+        fn test_arrays_len() {
+            verify_exact_code(r#"
+                arrays::len([3, 5, 7, 9])
+           "#, "4")
+        }
+
+        #[test]
+        fn test_arrays_map() {
+            verify_exact_code(r#"
+                arrays::map([1, 2, 3], fn(n) => n * 2)
+           "#, "[2, 4, 6]")
+        }
+
+        #[ignore]
+        #[test]
+        fn test_arrays_pop() {
+            verify_exact_code(r#"
+                stocks := ["ABC", "BOOM", "JET", "DEX"]
+                arrays::pop(stocks)
+            "#, r#"["ABC", "BOOM", "JET", "DEX"]"#);
+        }
+
+        #[ignore]
+        #[test]
+        fn test_arrays_push() {
+            verify_exact_code(r#"
+                stocks := ["ABC", "BOOM", "JET"]
+                stocks := arrays::push(stocks, "DEX")
+                stocks
+            "#, r#"["ABC", "BOOM", "JET", "DEX"]"#);
+        }
+
+        #[test]
+        fn test_arrays_reverse() {
+            verify_exact_code(r#"
+                arrays::reverse(['cat', 'dog', 'ferret', 'mouse'])
+            "#, r#"["mouse", "ferret", "dog", "cat"]"#)
+        }
+
+        #[test]
+        fn test_arrays_to_array() {
+            verify_exact_code(r#"
+                 arrays::to_array(("a", "b", "c"))
+            "#, r#"["a", "b", "c"]"#);
+        }
     }
 
     /// Package "cal" tests
@@ -2941,7 +3024,7 @@ mod tests {
         #[test]
         fn test_oxide_eval_qualified() {
             verify_exact_value("oxide::eval('2 ** 4')", Number(F64Value(16.)));
-            verify_exact_value("oxide::eval(123)", ErrorValue(Exact("Type Mismatch: Expected a String near i64".into())));
+            verify_exact_value("oxide::eval(123)", ErrorValue(Exact("Type Mismatch: Expected a String near 123".into())));
         }
 
         #[test]
@@ -2949,7 +3032,7 @@ mod tests {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_value_with(interpreter, "import oxide", Boolean(true));
             interpreter = verify_exact_value_with(interpreter, "'2 ** 4':::eval()", Number(F64Value(16.)));
-            interpreter = verify_exact_value_with(interpreter, "123:::eval()", ErrorValue(Exact("Type Mismatch: Expected a String near i64".into())));
+            interpreter = verify_exact_value_with(interpreter, "123:::eval()", ErrorValue(Exact("Type Mismatch: Expected a String near 123".into())));
         }
 
         #[test]
@@ -3101,7 +3184,7 @@ mod tests {
             verify_exact_value(r#"
                 import str, util
                 12345:::left(5)
-            "#, Undefined);
+            "#, ErrorValue(Exact("Type Mismatch: Expected a String near 12345".into())));
         }
 
         #[test]
@@ -3145,7 +3228,7 @@ mod tests {
         fn test_str_right_qualified_not_string_is_undefined() {
             verify_exact_value(r#"
                 str::right(7779311, 5)
-            "#, Undefined);
+            "#, ErrorValue(Exact("Type Mismatch: Expected a String near 7779311".into())));
         }
 
         #[test]
@@ -3464,17 +3547,17 @@ mod tests {
         fn test_tools_compact() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_table_with(interpreter, r#"
-                [+] stocks := ns("platform.compact.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
-                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                     { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] delete from stocks where last_sale > 1.0
-                [+] from stocks
+                stocks := ns("platform.compact.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                delete from stocks where last_sale > 1.0
+                from stocks
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
@@ -3486,9 +3569,9 @@ mod tests {
             ]);
 
             verify_exact_table_with(interpreter, r#"
-                [+] import tools
-                [+] stocks:::compact()
-                [+] from stocks
+                import tools
+                stocks:::compact()
+                from stocks
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
@@ -3517,9 +3600,9 @@ mod tests {
 
             // postfix
             verify_exact_table(r#"
-                [+] import tools
-                [+] stocks := ns("platform.describe.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                import tools
+                stocks := ns("platform.describe.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 stocks:::describe()
             "#, vec![
                 "|----------------------------------------------------------|",
@@ -3536,12 +3619,12 @@ mod tests {
         fn test_tools_fetch() {
             // fully-qualified
             verify_exact_table(r#"
-                [+] stocks := ns("platform.fetch.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] tools::fetch(stocks, 2)
+                stocks := ns("platform.fetch.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                tools::fetch(stocks, 2)
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
@@ -3552,13 +3635,13 @@ mod tests {
 
             // postfix
             verify_exact_table(r#"
-                [+] import tools
-                [+] stocks := to_table([
-                        { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                        { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                        { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-                    ])
-                [+] stocks:::fetch(1)
+                import tools
+                stocks := to_table([
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                ])
+                stocks:::fetch(1)
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
@@ -3584,9 +3667,9 @@ mod tests {
             verify_exact_table(r#"
                 stocks := ns("platform.filter_over_table.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                    [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
-                     { symbol: "ACDC", exchange: "AMEX", last_sale: 37.43 },
-                     { symbol: "UELO", exchange: "NYSE", last_sale: 91.82 }] ~> stocks
+                [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+                 { symbol: "ACDC", exchange: "AMEX", last_sale: 37.43 },
+                 { symbol: "UELO", exchange: "NYSE", last_sale: 91.82 }] ~> stocks
                 import tools
                 stocks:::filter(fn(row) => exchange is "AMEX")
            "#, vec![
@@ -3608,11 +3691,11 @@ mod tests {
                 create table stocks fn(
                    symbol: String(8), exchange: String(8), last_sale: f64
                 ) => {
-                        symbol: symbol,
-                        exchange: exchange,
-                        last_sale: last_sale * 2.0,
-                        event_time: cal::now()
-                     }
+                    symbol: symbol,
+                    exchange: exchange,
+                    last_sale: last_sale * 2.0,
+                    event_time: cal::now()
+                 }
             "#, Boolean(true));
             interpreter = verify_exact_value_with(interpreter, r#"
                 [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -3671,13 +3754,13 @@ mod tests {
         #[test]
         fn test_tools_pop() {
             verify_exact_table(r#"
-                [+] import tools
-                [+] stocks := ns("platform.pop.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] stocks:::pop()
+                import tools
+                stocks := ns("platform.pop.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                stocks:::pop()
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
@@ -3686,8 +3769,8 @@ mod tests {
                 "|------------------------------------|"
             ]);
             verify_exact_table(r#"
-                [+] stocks := ns("platform.pop.stocks")
-                [+] tools::pop(stocks)
+                stocks := ns("platform.pop.stocks")
+                tools::pop(stocks)
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
@@ -3720,13 +3803,13 @@ mod tests {
         #[test]
         fn test_tools_push_array_evaluate() {
             verify_exact_table(r#"
-                [+] stocks := [
-                        { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                        { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                        { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-                    ]
-                [+] stocks := tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
-                [+] from stocks
+                stocks := [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                ]
+                stocks := tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
+                from stocks
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
@@ -3742,13 +3825,13 @@ mod tests {
         #[test]
         fn test_tools_push_table_evaluate() {
             verify_exact_table(r#"
-                [+] stocks := ns("platform.push.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
-                [+] from stocks
+                stocks := ns("platform.push.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
+                from stocks
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
@@ -3764,13 +3847,13 @@ mod tests {
         #[test]
         fn test_tools_push_tuple_evaluate() {
             verify_exact_table(r#"
-                [+] stocks := [
-                        ("ABC", "AMEX", 12.49),
-                        ("BOOM", "NYSE", 56.88),
-                        ("JET", "NASDAQ", 32.12)
-                    ]
-                [+] stocks := tools::push(stocks, ("DEX", "OTC_BB", 0.0086))
-                [+] from tools::to_table(stocks)
+                stocks := [
+                    ("ABC", "AMEX", 12.49),
+                    ("BOOM", "NYSE", 56.88),
+                    ("JET", "NASDAQ", 32.12)
+                ]
+                stocks := tools::push(stocks, ("DEX", "OTC_BB", 0.0086))
+                from tools::to_table(stocks)
             "#, vec![
                 r#"|--------------------------------|"#,
                 r#"| id | value                     |"#,
@@ -3794,11 +3877,11 @@ mod tests {
                 create table stocks fn(
                    symbol: String(8), exchange: String(8), last_sale: f64
                 ) => {
-                        symbol: symbol,
-                        exchange: exchange,
-                        last_sale: last_sale * 2.0,
-                        rank: __row_id__ + 1
-                     }
+                    symbol: symbol,
+                    exchange: exchange,
+                    last_sale: last_sale * 2.0,
+                    rank: __row_id__ + 1
+                 }
             "#, Boolean(true));
             interpreter = verify_exact_value_with(interpreter, r#"
                 [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -3870,13 +3953,13 @@ mod tests {
         fn test_tools_reverse_tables_method() {
             // postfix (durable)
             verify_exact_table(r#"
-                [+] import tools
-                [+] stocks := ns("platform.reverse.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                [+] stocks:::reverse()
+                import tools
+                stocks := ns("platform.reverse.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                stocks:::reverse()
             "#, vec![
                 "|------------------------------------|",
                 "| id | symbol | exchange | last_sale |",
@@ -3892,16 +3975,16 @@ mod tests {
         fn test_tools_scan() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-                [+] import tools
-                [+] stocks := ns("platform.scan.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
-                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                     { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
-                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
-                     { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
-                [+] delete from stocks where last_sale > 1.0
-                [+] stocks:::scan()
+                import tools
+                stocks := ns("platform.scan.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
+                 { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
+                delete from stocks where last_sale > 1.0
+                stocks:::scan()
             "#).unwrap();
             assert_eq!(result.to_table().unwrap().read_active_rows().unwrap(), vec![
                 make_scan_quote(0, "ABC", "AMEX", 12.33, false),
@@ -3971,13 +4054,13 @@ mod tests {
         fn test_tools_to_csv() {
             verify_exact_value(r#"
                 import tools::to_csv
-                [+] stocks := ns("platform.csv.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                stocks := ns("platform.csv.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
                 stocks:::to_csv()
             "#, ArrayValue(Array::from(vec![
                 StringValue(r#""ABC","AMEX",11.11"#.into()),
@@ -3992,13 +4075,13 @@ mod tests {
         fn test_tools_to_json() {
             verify_exact_value(r#"
                 import tools::to_json
-                [+] stocks := ns("platform.json.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                stocks := ns("platform.json.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
                 stocks:::to_json()
             "#, ArrayValue(Array::from(vec![
                 StringValue(r#"{"symbol":"ABC","exchange":"AMEX","last_sale":11.11}"#.into()),
@@ -4207,14 +4290,14 @@ mod tests {
         fn test_www_serve() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-                [+] www::serve(8822)
-                [+] stocks := ns("platform.www.quotes")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
-                     { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
-                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
-                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                     { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
+                www::serve(8822)
+                stocks := ns("platform.www.quotes")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
+                 { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
                 GET http://localhost:8822/platform/www/quotes/1/4
             "#).unwrap();
             assert_eq!(result.to_json(), json!([

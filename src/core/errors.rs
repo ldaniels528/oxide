@@ -147,7 +147,9 @@ impl Display for TypeMismatchErrors {
             TypeMismatchErrors::UnrecognizedTypeName(name) =>
                 format!("Unrecognized type '{name}'"),
             TypeMismatchErrors::UnsupportedType(a, b) =>
-                format!("{a} is not convertible to {b}"),
+                format!("{} is not convertible to {}",
+                        a.to_type_declaration().unwrap_or("Any".into()),
+                        b.to_type_declaration().unwrap_or("Any".into())),
             TypeMismatchErrors::VariableExpected(a) =>
                 format!("Variable identifier expected near {a}"),
         };
