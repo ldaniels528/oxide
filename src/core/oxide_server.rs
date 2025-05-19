@@ -24,6 +24,7 @@ use crate::websockets::OxideWebSocketServer;
 use crate::*;
 use actix::{Actor, Addr, StreamHandler};
 use actix_session::Session;
+use actix_web::dev::Server;
 use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws;
 use actix_web_actors::ws::WebsocketContext;
@@ -308,6 +309,13 @@ pub fn start_http_server(port: u16) -> JoinHandle<()> {
     })
 }
 
+pub async fn start_async_http_server(port: u16) -> Server {
+       actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
+            .bind(format!("{}:{}", "0.0.0.0", port))
+            .expect(format!("Can't bind to port {port}").as_str())
+            .run()
+}
+
 async fn append_row(
     req: HttpRequest,
     data: web::Json<Value>,
@@ -387,6 +395,18 @@ async fn update_row_by_id(
     update_row!(actor, ns, Row::from_json(&columns, &data.0).with_row_id(id))
 }
 
+pub fn ns_uri(database: &str, schema: &str, name: &str) -> String {
+    format!("/{}/{}/{}", database, schema, name)
+}
+
+pub fn range_uri(database: &str, schema: &str, name: &str, a: usize, b: usize) -> String {
+    format!("/{}/{}/{}/{}/{}", database, schema, name, a, b)
+}
+
+pub fn row_uri(database: &str, schema: &str, name: &str, id: usize) -> String {
+    format!("/{}/{}/{}/{}", database, schema, name, id)
+}
+
 /// Represents all the shared state of the application
 #[derive(Debug)]
 pub struct SharedState {
@@ -413,12 +433,11 @@ mod tests {
     use tokio::runtime::Runtime;
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-
+    use crate::platform::VERSION;
     use super::*;
     use crate::testdata::make_quote_parameters;
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::StringValue;
-    use shared_lib::{ns_uri, range_uri, row_uri};
 
     #[actix::test]
     async fn test_dataframe_config_lifecycle() {
@@ -557,6 +576,6 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"title":"Oxide","version":"0.35"}"#);
+        assert_eq!(body, format!( r#"{{"title":"Oxide","version":"{}"}}"#, VERSION));
     }
 }

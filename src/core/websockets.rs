@@ -134,10 +134,11 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for OxideWebSocketSer
 /// Unit tests
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::dataframe::Dataframe::Model;
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::I64Value;
-    use crate::repl;
+    use crate::terminal;
     use crate::testdata::{make_quote, make_quote_columns, start_test_server};
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::{Number, TableValue};
@@ -186,7 +187,7 @@ mod tests {
     }
 
     fn show_value(value: TypedValue) {
-        for s in repl::build_output(1, value, 0.33).unwrap() {
+        for s in terminal::build_output(1, value, 0.33).unwrap() {
             println!("{}", s)
         }
     }

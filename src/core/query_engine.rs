@@ -992,7 +992,7 @@ mod tests {
 
         // create a table and append some rows
         let mut interpreter = Interpreter::new();
-        interpreter = verify_exact_value_with(interpreter,r#"
+        interpreter = verify_exact_value_with(interpreter, r#"
             stocks := ns("query_engine.select1.stocks")
             table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             append stocks from [

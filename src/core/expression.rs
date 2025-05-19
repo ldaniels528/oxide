@@ -10,13 +10,14 @@ use crate::errors::Errors::{SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ConstantValueExpected, UnsupportedType};
 use crate::errors::{throw, SyntaxErrors};
 use crate::expression::Expression::*;
+use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::machine;
 use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers;
 use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
-use crate::platform::PlatformOps;
+use crate::platform::{Package, PackageOps};
 use crate::row_collection::RowCollection;
 use crate::sequences::{Array, Sequence};
 use crate::structures::Structures::{Firm, Soft};
@@ -163,7 +164,7 @@ impl HttpMethodCalls {
     }
 }
 
-/// Represents an import definition
+/// Represents an enumeration of import definition variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum ImportOps {
     Everything(String),
@@ -186,7 +187,7 @@ impl Display for ImportOps {
     }
 }
 
-/// Represents a data modification event
+/// Represents an enumeration of data modification event variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Mutations {
     Append {
@@ -225,7 +226,7 @@ pub enum Mutations {
     },
 }
 
-/// Represents a Mutation Target
+/// Represents an enumeration of Mutation Target variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum MutateTarget {
     IndexTarget {
@@ -236,7 +237,7 @@ pub enum MutateTarget {
     },
 }
 
-/// Represents an enumeration of queryables
+/// Represents an enumeration of Queryable variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Queryables {
     Limit { from: Box<Expression>, limit: Box<Expression> },
@@ -252,7 +253,14 @@ pub enum Queryables {
     Where { from: Box<Expression>, condition: Conditions },
 }
 
-/// Represents an Expression
+/// Represents an enumeration of range variations
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum Ranges {
+    Inclusive(Box<Expression>, Box<Expression>),
+    Exclusive(Box<Expression>, Box<Expression>),
+}
+
+/// Represents an enumeration of Expression variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Expression {
     ArrayExpression(Vec<Expression>),
@@ -262,6 +270,7 @@ pub enum Expression {
     BitwiseShiftLeft(Box<Expression>, Box<Expression>),
     BitwiseShiftRight(Box<Expression>, Box<Expression>),
     BitwiseXor(Box<Expression>, Box<Expression>),
+    Coalesce(Box<Expression>, Box<Expression>),
     CodeBlock(Vec<Expression>),
     ColonColon(Box<Expression>, Box<Expression>),
     ColonColonColon(Box<Expression>, Box<Expression>),
@@ -278,8 +287,7 @@ pub enum Expression {
         body: Option<Box<Expression>>,
         returns: DataType,
     },
-    FoldOver(Box<Expression>, Box<Expression>),
-    ForEach(String, Box<Expression>, Box<Expression>),
+    For { item: Box<Expression>, items: Box<Expression>, op: Box<Expression> },
     From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     HTTP(HttpMethodCalls),
@@ -290,8 +298,8 @@ pub enum Expression {
     },
     Import(Vec<ImportOps>),
     Include(Box<Expression>),
-    StructureExpression(Vec<(String, Expression)>),
     Literal(TypedValue),
+    MatchExpression(Box<Expression>, Vec<Expression>),
     Minus(Box<Expression>, Box<Expression>),
     Module(String, Vec<Expression>),
     Modulo(Box<Expression>, Box<Expression>),
@@ -300,16 +308,18 @@ pub enum Expression {
     New(Box<Expression>),
     Ns(Box<Expression>),
     Parameters(Vec<Parameter>),
+    Pipeline(Box<Expression>, Box<Expression>),
     Plus(Box<Expression>, Box<Expression>),
     PlusPlus(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
-    Range(Box<Expression>, Box<Expression>),
+    Range(Ranges),
     Return(Box<Expression>),
     Scenario {
         title: Box<Expression>,
         verifications: Vec<Expression>,
     },
     SetVariables(Box<Expression>, Box<Expression>),
+    StructureExpression(Vec<(String, Expression)>),
     TupleExpression(Vec<Expression>),
     TypeDef(Box<Expression>),
     Variable(String),
@@ -342,12 +352,19 @@ impl Expression {
                 format!("{} << {}", Self::decompile(a), Self::decompile(b)),
             Expression::BitwiseShiftRight(a, b) =>
                 format!("{} >> {}", Self::decompile(a), Self::decompile(b)),
+            Expression::Coalesce(a, b) =>
+                format!("{} ? {}", Self::decompile(a), Self::decompile(b)),
             Expression::CodeBlock(items) => Self::decompile_code_blocks(items),
             Expression::Condition(cond) => Self::decompile_cond(cond),
             Expression::CurvyArrowLeft(a, b) =>
                 format!("{} <~ {}", Self::decompile(a), Self::decompile(b)),
             Expression::CurvyArrowRight(a, b) =>
                 format!("{} ~> {}", Self::decompile(a), Self::decompile(b)),
+            Expression::DatabaseOp(op) =>
+                match op {
+                    DatabaseOps::Queryable(q) => Self::decompile_queryables(q),
+                    DatabaseOps::Mutation(m) => Self::decompile_modifications(m),
+                },
             Expression::Directive(d) => Self::decompile_directives(d),
             Expression::Divide(a, b) =>
                 format!("{} / {}", Self::decompile(a), Self::decompile(b)),
@@ -372,10 +389,9 @@ impl Expression {
                             Some(my_body) => format!(" => {}", my_body.to_code()),
                             None => String::new()
                         }),
-            Expression::FoldOver(a, b) =>
-                format!("{} |> {}", Self::decompile(a), Self::decompile(b)),
-            Expression::ForEach(a, b, c) =>
-                format!("foreach {} in {} {}", a, Self::decompile(b), Self::decompile(c)),
+            Expression::For { item, items, op } =>
+                format!("for {} in {} {}",
+                        Self::decompile(item), Self::decompile(items), Self::decompile(op)),
             Expression::From(a) => format!("from {}", Self::decompile(a)),
             Expression::FunctionCall { fx, args } =>
                 format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
@@ -390,12 +406,9 @@ impl Expression {
                     .collect::<Vec<_>>()
                     .join(", ")),
             Expression::Include(path) => format!("include {}", Self::decompile(path)),
-            Expression::StructureExpression(items) =>
-                format!("{{{}}}", items.iter()
-                    .map(|(k, v)| format!("{}: {}", k, v))
-                    .collect::<Vec<String>>()
-                    .join(", ")),
             Expression::Literal(value) => value.to_code(),
+            Expression::MatchExpression(a, b) =>
+                format!("match {} {}", Self::decompile(a), Self::decompile(&ArrayExpression(b.clone()))),
             Expression::Minus(a, b) =>
                 format!("{} - {}", Self::decompile(a), Self::decompile(b)),
             Expression::Module(name, ops) =>
@@ -408,19 +421,18 @@ impl Expression {
             Expression::New(a) => format!("new {}", Self::decompile(a)),
             Expression::Ns(a) => format!("ns({})", Self::decompile(a)),
             Expression::Parameters(parameters) => Self::decompile_parameters(parameters),
+            Expression::Pipeline(a, b) =>
+                format!("{} |> {}", Self::decompile(a), Self::decompile(b)),
             Expression::Plus(a, b) =>
                 format!("{} + {}", Self::decompile(a), Self::decompile(b)),
             Expression::PlusPlus(a, b) =>
                 format!("{} ++ {}", Self::decompile(a), Self::decompile(b)),
             Expression::Pow(a, b) =>
                 format!("{} ** {}", Self::decompile(a), Self::decompile(b)),
-            Expression::DatabaseOp(job) =>
-                match job {
-                    DatabaseOps::Queryable(q) => Self::decompile_queryables(q),
-                    DatabaseOps::Mutation(m) => Self::decompile_modifications(m),
-                },
-            Expression::Range(a, b) =>
+            Expression::Range(Exclusive(a, b)) =>
                 format!("{}..{}", Self::decompile(a), Self::decompile(b)),
+            Expression::Range(Inclusive(a, b)) =>
+                format!("{}..={}", Self::decompile(a), Self::decompile(b)),
             Expression::Return(a) =>
                 format!("return {}", Self::decompile(a)),
             Expression::Scenario { title, verifications } => {
@@ -433,6 +445,11 @@ impl Expression {
             }
             Expression::SetVariables(vars, values) =>
                 format!("{} := {}", Self::decompile(vars), Self::decompile(values)),
+            Expression::StructureExpression(items) =>
+                format!("{{{}}}", items.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<String>>()
+                    .join(", ")),
             Expression::TupleExpression(args) => format!("({})", Self::decompile_list(args)),
             Expression::TypeDef(expr) => format!("typedef({})", expr.to_code()),
             Expression::Variable(name) => name.to_string(),
@@ -650,20 +667,21 @@ impl Expression {
             BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b, hints),
             BitwiseShiftRight(a, b) => Self::infer_a_or_b(a, b, hints),
             BitwiseXor(a, b) => Self::infer_a_or_b(a, b, hints),
+            Coalesce(a, b) => Self::infer_a_or_b(a, b, hints),
             CodeBlock(ops) => ops.last().map(|op| Self::infer_with_hints(op, hints))
-                .unwrap_or(DynamicType),
+                .unwrap_or(UnresolvedType),
             // platform functions: cal::now()
             ColonColon(a, b) | ColonColonColon(a, b) =>
                 match (a.deref(), b.deref()) {
                     (Variable(package), FunctionCall { fx, .. }) =>
                         match fx.deref() {
                             Variable(name) =>
-                                PlatformOps::find_function(package, name)
-                                    .map(|pf| pf.return_type)
-                                    .unwrap_or(DynamicType),
-                            _ => DynamicType
+                                PackageOps::find_function(package, name)
+                                    .map(|pf| pf.get_return_type())
+                                    .unwrap_or(UnresolvedType),
+                            _ => UnresolvedType
                         }
-                    _ => DynamicType
+                    _ => UnresolvedType
                 }
             Condition(..) => BooleanType,
             CurvyArrowLeft(..) => StructureType(vec![]),
@@ -677,15 +695,15 @@ impl Expression {
             }
             Directive(..) => BooleanType,
             Divide(a, b) => Self::infer_a_or_b(a, b, hints),
-            ElementAt(..) => DynamicType,
+            ElementAt(..) => UnresolvedType,
             Feature { .. } => BooleanType,
             FnExpression { params, returns, .. } =>
                 FunctionType(params.clone(), Box::new(returns.clone())),
-            FoldOver(_, b) => Self::infer_with_hints(b, hints),
-            ForEach(..) => DynamicType,
+            Pipeline(_, b) => Self::infer_with_hints(b, hints),
+            For { op, .. } => Self::infer_with_hints(op, hints),
             From(..) => TableType(vec![], 0),
             FunctionCall { fx, .. } => Self::infer_with_hints(fx, hints),
-            HTTP { .. } => DynamicType,
+            HTTP { .. } => UnresolvedType,
             If { a: true_v, b: Some(false_v), .. } => Self::infer_a_or_b(true_v, false_v, hints),
             If { a: true_v, .. } => Self::infer_with_hints(true_v, hints),
             Import(..) => BooleanType,
@@ -693,6 +711,11 @@ impl Expression {
             Literal(Function { body, .. }) => Self::infer_with_hints(body, hints),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
+            MatchExpression(_, cases) => DataType::best_fit(
+                cases.iter()
+                    .map(|op| Self::infer_with_hints(op, hints))
+                    .collect::<Vec<_>>()
+            ),
             Minus(a, b) => Self::infer_a_or_b(a, b, hints),
             Module(..) => BooleanType,
             Modulo(a, b) => Self::infer_a_or_b(a, b, hints),
@@ -704,7 +727,8 @@ impl Expression {
             Plus(a, b) => Self::infer_a_or_b(a, b, hints),
             PlusPlus(a, b) => Self::infer_a_or_b(a, b, hints),
             Pow(a, b) => Self::infer_a_or_b(a, b, hints),
-            Range(a, b) => Self::infer_a_or_b(a, b, hints),
+            Range(Exclusive(a, b)) => Self::infer_a_or_b(a, b, hints),
+            Range(Inclusive(a, b)) => Self::infer_a_or_b(a, b, hints),
             Return(a) => Self::infer_with_hints(a, hints),
             Scenario { .. } => BooleanType,
             SetVariables(..) => BooleanType,
@@ -730,11 +754,11 @@ impl Expression {
                     _ =>
                         match hints.iter().find(|hint| hint.get_name() == name) {
                             Some(param) => param.get_data_type(),
-                            None => DynamicType
+                            None => UnresolvedType
                         }
                 }
             Via(..) => TableType(vec![], 0),
-            While { .. } => DynamicType,
+            While { .. } => UnresolvedType,
         }
     }
 
@@ -812,7 +836,7 @@ impl Expression {
                         .map(|row| Structured(Firm(row, df.get_parameters())))
                         .unwrap_or(Undefined),
                     TypedValue::Undefined => Undefined,
-                    z => ErrorValue(TypeMismatch(UnsupportedType(DynamicType, z.get_type())))
+                    z => return throw(TypeMismatch(UnsupportedType(UnresolvedType, z.get_type())))
                 })
             }
             Expression::StructureExpression(items) => {
@@ -830,8 +854,14 @@ impl Expression {
             Expression::Plus(a, b) => Ok(a.to_pure()? + b.to_pure()?),
             Expression::Pow(a, b) => Ok(a.to_pure()?.pow(&b.to_pure()?)
                 .unwrap_or(Undefined)),
-            Expression::Range(a, b) =>
-                Ok(ArrayValue(Array::from(TypedValue::express_range(
+            Expression::Range(Exclusive(a, b)) =>
+                Ok(ArrayValue(Array::from(TypedValue::exclusive_range(
+                    a.to_pure()?,
+                    b.to_pure()?,
+                    Number(I64Value(1)),
+                )))),
+            Expression::Range(Inclusive(a, b)) =>
+                Ok(ArrayValue(Array::from(TypedValue::inclusive_range(
                     a.to_pure()?,
                     b.to_pure()?,
                     Number(I64Value(1)),
@@ -860,7 +890,7 @@ fn to_ns(path: Expression) -> Expression {
 /// expression unit tests
 #[cfg(test)]
 mod expression_tests {
-    use crate::data_types::DataType::{DynamicType, NumberType, StringType};
+    use crate::data_types::DataType::{NumberType, StringType, UnresolvedType};
     use crate::expression::Conditions::*;
     use crate::expression::CreationEntity::{IndexEntity, TableEntity};
     use crate::expression::DatabaseOps::{Mutation, Queryable};
@@ -1265,7 +1295,7 @@ mod expression_tests {
             ), Box::new(
                 Variable("b".into())
             )))),
-            returns: DynamicType,
+            returns: UnresolvedType,
         };
         assert_eq!(Expression::decompile(&model), "fn(a, b) => a * b")
     }
@@ -1284,7 +1314,7 @@ mod expression_tests {
                 ), Box::new(
                     Variable("b".into())
                 )))),
-                returns: DynamicType,
+                returns: UnresolvedType,
             }.into(),
         );
         assert_eq!(Expression::decompile(&model), "add := fn(a, b) => a + b")

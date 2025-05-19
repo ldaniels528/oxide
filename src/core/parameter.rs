@@ -5,7 +5,7 @@
 
 use crate::columns::Column;
 use crate::data_types::DataType;
-use crate::data_types::DataType::DynamicType;
+use crate::data_types::DataType::UnresolvedType;
 
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Null;
@@ -26,7 +26,7 @@ impl Parameter {
     ////////////////////////////////////////////////////////////////////
 
     pub fn add(name: impl Into<String>) -> Self {
-        Self::new(name, DynamicType)
+        Self::new(name, UnresolvedType)
     }
 
     pub fn are_compatible(
@@ -49,6 +49,32 @@ impl Parameter {
 
     pub fn from_tuple(name: impl Into<String>, value: TypedValue) -> Self {
         Self::with_default(name.into(), value.get_type(), value)
+    }
+
+    pub fn merge_parameters(
+        mut current_params: Vec<Parameter>,
+        incoming_params: Vec<Parameter>,
+    ) -> Vec<Parameter> {
+        for incoming_param in incoming_params {
+            let name = incoming_param.get_name();
+            match current_params.iter().position(|p| p.get_name() == name) {
+                // Not found — add the new parameter
+                None => current_params.push(incoming_param),
+                // Found — normalize the types and replace
+                Some(index) => {
+                    let existing_param = &current_params[index];
+                    let new_param = Parameter::new(
+                        name,
+                        DataType::best_fit(vec![
+                            existing_param.get_data_type(),
+                            incoming_param.get_data_type(),
+                        ]),
+                    );
+                    current_params[index] = new_param;
+                }
+            }
+        }
+        current_params
     }
 
     pub fn new(name: impl Into<String>, param_type: DataType) -> Self {

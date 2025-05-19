@@ -5,12 +5,14 @@
 
 use crate::tokens::Token;
 
+/// Single-character operators
 const OPERATORS_1: [char; 39] = [
     '!', '¡', '@', '#', '$', '%', '^', '&', '×', '*', '÷', '/', '+', '-', '=',
     '(', ')', '<', '>', '{', '}', '[', ']', ',', ';', '?', '\\', '|', '~',
     '⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹',
 ];
 
+/// Dual-character operators
 const OPERATORS_2: [&str; 26] = [
     "++", "&&", "**", "||", "::", "..", "==", ">>", "<<", "|>",
     "->", "<-", ">=", "<=", "=>",
@@ -18,12 +20,15 @@ const OPERATORS_2: [&str; 26] = [
     "~>", "<~",
 ];
 
-const OPERATORS_3: [&str; 3] = [
-    ":::", "~>>", "<<~",
+/// Triple-character operators
+const OPERATORS_3: [&str; 4] = [
+    ":::", "..=", "~>>", "<<~",
 ];
 
+/// Pseudo-numerical prefixes
 const PSEUDO_NUMERICAL: [&str; 3] = ["0x", "0b", "0o"];
 
+/// Special symbols
 const SYMBOLS_3: [&str; 6] = [
     "[^]", "[!]", "[+]", "[-]", "[~]", "[_]",
 ];

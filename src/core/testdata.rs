@@ -106,7 +106,7 @@ pub fn start_test_server(port: u16) {
 
 pub fn verify_bit_operator(op: &str) {
     verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
-    verify_data_type(format!("a {} b", op).as_str(), DynamicType);
+    verify_data_type(format!("a {} b", op).as_str(), UnresolvedType);
 }
 
 pub fn verify_data_type(code: &str, expected: DataType) {
@@ -180,7 +180,7 @@ pub fn verify_exact_value_with(
 pub fn verify_math_operator(op: &str) {
     verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
     verify_data_type(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
-    verify_data_type(format!("a {} b", op).as_str(), DynamicType);
+    verify_data_type(format!("a {} b", op).as_str(), UnresolvedType);
 }
 
 pub fn verify_outcome_whence(

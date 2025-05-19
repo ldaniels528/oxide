@@ -18,7 +18,7 @@ use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::U64Kind;
 use crate::numbers::Numbers::{RowId, U64Value};
 use crate::parameter::Parameter;
-use crate::platform::PlatformOps;
+use crate::platform::PackageOps;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::Array;
 use crate::structures::Row;
@@ -136,7 +136,7 @@ pub trait RowCollection: Debug {
 
     /// Returns a table that describes the structure of the host table
     fn describe(&self) -> TypedValue {
-        let params = PlatformOps::get_tools_describe_parameters();
+        let params = PackageOps::get_tools_describe_parameters();
         let mut mrc = ModelRowCollection::from_parameters(&params);
         for column in self.get_columns() {
             mrc.append_row(Row::new(0, vec![
@@ -805,10 +805,11 @@ mod tests {
     use crate::table_renderer::TableRenderer;
     use crate::table_scan::TableScanTypes::ColumnScan;
     use crate::testdata::*;
+    use crate::utils::compute_time_millis;
     use chrono::Local;
     use num_traits::ToPrimitive;
     use rand::{thread_rng, Rng, RngCore};
-    use shared_lib::{cnv_error, compute_time_millis};
+    use shared_lib::cnv_error;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]

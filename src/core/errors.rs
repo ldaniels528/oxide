@@ -7,7 +7,7 @@ use std::fmt::{Debug, Display, Formatter};
 
 use crate::data_types::DataType;
 use crate::parameter::Parameter;
-use crate::platform::PlatformOps;
+use crate::platform::PackageOps;
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
 
@@ -147,7 +147,9 @@ impl Display for TypeMismatchErrors {
             TypeMismatchErrors::UnrecognizedTypeName(name) =>
                 format!("Unrecognized type '{name}'"),
             TypeMismatchErrors::UnsupportedType(a, b) =>
-                format!("{a} is not convertible to {b}"),
+                format!("{} is not convertible to {}",
+                        a.to_type_declaration().unwrap_or("Any".into()),
+                        b.to_type_declaration().unwrap_or("Any".into())),
             TypeMismatchErrors::VariableExpected(a) =>
                 format!("Variable identifier expected near {a}"),
         };
@@ -172,11 +174,11 @@ pub enum Errors {
     Multiple(Vec<Errors>),
     NotImplemented(String),
     PackageNotFound(String),
-    PlatformOpError(PlatformOps),
+    PlatformOpError(PackageOps),
     SyntaxError(SyntaxErrors),
     TypeMismatch(TypeMismatchErrors),
     UnsupportedFeature(String),
-    UnsupportedPlatformOps(PlatformOps),
+    UnsupportedPlatformOps(PackageOps),
     ViewsCannotBeResized,
     WriteProtected,
 }
@@ -245,6 +247,7 @@ mod tests {
     use crate::data_types::DataType::{NumberType, StructureType};
     use crate::errors::TypeMismatchErrors::*;
     use crate::number_kind::NumberKind::I128Kind;
+    use crate::packages::UtilsPkg;
     use Errors::*;
 
     #[test]
@@ -253,7 +256,7 @@ mod tests {
                "Assertion Error: true was not false");
         verify(CannotSubtract("a".into(), "b".into()),
                "Cannot subtract b from a");
-        verify(PlatformOpError(PlatformOps::UtilHex),
+        verify(PlatformOpError(PackageOps::Utils(UtilsPkg::Hex)),
                "Conversion error: \"util::hex(a)\"");
         verify(Empty, "General fault occurred".into());
         verify(Exact("Something bad happened".into()),

@@ -4,6 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use std::cmp::Ordering;
+use std::collections::btree_map::IntoKeys;
 use std::collections::Bound;
 use std::fmt::Display;
 use std::fs::File;
@@ -45,7 +46,7 @@ use crate::numbers::Numbers;
 use crate::numbers::Numbers::*;
 use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
-use crate::platform::PlatformOps;
+use crate::platform::PackageOps;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::*;
@@ -75,7 +76,7 @@ pub enum TypedValue {
     NamespaceValue(Namespace),
     Null,
     Number(Numbers),
-    PlatformOp(PlatformOps),
+    PlatformOp(PackageOps),
     Sequenced(Sequences),
     StringValue(String),
     Structured(Structures),
@@ -90,10 +91,20 @@ impl TypedValue {
     //  Static Methods
     ////////////////////////////////////////////////////////////////////
 
-    pub fn express_range(a: Self, b: Self, step: Self) -> Vec<Self> {
+    pub fn exclusive_range(a: Self, b: Self, step: Self) -> Vec<Self> {
         let mut items = Vec::new();
         let mut n = a;
         while n < b {
+            items.push(n.clone());
+            n = n + step.clone();
+        }
+        items
+    }
+
+    pub fn inclusive_range(a: Self, b: Self, step: Self) -> Vec<Self> {
+        let mut items = Vec::new();
+        let mut n = a;
+        while n <= b {
             items.push(n.clone());
             n = n + step.clone();
         }
@@ -220,6 +231,13 @@ impl TypedValue {
     //  Instance Methods
     ////////////////////////////////////////////////////////////////////
 
+    pub fn coalesce(&self, other: TypedValue) -> TypedValue {
+        match self {
+            ErrorValue(..) | Null | Undefined => other,
+            _ => self.clone()
+        }
+    }
+
     /// returns true, if:
     /// 1. the host value is an array, and the item value is found within it,
     /// 2. the host value is a table, and the item value matches a row found within it,
@@ -269,7 +287,7 @@ impl TypedValue {
                     }
                     other => ErrorValue(TypeMismatch(TypeMismatchErrors::FunctionExpected(other.to_code())))
                 }
-            DynamicType => self.clone(),
+            UnresolvedType => self.clone(),
             NumberType(kind) => match self {
                 Boolean(b) => Number(U8Value(if *b { 1 } else { 0 }).convert_to(kind)),
                 Number(number) => Number(number.convert_to(kind)),
@@ -281,6 +299,44 @@ impl TypedValue {
             TableType(params, ..) => self.to_table_with_schema(&params)?,
             TupleType(..) => Undefined,
         })
+    }
+
+    pub fn display_value(&self) -> String {
+        match self {
+            TypedValue::ArrayValue(av) => {
+                let values = av.iter().map(|v| v.display_value()).collect::<Vec<_>>();
+                format!("[{}]", values.join(", "))
+            }
+            TypedValue::Binary(bytes) => hex::encode(bytes),
+            TypedValue::ASCII(chars) => format!("{:#?}", chars),
+            TypedValue::Boolean(b) => (if *b { "true" } else { "false" }).into(),
+            TypedValue::ErrorValue(message) => message.to_string(),
+            TypedValue::Function { params, body: code, returns } =>
+                format!("(fn({}){} => {})",
+                        params.iter().map(|c| c.to_code()).collect::<Vec<_>>().join(", "),
+                        match returns.to_code().as_str() {
+                            "" => "".to_string(),
+                            s => format!(": {}", s),
+                        },
+                        code.to_code()),
+            TypedValue::Kind(data_type) => data_type.to_code(),
+            TypedValue::NamespaceValue(ns) => ns.get_full_name(),
+            TypedValue::Null => "null".into(),
+            TypedValue::Number(number) => number.unwrap_value(),
+            TypedValue::PlatformOp(nf) => nf.to_code(),
+            TypedValue::Sequenced(seq) => seq.unwrap_value(),
+            TypedValue::StringValue(string) => format!("\"{}\"", string),
+            TypedValue::Structured(structure) => structure.to_json().to_string(),
+            TypedValue::TableValue(rcv) => {
+                let params = rcv.get_parameters();
+                serde_json::json!(rcv.iter().map(|r| r.to_hash_json_value(&params))
+                    .collect::<Vec<_>>()).to_string()
+            }
+            TypedValue::TupleValue(items) =>
+                format!("({})", items.iter().map(|i| i.display_value())
+                    .collect::<Vec<_>>().join(", ")),
+            TypedValue::Undefined => "undefined".into(),
+        }
     }
 
     pub fn encode(&self) -> Vec<u8> {
@@ -318,7 +374,7 @@ impl TypedValue {
                 FunctionType(params.clone(), Box::from(returns.clone())),
             Kind(data_type) => data_type.clone(),
             NamespaceValue(..) => TableType(Vec::new(), 0),
-            Null | Undefined => DynamicType,
+            Null | Undefined => UnresolvedType,
             Number(n) => NumberType(n.kind()),
             PlatformOp(op) => op.get_type(),
             Sequenced(seq) => seq.get_type(),
@@ -403,6 +459,10 @@ impl TypedValue {
             Structured(Hard(hs)) => hs.to_code(),
             Structured(Soft(ss)) => ss.to_code(),
             StringValue(s) => format!("\"{s}\""),
+            TupleValue(items) =>
+                format!("({})", items.iter()
+                    .map(|v| v.to_code())
+                    .collect::<Vec<_>>().join(", ")),
             other => other.unwrap_value()
         }
     }
@@ -521,6 +581,10 @@ impl TypedValue {
         match self {
             ArrayValue(array) => Ok(Sequences::TheArray(array.clone())),
             NamespaceValue(ns) => Ok(Sequences::TheDataframe(Disk(FileRowCollection::open(ns)?))),
+            StringValue(s) => Ok(Sequences::TheArray(Array::from(s.chars()
+                .map(|c| StringValue(c.to_string()))
+                .collect::<Vec<_>>()
+            ))),
             TableValue(df) => Ok(Sequences::TheDataframe(df.clone())),
             TupleValue(t) => Ok(Sequences::TheTuple(t.to_vec())),
             z => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), z.get_type())))
@@ -734,9 +798,15 @@ impl TypedValue {
         }
     }
 
-    pub fn range(&self, rhs: &Self) -> Option<Self> {
+    pub fn range_exclusive(&self, rhs: &Self) -> Option<Self> {
         let mut values = Vec::new();
         for n in self.to_i64()..rhs.to_i64() { values.push(Number(I64Value(n))) }
+        Some(ArrayValue(Array::from(values)))
+    }
+
+    pub fn range_inclusive(&self, rhs: &Self) -> Option<Self> {
+        let mut values = Vec::new();
+        for n in self.to_i64()..=rhs.to_i64() { values.push(Number(I64Value(n))) }
         Some(ArrayValue(Array::from(values)))
     }
 }
@@ -786,7 +856,10 @@ impl Add for TypedValue {
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 },
             (TupleValue(a), TupleValue(b)) => TupleValue(add_vec(a, b)),
-            (a, b) => ErrorValue(TypeMismatch(UnsupportedType(a.get_type(), b.get_type())))
+            (a, b) => {
+                println!("add: {a:?} vs. {b:?}");
+                ErrorValue(TypeMismatch(UnsupportedType(a.get_type(), b.get_type())))
+            }
         }
     }
 }
@@ -1033,7 +1106,7 @@ mod core_tests {
         let (a, b, c) = (
             Number(I64Value(1)), Number(I64Value(5)), Number(I64Value(1))
         );
-        let list = TypedValue::express_range(a, b, c);
+        let list = TypedValue::exclusive_range(a, b, c);
         assert_eq!(list, vec![
             Number(I64Value(1)), Number(I64Value(2)), Number(I64Value(3)),
             Number(I64Value(4)),

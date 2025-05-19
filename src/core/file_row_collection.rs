@@ -17,7 +17,7 @@ use crate::number_kind::NumberKind::U64Kind;
 use crate::numbers::Numbers;
 use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
-use crate::platform::PlatformOps;
+use crate::platform::PackageOps;
 use crate::row_collection::{RowCollection, RowEncoding};
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;

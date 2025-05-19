@@ -5,7 +5,7 @@
 
 use crate::data_types::DataType;
 use crate::data_types::DataType::TupleType;
-use crate::data_types::DataType::{ArrayType, DynamicType, TableType};
+use crate::data_types::DataType::{ArrayType, TableType, UnresolvedType};
 use crate::dataframe::Dataframe;
 use crate::errors::Errors::{Exact, TypeMismatch};
 use crate::errors::TypeMismatchErrors::StructExpected;
@@ -42,10 +42,6 @@ pub trait Sequence {
     fn iter(&self) -> Iter<'_, TypedValue>;
 
     fn len(&self) -> usize;
-
-    //fn map(&self, f: fn(&TypedValue) -> TypedValue) -> Self;
-
-    //fn rev(&self) -> Self;
 
     fn pop(&mut self) -> Option<TypedValue>;
 
@@ -258,9 +254,9 @@ impl Array {
                 }
             });
         match kinds.as_slice() {
-            [] => DynamicType,
+            [] => UnresolvedType,
             [kind] => kind.clone(),
-            _ => DynamicType
+            _ => UnresolvedType
         }
     }
 
@@ -561,7 +557,7 @@ mod tests {
     /// Unit array tests
     #[cfg(test)]
     mod array_tests {
-        use crate::data_types::DataType::{ArrayType, DynamicType, StringType};
+        use crate::data_types::DataType::{ArrayType, StringType, UnresolvedType};
         use crate::numbers::Numbers::I64Value;
         use crate::sequences::{Array, Sequence, Tuple};
         use crate::testdata::*;
@@ -602,11 +598,11 @@ mod tests {
             assert_eq!(array.get_component_type(), StringType(5));
 
             array.push(Boolean(true));
-            assert_eq!(array.get_component_type(), DynamicType);
+            assert_eq!(array.get_component_type(), UnresolvedType);
 
             array.push(StringValue("Hello World".into()));
             array.push(StringValue("Hello World".into()));
-            assert_eq!(array.get_component_type(), DynamicType);
+            assert_eq!(array.get_component_type(), UnresolvedType);
 
             assert_eq!(array.get_type(), ArrayType(4));
         }

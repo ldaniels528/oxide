@@ -18,7 +18,7 @@ use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers::I32Value;
 use crate::parameter::Parameter;
-use crate::platform::PlatformOps;
+use crate::platform::PackageOps;
 use crate::row_collection::RowCollection;
 use crate::sequences::Array;
 use crate::structures::Structures::Hard;
@@ -37,12 +37,12 @@ pub enum DataType {
     ASCIIType(usize),
     BinaryType(usize),
     BooleanType,
-    DynamicType, // Polymorphic
+    UnresolvedType, // Polymorphic
     EnumType(Vec<Parameter>),
     ErrorType,
     FunctionType(Vec<Parameter>, Box<DataType>),
     NumberType(NumberKind),
-    PlatformOpsType(PlatformOps),
+    PlatformOpsType(PackageOps),
     StringType(usize),
     StructureType(Vec<Parameter>),
     TableType(Vec<Parameter>, usize),
@@ -63,17 +63,16 @@ impl DataType {
 
     /// provides type resolution for the given [Vec<DataType>]
     pub fn best_fit(types: Vec<DataType>) -> DataType {
-        fn larger(a: &usize, b: &usize) -> usize {
-            (if a > b { a } else { b }).to_owned()
-        }
-
         match types.len() {
-            0 => DynamicType,
+            0 => UnresolvedType,
             1 => types[0].to_owned(),
             _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
                 match (agg, t) {
-                    (BinaryType(a), BinaryType(b)) => StringType(larger(&a, b)),
-                    (StringType(a), StringType(b)) => StringType(larger(&a, b)),
+                    (ArrayType(a), ArrayType(b)) => ArrayType(a.max(*b)),
+                    (ASCIIType(a), ASCIIType(b)) => ASCIIType(a.max(*b)),
+                    (BinaryType(a), BinaryType(b)) => BinaryType(a.max(*b)),
+                    (StringType(a), StringType(b)) => StringType(a.max(*b)),
+                    (TableType(p0, a), TableType(p1, b)) if p0 == *p1 => TableType(p0, a.max(*b)),
                     (_, t) => t.to_owned()
                 })
         }
@@ -109,7 +108,7 @@ impl DataType {
             ASCIIType(..) => ASCII(bcc.next_clob()),
             BinaryType(..) => Binary(bcc.next_blob()),
             BooleanType => Boolean(bcc.next_bool()),
-            DataType::DynamicType => Undefined,
+            DataType::UnresolvedType => Undefined,
             EnumType(labels) => {
                 let index = bcc.next_u32() as usize;
                 StringValue(labels[index].get_name().to_string())
@@ -215,7 +214,7 @@ impl DataType {
             EnumType(..) => 2,
             ErrorType => 256,
             FunctionType(columns, ..) => columns.len() * 8,
-            DynamicType => 8,
+            UnresolvedType => 8,
             NumberType(nk) => nk.compute_fixed_size(),
             PlatformOpsType(..) => 4,
             StringType(size) => match size {
@@ -236,7 +235,7 @@ impl DataType {
             ASCIIType(..) => ASCII(vec![]),
             BinaryType(..) => Binary(vec![]),
             BooleanType => Boolean(false),
-            DataType::DynamicType => Null,
+            DataType::UnresolvedType => Null,
             EnumType(..) => Number(I32Value(0)),
             ErrorType => ErrorValue(Errors::Empty),
             FunctionType(params, returns) => Function {
@@ -263,7 +262,7 @@ impl DataType {
             ASCIIType(_) => Ok(ASCII(vec![])),
             BinaryType(_) => Ok(Binary(vec![])),
             BooleanType => Ok(Boolean(false)),
-            DynamicType => throw(InstantiationError(self.clone())),
+            UnresolvedType => throw(InstantiationError(self.clone())),
             EnumType(_) => throw(InstantiationError(self.clone())),
             ErrorType => throw(InstantiationError(self.clone())),
             FunctionType(params, kind) =>
@@ -292,7 +291,7 @@ impl DataType {
             (ArrayType(..), ArrayType(..)) |
             (ASCIIType(..) | StringType(..), ASCIIType(..) | StringType(..)) |
             (BinaryType(..), BinaryType(..)) |
-            (DynamicType, _) | (_, DynamicType) => true,
+            (UnresolvedType, _) | (_, UnresolvedType) => true,
             (EnumType(a), EnumType(b)) => Parameter::are_compatible(a, b),
             (FunctionType(a, dta), FunctionType(b, dtb)) =>
                 Parameter::are_compatible(a, b) && dta.is_compatible(dtb),
@@ -348,7 +347,7 @@ impl DataType {
             ASCIIType(size) => sized("ASCII", *size),
             BinaryType(size) => sized("Binary", *size), // UTF8
             BooleanType => "Boolean".into(),
-            DynamicType => String::new(),
+            UnresolvedType => String::new(),
             EnumType(labels) => parameterized("Enum", labels, true),
             ErrorType => "Error".into(),
             FunctionType(params, returns) =>
@@ -457,7 +456,7 @@ fn decode_model_function_call(
                 "ASCII" => expect_size(args, |size| ASCIIType(size)),
                 "Binary" => expect_size(args, |size| BinaryType(size)),
                 "Enum" => expect_params(args, |params| EnumType(params)),
-                "fn" => expect_params(args, |params| FunctionType(params, DynamicType.into())),
+                "fn" => expect_params(args, |params| FunctionType(params, UnresolvedType.into())),
                 "String" => expect_size(args, |size| StringType(size)),
                 "Struct" => expect_params(args, |params| StructureType(params)),
                 "Table" => expect_params(args, |params| TableType(params, 0)),
@@ -487,7 +486,7 @@ fn decode_model_variable(name: &str) -> std::io::Result<DataType> {
         "Error" => Ok(ErrorType),
         "f32" => Ok(NumberType(F32Kind)),
         "f64" => Ok(NumberType(F64Kind)),
-        "Fn" => Ok(FunctionType(vec![], Box::new(DynamicType))),
+        "Fn" => Ok(FunctionType(vec![], Box::new(UnresolvedType))),
         "i8" => Ok(NumberType(I8Kind)),
         "i16" => Ok(NumberType(I16Kind)),
         "i32" => Ok(NumberType(I32Kind)),
@@ -544,7 +543,6 @@ mod tests {
             verify_compatibility(NumberType(I64Kind), NumberType(I32Kind));
             verify_incompatibility(NumberType(I64Kind), BooleanType);
         }
-
 
         fn verify_compatibility(a: DataType, b: DataType) {
             assert!(a.is_compatible(&b));
@@ -627,7 +625,7 @@ mod tests {
         fn test_fn() {
             verify_type_construction(
                 "fn(symbol: String(8), exchange: String(8), last_sale: f64)",
-                FunctionType(make_quote_parameters(), Box::from(DynamicType)));
+                FunctionType(make_quote_parameters(), Box::from(UnresolvedType)));
         }
 
         #[test]

@@ -3,14 +3,15 @@
 //      Oxide REST Server
 ////////////////////////////////////////////////////////////////////
 
+use crate::interpreter::Interpreter;
 use crate::oxide_server::start_http_server;
-use crate::repl::{read_line_from_stdin, REPLState};
-use crate::terminal::TerminalState;
+use crate::terminal::{read_line_from_stdin, TerminalState};
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
 use std::env;
 use std::string::ToString;
+use crate::repl::REPLState;
 
 mod blobs;
 mod byte_code_compiler;
@@ -37,6 +38,7 @@ mod number_kind;
 mod numbers;
 mod object_config;
 mod oxide_server;
+mod packages;
 mod parameter;
 mod platform;
 mod query_engine;
@@ -56,6 +58,7 @@ mod token_slice;
 mod tokenizer;
 mod tokens;
 mod typed_values;
+mod utils;
 mod websockets;
 
 const LOCAL_HOST: &str = "0.0.0.0";
@@ -94,13 +97,19 @@ impl ApplicationModes {
 }
 
 /// Starts the Oxide server
-#[actix::main]
-async fn main() -> std::io::Result<()> {
+//#[actix::main] 
+fn main() -> std::io::Result<()> {
     // set up the logger
     env_logger::builder()
         .filter_level(LevelFilter::Info)
         .init();
 
+    // start the REPL 
+    repl::do_terminal(REPLState::new(), env::args().collect(), || read_line_from_stdin())
+}
+
+// Start the Oxide terminal (embedded or remote server)
+async fn terminal_startup() -> std::io::Result<()> {
     // start the REPL based on the commandline arguments
     match ApplicationModes::parse(env::args().collect()) {
         ApplicationModes::EmbeddedSession(port) => {
@@ -114,7 +123,7 @@ async fn main() -> std::io::Result<()> {
         }
         ApplicationModes::OfflineSession => {
             println!("Starting offline Oxide service...");
-            start_offline_session()?
+            start_offline_session().await?
         }
         ApplicationModes::StartupFailure(message) => {
             eprintln!("{}", message)
@@ -132,12 +141,12 @@ fn parse_u16(s: &str) -> std::io::Result<u16> {
 }
 
 /// Starts a standalone/offline Oxide REPL
-fn start_offline_session() -> std::io::Result<()> {
-    repl::do_terminal(
-        REPLState::new(),
+async fn start_offline_session() -> std::io::Result<()> {
+    terminal::do_terminal(
+        TerminalState::offline()?,
         env::args().collect(),
         || read_line_from_stdin(),
-    )
+    ).await
 }
 
 /// Starts a websockets-based Oxide Server

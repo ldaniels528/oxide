@@ -38,7 +38,7 @@ impl NumberKind {
     pub fn compute_fixed_size(&self) -> usize {
         use NumberKind::*;
         match self {
-            RowIdKind  => 2,
+            RowIdKind => 2,
             I8Kind | U8Kind => 1,
             I16Kind | U16Kind => 2,
             F32Kind | I32Kind | U32Kind => 4,

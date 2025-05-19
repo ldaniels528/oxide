@@ -3,7 +3,7 @@
 //  Machine - state machine module
 ////////////////////////////////////////////////////////////////////
 
-use actix_web::web::scope;
+use actix_web::web::{scope, to};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
 use log::{error, info};
@@ -42,6 +42,7 @@ use crate::expression::Conditions::{False, True};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
+use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::expression::{Conditions, Expression, HttpMethodCalls, ImportOps, UNDEFINED};
 use crate::expression::{DatabaseOps, Directives, Mutations, Queryables};
 use crate::file_row_collection::FileRowCollection;
@@ -50,7 +51,7 @@ use crate::namespaces::Namespace;
 use crate::numbers::Numbers::*;
 use crate::object_config::{HashIndexConfig, ObjectConfig};
 use crate::parameter::Parameter;
-use crate::platform::PlatformOps;
+use crate::platform::{Package, PackageOps};
 use crate::query_engine;
 use crate::row_collection::RowCollection;
 use crate::structures::Row;
@@ -60,6 +61,7 @@ use crate::table_renderer::TableRenderer;
 use crate::testdata::verify_exact_table_with;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use crate::utils::{pull_array, pull_bool, pull_number, pull_variable, pull_vec};
 use shared_lib::cnv_error;
 
 pub const ROW_ID: &str = "__row_id__";
@@ -105,7 +107,7 @@ impl Machine {
 
     /// creates a new state machine prepopulated with platform packages
     pub fn new() -> Self {
-        PlatformOps::build_packages().iter()
+        PackageOps::build_packages().iter()
             .fold(Self::empty(), |ms, (name, list)| {
                 ms.with_module(name, list.to_owned())
             })
@@ -154,7 +156,8 @@ impl Machine {
             BitwiseShiftLeft(a, b) => self.eval_inline_2(a, b, |aa, bb| aa << bb),
             BitwiseShiftRight(a, b) => self.eval_inline_2(a, b, |aa, bb| aa >> bb),
             BitwiseXor(a, b) => self.eval_inline_2(a, b, |aa, bb| aa ^ bb),
-            CodeBlock(ops) => Ok(self.evaluate_scope(ops)),
+            Coalesce(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.coalesce(bb)),
+            CodeBlock(ops) => self.evaluate_scope(ops),
             ColonColon(a, b) => self.do_colon_colon(a, b),
             ColonColonColon(a, b) => self.do_colon_colon_colon(a, b),
             Condition(condition) => self.do_condition(condition),
@@ -166,29 +169,31 @@ impl Machine {
             ElementAt(a, b) => self.do_index_of_collection(a, b),
             Feature { title, scenarios } => self.do_feature(title, scenarios),
             FnExpression { params, body, returns } => self.do_fn_expression(params, body, returns),
-            FoldOver(a, b) => self.do_fold_over(a, b),
-            ForEach(a, b, c) => Ok(self.do_foreach(a, b, c)),
+            For { item, items, op } => self.do_foreach(item, items, op),
             From(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
             FunctionCall { fx, args } => self.do_function_call(fx, args),
             HTTP(method_call) => self.do_http_exec(method_call),
             If { condition, a, b } => self.do_if_then_else(condition, a, b),
-            Import(ops) => Ok(self.do_imports(ops)),
+            Import(ops) => self.do_imports(ops),
             Include(path) => self.do_include(path),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
+            MatchExpression(src, cases) => self.do_match_cases(src, cases),
             Minus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa - bb),
             Module(name, ops) => self.do_structure_module(name, ops),
             Modulo(a, b) => self.eval_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) => self.eval_inline_2(a, b, |aa, bb| aa * bb),
-            Neg(a) => Ok(self.do_negate(a)),
+            Neg(a) => self.do_negate(a),
             New(a) => self.do_new_instance(a),
             Ns(a) => query_engine::eval_ns(self, a),
-            Parameters(params) => Ok(self.evaluate_parameters(params)),
+            Parameters(params) => self.evaluate_parameters(params),
+            Pipeline(a, b) => self.do_functional_pipeline(a, b),
             Plus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa + bb),
             PlusPlus(a, b) => self.eval_inline_2(a, b, Self::do_plus_plus),
             Pow(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
-            Range(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.range(&bb).unwrap_or(Undefined)),
+            Range(Exclusive(a, b)) => self.eval_inline_2(a, b, |aa, bb| aa.range_exclusive(&bb).unwrap_or(Undefined)),
+            Range(Inclusive(a, b)) => self.eval_inline_2(a, b, |aa, bb| aa.range_inclusive(&bb).unwrap_or(Undefined)),
             Return(a) => self.evaluate(a),
-            Scenario { .. } => Ok((self.to_owned(), ErrorValue(Exact("Scenario should not be called directly".to_string())))),
+            Scenario { .. } => throw(Exact("Scenario should not be called directly".to_string())),
             SetVariables(vars, values) => self.do_set_variables(vars, values),
             StructureExpression(items) => self.do_structure_soft(items),
             TupleExpression(args) => self.do_tuple(args),
@@ -205,6 +210,14 @@ impl Machine {
             Some(item) => self.evaluate(item),
             None => Ok((self.to_owned(), Undefined))
         }
+    }
+
+    pub fn is_true(
+        &self,
+        conditions: &Conditions,
+    ) -> std::io::Result<(Self, bool)> {
+        let (ms, result) = self.evaluate(&Condition(conditions.clone()))?;
+        Ok((ms, pull_bool(&result)?))
     }
 
     /// evaluates the specified [Expression]; returning an option of a [TypedValue] result.
@@ -224,24 +237,31 @@ impl Machine {
     fn evaluate_parameters(
         &self,
         columns: &Vec<Parameter>,
-    ) -> (Machine, TypedValue) {
+    ) -> std::io::Result<(Machine, TypedValue)> {
         let machine = self.to_owned();
         let values = columns.iter()
             .map(|c| machine.variables.get(c.get_name())
                 .map(|c| c.to_owned())
                 .unwrap_or(Undefined))
             .collect::<Vec<TypedValue>>();
-        (machine, ArrayValue(Array::from(values)))
+        Ok((machine, ArrayValue(Array::from(values))))
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
-    fn evaluate_scope(&self, ops: &Vec<Expression>) -> (Self, TypedValue) {
-        ops.iter().fold((self.to_owned(), Undefined),
-                        |(m, _), op| match m.evaluate(op) {
-                            Ok((m, ErrorValue(msg))) => (m, ErrorValue(msg)),
-                            Ok((m, tv)) => (m, tv),
-                            Err(err) => (m, ErrorValue(Exact(err.to_string())))
-                        })
+    fn evaluate_scope(&self, ops: &Vec<Expression>) -> std::io::Result<(Self, TypedValue)> {
+        let result = ops.iter().fold(
+            (self.to_owned(), Undefined),
+            |(m, result0), op| match result0 {
+                ErrorValue(msg) => (m, ErrorValue(msg)),
+                _ => match m.evaluate(op) {
+                    Ok((m, tv)) => (m, tv),
+                    Err(err) => (m, ErrorValue(Exact(err.to_string())))
+                }
+            });
+        match result {
+            (_, ErrorValue(err)) => throw(err),
+            result => Ok(result),
+        }
     }
 
     /// Executes a method call
@@ -252,17 +272,14 @@ impl Machine {
         field: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         let ms = self.clone();
-        match object {
-            Variable(var_name) =>
-                match ms.get(var_name) {
-                    None => throw(Exact(format!("Variable '{}' was not found", var_name))),
-                    Some(ErrorValue(err)) => Ok((ms, ErrorValue(err))),
-                    Some(Null) => throw(Exact(format!("Cannot evaluate {}::{}", Null, field.to_code()))),
-                    Some(Structured(structure)) => self.do_extraction_structure(var_name, Box::from(structure), field),
-                    Some(Undefined) => throw(Exact(format!("Cannot evaluate {}::{}", Undefined, field.to_code()))),
-                    Some(z) => throw(Exact(format!("Illegal structure {}", z.to_code())))
-                }
-            z => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(z.to_code())))
+        let var_name = pull_variable(object)?;
+        match ms.get(var_name.as_str()) {
+            None => throw(Exact(format!("Variable '{}' was not found", var_name))),
+            Some(ErrorValue(err)) => Ok((ms, ErrorValue(err))),
+            Some(Null) => throw(Exact(format!("Cannot evaluate {}::{}", Null, field.to_code()))),
+            Some(Structured(structure)) => self.do_extraction_structure(var_name.as_str(), Box::from(structure), field),
+            Some(Undefined) => throw(Exact(format!("Cannot evaluate {}::{}", Undefined, field.to_code()))),
+            Some(z) => throw(Exact(format!("Illegal structure {}", z.to_code())))
         }
     }
 
@@ -339,9 +356,12 @@ impl Machine {
     }
 
     /// Evaluates a curvy left arrow (<~)
-    /// ## fetches a record from a table
-    /// `{ symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }` ~> stocks
-    /// ```stock <~ stocks```
+    /// #### fetches a record from a table
+    /// ```
+    /// { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 } ~> stocks
+    /// stock <~ stocks
+    /// // { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }
+    /// ```
     fn do_curvy_arrow_left(
         &self,
         dest: &Expression,
@@ -351,8 +371,10 @@ impl Machine {
     }
 
     /// Evaluates a curvy right arrow (~>)
-    /// ## write a record to a table
-    /// `{ symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }` ~> stocks
+    /// #### write a record to a table
+    /// ```
+    /// { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 } ~> stocks
+    /// ```
     fn do_curvy_arrow_right(
         &self,
         src: &Expression,
@@ -361,7 +383,43 @@ impl Machine {
         query_engine::eval_into_ns(&self, dest, src)
     }
 
-    /// evaluates the specified [Directives]; returning a [TypedValue] result.
+    /// Performs deconstruction of an [ArrayExpression], [Variable]
+    /// or [TupleExpression] for the purpose of variable assignment.
+    /// #### Parameters
+    /// - item: the variable(s) for which to deconstruct
+    /// - value: the value(s) for which to assign to the deconstructed variable(s)
+    /// #### Returns
+    /// - a [Machine] populated with the deconstructed key-value pairs
+    /// #### Examples
+    /// ```
+    /// for [a, b] in [[1, 5], [6, 11], ...] ...
+    /// ```
+    /// ```
+    /// for (a, b) in [(1, 5), (6, 11), ...] ...
+    /// ```
+    /// ```
+    /// for row in tools::to_table(['apple', 'berry', ...]) ...
+    /// ```
+    fn do_deconstruction(
+        &self,
+        item: &Expression,
+        value: &TypedValue,
+    ) -> std::io::Result<Machine> {
+        match item {
+            ArrayExpression(elems) | TupleExpression(elems) => {
+                let mut ms = self.clone();
+                let values = pull_vec(&value)?;
+                for (elem, value) in elems.iter().zip(values.iter()) {
+                    ms = ms.do_deconstruction(elem, value)?;
+                }
+                Ok(ms)
+            }
+            Variable(name) => Ok(self.with_variable(name.as_str(), value.clone())),
+            z => throw(Exact(format!("{} could not be deconstructed", z.to_code())))
+        }
+    }
+
+    /// Evaluates the specified [Directives]; returning a [TypedValue] result.
     fn do_directive(
         &self,
         directive: &Directives,
@@ -369,11 +427,17 @@ impl Machine {
         match directive {
             Directives::MustAck(a) => self.do_directive_ack(a),
             Directives::MustDie(a) => self.do_directive_die(a),
-            Directives::MustIgnoreAck(a) => self.do_directive_ignore_ack(a),
+            Directives::MustIgnoreAck(a) => self.do_directive_ignore_failure(a),
             Directives::MustNotAck(a) => self.do_directive_not_ack(a),
         }
     }
 
+    /// Directive to expect a successful outcome
+    /// #### Example
+    /// ```
+    /// x := 67
+    /// [+] x < 67
+    /// ```
     fn do_directive_ack(
         &self,
         expr: &Expression,
@@ -386,6 +450,11 @@ impl Machine {
         }
     }
 
+    /// Directive to raise an error condition
+    /// #### Example
+    /// ```
+    /// [!] "Kaboom!!!
+    /// ```
     fn do_directive_die(
         &self,
         expr: &Expression,
@@ -395,7 +464,12 @@ impl Machine {
         throw(Exact(value.unwrap_value()))
     }
 
-    fn do_directive_ignore_ack(
+    /// Directive to ignore a failure outcome
+    /// #### Example
+    /// ```
+    /// [~] 7 / 0
+    /// ```
+    fn do_directive_ignore_failure(
         &self,
         expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -404,6 +478,11 @@ impl Machine {
         Ok((machine, Boolean(true)))
     }
 
+    /// Directive to expect an unsuccessful outcome
+    /// #### Example
+    /// ```
+    /// [-] x < 67
+    /// ```
     fn do_directive_not_ack(
         &self,
         expr: &Expression,
@@ -444,12 +523,27 @@ impl Machine {
         }
     }
 
+    /// Feature declaration - unit testing
+    /// #### Parameters
+    /// - title: the title of the feature
+    /// - scenarios: the collection of test scenarios
+    /// #### Examples
+    /// ```
+    /// import testing
+    /// Feature "Matches function" {
+    ///     Scenario "Compare Array contents" {
+    ///         assert(matches(
+    ///             [ 1 "a" "b" "c" ],
+    ///             [ 1 "a" "b" "c" ]
+    ///         ))
+    /// }
+    /// ```
     pub fn do_feature(&self,
                       title: &Box<Expression>,
                       scenarios: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         // create a table and capture function to store the verification report
-        let verification_columns = Column::from_parameters(&PlatformOps::get_testing_feature_parameters());
+        let verification_columns = Column::from_parameters(&PackageOps::get_testing_feature_parameters());
         let mut report = ModelRowCollection::new(verification_columns.to_owned());
         let mut capture = |level: u16, text: String, passed: bool, result: TypedValue| {
             let outcome = report.push_row(Row::new(0, vec![
@@ -507,7 +601,10 @@ impl Machine {
     }
 
     /// Resolves a function expression
-    /// ex: fn(symbol: String(5))
+    /// #### Examples
+    /// ```
+    /// fn(symbol: String(5))
+    /// ```
     fn do_fn_expression(
         &self,
         params: &Vec<Parameter>,
@@ -521,10 +618,38 @@ impl Machine {
         }))
     }
 
-    /// Fold over operation
-    /// ### Examples:
+    /// for `item` in `items` { `block` }
+    fn do_foreach(&self,
+                  item: &Box<Expression>,
+                  items: &Box<Expression>,
+                  block: &Box<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let mut ms = self.clone();
+        let (_, array_value) = ms.evaluate(items)?;
+        let array = pull_array(&array_value.to_array())?;
+        let mut index = 0;
+        let mut result = Undefined;
+        while index < array.len() {
+            // get the value at `index`
+            let value = array.get_or_else(index, Undefined);
+            // deconstruct the value (e.g. (a, b) ~> a = ?, b = ?)
+            ms = ms.do_deconstruction(item, &value)?;
+            // evaluate the block - capture the results
+            let (ms1, result1) = ms.evaluate(block)?;
+            ms = ms1;
+            result = result1;
+            // advance the `index`
+            index += 1
+        }
+        Ok((ms, result))
+    }
+
+    /// Functional pipeline
+    /// #### Examples
+    /// ```
     /// "Hello" |> tools::md5 |> tools::hex
-    fn do_fold_over(
+    /// ```
+    fn do_functional_pipeline(
         &self,
         expr: &Expression,
         operation: &Expression,
@@ -535,33 +660,6 @@ impl Machine {
                 expr.clone()
             ],
         })
-    }
-
-    /// foreach `name` in `items` { `block` }
-    fn do_foreach(&self,
-                  name: &str,
-                  items: &Box<Expression>,
-                  block: &Box<Expression>,
-    ) -> (Self, TypedValue) {
-        let ms0 = self.clone();
-        match ms0.evaluate(items).map(|(ms, tv)| (ms, tv.to_array())) {
-            Ok((_, ArrayValue(array))) => {
-                let mut index = 0;
-                while index < array.len() {
-                    match ms0
-                        .with_variable(name, array.get_or_else(index, Null))
-                        .evaluate(block) {
-                        Ok(..) => {}
-                        Err(err) => return (ms0, ErrorValue(Exact(err.to_string())))
-                    }
-                    index += 1
-                }
-                (ms0, Boolean(true))
-            }
-            Ok((ms, other)) =>
-                (ms, ErrorValue(TypeMismatch(UnsupportedType(ArrayType(0), other.get_type())))),
-            Err(err) => (ms0, ErrorValue(Exact(err.to_string())))
-        }
     }
 
     fn do_function_arguments(&self,
@@ -578,22 +676,24 @@ impl Machine {
     }
 
     /// Executes a function call
-    /// e.g. factorial(5)
+    /// #### Examples
+    /// ```
+    /// factorial(5)
+    /// ```
     fn do_function_call(&self,
                         fx: &Expression,
                         args: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        match self.eval_as_array(args) {
-            Ok((ms, ArrayValue(args))) =>
-                match ms.evaluate(fx) {
-                    Ok((ms, Function { params, body: code, returns })) =>
-                        ms.do_function_arguments(params, args.get_values().clone()).evaluate(&code),
-                    Ok((ms, PlatformOp(pf))) => pf.evaluate(ms, args.get_values().clone()),
-                    Ok((_, z)) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
-                    Err(err) => throw(Exact(err.to_string()))
+        match self.eval_as_array(args)? {
+            (ms, ArrayValue(args)) =>
+                match ms.evaluate(fx)? {
+                    (ms, Function { params, body, .. }) =>
+                        ms.do_function_arguments(params, args.get_values())
+                            .evaluate(&body),
+                    (ms, PlatformOp(pf)) => pf.evaluate(ms, args.get_values()),
+                    (_, z) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
                 }
-            Ok((_, other)) => throw(TypeMismatch(FunctionArgsExpected(other.to_code()))),
-            Err(err) => throw(Exact(err.to_string()))
+            (_, other) => throw(TypeMismatch(FunctionArgsExpected(other.to_code()))),
         }
     }
 
@@ -764,28 +864,31 @@ impl Machine {
         }
     }
 
-    pub fn do_import_by_name(&self, name: &str) -> Self {
+    pub fn do_import_by_name(&self, name: &str) -> std::io::Result<Self> {
         let module = vec![
             ImportOps::Everything(name.to_string())
         ];
-        match self.do_imports(&module) {
-            (m, ErrorValue(err)) => {
+        let result = match self.do_imports(&module) {
+            Ok((m, _)) => m,
+            Err(err) => {
                 error!("{}", err);
-                m.with_variable("__error__", StringValue(err.to_string()))
+                Machine::empty()
+                    .with_variable("__error__", StringValue(err.to_string()))
             }
-            (m, _) => m,
-        }
+        };
+        Ok(result)
     }
 
-    fn do_imports(&self, ops: &Vec<ImportOps>) -> (Self, TypedValue) {
-        ops.iter()
-            .fold((self.to_owned(), Undefined),
-                  |(ms, tv), iop| match iop {
-                      ImportOps::Everything(pkg) =>
-                          ms.do_import(pkg, &Vec::new()),
-                      ImportOps::Selection(pkg, selection) =>
-                          ms.do_import(pkg, selection),
-                  })
+    fn do_imports(&self, ops: &Vec<ImportOps>) -> std::io::Result<(Self, TypedValue)> {
+        let result = ops.iter().fold(
+            (self.to_owned(), Undefined),
+            |(ms, tv), iop| match iop {
+                ImportOps::Everything(pkg) =>
+                    ms.do_import(pkg, &Vec::new()),
+                ImportOps::Selection(pkg, selection) =>
+                    ms.do_import(pkg, selection),
+            });
+        Ok(result)
     }
 
     fn do_include(
@@ -852,7 +955,7 @@ impl Machine {
             }
             other =>
                 ErrorValue(TypeMismatch(UnsupportedType(
-                    DynamicType,
+                    UnresolvedType,
                     other.get_type(),
                 )))
         };
@@ -875,6 +978,81 @@ impl Machine {
                 }
             (a, b) =>
                 Ok((ms, ErrorValue(SyntaxError(SyntaxErrors::TypeIdentifierExpected(format!("{} like {}", a.to_code(), b.to_code()))))))
+        }
+    }
+
+    /// Evaluates a match expression
+    /// #### Examples
+    /// ```
+    /// match code [
+    ///    n: 100 ~> "Accepted",
+    ///    n: 101..104 ~> 'Escalated',
+    ///    n: n > 0 && n < 100 ~> "Pending",
+    ///    _ ~> "Rejected"
+    /// ]
+    /// ```
+    fn do_match_cases(
+        &self,
+        host: &Expression,
+        cases: &Vec<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        println!("cases {cases:?}");
+        // find a matching case
+        let (ms, src) = self.evaluate(host)?;
+        for case in cases {
+            println!("case {case:?}");
+            match case {
+                CurvyArrowRight(cond_expr, op_expr) =>
+                    match cond_expr.deref() {
+                        (AsValue(name, expr)) => {
+                            let cond = match expr.deref() {
+                                // condition case: `n: if n > 0 && n < 100 ~> "Pending"`
+                                Condition(cond) => cond.clone(),
+                                // literal case: `n: 100 ~> "Accepted"`
+                                Literal(value) => Conditions::Equal(
+                                    Variable(name.into()).into(),
+                                    Literal(value.clone()).into()
+                                ),
+                                // range case: `n: 101..104 ~> "Escalated"`
+                                Range(Exclusive(a, b)) => Conditions::Betwixt(
+                                    Variable(name.into()).into(),
+                                    a.clone().into(),
+                                    b.clone().into(),
+                                ),
+                                // range case: `n: 101..=104 ~> "Escalated"`
+                                Range(Inclusive(a, b)) => Conditions::Between(
+                                    Variable(name.into()).into(),
+                                    a.clone().into(),
+                                    b.clone().into(),
+                                ),
+                                // unsupported cases ...
+                                z => return throw(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
+                            };
+                            if let (ms, result, true) = ms.do_match_case_eval(name, cond, &src, op_expr)? {
+                                return Ok((ms, result));
+                            }
+                        }
+                        // variable case: _ ~> "Rejected"
+                        Variable(name) => return ms.with_variable(name, src.clone()).evaluate(&op_expr),
+                        // unsupported cases ...
+                        z => return throw(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
+                    }
+                z => return throw(Exact(format!("Expected a case expression near {}", z.to_code())))
+            }
+        }
+        throw(Exact("Failed to find a matching case".into()))
+    }
+
+    fn do_match_case_eval(
+        &self,
+        name: &str,
+        cond: Conditions,
+        src_value: &TypedValue,
+        op_expr: &Expression,
+    ) -> std::io::Result<(Machine, TypedValue, bool)> {
+        match self.with_variable(name, src_value.clone()).is_true(&cond)? {
+            (ms, true) => ms.evaluate(op_expr).map(|(ms, result)| (ms, result, true)),
+            (ms, _) => Ok((ms, Undefined, false))
         }
     }
 
@@ -919,11 +1097,8 @@ impl Machine {
     }
 
     /// evaluates the specified [Expression]; returning a negative [TypedValue] result.
-    fn do_negate(&self, expr: &Expression) -> (Self, TypedValue) {
-        match self.evaluate(expr) {
-            Ok((machine, result)) => (machine, result.neg()),
-            Err(err) => (self.to_owned(), ErrorValue(Exact(err.to_string())))
-        }
+    fn do_negate(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
+        self.evaluate(expr).map(|(ms, result)| (ms, result.neg()))
     }
 
     /// Creates a new object
@@ -1200,7 +1375,6 @@ impl Machine {
         Ok((machine, f(aa, bb, cc)))
     }
 
-
     /// returns a variable by name
     pub fn get(&self, name: &str) -> Option<TypedValue> {
         self.variables.get(name).map(|x| x.to_owned())
@@ -1230,12 +1404,16 @@ impl Machine {
     pub fn with_module(
         &self,
         name: &str,
-        variables: Vec<PlatformOps>,
+        variables: Vec<PackageOps>,
     ) -> Self {
         let structure = variables.iter().fold(
             HardStructure::empty(),
             |structure, key|
-                structure.with_variable(key.get_name().as_str(), PlatformOp(key.clone())));
+                structure.with_variable(
+                    key.get_name().as_str(),
+                    PlatformOp(key.clone()),
+                ),
+        );
         self.with_variable(name, Structured(Hard(structure)))
     }
 
@@ -1367,7 +1545,7 @@ mod tests {
         };
 
         let machine = Machine::new_platform()
-            .do_import_by_name("testing");
+            .do_import_by_name("testing").unwrap();
         let (_, result) = machine.evaluate(&model).unwrap();
         let table = result.to_table().unwrap();
         let columns = table.get_columns();
@@ -1406,7 +1584,7 @@ mod tests {
                                    Box::new(Literal(Number(I64Value(3)))))))
         ];
 
-        let (_ms, result) = Machine::empty().evaluate_scope(&opcodes);
+        let (_ms, result) = Machine::empty().evaluate_scope(&opcodes).unwrap();
         assert_eq!(result, Number(F64Value(14.)))
     }
 
@@ -1419,36 +1597,132 @@ mod tests {
         assert_eq!(machine.get("xyz"), Some(Number(I32Value(58))));
     }
 
+    /// Control Flow tests
+    #[cfg(test)]
+    mod control_flow_tests {
+        use super::*;
+        use crate::expression::Conditions::And;
+
+        #[test]
+        fn test_if_else_flow_1() {
+            let model = If {
+                condition: Box::new(Condition(GreaterThan(
+                    Box::new(Variable("num".into())),
+                    Box::new(Literal(Number(I64Value(25)))),
+                ))),
+                a: Box::new(Literal(StringValue("Yes".into()))),
+                b: Some(Box::new(Literal(StringValue("No".into())))),
+            };
+            assert_eq!(model.to_code(), r#"if num > 25 "Yes" else "No""#);
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, StringValue("No".into()));
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(37)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, StringValue("Yes".into()));
+        }
+
+        #[test]
+        fn test_if_else_flow_2() {
+            let model = If {
+                condition: Box::new(Condition(LessThan(
+                    Box::new(Variable("num".into())),
+                    Box::new(Literal(Number(I64Value(10)))),
+                ))),
+                a: Box::new(Literal(StringValue("Yes".into()))),
+                b: Some(Box::new(Literal(StringValue("No".into())))),
+            };
+            assert_eq!(model.to_code(), r#"if num < 10 "Yes" else "No""#);
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, StringValue("Yes".into()));
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(99)));
+            let (_, result) = machine.evaluate(&model).unwrap();
+            assert_eq!(result, StringValue("No".into()));
+        }
+
+        #[test]
+        fn test_match() {
+            let model = MatchExpression(
+                Variable("code".into()).into(),
+                vec![
+                    // n: 100 ~> "Accepted",
+                    CurvyArrowRight(
+                        AsValue("n".into(), Literal(Number(I64Value(100))).into()).into(),
+                        Literal(StringValue("Accepted".into())).into()
+                    ),
+                    // n: 101..104 ~> "Escalated",
+                    CurvyArrowRight(
+                        AsValue("n".into(), Range(Exclusive(
+                            Literal(Number(I64Value(101))).into(),
+                            Literal(Number(I64Value(104))).into()
+                        )).into()).into(),
+                        Literal(StringValue("Escalated".into())).into()
+                    ),
+                    // n: n > 0 && n < 100 ~> "Pending",
+                    CurvyArrowRight(
+                        AsValue(
+                            "n".into(),
+                            Condition(And(
+                                Condition(GreaterThan(
+                                    Variable("n".into()).into(),
+                                    Literal(Number(I64Value(0))).into()
+                                )).into(),
+                                Condition(LessThan(
+                                    Variable("n".into()).into(),
+                                    Literal(Number(I64Value(100))).into()
+                                )).into(),
+                            )).into(),
+                        ).into(),
+                        Literal(StringValue("Accepted".into())).into()
+                    ).into(),
+                    // _ ~> "Rejected"
+                    CurvyArrowRight(
+                        Variable("_".into()).into(),
+                        Literal(StringValue("Rejected".into())).into()
+                    ).into()
+                ]
+            );
+            let ms = Machine::new_platform();
+            let (_, result) = ms
+                .with_variable("code", Number(I64Value(100)))
+                .evaluate(&model).unwrap();
+            assert_eq!(result, StringValue("Accepted".into()))
+        }
+
+        #[test]
+        fn test_while_loop() {
+            let model = While {
+                // num < 5
+                condition: Box::new(Condition(LessThan(
+                    Box::new(Variable("num".into())),
+                    Box::new(Literal(Number(I64Value(5)))),
+                ))),
+                // num := num + 1
+                code: SetVariables(
+                    Variable("num".into()).into(),
+                    Plus(
+                        Variable("num".into()).into(),
+                        Literal(Number(I64Value(1))).into(),
+                    ).into()).into(),
+            };
+            assert_eq!(model.to_code(), "while num < 5 num := num + 1");
+
+            let machine = Machine::empty().with_variable("num", Number(I64Value(0)));
+            let (machine, _) = machine.evaluate(&model).unwrap();
+            assert_eq!(machine.get("num"), Some(Number(I64Value(5))))
+        }
+    }
+
     /// Function tests
     #[cfg(test)]
     mod function_tests {
         use super::*;
-        use crate::data_types::DataType::DynamicType;
-
-        #[test]
-        fn test_fold_over() {
-            //  "Hello" |> util::md5 |> util::hex
-            let model = FoldOver(
-                Box::new(FoldOver(
-                    Box::new(Literal(StringValue("Hello".to_string()))),
-                    Box::new(ColonColon(
-                        Box::new(Variable("util".to_string())),
-                        Box::new(Variable("md5".to_string())),
-                    )),
-                )),
-                Box::new(ColonColon(
-                    Box::new(Variable("util".to_string())),
-                    Box::new(Variable("hex".to_string())),
-                )),
-            );
-
-            // evaluate the function
-            let (machine, result) = Machine::new()
-                .evaluate(&model)
-                .unwrap();
-            assert_eq!(result, StringValue("8b1a9953c4611296a827abf8c47804d7".to_string()));
-            assert_eq!(model.to_code(), r#""Hello" |> util::md5 |> util::hex"#)
-        }
+        use crate::data_types::DataType::UnresolvedType;
 
         #[test]
         fn test_anonymous_function() {
@@ -1491,7 +1765,7 @@ mod tests {
                 ), Box::new(
                     Variable("b".into())
                 ))),
-                returns: DynamicType,
+                returns: UnresolvedType,
             };
 
             // publish the function in scope: fn add(a, b) => a + b
@@ -1501,7 +1775,7 @@ mod tests {
                     Variable("add".into()).into(),
                     Literal(fx.to_owned()).into()
                 )
-            ]);
+            ]).unwrap();
             assert_eq!(machine.get("add").unwrap(), fx);
             assert_eq!(result, Boolean(true));
 
@@ -1518,6 +1792,31 @@ mod tests {
                 .unwrap();
             assert_eq!(result, Number(I64Value(5)));
             assert_eq!(model.to_code(), "(fn(a: i64, b: i64) => a + b)(2, 3)")
+        }
+
+        #[test]
+        fn test_function_pipeline() {
+            //  "Hello" |> util::md5 |> util::hex
+            let model = Pipeline(
+                Box::new(Pipeline(
+                    Box::new(Literal(StringValue("Hello".to_string()))),
+                    Box::new(ColonColon(
+                        Box::new(Variable("util".to_string())),
+                        Box::new(Variable("md5".to_string())),
+                    )),
+                )),
+                Box::new(ColonColon(
+                    Box::new(Variable("util".to_string())),
+                    Box::new(Variable("hex".to_string())),
+                )),
+            );
+
+            // evaluate the function
+            let (machine, result) = Machine::new()
+                .evaluate(&model)
+                .unwrap();
+            assert_eq!(result, StringValue("8b1a9953c4611296a827abf8c47804d7".to_string()));
+            assert_eq!(model.to_code(), r#""Hello" |> util::md5 |> util::hex"#)
         }
 
         #[test]
@@ -1565,77 +1864,6 @@ mod tests {
 
             println!("result: {}", result);
             assert_eq!(result, Number(I64Value(120)));
-        }
-    }
-
-    /// Logical tests
-    #[cfg(test)]
-    mod logical_tests {
-        use super::*;
-
-        #[test]
-        fn test_if_else_flow_1() {
-            let model = If {
-                condition: Box::new(Condition(GreaterThan(
-                    Box::new(Variable("num".into())),
-                    Box::new(Literal(Number(I64Value(25)))),
-                ))),
-                a: Box::new(Literal(StringValue("Yes".into()))),
-                b: Some(Box::new(Literal(StringValue("No".into())))),
-            };
-            assert_eq!(model.to_code(), r#"if num > 25 "Yes" else "No""#);
-
-            let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
-            let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, StringValue("No".into()));
-
-            let machine = Machine::empty().with_variable("num", Number(I64Value(37)));
-            let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, StringValue("Yes".into()));
-        }
-
-        #[test]
-        fn test_if_else_flow_2() {
-            let model = If {
-                condition: Box::new(Condition(LessThan(
-                    Box::new(Variable("num".into())),
-                    Box::new(Literal(Number(I64Value(10)))),
-                ))),
-                a: Box::new(Literal(StringValue("Yes".into()))),
-                b: Some(Box::new(Literal(StringValue("No".into())))),
-            };
-            assert_eq!(model.to_code(), r#"if num < 10 "Yes" else "No""#);
-
-            let machine = Machine::empty().with_variable("num", Number(I64Value(5)));
-            let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, StringValue("Yes".into()));
-
-            let machine = Machine::empty().with_variable("num", Number(I64Value(99)));
-            let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, StringValue("No".into()));
-        }
-
-        #[test]
-        fn test_while_loop() {
-            let model = While {
-                // num < 5
-                condition: Box::new(Condition(LessThan(
-                    Box::new(Variable("num".into())),
-                    Box::new(Literal(Number(I64Value(5)))),
-                ))),
-                // num := num + 1
-                code: SetVariables(
-                    Variable("num".into()).into(),
-                    Plus(
-                        Variable("num".into()).into(),
-                        Literal(Number(I64Value(1))).into(),
-                    ).into()).into(),
-            };
-            assert_eq!(model.to_code(), "while num < 5 num := num + 1");
-
-            let machine = Machine::empty().with_variable("num", Number(I64Value(0)));
-            let (machine, _) = machine.evaluate(&model).unwrap();
-            assert_eq!(machine.get("num"), Some(Number(I64Value(5))))
         }
     }
 
