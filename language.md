@@ -135,14 +135,14 @@ result</pre>
 <h4>▶️ Conditionals</h4>
 <h5>example¹</h5>
 <pre>x := 10
-x between 5 and 10</pre>
+x in 5..=10</pre>
 <h5>results</h5>
 <pre>
 true
 </pre>
 <h5>example²</h5>
 <pre>x := 10
-x betwixt 5 and 10</pre>
+x in 5..10</pre>
 <h5>results</h5>
 <pre>
 false
@@ -209,7 +209,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-5
+6
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -221,7 +221,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Mon, 19 May 2025 17:02:05 GMT"}
+{content-length: "81", content-type: "application/json", date: "Mon, 19 May 2025 21:01:12 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {

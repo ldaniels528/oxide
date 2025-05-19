@@ -39,13 +39,12 @@ pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Conditions {
     And(Box<Expression>, Box<Expression>),
-    Between(Box<Expression>, Box<Expression>, Box<Expression>),
-    Betwixt(Box<Expression>, Box<Expression>, Box<Expression>),
     Contains(Box<Expression>, Box<Expression>),
     Equal(Box<Expression>, Box<Expression>),
     False,
     GreaterOrEqual(Box<Expression>, Box<Expression>),
     GreaterThan(Box<Expression>, Box<Expression>),
+    In(Box<Expression>, Box<Expression>),
     LessOrEqual(Box<Expression>, Box<Expression>),
     LessThan(Box<Expression>, Box<Expression>),
     Like(Box<Expression>, Box<Expression>),
@@ -469,10 +468,6 @@ impl Expression {
         match cond {
             Conditions::And(a, b) =>
                 format!("{} && {}", Self::decompile(a), Self::decompile(b)),
-            Conditions::Between(a, b, c) =>
-                format!("{} between {} and {}", Self::decompile(a), Self::decompile(b), Self::decompile(c)),
-            Conditions::Betwixt(a, b, c) =>
-                format!("{} betwixt {} and {}", Self::decompile(a), Self::decompile(b), Self::decompile(c)),
             Conditions::Contains(a, b) =>
                 format!("{} contains {}", Self::decompile(a), Self::decompile(b)),
             Conditions::Equal(a, b) =>
@@ -482,6 +477,8 @@ impl Expression {
                 format!("{} > {}", Self::decompile(a), Self::decompile(b)),
             Conditions::GreaterOrEqual(a, b) =>
                 format!("{} >= {}", Self::decompile(a), Self::decompile(b)),
+            Conditions::In(a, b) =>
+                format!("{} in {}", Self::decompile(a), Self::decompile(b)),
             Conditions::LessThan(a, b) =>
                 format!("{} < {}", Self::decompile(a), Self::decompile(b)),
             Conditions::LessOrEqual(a, b) =>
@@ -961,29 +958,33 @@ mod expression_tests {
     }
 
     #[test]
-    fn test_between_expression() {
+    fn test_in_range_exclusive_expression() {
         let machine = Machine::empty();
-        let model = Between(
-            Box::new(Literal(Number(I32Value(10)))),
-            Box::new(Literal(Number(I32Value(1)))),
-            Box::new(Literal(Number(I32Value(10)))),
-        );
-        let (_, result) = machine.do_condition(&model).unwrap();
-        assert_eq!(result, Boolean(true));
-        assert_eq!(model.to_code(), "10 between 1 and 10")
-    }
-
-    #[test]
-    fn test_betwixt_expression() {
-        let machine = Machine::empty();
-        let model = Betwixt(
-            Box::new(Literal(Number(I32Value(10)))),
-            Box::new(Literal(Number(I32Value(1)))),
-            Box::new(Literal(Number(I32Value(10)))),
+        let model = In(
+            Literal(Number(I32Value(10))).into(),
+            Range(Exclusive(
+                Literal(Number(I32Value(1))).into(),
+                Literal(Number(I32Value(10))).into()
+            )).into(),
         );
         let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(false));
-        assert_eq!(model.to_code(), "10 betwixt 1 and 10")
+        assert_eq!(model.to_code(), "10 in 1..10")
+    }
+
+    #[test]
+    fn test_in_range_inclusive_expression() {
+        let machine = Machine::empty();
+        let model = In(
+            Literal(Number(I32Value(10))).into(),
+            Range(Inclusive(
+                Literal(Number(I32Value(1))).into(),
+                Literal(Number(I32Value(10))).into()
+            )).into(),
+        );
+        let (_, result) = machine.do_condition(&model).unwrap();
+        assert_eq!(result, Boolean(true));
+        assert_eq!(model.to_code(), "10 in 1..=10")
     }
 
     #[test]
@@ -1116,18 +1117,23 @@ mod expression_tests {
 
     #[test]
     fn test_is_conditional() {
+        // x and y
         let model = Condition(Conditions::And(Box::new(TRUE), Box::new(FALSE)));
         assert_eq!(model.to_code(), "true && false");
         assert!(model.is_conditional());
-
-        let model = Condition(Between(
-            Box::new(Variable("x".into())),
-            Box::new(Literal(Number(I32Value(1)))),
-            Box::new(Literal(Number(I32Value(10)))),
+        
+        // x in y..=z
+        let model = Condition(In(
+            Variable("x".into()).into(),
+            Range(Inclusive(
+                Literal(Number(I32Value(1))).into(),
+                Literal(Number(I32Value(10))).into(),
+            )).into()
         ));
-        assert_eq!(model.to_code(), "x between 1 and 10");
+        assert_eq!(model.to_code(), "x in 1..=10");
         assert!(model.is_conditional());
 
+        // x or y
         let model = Condition(Conditions::Or(Box::new(TRUE), Box::new(FALSE)));
         assert_eq!(model.to_code(), "true || false");
         assert!(model.is_conditional());
@@ -1531,13 +1537,13 @@ mod inference_tests {
     }
 
     #[test]
-    fn test_infer_conditionals_between() {
-        verify_data_type("20 between 1 and 20", BooleanType);
+    fn test_infer_conditionals_in_range_exclusive() {
+        verify_data_type("20 in 1..20", BooleanType);
     }
 
     #[test]
-    fn test_infer_conditionals_betwixt() {
-        verify_data_type("20 betwixt 1 and 21", BooleanType);
+    fn test_infer_conditionals_in_range_inclusive() {
+        verify_data_type("20 in 1..=20", BooleanType);
     }
 
     #[test]

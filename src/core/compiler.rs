@@ -279,25 +279,10 @@ impl Compiler {
     ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
         //println!("next_expression_postfix: expr0 {expr0:?} ts {:?}", ts.current());
         match ts.next() {
-            // keyword operator "between"
-            (Some(Atom { text, .. }), ts) if text == "between" => {
+            // keyword operator "in"
+            (Some(Atom { text, .. }), ts) if text == "in" => {
                 let (expr1, ts) = self.compile_next(&ts)?;
-                let ts = ts.expect("and")?;
-                let (expr2, ts) = self.compile_next(&ts)?;
-                Ok((
-                    Some(Condition(Between(expr0.into(), expr1.into(), expr2.into()))),
-                    ts,
-                ))
-            }
-            // keyword operator "betwixt"
-            (Some(Atom { text, .. }), ts) if text == "betwixt" => {
-                let (expr1, ts) = self.compile_next(&ts)?;
-                let ts = ts.expect("and")?;
-                let (expr2, ts) = self.compile_next(&ts)?;
-                Ok((
-                    Some(Condition(Betwixt(expr0.into(), expr1.into(), expr2.into()))),
-                    ts,
-                ))
+                Ok((Some(Condition(In(expr0.into(), expr1.into()))), ts))
             }
             // keyword operator "is"
             (Some(Atom { text, .. }), ts) if text == "is" => {
@@ -390,7 +375,7 @@ impl Compiler {
                 "false" => Ok((FALSE, nts)),
                 "Feature" => self.parse_keyword_feature(nts),
                 "fn" => self.parse_keyword_fn(nts),
-                "for" => self.parse_keyword_foreach(nts),
+                "for" => self.parse_keyword_for(nts),
                 "from" => {
                     let (from, ts) = self.parse_expression_1a(nts, Expression::From)?;
                     self.parse_queryable(from, ts)
@@ -919,7 +904,7 @@ impl Compiler {
                 "false" => Ok((FALSE, nts)),
                 "Feature" => self.parse_keyword_feature(nts),
                 "fn" => self.parse_keyword_fn(nts),
-                "for" => self.parse_keyword_foreach(nts),
+                "for" => self.parse_keyword_for(nts),
                 "from" => {
                     let (from, ts) = self.parse_expression_1a(nts, Expression::From)?;
                     self.parse_queryable(from, ts)
@@ -1150,20 +1135,23 @@ impl Compiler {
 
     /// "for" expression
     /// ex: for item in items { ... }
-    fn parse_keyword_foreach(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        // for [item] in [items] [block]
-        let (item, ts) = self.compile_next(&ts)?;
-        let ts = ts.expect("in")?;
-        let (items, ts) = self.compile_next(&ts)?;
-        let (block, ts) = self.compile_next(&ts)?;
-        Ok((
-            For {
-                item: item.into(),
-                items: items.into(),
-                op: block.into(),
-            },
-            ts,
-        ))
+    fn parse_keyword_for(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        // for [item in items] [block]
+        let (construct, ts) = self.compile_next(&ts)?;
+        match construct { 
+            Condition(In(item, items)) => {
+                let (block, ts) = self.compile_next(&ts)?;
+                Ok((For {
+                    item: item.into(),
+                    items: items.into(),
+                    op: block.into(),
+                }, ts))
+            }
+            _ => throw(ExactNear(
+                format!("Expected `in` keyword: for item in items {{ ... }}"),
+                ts.current(),
+            )),
+        }
     }
 
     /// Parses an HTTP expression.
@@ -1939,7 +1927,6 @@ mod tests {
                 ])
             )
         }
-        
     }
 
     /// integration tests
@@ -1950,7 +1937,7 @@ mod tests {
         use crate::data_types::DataType::{NumberType, StringType, StructureType, UnresolvedType};
         use crate::expression::Conditions::*;
         use crate::expression::Expression::*;
-        use crate::expression::Ranges::Exclusive;
+        use crate::expression::Ranges::{Exclusive, Inclusive};
         use crate::expression::{HttpMethodCalls, ImportOps, FALSE, TRUE};
         use crate::machine::Machine;
         use crate::number_kind::NumberKind::{F64Kind, I32Kind, I64Kind, U64Kind};
@@ -1993,25 +1980,31 @@ mod tests {
         }
 
         #[test]
-        fn test_between() {
+        fn test_in_range_exclusive() {
             verify_build(
-                "n between x and y",
-                Condition(Between(
+                "n in a..z",
+                Condition(In(
                     Variable("n".into()).into(),
-                    Variable("x".into()).into(),
-                    Variable("y".into()).into(),
+                    Range(Exclusive(
+                        Variable("a".into()).into(),
+                        Variable("z".into()).into(),
+                    ))
+                    .into(),
                 )),
             )
         }
 
         #[test]
-        fn test_betwixt() {
+        fn test_in_range_inclusive() {
             verify_build(
-                "n betwixt x and y",
-                Condition(Betwixt(
+                "n in a..=z",
+                Condition(In(
                     Variable("n".into()).into(),
-                    Variable("x".into()).into(),
-                    Variable("y".into()).into(),
+                    Range(Inclusive(
+                        Variable("a".into()).into(),
+                        Variable("z".into()).into(),
+                    ))
+                        .into(),
                 )),
             )
         }
@@ -3025,7 +3018,7 @@ mod tests {
                 (a, b, c: i64)
             "#,
             )
-                .unwrap();
+            .unwrap();
             assert_eq!(
                 expr,
                 Parameters(vec![
@@ -3043,7 +3036,7 @@ mod tests {
                 (a: i64, b: i64, c: i64)
             "#,
             )
-                .unwrap();
+            .unwrap();
             assert_eq!(
                 expr,
                 Parameters(vec![
@@ -3073,6 +3066,40 @@ mod tests {
                     Variable("n".into()).into(),
                     Literal(Number(I64Value(5))).into(),
                 ),
+            )
+        }
+
+        #[test]
+        fn test_range_exclusive() {
+            verify_build(
+                "n in 1..100",
+                Condition(In(
+                    Variable("n".into()).into(),
+                    Range(
+                        Exclusive(
+                            Literal(Number(I64Value(1))).into(),
+                            Literal(Number(I64Value(100))).into(),
+                        )
+                        .into(),
+                    ).into()
+                )),
+            )
+        }
+
+        #[test]
+        fn test_range_inclusive() {
+            verify_build(
+                "n in 1..=100",
+                Condition(In(
+                    Variable("n".into()).into(),
+                    Range(
+                        Inclusive(
+                            Literal(Number(I64Value(1))).into(),
+                            Literal(Number(I64Value(100))).into(),
+                        )
+                            .into(),
+                    ).into()
+                )),
             )
         }
 
@@ -3185,7 +3212,7 @@ mod tests {
                 (a, b, c)
             "#,
             )
-                .unwrap();
+            .unwrap();
             assert_eq!(
                 expr,
                 TupleExpression(vec![
@@ -3220,7 +3247,7 @@ mod tests {
                 type_of("cat")
             "#,
             )
-                .unwrap();
+            .unwrap();
             assert_eq!(
                 model,
                 FunctionCall {

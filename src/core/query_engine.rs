@@ -812,15 +812,15 @@ mod tests {
     use crate::typed_values::TypedValue::*;
 
     #[test]
-    fn test_between() {
-        verify_exact_value("20 between 1 and 20", Boolean(true));
-        verify_exact_value("21 between 1 and 20", Boolean(false));
+    fn test_in_range_exclusive() {
+        verify_exact_value("19 in 1..20", Boolean(true));
+        verify_exact_value("20 in 1..20", Boolean(false));
     }
 
     #[test]
-    fn test_betwixt() {
-        verify_exact_value("20 betwixt 1 and 20", Boolean(false));
-        verify_exact_value("19 betwixt 1 and 20", Boolean(true));
+    fn test_in_range_inclusive() {
+        verify_exact_value("20 in 1..=20", Boolean(true));
+        verify_exact_value("21 in 1..=20", Boolean(false));
     }
 
     #[test]

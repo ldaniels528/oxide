@@ -364,11 +364,11 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::Condition(..) => vec![
             strip_margin(r#"
                     |x := 10
-                    |x between 5 and 10
+                    |x in 5..=10
                 "#, '|'),
             strip_margin(r#"
                     |x := 10
-                    |x betwixt 5 and 10
+                    |x in 5..10
                 "#, '|'),
             strip_margin(r#"
                     |x := 1..8

@@ -243,22 +243,12 @@ impl TypedValue {
     /// 2. the host value is a table, and the item value matches a row found within it,
     /// 3. the host value is a struct, and the item value matches a name (key) found within it,
     pub fn contains(&self, value: &TypedValue) -> bool {
-        match &self {
-            ArrayValue(items) => items.contains(value),
-            Sequenced(items) => items.contains(value),
-            Structured(Hard(hard)) => match value {
-                StringValue(name) => hard.contains(name),
-                _ => false
-            },
-            Structured(Soft(soft)) => match value {
-                StringValue(name) => soft.contains(name),
-                _ => false
-            },
-            TableValue(Model(mrc)) => match value {
-                Structured(Soft(soft)) => mrc.contains(&soft.to_row()),
-                Structured(Hard(hard)) => mrc.contains(&hard.to_row()),
-                _ => false
-            }
+        match (&self, value) {
+            (ArrayValue(items), item) => items.contains(item),
+            (Number(a), Number(b)) => a.to_f64() == b.to_f64(),
+            (Sequenced(items), item) => items.contains(item),
+            (Structured(s), StringValue(name)) => s.contains(name),
+            (TableValue(Model(mrc)), Structured(s)) => mrc.contains(&s.to_row()),
             _ => false
         }
     }

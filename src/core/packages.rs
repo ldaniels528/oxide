@@ -10,9 +10,7 @@ use crate::data_types::DataType::{
     TableType, UnresolvedType,
 };
 use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
-use crate::errors::Errors::{
-    AssertionError, Exact, NotImplemented, PlatformOpError, TypeMismatch, UnsupportedPlatformOps,
-};
+use crate::errors::Errors::{AssertionError, Exact, PlatformOpError, TypeMismatch, UnsupportedFeature, UnsupportedPlatformOps};
 use crate::errors::TypeMismatchErrors::{
     ArgumentsMismatched, CharExpected, CollectionExpected, DateExpected, StructExpected,
     UnsupportedType,
@@ -36,8 +34,8 @@ use crate::parameter::Parameter;
 use crate::platform::PackageOps::Cal;
 use crate::platform::{Package, PackageOps, VERSION};
 use crate::row_collection::RowCollection;
-use crate::sequences::Sequences::{TheArray, TheDataframe, TheTuple};
-use crate::sequences::{Array, Sequence};
+use crate::sequences::Sequences::{TheArray, TheDataframe, TheRange, TheTuple};
+use crate::sequences::{range_diff, Array, Sequence};
 use crate::structures::Structures::{Hard, Soft};
 use crate::structures::{Row, Structure};
 use crate::typed_values::TypedValue;
@@ -45,10 +43,7 @@ use crate::typed_values::TypedValue::{
     ArrayValue, Binary, Boolean, ErrorValue, Function, NamespaceValue, Null, Number, PlatformOp,
     Sequenced, StringValue, Structured, TableValue, TupleValue, Undefined,
 };
-use crate::utils::{
-    extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0,
-    extract_value_fn1, extract_value_fn2, extract_value_fn3, pull_array, pull_string, strip_margin,
-};
+use crate::utils::{extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0, extract_value_fn1, extract_value_fn2, extract_value_fn3, pull_array, pull_string, strip_margin};
 use crate::{machine, oxide_server};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
@@ -1966,6 +1961,7 @@ impl ToolsPkg {
         let result = match value.to_sequence()? {
             TheArray(array) => Number(I64Value(array.len() as i64)),
             TheDataframe(df) => Number(I64Value(df.len()? as i64)),
+            TheRange(a, b, incl) => range_diff(&a, &b, incl),
             TheTuple(tuple) => Number(I64Value(tuple.len() as i64)),
         };
         Ok((ms, result))
@@ -2008,7 +2004,8 @@ impl ToolsPkg {
                 .to_dataframe()
                 .map(|df| (ms, TableValue(df))),
             TheArray(mut arr) => Ok((ms, arr.pop().unwrap_or(Null))),
-            TheTuple(..) => throw(NotImplemented("Tuple::pop()".into())),
+            TheRange(..) => throw(UnsupportedFeature("Range::pop()".into())),
+            TheTuple(..) => throw(UnsupportedFeature("Tuple::pop()".into())),
         }
     }
 
@@ -2023,6 +2020,7 @@ impl ToolsPkg {
                 let result = match seq {
                     TheDataframe(mut df) => df.push_row(Row::new(0, vv)),
                     TheArray(mut arr) => arr.push(TupleValue(vv)),
+                    TheRange(..) => return throw(UnsupportedFeature("Range::push()".into())),
                     TheTuple(mut tpl) => {
                         tpl.push(TupleValue(vv));
                         TupleValue(tpl)
@@ -2035,6 +2033,7 @@ impl ToolsPkg {
                 let result = match seq {
                     TheDataframe(mut df) => df.push_row(Row::new(0, source.get_values())),
                     TheArray(mut arr) => arr.push(Sequenced(source)),
+                    TheRange(..) => return throw(UnsupportedFeature("Range::pop()".into())),
                     TheTuple(mut tpl) => {
                         tpl.push(Sequenced(source));
                         TupleValue(tpl)
@@ -2047,6 +2046,7 @@ impl ToolsPkg {
                 let result = match seq {
                     TheDataframe(mut df) => df.push_row(structure.to_row()),
                     TheArray(mut arr) => arr.push(Structured(structure)),
+                    TheRange(..) => return throw(UnsupportedFeature("Range::push()".into())),
                     TheTuple(mut tpl) => {
                         tpl.push(Structured(structure));
                         TupleValue(tpl)

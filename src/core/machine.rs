@@ -30,7 +30,7 @@ use crate::compiler::Compiler;
 use crate::cursor::Cursor;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
-use crate::sequences::{Array, Sequence};
+use crate::sequences::{is_in_range, Array, Sequence};
 
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, Model};
@@ -54,6 +54,7 @@ use crate::parameter::Parameter;
 use crate::platform::{Package, PackageOps};
 use crate::query_engine;
 use crate::row_collection::RowCollection;
+use crate::sequences::Sequences::{TheArray, TheDataframe, TheRange, TheTuple};
 use crate::structures::Row;
 use crate::structures::Structures::{Firm, Hard, Soft};
 use crate::structures::*;
@@ -317,10 +318,6 @@ impl Machine {
         match condition {
             And(a, b) =>
                 self.eval_inline_2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
-            Between(a, b, c) =>
-                self.eval_inline_3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa <= cc))),
-            Betwixt(a, b, c) =>
-                self.eval_inline_3(a, b, c, |aa, bb, cc| Boolean((aa >= bb) && (aa < cc))),
             Contains(a, b) => self.do_contains(a, b),
             Equal(a, b) =>
                 self.eval_inline_2(a, b, |aa, bb| Boolean(aa == bb)),
@@ -329,6 +326,7 @@ impl Machine {
                 self.eval_inline_2(a, b, |aa, bb| Boolean(aa > bb)),
             GreaterOrEqual(a, b) =>
                 self.eval_inline_2(a, b, |aa, bb| Boolean(aa >= bb)),
+            In(a, b) => self.do_in(a, b),
             LessThan(a, b) =>
                 self.eval_inline_2(a, b, |aa, bb| Boolean(aa < bb)),
             LessOrEqual(a, b) =>
@@ -891,6 +889,29 @@ impl Machine {
         Ok(result)
     }
 
+    fn do_in(
+        &self,
+        item: &Expression,
+        container: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, item_val) = self.evaluate(item)?;
+        println!("do_in: item = {}", item_val.to_code());
+        let (ms, container_val) = ms.evaluate(container)?;
+        println!("do_in: container = {}", container_val.to_code());
+        let result = match container_val.to_sequence()? {
+            TheArray(array) => array.contains(&item_val),
+            TheDataframe(df) => {
+                match item_val {
+                    Structured(s) => df.contains(&s.to_row()),
+                    _ => false
+                }
+            },
+            TheRange(a, b, incl) => is_in_range(&item_val, &a, &b, incl),
+            TheTuple(values) => values.contains(&item_val),
+        };
+        Ok((ms, Boolean(result)))
+    }
+
     fn do_include(
         &self,
         path: &Expression,
@@ -996,11 +1017,9 @@ impl Machine {
         host: &Expression,
         cases: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        println!("cases {cases:?}");
         // find a matching case
         let (ms, src) = self.evaluate(host)?;
         for case in cases {
-            println!("case {case:?}");
             match case {
                 CurvyArrowRight(cond_expr, op_expr) =>
                     match cond_expr.deref() {
@@ -1013,17 +1032,10 @@ impl Machine {
                                     Variable(name.into()).into(),
                                     Literal(value.clone()).into()
                                 ),
-                                // range case: `n: 101..104 ~> "Escalated"`
-                                Range(Exclusive(a, b)) => Conditions::Betwixt(
-                                    Variable(name.into()).into(),
-                                    a.clone().into(),
-                                    b.clone().into(),
-                                ),
                                 // range case: `n: 101..=104 ~> "Escalated"`
-                                Range(Inclusive(a, b)) => Conditions::Between(
+                                Range(r) => Conditions::In(
                                     Variable(name.into()).into(),
-                                    a.clone().into(),
-                                    b.clone().into(),
+                                    Range(r.clone()).into(),
                                 ),
                                 // unsupported cases ...
                                 z => return throw(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
@@ -1251,8 +1263,10 @@ impl Machine {
     }
 
     /// Declares a type definition expression
-    /// stock_type :=
-    ///     typedef(Table(symbol: String(8), exchange: String(8), last_sale: f64)
+    /// #### Example
+    /// ```
+    /// stock_type := typedef(Table(symbol: String(8), exchange: String(8), last_sale: f64)
+    /// ```
     fn do_type_decl(
         &self,
         expr: &Expression,

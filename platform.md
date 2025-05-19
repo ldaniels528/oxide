@@ -92,7 +92,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-10
+2
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -101,7 +101,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-10
+14
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -110,7 +110,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-2
+1
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -128,7 +128,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-6
+12
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -146,7 +146,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-16T17:02:06.020Z
+2025-05-16T21:01:12.735Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -154,7 +154,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-19T17:02:06.020Z
+2025-05-19T21:01:12.736Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -163,7 +163,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-18T17:02:06.023Z
+2025-06-18T21:01:12.739Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -455,13 +455,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------------------|
-| id | name  | module | signature                 | description                                    | returns |
-|------------------------------------------------------------------------------------------------------------|
-| 0  | sqrt  | math   | math::sqrt(n: f64)        | sqrt(x): Returns the square root of x.         | i64     |
-| 1  | round | math   | math::round(n: f64)       | round(x): Rounds x to the nearest integer.     | i64     |
-| 2  | pow   | math   | math::pow(a: f64, b: f64) | pow(x, y): Returns x raised to the power of y. | i64     |
-|------------------------------------------------------------------------------------------------------------|
+|---------------------------------------------------------------------------------------------------------------------------|
+| id | name    | module    | signature                  | description                                             | returns |
+|---------------------------------------------------------------------------------------------------------------------------|
+| 0  | seconds | durations | durations::seconds(n: i64) | Converts a number into the equivalent number of seconds | i64     |
+| 1  | minutes | durations | durations::minutes(n: i64) | Converts a number into the equivalent number of minutes | i64     |
+| 2  | millis  | durations | durations::millis(n: i64)  | Converts a number into the equivalent number of millis  | i64     |
+|---------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -507,7 +507,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-f2ace827-0cd1-49ac-af02-d856269f9d49
+84dca5e1-f88c-4b5a-9dbf-8f390eab2e34
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -823,9 +823,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-19T17:02:06.399Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-19T17:02:06.399Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-19T17:02:06.400Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-19T21:01:13.138Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-19T21:01:13.139Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-19T21:01:13.140Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

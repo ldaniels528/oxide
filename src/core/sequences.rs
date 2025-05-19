@@ -7,7 +7,7 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::TupleType;
 use crate::data_types::DataType::{ArrayType, TableType, UnresolvedType};
 use crate::dataframe::Dataframe;
-use crate::errors::Errors::{Exact, TypeMismatch};
+use crate::errors::Errors::{Exact, TypeMismatch, UnsupportedFeature};
 use crate::errors::TypeMismatchErrors::StructExpected;
 use crate::row_collection::RowCollection;
 use crate::structures::Structures::{Firm, Hard};
@@ -21,6 +21,8 @@ use std::cmp::Ordering;
 use std::ops::Index;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Rem, Shl, Shr, Sub};
 use std::slice::Iter;
+use crate::errors::throw;
+use crate::numbers::Numbers::I64Value;
 
 /// Represents a linear sequence of [TypedValue]s
 pub trait Sequence {
@@ -59,6 +61,7 @@ pub trait Sequence {
 pub enum Sequences {
     TheArray(Array),
     TheDataframe(Dataframe),
+    TheRange(Box<TypedValue>, Box<TypedValue>, bool),
     TheTuple(Vec<TypedValue>),
 }
 
@@ -70,9 +73,10 @@ impl Sequence for Sequences {
             Sequences::TheArray(array) => array.contains(item),
             Sequences::TheDataframe(df) =>
                 match item {
-                    TypedValue::Structured(s) => df.contains(&s.to_row()),
+                    Structured(s) => df.contains(&s.to_row()),
                     _ => false
                 }
+            Sequences::TheRange(a, b, incl) => is_in_range(item, a, b, *incl),
             Sequences::TheTuple(tuple) => tuple.contains(item),
         }
     }
@@ -89,6 +93,7 @@ impl Sequence for Sequences {
                         None
                     }
                 }
+            Sequences::TheRange(..) => self.to_array().get(index),
             Sequences::TheTuple(tuple) => tuple.get(index).map(|v| v.clone()),
         }
     }
@@ -102,6 +107,7 @@ impl Sequence for Sequences {
                     Ok(Some(row)) => Structured(Firm(row, df.get_parameters())),
                     Err(err) => ErrorValue(Exact(err.to_string()))
                 }
+            Sequences::TheRange(..) => self.to_array().get_or_else(index, default),
             Sequences::TheTuple(tuple) => tuple.get(index).map(|v| v.clone()).unwrap_or(default),
         }
     }
@@ -110,6 +116,7 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.get_type(),
             Sequences::TheDataframe(df) => TableType(df.get_parameters(), 0),
+            Sequences::TheRange(..) => ArrayType(0),
             Sequences::TheTuple(tuple) => TupleType(tuple.iter().map(|v| v.get_type()).collect()),
         }
     }
@@ -118,6 +125,7 @@ impl Sequence for Sequences {
         match self.clone() {
             Sequences::TheArray(array) => array.get_values(),
             Sequences::TheDataframe(df) => df.to_array().get_values(),
+            Sequences::TheRange(..) => self.to_array().get_values(),
             Sequences::TheTuple(tuple) => tuple,
         }
     }
@@ -131,6 +139,7 @@ impl Sequence for Sequences {
                         .map(|row| Structured(Firm(row, df.get_parameters())))
                         .collect::<Vec<_>>()
                 )).iter(),
+            Sequences::TheRange(..) => Box::leak(Box::new(self.to_array())).iter(),
             Sequences::TheTuple(tuple) => tuple.iter(),
         }
     }
@@ -139,6 +148,7 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.len(),
             Sequences::TheDataframe(df) => df.len().unwrap_or(0),
+            Sequences::TheRange(..) => self.to_array().len(),
             Sequences::TheTuple(tuple) => tuple.len(),
         }
     }
@@ -151,6 +161,7 @@ impl Sequence for Sequences {
                     Undefined => None,
                     other => Some(other)
                 }
+            Sequences::TheRange(..) => self.to_array().pop(),
             Sequences::TheTuple(tuple) => tuple.pop(),
         }
     }
@@ -166,6 +177,7 @@ impl Sequence for Sequences {
                     Structured(s) => df.push_row(s.to_row()),
                     other => ErrorValue(TypeMismatch(StructExpected("Struct".into(), other.to_code())))
                 }
+            Sequences::TheRange(..) => self.to_array().push(value),
             Sequences::TheTuple(tuple) => {
                 tuple.push(value);
                 Boolean(true)
@@ -177,6 +189,7 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.to_array(),
             Sequences::TheDataframe(df) => df.to_array(),
+            Sequences::TheRange(a, b, inclusive) => Array::from_range(a, b, *inclusive),
             Sequences::TheTuple(tuple) => Array::from(tuple.to_vec()),
         }
     }
@@ -185,6 +198,7 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.to_tuple(),
             Sequences::TheDataframe(df) => df.to_array().to_tuple(),
+            Sequences::TheRange(..) => self.to_array().to_tuple(),
             Sequences::TheTuple(tuple) => Tuple::new(tuple.to_vec()),
         }
     }
@@ -193,6 +207,7 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.unwrap_value(),
             Sequences::TheDataframe(df) => df.to_array().unwrap_value(),
+            Sequences::TheRange(..) => self.to_array().unwrap_value(),
             Sequences::TheTuple(tuple) =>
                 format!("[{}]", tuple.iter().map(|v| v.unwrap_value())
                     .collect::<Vec<_>>().join(", "))
@@ -216,13 +231,17 @@ impl Array {
     // static methods
     ////////////////////////////////////////////////////////////////////
 
-    /// Constructs an [Array] from  a vector of [TypedValue]s
+    /// Constructs an [Array] from a vector of [TypedValue]s
     pub fn from(
         items: Vec<TypedValue>,
-    ) -> Array {
+    ) -> Self {
         Self {
             the_array: items,
         }
+    }
+    
+    pub fn from_range(a: &TypedValue, b: &TypedValue, inclusive: bool) -> Self {
+        Self::from(range_to_vec(a, b, inclusive))
     }
 
     /// Creates a new empty [Array]
@@ -297,7 +316,7 @@ impl PartialOrd for Array {
 impl Sequence for Array {
     /// Returns true, if the [Array] contains the specified item
     fn contains(&self, item: &TypedValue) -> bool {
-        self.the_array.contains(item)
+      self.the_array.contains(item) || self.the_array.iter().any(|i| i.contains(item))
     }
 
     /// Returns the [Option] of a [TypedValue] from specified index
@@ -545,6 +564,25 @@ pub fn sub_vec(aa: Vec<TypedValue>, bb: Vec<TypedValue>) -> Vec<TypedValue> {
     aa.iter().zip(bb.iter())
         .map(|(a, b)| a.clone().sub(b.clone()))
         .collect()
+}
+
+pub fn is_in_range(value: &TypedValue, min: &TypedValue, max: &TypedValue, inclusive: bool) -> bool {
+    value >= min && (if inclusive { value <= max } else { value < max })
+}
+
+pub fn range_diff(min: &TypedValue, max: &TypedValue, inclusive: bool) -> TypedValue {
+    (max.clone() - min.clone()) + Number(I64Value(if inclusive { 1 } else { 0 }))
+}
+
+pub fn range_to_vec(a: &TypedValue, b: &TypedValue, inclusive: bool) -> Vec<TypedValue> {
+    let mut values = vec![];
+    let mut n = a.clone();
+    while n < *b {
+        values.push(n.clone());
+        n = n.clone().add(Number(I64Value(1)));
+    }
+    if inclusive { values.push(b.clone()) }
+    values
 }
 
 /// Unit tests
