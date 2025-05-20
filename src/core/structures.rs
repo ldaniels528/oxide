@@ -934,13 +934,13 @@ mod tests {
         #[test]
         fn test_firm_structure_from_table() {
             verify_exact_value(r#"
-                [+] stocks := ns("interpreter.struct.stocks")
-                [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                stocks := ns("interpreter.struct.stocks")
+                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
                 stocks[0]
         "#, Structured(Firm(Row::new(0, vec![
                 StringValue("ABC".into()),

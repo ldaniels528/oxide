@@ -110,7 +110,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-9
+3
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -119,7 +119,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-9
+15
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -128,7 +128,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-41
+16
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -146,7 +146,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-9
+4
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -164,7 +164,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:41:09.056Z
+2025-05-17T22:16:04.608Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -172,7 +172,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-20T16:41:09.057Z
+2025-05-20T22:16:04.609Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -181,7 +181,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-19T16:41:09.061Z
+2025-06-19T22:16:04.612Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -473,13 +473,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|----------------------------------------------------------------------------------------------------|
-| id | name     | module | signature                | description                          | returns |
-|----------------------------------------------------------------------------------------------------|
-| 0  | to_table | tools  | tools::to_table(a)       | Converts an object into a to_table   | Table   |
-| 1  | to_json  | tools  | tools::to_json(t: Table) | Converts a collection to JSON format | Table   |
-| 2  | to_csv   | tools  | tools::to_csv(t: Table)  | Converts a collection to CSV format  | Table   |
-|----------------------------------------------------------------------------------------------------|
+|---------------------------------------------------------------------------------------------------|
+| id | name    | module | signature        | description                                  | returns |
+|---------------------------------------------------------------------------------------------------|
+| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
+| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
+| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
+|---------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -525,7 +525,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-fa76b7c2-7716-41f2-a2c8-16e9bab88280
+77d6aec5-c369-47e6-8a3c-7140cecc27d7
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -841,9 +841,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T16:41:09.568Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T16:41:09.569Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T16:41:09.570Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T22:16:05.011Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T22:16:05.012Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T22:16:05.012Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

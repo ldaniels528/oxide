@@ -230,7 +230,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-15
+3
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -242,7 +242,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 16:41:08 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 22:16:04 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -614,4 +614,12 @@ from stocks</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+</pre>
+<hr>
+<h4>▶️ Yield</h4>
+<h5>example¹</h5>
+<pre>for(i = 0, i < 5, i = i + 1) yield i * 2</pre>
+<h5>results</h5>
+<pre>
+[0, 2, 4, 6, 8]
 </pre>

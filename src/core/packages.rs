@@ -5,10 +5,10 @@
 
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::{ArrayType, BinaryType, BooleanType, FunctionType, NumberType, StringType, StructureType, TableType, UnresolvedType};
+use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
-use crate::errors::Errors::{AssertionError, Exact, PlatformOpError, TypeMismatch, UnsupportedFeature, UnsupportedPlatformOps};
-use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, ArrayExpected, CharExpected, CollectionExpected, DateExpected, SequenceExpected, StructExpected, UnsupportedType};
+use crate::errors::Errors::*;
+use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, TypeMismatchErrors};
 use crate::expression::Expression::{CodeBlock, FunctionCall, Literal, Multiply, Scenario, StructureExpression};
 use crate::file_row_collection::FileRowCollection;
@@ -16,14 +16,8 @@ use crate::formatting::DataFormats;
 use crate::journaling::Journaling;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
-use crate::number_kind::NumberKind::{
-    DateKind, F32Kind, F64Kind, I128Kind, I16Kind, I32Kind, I64Kind, I8Kind, U128Kind, U16Kind,
-    U32Kind, U64Kind, U8Kind,
-};
-use crate::numbers::Numbers::{
-    DateValue, F32Value, F64Value, I128Value, I16Value, I32Value, I64Value, I8Value, U128Value,
-    U16Value, U32Value, U64Value, U8Value, UUIDValue,
-};
+use crate::number_kind::NumberKind::*;
+use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::platform::PackageOps::Cal;
 use crate::platform::{Package, PackageOps, VERSION};
@@ -70,6 +64,19 @@ pub enum ArraysPkg {
 }
 
 impl ArraysPkg {
+    fn do_arrays_pop(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let array = pull_array(value)?;
+        let (new_array, item) = array.pop();
+        let result = TupleValue(vec![
+            ArrayValue(new_array),
+            item.unwrap_or(Null),
+        ]);
+        Ok((ms, result))
+    }
+
     fn do_arrays_reduce(
         ms: Machine,
         items: &TypedValue,
@@ -248,9 +255,10 @@ impl Package for ArraysPkg {
 
     fn get_return_type(&self) -> DataType {
         match self {
-            ArraysPkg::Filter | ArraysPkg::Map | ArraysPkg::Reverse | ArraysPkg::ToArray => {
-                ArrayType(0)
-            }
+            ArraysPkg::Filter
+            | ArraysPkg::Map
+            | ArraysPkg::Reverse
+            | ArraysPkg::ToArray => ArrayType(0),
             ArraysPkg::Len => NumberType(I64Kind),
             ArraysPkg::Pop | ArraysPkg::Push => BooleanType,
             ArraysPkg::Reduce => UnresolvedType,
@@ -266,7 +274,7 @@ impl Package for ArraysPkg {
             ArraysPkg::Filter => extract_value_fn2(ms, args, ToolsPkg::do_tools_filter),
             ArraysPkg::Len => extract_array_fn1(ms, args, |a| Number(I64Value(a.len() as i64))),
             ArraysPkg::Map => extract_value_fn2(ms, args, ToolsPkg::do_tools_map),
-            ArraysPkg::Pop => extract_value_fn1(ms, args, ToolsPkg::do_tools_pop),
+            ArraysPkg::Pop => extract_value_fn1(ms, args, ArraysPkg::do_arrays_pop),
             ArraysPkg::Push => ToolsPkg::do_tools_push(ms, args),
             ArraysPkg::Reduce => extract_value_fn3(ms, args, Self::do_arrays_reduce),
             ArraysPkg::Reverse => extract_array_fn1(ms, args, |a| ArrayValue(a.rev())),
@@ -2050,7 +2058,7 @@ impl ToolsPkg {
                 .pop_row(df.get_parameters())
                 .to_dataframe()
                 .map(|df| (ms, TableValue(df))),
-            TheArray(mut arr) => Ok((ms, arr.pop().unwrap_or(Null))),
+            TheArray(..) => ArraysPkg::do_arrays_pop(ms, value),
             TheRange(..) => throw(UnsupportedFeature("Range::pop()".into())),
             TheTuple(..) => throw(UnsupportedFeature("Tuple::pop()".into())),
         }
@@ -2954,6 +2962,16 @@ mod tests {
         fn test_arrays_filter() {
             verify_exact_code(
                 r#"
+                arrays::filter([123, 56, 89, 66], fn(n) => (n % 3) == 0)
+           "#,
+                "[123, 66]",
+            )
+        }
+
+        #[test]
+        fn test_arrays_filter_with_range() {
+            verify_exact_code(
+                r#"
                 arrays::filter(1..7, fn(n) => (n % 2) == 0)
            "#,
                 "[2, 4, 6]",
@@ -2971,6 +2989,16 @@ mod tests {
         }
 
         #[test]
+        fn test_arrays_len_map_with_range() {
+            verify_exact_code(
+                r#"
+                arrays::len(1..5)
+           "#,
+                "4",
+            )
+        }
+
+        #[test]
         fn test_arrays_map() {
             verify_exact_code(
                 r#"
@@ -2980,16 +3008,22 @@ mod tests {
             )
         }
 
-        #[ignore]
         #[test]
-        fn test_arrays_pop() {
+        fn test_arrays_map_with_range() {
             verify_exact_code(
                 r#"
+                arrays::map(1..4, fn(n) => n * 2)
+           "#,
+                "[2, 4, 6]",
+            )
+        }
+
+        #[test]
+        fn test_arrays_pop() {
+            verify_exact_code(r#"
                 stocks := ["ABC", "BOOM", "JET", "DEX"]
                 arrays::pop(stocks)
-            "#,
-                r#"["ABC", "BOOM", "JET", "DEX"]"#,
-            );
+            "#, r#"(["ABC", "BOOM", "JET"], "DEX")"#);
         }
 
         #[ignore]
@@ -3006,23 +3040,40 @@ mod tests {
         }
 
         #[test]
+        fn test_arrays_reduce() {
+            verify_exact_code(r#"
+                 use arrays::reduce
+                 numbers := [1, 2, 3, 4, 5]
+                 numbers:::reduce(0, fn(a, b) => a + b)
+            "#, "15");
+        }
+
+        #[test]
+        fn test_arrays_reduce_with_range() {
+            verify_exact_code(r#"
+                 arrays::reduce(1..=5, 0, fn(a, b) => a + b)
+            "#, "15");
+        }
+
+        #[test]
         fn test_arrays_reverse() {
-            verify_exact_code(
-                r#"
+            verify_exact_code(r#"
                 arrays::reverse(['cat', 'dog', 'ferret', 'mouse'])
-            "#,
-                r#"["mouse", "ferret", "dog", "cat"]"#,
-            )
+            "#, r#"["mouse", "ferret", "dog", "cat"]"#)
+        }
+
+        #[test]
+        fn test_arrays_reverse_with_range() {
+            verify_exact_code(r#"
+                arrays::reverse(1..=5)
+            "#, r#"[5, 4, 3, 2, 1]"#)
         }
 
         #[test]
         fn test_arrays_to_array() {
-            verify_exact_code(
-                r#"
+            verify_exact_code(r#"
                  arrays::to_array(("a", "b", "c"))
-            "#,
-                r#"["a", "b", "c"]"#,
-            );
+            "#, r#"["a", "b", "c"]"#);
         }
     }
 

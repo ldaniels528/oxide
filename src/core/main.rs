@@ -5,13 +5,13 @@
 
 use crate::interpreter::Interpreter;
 use crate::oxide_server::start_http_server;
+use crate::repl::REPLState;
 use crate::terminal::{read_line_from_stdin, TerminalState};
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
 use std::env;
 use std::string::ToString;
-use crate::repl::REPLState;
 
 mod blobs;
 mod byte_code_compiler;

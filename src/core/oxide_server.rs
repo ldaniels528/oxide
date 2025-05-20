@@ -424,6 +424,11 @@ impl SharedState {
 /// Unit tests
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::platform::VERSION;
+    use crate::testdata::make_quote_parameters;
+    use crate::typed_values::TypedValue;
+    use crate::typed_values::TypedValue::StringValue;
     use actix_web::test;
     use futures_util::stream::SplitSink;
     use futures_util::{SinkExt, StreamExt};
@@ -433,11 +438,6 @@ mod tests {
     use tokio::runtime::Runtime;
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-    use crate::platform::VERSION;
-    use super::*;
-    use crate::testdata::make_quote_parameters;
-    use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::StringValue;
 
     #[actix::test]
     async fn test_dataframe_config_lifecycle() {

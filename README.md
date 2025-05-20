@@ -324,7 +324,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-16
+4
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -336,7 +336,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 16:41:10 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 22:16:05 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -709,6 +709,14 @@ from stocks</pre>
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
 </pre>
+<hr>
+<h4>▶️ Yield</h4>
+<h5>example¹</h5>
+<pre>for(i = 0, i < 5, i = i + 1) yield i * 2</pre>
+<h5>results</h5>
+<pre>
+[0, 2, 4, 6, 8]
+</pre>
 
 <a name="platform_examples"></a>
 ### 📦 Platform Examples
@@ -823,7 +831,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-9
+3
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -832,7 +840,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-9
+15
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -841,7 +849,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-41
+16
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -859,7 +867,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-10
+5
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -877,7 +885,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T16:41:10.617Z
+2025-05-17T22:16:05.840Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -885,7 +893,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-20T16:41:10.619Z
+2025-05-20T22:16:05.841Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -894,7 +902,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-19T16:41:10.623Z
+2025-06-19T22:16:05.844Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -1186,13 +1194,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| id | name    | module  | signature                              | description                 | returns                                                                    |
-|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | type_of | testing | testing::type_of(a)                    | Returns the type of a value | String                                                                     |
-| 1  | matches | testing | testing::matches(a, b)                 | Compares two values         | Boolean                                                                    |
-| 2  | feature | testing | testing::feature(a: String, b: Struct) | Creates a new test feature  | Table(level: u16, item: String(256), passed: Boolean, result: String(256)) |
-|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------|
+| id | name  | module | signature                 | description                                    | returns |
+|------------------------------------------------------------------------------------------------------------|
+| 0  | sqrt  | math   | math::sqrt(n: f64)        | sqrt(x): Returns the square root of x.         | i64     |
+| 1  | round | math   | math::round(n: f64)       | round(x): Rounds x to the nearest integer.     | i64     |
+| 2  | pow   | math   | math::pow(a: f64, b: f64) | pow(x, y): Returns x raised to the power of y. | i64     |
+|------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1238,7 +1246,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-94094c83-4d8c-41ec-ae2b-a541906ee90b
+19ff64b6-3d19-489b-b256-eb0d96ecc370
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1554,9 +1562,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T16:41:11.134Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T16:41:11.135Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T16:41:11.135Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T22:16:06.234Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T22:16:06.235Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T22:16:06.236Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

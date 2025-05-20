@@ -206,29 +206,29 @@ impl Compiler {
             "<" => Ok(Condition(Conditions::LessThan(a.into(), b.into()))),
             "!=" => Ok(Condition(Conditions::NotEqual(a.into(), b.into()))),
             "||" => Ok(Condition(Conditions::Or(a.into(), b.into()))),
-            ":" => Ok(Expression::AsValue(pull_name(&a)?, b.into())),
-            "&" => Ok(Expression::BitwiseAnd(a.into(), b.into())),
-            "|" => Ok(Expression::BitwiseOr(a.into(), b.into())),
-            "<<" => Ok(Expression::BitwiseShiftLeft(a.into(), b.into())),
-            ">>" => Ok(Expression::BitwiseShiftRight(a.into(), b.into())),
-            "^" => Ok(Expression::BitwiseXor(a.into(), b.into())),
-            "?" => Ok(Expression::Coalesce(a.into(), b.into())),
-            "::" => Ok(Expression::ColonColon(a.into(), b.into())),
-            ":::" => Ok(Expression::ColonColonColon(a.into(), b.into())),
-            "<~" => Ok(Expression::CurvyArrowLeft(a.into(), b.into())),
-            "~>" => Ok(Expression::CurvyArrowRight(a.into(), b.into())),
-            "÷" | "/" => Ok(Expression::Divide(a.into(), b.into())),
-            "-" => Ok(Expression::Minus(a.into(), b.into())),
-            "%" => Ok(Expression::Modulo(a.into(), b.into())),
-            "×" | "*" => Ok(Expression::Multiply(a.into(), b.into())),
-            "+" => Ok(Expression::Plus(a.into(), b.into())),
-            "++" => Ok(Expression::PlusPlus(a.into(), b.into())),
-            "**" => Ok(Expression::Pow(a.into(), b.into())),
-            ".." => Ok(Expression::Range(Exclusive(a.into(), b.into()))),
-            "..=" => Ok(Expression::Range(Inclusive(a.into(), b.into()))),
-            ":=" => Ok(Expression::SetVariables(a.into(), b.into())),
-            "|>" => Ok(Expression::VerticalBarArrow(a.into(), b.into())),
-            "|>>" => Ok(Expression::VerticalBarDoubleArrow(a.into(), b.into())),
+            ":" => Ok(AsValue(pull_name(&a)?, b.into())),
+            "&" => Ok(BitwiseAnd(a.into(), b.into())),
+            "|" => Ok(BitwiseOr(a.into(), b.into())),
+            "<<" => Ok(BitwiseShiftLeft(a.into(), b.into())),
+            ">>" => Ok(BitwiseShiftRight(a.into(), b.into())),
+            "^" => Ok(BitwiseXor(a.into(), b.into())),
+            "?" => Ok(Coalesce(a.into(), b.into())),
+            "::" => Ok(ColonColon(a.into(), b.into())),
+            ":::" => Ok(ColonColonColon(a.into(), b.into())),
+            "<~" => Ok(CurvyArrowLeft(a.into(), b.into())),
+            "~>" => Ok(CurvyArrowRight(a.into(), b.into())),
+            "÷" | "/" => Ok(Divide(a.into(), b.into())),
+            "-" => Ok(Minus(a.into(), b.into())),
+            "%" => Ok(Modulo(a.into(), b.into())),
+            "×" | "*" => Ok(Multiply(a.into(), b.into())),
+            "+" => Ok(Plus(a.into(), b.into())),
+            "++" => Ok(PlusPlus(a.into(), b.into())),
+            "**" => Ok(Pow(a.into(), b.into())),
+            ".." => Ok(Range(Exclusive(a.into(), b.into()))),
+            "..=" => Ok(Range(Inclusive(a.into(), b.into()))),
+            ":=" => Ok(SetVariables(a.into(), b.into())),
+            "|>" => Ok(VerticalBarArrow(a.into(), b.into())),
+            "|>>" => Ok(VerticalBarDoubleArrow(a.into(), b.into())),
             _ => throw(ExactNear(
                 format!("Invalid operator '{}'", op.get_raw_value()),
                 op.clone(),
@@ -320,10 +320,10 @@ impl Compiler {
             // variables
             (Some(Backticks { text, .. }), ts) => Ok((Some(Variable(text)), ts)),
             // double- or single-quoted or URL strings
-            (
-                Some(DoubleQuoted { text, .. } | SingleQuoted { text, .. } | URL { text, .. }),
-                ts,
-            ) => Ok((Some(Literal(StringValue(text))), ts)),
+            (Some(DoubleQuoted { text, .. }
+                  | SingleQuoted { text, .. }
+                  | URL { text, .. }), ts) =>
+                Ok((Some(Literal(StringValue(text))), ts)),
             // numeric values
             (Some(Numeric { text, .. }), ts) => {
                 Ok((Some(Literal(TypedValue::from_numeric(text.as_str())?)), ts))
@@ -347,10 +347,10 @@ impl Compiler {
             // variables
             (Some(Backticks { text, .. }), ts) => Ok((Some(Variable(text)), ts)),
             // double- or single-quoted or URL strings
-            (
-                Some(DoubleQuoted { text, .. } | SingleQuoted { text, .. } | URL { text, .. }),
-                ts,
-            ) => Ok((Some(Literal(StringValue(text))), ts)),
+            (Some(DoubleQuoted { text, .. }
+                  | SingleQuoted { text, .. }
+                  | URL { text, .. }), ts) =>
+                Ok((Some(Literal(StringValue(text))), ts)),
             // numeric values
             (Some(Numeric { text, .. }), ts) => {
                 Ok((Some(Literal(TypedValue::from_numeric(text.as_str())?)), ts))
@@ -364,10 +364,6 @@ impl Compiler {
     fn next_keyword(&self, ts: TokenSlice) -> std::io::Result<(Option<Expression>, TokenSlice)> {
         if let (Some(Atom { text, .. }), nts) = ts.next() {
             let (expr, ts) = match text.as_str() {
-                "[!]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustDie(e))),
-                "[+]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustAck(e))),
-                "[-]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustNotAck(e))),
-                "[~]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustIgnoreAck(e))),
                 "append" => self.parse_keyword_append(nts),
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
@@ -378,14 +374,15 @@ impl Compiler {
                 "fn" => self.parse_keyword_fn(nts),
                 "for" => self.parse_keyword_for(nts),
                 "from" => {
-                    let (from, ts) = self.parse_expression_1a(nts, Expression::From)?;
+                    let (from, ts) = self.parse_expression_1a(nts, From)?;
                     self.parse_queryable(from, ts)
                 }
                 "GET" => self.parse_keyword_http(ts),
                 "HEAD" => self.parse_keyword_http(ts),
                 "HTTP" => self.parse_keyword_http(nts),
                 "if" => self.parse_keyword_if(nts),
-                "include" => self.parse_expression_1a(nts, Expression::Include),
+                "include" => self.parse_expression_1a(nts, Include),
+                "let" => self.parse_keyword_let(nts),
                 "limit" => throw(ExactNear(
                     "`from` is expected before `limit`: from stocks limit 5".into(),
                     nts.current(),
@@ -416,6 +413,7 @@ impl Compiler {
                     nts.current(),
                 )),
                 "while" => self.parse_keyword_while(nts),
+                "yield" => self.parse_expression_1a(nts, Yield),
                 name => self.expect_function_call_or_variable(name, nts),
             }?;
             Ok((Some(expr), ts))
@@ -626,6 +624,9 @@ impl Compiler {
                 .map(|(m, ts)| (Some(m), ts)),
             "÷" | "/" => self
                 .parse_expression_2a(ts, expr0, Divide)
+                .map(|(m, ts)| (Some(m), ts)),
+            "=" => self
+                .parse_expression_2a(ts, expr0, SetVariables)
                 .map(|(m, ts)| (Some(m), ts)),
             "==" => self
                 .parse_condition_2a(ts, expr0, Equal)
@@ -896,10 +897,6 @@ impl Compiler {
     fn parse_keyword(&self, ts: TokenSlice) -> std::io::Result<(Option<Expression>, TokenSlice)> {
         if let (Some(Atom { text, .. }), nts) = ts.next() {
             let (expr, ts) = match text.as_str() {
-                "[!]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustDie(e))),
-                "[+]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustAck(e))),
-                "[-]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustNotAck(e))),
-                "[~]" => self.parse_expression_1a(nts, |e| Directive(Directives::MustIgnoreAck(e))),
                 "append" => self.parse_keyword_append(nts),
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
@@ -910,14 +907,15 @@ impl Compiler {
                 "fn" => self.parse_keyword_fn(nts),
                 "for" => self.parse_keyword_for(nts),
                 "from" => {
-                    let (from, ts) = self.parse_expression_1a(nts, Expression::From)?;
+                    let (from, ts) = self.parse_expression_1a(nts, From)?;
                     self.parse_queryable(from, ts)
                 }
                 "GET" => self.parse_keyword_http(ts),
                 "HEAD" => self.parse_keyword_http(ts),
                 "HTTP" => self.parse_keyword_http(nts),
                 "if" => self.parse_keyword_if(nts),
-                "include" => self.parse_expression_1a(nts, Expression::Include),
+                "include" => self.parse_expression_1a(nts, Include),
+                "let" => self.parse_keyword_let(nts),
                 "limit" => throw(ExactNear(
                     "`from` is expected before `limit`: from stocks limit 5".into(),
                     nts.current(),
@@ -947,6 +945,7 @@ impl Compiler {
                     nts.current(),
                 )),
                 "while" => self.parse_keyword_while(nts),
+                "yield" => self.parse_expression_1a(nts, Yield),
                 name => self.expect_function_call_or_variable(name, nts),
             }?;
             Ok((Some(expr), ts))
@@ -1137,8 +1136,23 @@ impl Compiler {
         }
     }
 
-    /// "for" expression
-    /// ex: for item in items { ... }
+    /// Parses a for statement
+    /// #### Examples
+    /// ```
+    /// for(i = 0, i < 5, i = i + 1) ...
+    /// ```
+    /// ```
+    /// for [x, y, z] in [[1, 5, 3], [6, 11, 17], ...] ...
+    /// ```
+    /// ```
+    /// for (c, n) in [('a', 5), ('c', 11), ...] ...
+    /// ```
+    /// ```
+    /// for item in ['apple', 'berry', ...] ...
+    /// ```
+    /// ```
+    /// for row in tools::to_table([{symbol:'ABC', price: 10.0}, ...]) ...
+    /// ```
     fn parse_keyword_for(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         // for [item in items] [block]
         let (construct, ts) = self.compile_next(&ts)?;
@@ -1146,8 +1160,14 @@ impl Compiler {
             Condition(In(item, items)) => {
                 let (block, ts) = self.compile_next(&ts)?;
                 Ok((For {
-                    item: item.into(),
-                    items: items.into(),
+                    construct: Condition(In(item, items)).into(),
+                    op: block.into(),
+                }, ts))
+            }
+            TupleExpression(components) if components.len() == 3 => {
+                let (block, ts) = self.compile_next(&ts)?;
+                Ok((For {
+                    construct: TupleExpression(components).into(),
                     op: block.into(),
                 }, ts))
             }
@@ -1212,6 +1232,14 @@ impl Compiler {
             },
             ts,
         ))
+    }
+
+    fn parse_keyword_let(&self, ts0: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        match self.next_expression(None, &ts0)? {
+            (Some(SetVariables(name, value)), ts) => Ok((SetVariables(name, value), ts)),
+            (Some(_), _) => throw(ExactNear("Expected assignment: let x = y".into(), ts0.current())),
+            (None, _) => throw(ExactNear("Expected identifier".into(), ts0.current()))
+        }
     }
 
     /// Builds an use statement:
@@ -1984,36 +2012,6 @@ mod tests {
         }
 
         #[test]
-        fn test_in_range_exclusive() {
-            verify_build(
-                "n in a..z",
-                Condition(In(
-                    Variable("n".into()).into(),
-                    Range(Exclusive(
-                        Variable("a".into()).into(),
-                        Variable("z".into()).into(),
-                    ))
-                    .into(),
-                )),
-            )
-        }
-
-        #[test]
-        fn test_in_range_inclusive() {
-            verify_build(
-                "n in a..=z",
-                Condition(In(
-                    Variable("n".into()).into(),
-                    Range(Inclusive(
-                        Variable("a".into()).into(),
-                        Variable("z".into()).into(),
-                    ))
-                        .into(),
-                )),
-            )
-        }
-
-        #[test]
         fn test_bitwise_and() {
             verify_build(
                 "20 & 3",
@@ -2433,24 +2431,61 @@ mod tests {
         }
 
         #[test]
-        fn test_for() {
+        fn test_for_each_item_in_array() {
             verify_build(
                 "for item in [1, 5, 6, 11, 17] println(item)",
                 For {
-                    item: Variable("item".into()).into(),
-                    items: ArrayExpression(vec![
-                        Literal(Number(I64Value(1))),
-                        Literal(Number(I64Value(5))),
-                        Literal(Number(I64Value(6))),
-                        Literal(Number(I64Value(11))),
-                        Literal(Number(I64Value(17))),
-                    ])
-                    .into(),
+                    construct: Condition(In(
+                        Variable("item".into()).into(),
+                        ArrayExpression(vec![
+                            Literal(Number(I64Value(1))),
+                            Literal(Number(I64Value(5))),
+                            Literal(Number(I64Value(6))),
+                            Literal(Number(I64Value(11))),
+                            Literal(Number(I64Value(17))),
+                        ]).into()
+                    )).into(),
                     op: FunctionCall {
                         fx: Variable("println".into()).into(),
                         args: vec![Variable("item".into())],
                     }
                     .into(),
+                },
+            );
+        }
+
+        #[test]
+        fn test_for_iteration() {
+            verify_build_with_decompile(
+                "for(i = 0, i < 5, i = i + 1) println(i)",
+                "for (i := 0, i < 5, i := i + 1) println(i)",
+                For {
+                    construct:
+                    TupleExpression(vec![
+                        // i = 0
+                        SetVariables(
+                            Variable("i".into()).into(),
+                            Literal(Number(I64Value(0))).into()
+                        ).into(),
+                        // i < 5
+                        Condition(LessThan(
+                            Variable("i".into()).into(),
+                            Literal(Number(I64Value(5))).into()
+                        )).into(),
+                        // i = i + 1
+                        SetVariables(
+                            Variable("i".into()).into(),
+                            Plus(
+                                Variable("i".into()).into(),
+                                Literal(Number(I64Value(1))).into()
+                            ).into()
+                        ).into(),
+                    ]).into(),
+                    op: FunctionCall {
+                        fx: Variable("println".into()).into(),
+                        args: vec![Variable("i".into())],
+                    }
+                        .into(),
                 },
             );
         }
@@ -2670,7 +2705,7 @@ mod tests {
         }
 
         #[test]
-        fn test_if() {
+        fn test_if_statement() {
             let model = Compiler::build(
                 r#"
                 if n > 100 "Yes"
@@ -2691,7 +2726,7 @@ mod tests {
         }
 
         #[test]
-        fn test_if_else() {
+        fn test_if_else_statement() {
             let code = Compiler::build(
                 r#"
                 if n > 100 n else m
@@ -2712,7 +2747,7 @@ mod tests {
         }
 
         #[test]
-        fn test_iff() {
+        fn test_iff_expression() {
             let model = Compiler::build(
                 r#"
                 iff(n > 5, a, b)
@@ -2733,39 +2768,45 @@ mod tests {
         }
 
         #[test]
-        fn test_use_one() {
-            // single use
-            let code = Compiler::build(
-                r#"
-                use "os"
-            "#,
+        fn test_in_range_exclusive() {
+            verify_build(
+                "n in a..z",
+                Condition(In(
+                    Variable("n".into()).into(),
+                    Range(Exclusive(
+                        Variable("a".into()).into(),
+                        Variable("z".into()).into(),
+                    ))
+                        .into(),
+                )),
             )
-            .unwrap();
-            assert_eq!(code, Use(vec![UseOps::Everything("os".into())]));
-            assert_eq!(code.to_code(), "use os");
         }
 
         #[test]
-        fn test_use_multiple() {
-            // multiple uses
-            let code = Compiler::build(
-                r#"
-                use os, util
-            "#,
+        fn test_in_range_inclusive() {
+            verify_build(
+                "n in a..=z",
+                Condition(In(
+                    Variable("n".into()).into(),
+                    Range(Inclusive(
+                        Variable("a".into()).into(),
+                        Variable("z".into()).into(),
+                    ))
+                        .into(),
+                )),
             )
-            .unwrap();
+        }
+
+        #[test]
+        fn test_let_statement() {
             assert_eq!(
-                code,
-                Use(vec![
-                    UseOps::Everything("os".into()),
-                    UseOps::Everything("util".into()),
-                ])
+                Compiler::build("let x = 5").unwrap(),
+                SetVariables(Variable("x".into()).into(), Literal(Number(I64Value(5))).into())
             );
-            assert_eq!(code.to_code(), "use os, util");
         }
 
         #[test]
-        fn test_like() {
+        fn test_like_statement() {
             assert_eq!(
                 Compiler::build("'Hello' like 'H.ll.'").unwrap(),
                 Condition(Like(
@@ -2777,7 +2818,7 @@ mod tests {
 
         #[ignore]
         #[test]
-        fn test_match() {
+        fn test_match_statement() {
             let compiler = Compiler::new();
             let (model, _) = compiler
                 .compile_with_precedence(TokenSlice::from_string(
@@ -3262,6 +3303,39 @@ mod tests {
         }
 
         #[test]
+        fn test_use_single() {
+            // single use
+            let code = Compiler::build(
+                r#"
+                use "os"
+            "#,
+            )
+                .unwrap();
+            assert_eq!(code, Use(vec![UseOps::Everything("os".into())]));
+            assert_eq!(code.to_code(), "use os");
+        }
+
+        #[test]
+        fn test_use_multiple() {
+            // multiple uses
+            let code = Compiler::build(
+                r#"
+                use os, utils, "tools"
+            "#,
+            )
+                .unwrap();
+            assert_eq!(
+                code,
+                Use(vec![
+                    UseOps::Everything("os".into()),
+                    UseOps::Everything("utils".into()),
+                    UseOps::Everything("tools".into()),
+                ])
+            );
+            assert_eq!(code.to_code(), "use os, utils, tools");
+        }
+
+        #[test]
         fn test_while_loop() {
             let model = Compiler::build(
                 r#"
@@ -3406,7 +3480,7 @@ mod tests {
             );
             // tokens ["4", "*", "(", "2", "-", "1", ")", "**", "2", "+", "3"]
 
-            // setup the compiler
+            // set up the compiler
             let ts = TokenSlice::new(tokens);
             let compiler = Compiler::new();
 
@@ -3431,13 +3505,10 @@ mod tests {
         use crate::expression::Conditions::{Equal, GreaterOrEqual, LessOrEqual, LessThan, True};
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
         use crate::expression::DatabaseOps::{Mutation, Queryable};
-        use crate::expression::Expression::{
-            ArrayExpression, ColonColon, ColonColonColon, Condition, CurvyArrowRight, DatabaseOp,
-            FnExpression, From, FunctionCall, Literal, Ns, StructureExpression, Variable, Via,
-        };
+        use crate::expression::Expression::*;
         use crate::expression::MutateTarget::TableTarget;
         use crate::expression::Mutations::{Create, Declare, Drop};
-        use crate::expression::{CreationEntity, Mutations, Queryables};
+        use crate::expression::{CreationEntity, Expression, Mutations, Queryables};
         use crate::number_kind::NumberKind::{DateKind, F64Kind};
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::parameter::Parameter;
@@ -3458,7 +3529,7 @@ mod tests {
                     path: Box::new(Ns(Box::new(Literal(StringValue(
                         "compiler.append2.stocks".to_string()
                     ))))),
-                    source: Box::new(From(Box::new(StructureExpression(vec![
+                    source: Box::new(Expression::From(Box::new(StructureExpression(vec![
                         ("symbol".into(), Literal(StringValue("ABC".into()))),
                         ("exchange".into(), Literal(StringValue("NYSE".into()))),
                         ("last_sale".into(), Literal(Number(F64Value(0.1008)))),
@@ -3486,7 +3557,7 @@ mod tests {
                     path: Box::new(Ns(Box::new(Literal(StringValue(
                         "compiler.into.stocks".to_string()
                     ))))),
-                    source: Box::new(From(Box::new(ArrayExpression(vec![
+                    source: Box::new(Expression::From(Box::new(ArrayExpression(vec![
                         StructureExpression(vec![
                             ("symbol".into(), Literal(StringValue("CAT".into()))),
                             ("exchange".into(), Literal(StringValue("NYSE".into()))),
@@ -3521,7 +3592,7 @@ mod tests {
                     path: Box::new(Ns(Box::new(Literal(StringValue(
                         "compiler.append.stocks".to_string()
                     ))))),
-                    source: Box::new(From(Box::new(Variable("stocks".into())))),
+                    source: Box::new(Expression::From(Box::new(Variable("stocks".into())))),
                 }))
             )
         }
@@ -3790,7 +3861,7 @@ mod tests {
         #[test]
         fn test_from() {
             let model = Compiler::build("from stocks").unwrap();
-            assert_eq!(model, From(Box::new(Variable("stocks".into()))));
+            assert_eq!(model, Expression::From(Box::new(Variable("stocks".into()))));
         }
 
         #[test]
@@ -3805,7 +3876,7 @@ mod tests {
                 model,
                 DatabaseOp(Queryable(Queryables::Limit {
                     from: Box::new(DatabaseOp(Queryable(Queryables::Where {
-                        from: Box::new(From(Box::new(Variable("stocks".into())))),
+                        from: Box::new(Expression::From(Box::new(Variable("stocks".into())))),
                         condition: GreaterOrEqual(
                             Box::new(Variable("last_sale".into())),
                             Box::new(Literal(Number(F64Value(1.0)))),

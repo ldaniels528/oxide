@@ -28,11 +28,6 @@ const OPERATORS_3: [&str; 5] = [
 /// Pseudo-numerical prefixes
 const PSEUDO_NUMERICAL: [&str; 3] = ["0x", "0b", "0o"];
 
-/// Special symbols
-const SYMBOLS_3: [&str; 6] = [
-    "[^]", "[!]", "[+]", "[-]", "[~]", "[_]",
-];
-
 type NewToken = fn(String, usize, usize, usize, usize) -> Token;
 
 type ParserFunction = fn(&Vec<char>, &mut usize) -> Option<Token>;
@@ -103,7 +98,6 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
         skip_comments,
         next_compound_3_operator_token,
-        next_compound_symbol_token,
         next_compound_2_operator_token,
         next_operator_token,
         next_pseudo_numeric_token,
@@ -268,17 +262,6 @@ fn next_compound_operator_token(
         *pos += symbol_len;
         let end = *pos;
         generate_token(&inputs, start, end, Token::operator)
-    } else { None }
-}
-
-fn next_compound_symbol_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
-    let symbol_len = 3;
-    let start = *pos;
-    if has_at_least(inputs, pos, symbol_len) &&
-        SYMBOLS_3.iter().any(|gl| is_same(&inputs[start..(start + symbol_len)], gl)) {
-        *pos += symbol_len;
-        let end = *pos;
-        generate_token(&inputs, start, end, Token::atom)
     } else { None }
 }
 

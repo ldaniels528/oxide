@@ -967,13 +967,13 @@ mod tests {
     #[test]
     fn test_table_into_then_delete() {
         verify_exact_table(r#"
-            [+] stocks := ns("query_engine.into_then_delete.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-            [+] delete from stocks where last_sale < 30.0
-            [+] from stocks
+            stocks := ns("query_engine.into_then_delete.stocks")
+            table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+             { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+             { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+            delete from stocks where last_sale < 30.0
+            from stocks
         "#, vec![
             "|------------------------------------|",
             "| id | symbol | exchange | last_sale |",
@@ -1027,18 +1027,18 @@ mod tests {
 
         // set up the interpreter
         verify_exact_table(r#"
-            [+] stocks := ns("query_engine.select.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            [+] select symbol, exchange, last_sale
-                from stocks
-                where last_sale > 1.0
-                order by symbol
-                limit 5
+            stocks := ns("query_engine.select.stocks")
+            table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
+             { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+             { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+             { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+             { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+            select symbol, exchange, last_sale
+            from stocks
+            where last_sale > 1.0
+            order by symbol
+            limit 5
         "#, vec![
             "|------------------------------------|",
             "| id | symbol | exchange | last_sale |",
@@ -1127,18 +1127,18 @@ mod tests {
 
         // set up the interpreter
         verify_exact_table(r#"
-            [+] stocks := ns("query-engine.select.stocks")
-            [+] table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            [+] [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 0.66 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 13.2456 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 24.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            [+] select symbol, exchange, price: last_sale, symbol_md5: util::md5(symbol)
-                from stocks
-                where last_sale > 1.0
-                order by symbol
-                limit 2
+            stocks := ns("query-engine.select.stocks")
+            table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+            [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
+             { symbol: "BIZ", exchange: "NYSE", last_sale: 0.66 },
+             { symbol: "UNO", exchange: "OTC", last_sale: 13.2456 },
+             { symbol: "GOTO", exchange: "OTC", last_sale: 24.1428 },
+             { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+            select symbol, exchange, price: last_sale, symbol_md5: util::md5(symbol)
+            from stocks
+            where last_sale > 1.0
+            order by symbol
+            limit 2
         "#, vec![
             "|---------------------------------------------------------------------|",
             "| id | symbol | exchange | price   | symbol_md5                       |",

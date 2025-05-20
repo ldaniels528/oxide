@@ -3,6 +3,7 @@
 //  Machine - state machine module
 ////////////////////////////////////////////////////////////////////
 
+use actix::fut::result;
 use actix_web::web::{scope, to};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
@@ -38,13 +39,13 @@ use crate::dataframe::Dataframe::{Disk, Model};
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, Errors, SyntaxErrors, TypeMismatchErrors};
-use crate::expression::Conditions::{False, True};
+use crate::expression::Conditions::{False, In, True};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::expression::{Conditions, Expression, HttpMethodCalls, UseOps, UNDEFINED};
-use crate::expression::{DatabaseOps, Directives, Mutations, Queryables};
+use crate::expression::{DatabaseOps, Mutations, Queryables};
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
@@ -165,12 +166,11 @@ impl Machine {
             CurvyArrowLeft(a, b) => self.do_curvy_arrow_left(a, b),
             CurvyArrowRight(a, b) => self.do_curvy_arrow_right(a, b),
             DatabaseOp(op) => query_engine::evaluate(self, op, &UNDEFINED),
-            Directive(d) => self.do_directive(d),
             Divide(a, b) => self.eval_inline_2(a, b, |aa, bb| aa / bb),
             ElementAt(a, b) => self.do_index_of_collection(a, b),
             Feature { title, scenarios } => self.do_feature(title, scenarios),
             FnExpression { params, body, returns } => self.do_fn_expression(params, body, returns),
-            For { item, items, op } => self.do_foreach(item, items, op),
+            For { construct, op } => self.do_for_construct(construct, op),
             From(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
             FunctionCall { fx, args } => self.do_function_call(fx, args),
             HTTP(method_call) => self.do_http_exec(method_call),
@@ -203,6 +203,7 @@ impl Machine {
             VerticalBarDoubleArrow(a, b) => self.do_function_pipeline(a, b, true),
             Via(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
             While { condition, code } => self.do_while(condition, code),
+            Yield(a) => self.do_yield(a),
         }
     }
 
@@ -418,82 +419,6 @@ impl Machine {
         }
     }
 
-    /// Evaluates the specified [Directives]; returning a [TypedValue] result.
-    fn do_directive(
-        &self,
-        directive: &Directives,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        match directive {
-            Directives::MustAck(a) => self.do_directive_ack(a),
-            Directives::MustDie(a) => self.do_directive_die(a),
-            Directives::MustIgnoreAck(a) => self.do_directive_ignore_failure(a),
-            Directives::MustNotAck(a) => self.do_directive_not_ack(a),
-        }
-    }
-
-    /// Directive to expect a successful outcome
-    /// #### Example
-    /// ```
-    /// x := 67
-    /// [+] x < 67
-    /// ```
-    fn do_directive_ack(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        info!("{}", expr.to_code());
-        let (machine, value) = self.evaluate(expr)?;
-        match value {
-            v if v.is_ok() => Ok((machine, v.to_owned())),
-            v => throw(TypeMismatch(OutcomeExpected(v.to_code())))
-        }
-    }
-
-    /// Directive to raise an error condition
-    /// #### Example
-    /// ```
-    /// [!] "Kaboom!!!
-    /// ```
-    fn do_directive_die(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        info!("{}", expr.to_code());
-        let (_, value) = self.evaluate(expr)?;
-        throw(Exact(value.unwrap_value()))
-    }
-
-    /// Directive to ignore a failure outcome
-    /// #### Example
-    /// ```
-    /// [~] 7 / 0
-    /// ```
-    fn do_directive_ignore_failure(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        info!("{}", expr.to_code());
-        let (machine, _) = self.evaluate(expr)?;
-        Ok((machine, Boolean(true)))
-    }
-
-    /// Directive to expect an unsuccessful outcome
-    /// #### Example
-    /// ```
-    /// [-] x < 67
-    /// ```
-    fn do_directive_not_ack(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        info!("{}", expr.to_code());
-        let (machine, value) = self.evaluate(expr)?;
-        match value {
-            v if v.is_ok() => throw(Exact(format!("Expected a non-success value, but found {}", &v))),
-            v => Ok((machine, v))
-        }
-    }
-
     fn do_extraction_structure(
         &self,
         var_name: &str,
@@ -617,11 +542,53 @@ impl Machine {
         }))
     }
 
-    /// for `item` in `items` { `block` }
-    fn do_foreach(&self,
-                  item: &Box<Expression>,
-                  items: &Box<Expression>,
-                  block: &Box<Expression>,
+    /// Evaluates a for statement
+    /// #### Parameters
+    /// - construct: the expression that represents the for loop construct
+    /// - block: the block of code to execute for each item
+    /// #### Returns
+    /// - a [Machine] populated with the deconstructed key-value pairs
+    /// - the result of the last statement in the block
+    /// #### Examples
+    /// ```
+    /// for(i = 0, i < 5, i = i + 1) ...
+    /// ```
+    /// ```
+    /// for [x, y, z] in [[1, 5, 3], [6, 11, 17], ...] ...
+    /// ```
+    /// ```
+    /// for (c, n) in [('a', 5), ('c', 11), ...] ...
+    /// ```
+    /// ```
+    /// for item in ['apple', 'berry', ...] ...
+    /// ```
+    /// ```
+    /// for row in tools::to_table([{symbol:'ABC', price: 10.0}, ...]) ...
+    /// ```
+    fn do_for_construct(&self,
+                        construct: &Box<Expression>,
+                        block: &Box<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match construct.deref() {
+            // for item in ['apple', 'berry', ...] ...
+            Condition(In(item, items)) => self.do_for_each(item, items, block),
+            // for(i = 0, i < 5, i = i + 1) ...
+            TupleExpression(components) => {
+                match components.as_slice() {
+                    [init, Condition(cond), counter] => {
+                        self.do_for_loop(init, cond, counter, block)
+                    },
+                    _ => throw(Exact(format!("Invalid for loop construct: {}", construct.to_code())))
+                }
+            }
+            _ => throw(Exact(format!("Invalid for loop construct: {}", construct.to_code())))
+        }
+    }
+
+    fn do_for_each(&self,
+                   item: &Expression,
+                   items: &Expression,
+                   block: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         let mut ms = self.clone();
         let (_, array_value) = ms.evaluate(items)?;
@@ -639,6 +606,28 @@ impl Machine {
             result = result1;
             // advance the `index`
             index += 1
+        }
+        Ok((ms, result))
+    }
+
+    fn do_for_loop(
+        &self,
+        init: &Expression,
+        cond: &Conditions,
+        counter: &Expression,
+        block: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        // evaluate the init expression
+        let (mut ms, mut result) = self.evaluate(init)?;
+
+        // while the condition is true, evaluate the block
+        while let (ms1, true) = ms.is_true(cond)? {
+            let (ms2, result1) = ms1.evaluate(block)?;
+            result = result1;
+
+            // increment the loop counter
+            let (ms3, _) = ms2.evaluate(counter)?;
+            ms = ms3;
         }
         Ok((ms, result))
     }
@@ -1308,6 +1297,27 @@ impl Machine {
             }
         }
         Ok((machine, outcome))
+    }
+    
+    fn do_yield(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let prop_name = "__yield__";
+        let (mut ms, value) = self.evaluate(expr)?;
+        let array = match ms.get(prop_name) { 
+            Some(ArrayValue(mut array)) => {
+                array.push(value);
+                ms = ms.set(prop_name, ArrayValue(array.clone()));
+                array
+            },
+            _ => {
+                let array = Array::from(vec![value]);
+                ms = ms.with_variable(prop_name, ArrayValue(array.clone()));
+                array
+            }
+        };
+        Ok((ms, ArrayValue(array)))
     }
 
     /// evaluates the specified [Expression]; returning an array ([TypedValue]) result.

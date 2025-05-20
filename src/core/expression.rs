@@ -61,15 +61,6 @@ impl Conditions {
     }
 }
 
-/// Represents the set of all Directives
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum Directives {
-    MustAck(Box<Expression>),
-    MustDie(Box<Expression>),
-    MustIgnoreAck(Box<Expression>),
-    MustNotAck(Box<Expression>),
-}
-
 /// Represents the set of all Database Operations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DatabaseOps {
@@ -277,7 +268,6 @@ pub enum Expression {
     CurvyArrowLeft(Box<Expression>, Box<Expression>),
     CurvyArrowRight(Box<Expression>, Box<Expression>),
     DatabaseOp(DatabaseOps),
-    Directive(Directives),
     Divide(Box<Expression>, Box<Expression>),
     ElementAt(Box<Expression>, Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
@@ -286,7 +276,7 @@ pub enum Expression {
         body: Option<Box<Expression>>,
         returns: DataType,
     },
-    For { item: Box<Expression>, items: Box<Expression>, op: Box<Expression> },
+    For { construct: Box<Expression>, op: Box<Expression> },
     From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     HTTP(HttpMethodCalls),
@@ -328,6 +318,7 @@ pub enum Expression {
         condition: Box<Expression>,
         code: Box<Expression>,
     },
+    Yield(Box<Expression>),
 }
 
 impl Expression {
@@ -365,7 +356,6 @@ impl Expression {
                     DatabaseOps::Queryable(q) => Self::decompile_queryables(q),
                     DatabaseOps::Mutation(m) => Self::decompile_modifications(m),
                 },
-            Expression::Directive(d) => Self::decompile_directives(d),
             Expression::Divide(a, b) =>
                 format!("{} / {}", Self::decompile(a), Self::decompile(b)),
             Expression::ElementAt(a, b) =>
@@ -389,9 +379,8 @@ impl Expression {
                             Some(my_body) => format!(" => {}", my_body.to_code()),
                             None => String::new()
                         }),
-            Expression::For { item, items, op } =>
-                format!("for {} in {} {}",
-                        Self::decompile(item), Self::decompile(items), Self::decompile(op)),
+            Expression::For { construct, op } =>
+                format!("for {} {}", Self::decompile(construct), Self::decompile(op)),
             Expression::From(a) => format!("from {}", Self::decompile(a)),
             Expression::FunctionCall { fx, args } =>
                 format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
@@ -458,6 +447,8 @@ impl Expression {
             Expression::Via(expr) => format!("via {}", Self::decompile(expr)),
             Expression::While { condition, code } =>
                 format!("while {} {}", Self::decompile(condition), Self::decompile(code)),
+            Expression::Yield(expr) =>
+                format!("yield {}", Self::decompile(expr)),
         }
     }
 
@@ -501,15 +492,6 @@ impl Expression {
         params.iter().map(|p| p.to_code())
             .collect::<Vec<_>>()
             .join(", ")
-    }
-
-    pub fn decompile_directives(directive: &Directives) -> String {
-        match directive {
-            Directives::MustAck(a) => format!("[+] {}", Self::decompile(a)),
-            Directives::MustDie(a) => format!("[!] {}", Self::decompile(a)),
-            Directives::MustIgnoreAck(a) => format!("[~] {}", Self::decompile(a)),
-            Directives::MustNotAck(a) => format!("[-] {}", Self::decompile(a)),
-        }
     }
 
     pub fn decompile_if_exists(if_exists: bool) -> String {
@@ -693,7 +675,6 @@ impl Expression {
                     _ => NumberType(NumberKind::I64Kind),
                 }
             }
-            Directive(..) => BooleanType,
             Divide(a, b) => Self::infer_a_or_b(a, b, hints),
             ElementAt(..) => UnresolvedType,
             Feature { .. } => BooleanType,
@@ -760,6 +741,7 @@ impl Expression {
             VerticalBarDoubleArrow(_, b) => Self::infer_with_hints(b, hints),
             Via(..) => TableType(vec![], 0),
             While { .. } => UnresolvedType,
+            Yield(..) => ArrayType(0),
         }
     }
 

@@ -12,8 +12,8 @@ use crate::expression::Expression::{Literal, Variable};
 use crate::machine::Machine;
 use crate::number_kind::NumberKind::F64Kind;
 use crate::numbers::Numbers;
-use crate::sequences::Sequences::TheArray;
-use crate::sequences::{Array, Sequence};
+use crate::sequences::Sequences::{TheArray, TheRange};
+use crate::sequences::{range_to_vec, Array, Sequence};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{ArrayValue, Boolean, Number, StringValue, TupleValue};
 use chrono::TimeDelta;
@@ -139,9 +139,10 @@ where
 }
 
 pub fn pull_array(value: &TypedValue) -> std::io::Result<Array> {
-    match value {
-        ArrayValue(items) => Ok(items.clone()),
-        z => throw(TypeMismatch(ArrayExpected(z.to_code())))
+    match value.to_sequence()? {
+        TheArray(array) => Ok(array),
+        TheRange(a, b, incl) => Ok(Array::from(range_to_vec(&a, &b, incl))),
+        z => throw(TypeMismatch(ArrayExpected(z.unwrap_value())))
     }
 }
 

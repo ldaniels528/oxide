@@ -69,9 +69,11 @@ mod tests {
     use crate::typed_values::TypedValue::*;
 
     #[test]
-    fn test_math_pi() {
-        let pi = std::f64::consts::PI;
-        verify_exact_value("2 * π", Number(F64Value(2. * pi)))
+    fn test_let() {
+        verify_exact_code(r#"
+            let (x, y) = (5, 7)
+            x * y
+        "#, "35");
     }
 
     #[test]
@@ -89,6 +91,12 @@ mod tests {
         interpreter = verify_exact_value_with(interpreter, "x % 5", Number(F64Value(0.)));
         interpreter = verify_exact_value_with(interpreter, "x < 35", Boolean(false));
         interpreter = verify_exact_value_with(interpreter, "x >= 35", Boolean(true));
+    }
+
+    #[test]
+    fn test_math_pi() {
+        let pi = std::f64::consts::PI;
+        verify_exact_value("2 * π", Number(F64Value(2. * pi)))
     }
 
     #[test]
@@ -179,46 +187,43 @@ mod tests {
         use crate::typed_values::TypedValue::*;
 
         #[test]
-        fn test_foreach_item_in_an_array() {
+        fn test_for_each_item_in_an_array() {
             verify_exact_code(r#"
-                for item in [1, 5, 6, 11, 17]
-                    oxide::println(item)
-            "#, "true");
-            // 1
-            // 5
-            // 6
-            // 11
-            // 17
+                for item in [1, 5, 6, 11, 17] yield item
+            "#, "[1, 5, 6, 11, 17]");
         }
 
         #[test]
-        fn test_foreach_array_in_an_array() {
+        fn test_for_each_array_in_an_array() {
             verify_exact_code(r#"
                 for [a, b] in [[1, 5], [6, 11], [17, 21]] {
-                   b - a
+                   yield b - a
                 }
-            "#, "4");
+            "#, "[4, 5, 4]");
         }
 
         #[test]
-        fn test_foreach_tuple_in_an_array() {
+        fn test_for_each_tuple_in_an_array() {
             verify_exact_code(r#"
                 for (a, b) in [(1, 5), (6, 11), (17, 21)] {
-                   a + b
+                   yield a + b
                 }
-            "#, "38");
+            "#, "[6, 17, 38]");
         }
 
         #[test]
-        fn test_foreach_row_in_a_table() {
+        fn test_for_each_row_in_a_table() {
             verify_exact_code(r#"
                 for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime'])
-                    oxide::println(row)
-            "#, "true");
-            // {"value":"apple"}
-            // {"value":"berry"}
-            // {"value":"kiwi"}
-            // {"value":"lime"}
+                    yield row::value
+            "#, r#"["apple", "berry", "kiwi", "lime"]"#);
+        }
+
+        #[test]
+        fn test_for_yield_expression() {
+            verify_exact_code(r#"
+                for(i = 0, i < 5, i = i + 1) yield i * 5
+            "#, "[0, 5, 10, 15, 20]");
         }
 
         #[test]
@@ -280,41 +285,6 @@ mod tests {
         }
     }
 
-    /// Structure tests
-    #[cfg(test)]
-    mod directive_tests {
-        use crate::interpreter::Interpreter;
-        use crate::testdata::*;
-        use crate::typed_values::TypedValue::*;
-
-        #[test]
-        fn test_directive_die() {
-            verify_outcome_whence(
-                Interpreter::new(),
-                r#"[!] "Kaboom!!!""#,
-                |r| r.is_err_and(|err| err.to_string() == "Kaboom!!!".to_string()),
-            );
-        }
-
-        #[test]
-        fn test_directive_ignore_failure() {
-            verify_exact_code(r#"[~] 7 / 0"#, "true");
-        }
-
-        #[test]
-        fn test_directive_must_be_false() {
-            verify_exact_code(r#"
-                [+] x := 67
-                [-] x < 67
-            "#, "false");
-        }
-
-        #[test]
-        fn test_directive_must_be_true() {
-            verify_exact_code("[+] x := 67", "true");
-        }
-    }
-
     /// Function tests
     #[cfg(test)]
     mod function_tests {
@@ -359,24 +329,6 @@ mod tests {
                 f := fn(n) => iff(n <= 1, 1, n * f(n - 1))
                 f(6)
             "#, Number(I64Value(720)))
-        }
-
-        #[test]
-        fn test_reduce_array() {
-            let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_code_with(interpreter, r#"
-                 use arrays::reduce
-                 numbers := [1, 2, 3, 4, 5]
-                 numbers:::reduce(0, fn(a, b) => a + b)
-            "#, "15");
-        }
-
-        #[test]
-        fn test_reduce_range() {
-            let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_code_with(interpreter, r#"
-                 arrays::reduce(1..=5, 0, fn(a, b) => a + b)
-            "#, "15");
         }
     }
 }

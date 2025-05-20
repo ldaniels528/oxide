@@ -7,8 +7,10 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::TupleType;
 use crate::data_types::DataType::{ArrayType, TableType, UnresolvedType};
 use crate::dataframe::Dataframe;
+use crate::errors::throw;
 use crate::errors::Errors::{Exact, TypeMismatch, UnsupportedFeature};
 use crate::errors::TypeMismatchErrors::StructExpected;
+use crate::numbers::Numbers::I64Value;
 use crate::row_collection::RowCollection;
 use crate::structures::Structures::{Firm, Hard};
 use crate::structures::{Structure, Structures};
@@ -21,8 +23,6 @@ use std::cmp::Ordering;
 use std::ops::Index;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Rem, Shl, Shr, Sub};
 use std::slice::Iter;
-use crate::errors::throw;
-use crate::numbers::Numbers::I64Value;
 
 /// Represents a linear sequence of [TypedValue]s
 pub trait Sequence {
@@ -44,8 +44,6 @@ pub trait Sequence {
     fn iter(&self) -> Iter<'_, TypedValue>;
 
     fn len(&self) -> usize;
-
-    fn pop(&mut self) -> Option<TypedValue>;
 
     fn push(&mut self, value: TypedValue) -> TypedValue;
 
@@ -150,19 +148,6 @@ impl Sequence for Sequences {
             Sequences::TheDataframe(df) => df.len().unwrap_or(0),
             Sequences::TheRange(..) => self.to_array().len(),
             Sequences::TheTuple(tuple) => tuple.len(),
-        }
-    }
-
-    fn pop(&mut self) -> Option<TypedValue> {
-        match self {
-            Sequences::TheArray(array) => array.pop(),
-            Sequences::TheDataframe(df) =>
-                match df.pop_row(df.get_parameters()) {
-                    Undefined => None,
-                    other => Some(other)
-                }
-            Sequences::TheRange(..) => self.to_array().pop(),
-            Sequences::TheTuple(tuple) => tuple.pop(),
         }
     }
 
@@ -288,6 +273,12 @@ impl Array {
         Array::from(self.the_array.iter().map(f).collect::<Vec<_>>())
     }
 
+    pub fn pop(&self) -> (Array, Option<TypedValue>) {
+        let mut items = self.the_array.clone();
+        let value = items.pop();
+        (Array::from(items), value)
+    }
+
     pub fn push_all(&mut self, values: Vec<TypedValue>) {
         self.the_array.extend(values)
     }
@@ -350,10 +341,6 @@ impl Sequence for Array {
     fn push(&mut self, value: TypedValue) -> TypedValue {
         self.the_array.push(value);
         ArrayValue(self.clone())
-    }
-
-    fn pop(&mut self) -> Option<TypedValue> {
-        self.the_array.pop()
     }
 
     fn to_array(&self) -> Array {
@@ -464,10 +451,6 @@ impl Sequence for Tuple {
     fn push(&mut self, value: TypedValue) -> TypedValue {
         self.the_tuple.push(value);
         TupleValue(self.the_tuple.clone())
-    }
-
-    fn pop(&mut self) -> Option<TypedValue> {
-        self.the_tuple.pop()
     }
 
     fn to_array(&self) -> Array {
@@ -654,7 +637,13 @@ mod tests {
         #[test]
         fn test_pop() {
             let mut array = create_array();
-            assert_eq!(array.pop(), Some(StringValue("OTC-BB".into())))
+            let (new_array, value) = array.pop();
+            assert_eq!(value, Some(StringValue("OTC-BB".into())));
+            assert_eq!(new_array, Array::from(vec![
+                StringValue("NYSE".into()),
+                StringValue("NASDAQ".into()),
+                StringValue("AMEX".into()),
+            ]));
         }
 
         #[test]

@@ -6,7 +6,7 @@
 use crate::data_types::DataType;
 use crate::expression::Queryables::Where;
 use crate::expression::Ranges::Exclusive;
-use crate::expression::{Conditions, DatabaseOps, Directives, Expression, HttpMethodCalls};
+use crate::expression::{Conditions, DatabaseOps, Expression, HttpMethodCalls};
 use crate::interpreter::Interpreter;
 use crate::platform::{Package, PackageOps};
 use crate::row_collection::RowCollection;
@@ -398,7 +398,6 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |rows ~> stocks
             "#, '|')],
         Expression::DatabaseOp(..) => vec![],
-        Expression::Directive(..) => vec![],
         Expression::Divide(..) => vec![
             "20.0 / 3".into(),
         ],
@@ -681,7 +680,13 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 while (x < 5) x := x + 1
                 x
-            "#, '|')],
+            "#, '|')
+        ],
+        Expression::Yield(..) => vec![
+            strip_margin(r#"
+                for(i = 0, i < 5, i = i + 1) yield i * 2
+            "#, '|')
+        ],
     }
 }
 
@@ -703,13 +708,12 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Curvy-Arrow Left", CurvyArrowLeft(null.clone(), null.clone())),
         ("Curvy-Arrow Right", CurvyArrowRight(null.clone(), null.clone())),
         ("SQL", DatabaseOp(DatabaseOps::Queryable(Where { from: null.clone(), condition: Conditions::True }))),
-        ("Directives", Directive(Directives::MustAck(null.clone()))),
         ("Mathematics: division", Divide(null.clone(), null.clone())),
         ("Arrays: Indexing", ElementAt(null.clone(), null.clone())),
         ("Testing", Feature { title: null.clone(), scenarios: vec![] }),
         ("Functions", FnExpression { params: vec![], body: None, returns: DataType::BooleanType }),
         ("Function-Call", FunctionCall { fx: null.clone(), args: vec![] }),
-        ("Iteration", For { item: null.clone(), items: null.clone(), op: null.clone() }),
+        ("Iteration", For { construct: null.clone(), op: null.clone() }),
         ("Query", From(null.clone())),
         ("HTTP", HTTP(HttpMethodCalls::GET(null.clone()))),
         ("IF expression", If { condition: null.clone(), a: null.clone(), b: None }),
@@ -728,6 +732,7 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Type Definitions", TypeDef(null.clone())),
         ("Function Pipelines", VerticalBarDoubleArrow(null.clone(), null.clone())),
         ("Via Clause", Via(null.clone())),
+        ("Yield", Yield(null.clone())),
     ];
 
     let mut examples = models.iter()
