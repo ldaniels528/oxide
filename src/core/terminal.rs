@@ -443,7 +443,7 @@ mod tests {
         let state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
         let stdout = stdout();
         let reader = || read_line_from(vec![
-            "import oxide".into(),
+            "use oxide".into(),
             "help()".into(),
             "\n".into(),
         ]);
@@ -576,11 +576,11 @@ mod tests {
     #[test]
     fn test_read_until_blank() {
         let reader = read_line_from(vec![
-            "import oxide".into(),
+            "use oxide".into(),
             "help()".into(),
         ]);
         let code = read_until_blank(reader).unwrap();
-        assert_eq!(code, "import oxide\nhelp()\n")
+        assert_eq!(code, "use oxide\nhelp()\n")
     }
 
     #[test]

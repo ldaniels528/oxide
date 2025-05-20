@@ -137,7 +137,7 @@ impl Package for ArraysPkg {
             )],
             ArraysPkg::Pop => vec![strip_margin(
                 r#"
-                    |import arrays
+                    |use arrays
                     |stocks := []
                     |stocks:::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
                     |stocks:::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
@@ -147,7 +147,7 @@ impl Package for ArraysPkg {
             )],
             ArraysPkg::Push => vec![strip_margin(
                 r#"
-                    |import arrays
+                    |use arrays
                     |stocks := [
                     |    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     |    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -356,56 +356,56 @@ impl Package for CalPkg {
             // cal
             CalPkg::DateDay => vec![strip_margin(
                 r#"
-                    |import cal
+                    |use cal
                     |now():::day_of()
                 "#,
                 '|',
             )],
             CalPkg::DateHour12 => vec![strip_margin(
                 r#"
-                    |import cal
+                    |use cal
                     |now():::hour12()
                 "#,
                 '|',
             )],
             CalPkg::DateHour24 => vec![strip_margin(
                 r#"
-                    |import cal
+                    |use cal
                     |now():::hour24()
                 "#,
                 '|',
             )],
             CalPkg::DateMinute => vec![strip_margin(
                 r#"
-                    |import cal
+                    |use cal
                     |now():::minute_of()
                 "#,
                 '|',
             )],
             CalPkg::DateMonth => vec![strip_margin(
                 r#"
-                    |import cal
+                    |use cal
                     |now():::month_of()
                 "#,
                 '|',
             )],
             CalPkg::DateSecond => vec![strip_margin(
                 r#"
-                    |import cal
+                    |use cal
                     |now():::second_of()
                 "#,
                 '|',
             )],
             CalPkg::DateYear => vec![strip_margin(
                 r#"
-                    |import cal
+                    |use cal
                     |now():::year_of()
                 "#,
                 '|',
             )],
             CalPkg::Minus => vec![strip_margin(
                 r#"
-                    |import cal, durations
+                    |use cal, durations
                     |cal::minus(now(), 3:::days())
                 "#,
                 '|',
@@ -413,7 +413,7 @@ impl Package for CalPkg {
             CalPkg::Now => vec!["cal::now()".to_string()],
             CalPkg::Plus => vec![strip_margin(
                 r#"
-                    |import cal, durations
+                    |use cal, durations
                     |cal::plus(now(), 30:::days())
                 "#,
                 '|',
@@ -562,35 +562,35 @@ impl Package for DurationsPkg {
         match self {
             DurationsPkg::Days => vec![strip_margin(
                 r#"
-                    |import durations
+                    |use durations
                     |3:::days()
                 "#,
                 '|',
             )],
             DurationsPkg::Hours => vec![strip_margin(
                 r#"
-                    |import durations
+                    |use durations
                     |8:::hours()
                 "#,
                 '|',
             )],
             DurationsPkg::Millis => vec![strip_margin(
                 r#"
-                    |import durations
+                    |use durations
                     |8:::millis()
                 "#,
                 '|',
             )],
             DurationsPkg::Minutes => vec![strip_margin(
                 r#"
-                    |import durations
+                    |use durations
                     |30:::minutes()
                 "#,
                 '|',
             )],
             DurationsPkg::Seconds => vec![strip_margin(
                 r#"
-                    |import durations
+                    |use durations
                     |30:::seconds()
                 "#,
                 '|',
@@ -730,7 +730,7 @@ impl Package for IoPkg {
             IoPkg::FileExists => vec![r#"io::exists("quote.json")"#.to_string()],
             IoPkg::FileReadText => vec![strip_margin(
                 r#"
-                    |import io, util
+                    |use io, util
                     |file := "temp_secret.txt"
                     |file:::create_file(md5("**keep**this**secret**"))
                     |file:::read_text_file()
@@ -1273,7 +1273,7 @@ impl Package for OsPkg {
             OsPkg::Clear => vec!["os::clear()".into()],
             OsPkg::CurrentDir => vec![strip_margin(
                 r#"
-                    |import str
+                    |use str
                     |cur_dir := os::current_dir()
                     |prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
                     |path_str := prefix + "/demoes/language/include_file.oxide"
@@ -1772,7 +1772,7 @@ impl Package for TestingPkg {
             // testing
             TestingPkg::Assert => vec![strip_margin(
                 r#"
-                    |import testing
+                    |use testing
                     |assert(matches(
                     |   [ 1 "a" "b" "c" ],
                     |   [ 1 "a" "b" "c" ]
@@ -1782,7 +1782,7 @@ impl Package for TestingPkg {
             )],
             TestingPkg::Feature => vec![strip_margin(
                 r#"
-                    |import testing
+                    |use testing
                     |feature("Matches function", {
                     |    "Compare Array contents: Equal": fn(ctx) => {
                     |        assert(matches(
@@ -1809,7 +1809,7 @@ impl Package for TestingPkg {
             )],
             TestingPkg::Matches => vec![strip_margin(
                 r#"
-                    |import testing::matches
+                    |use testing::matches
                     |a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
                     |b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
                     |matches(a, b)
@@ -2269,7 +2269,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::Journal => vec![strip_margin(
                 r#"
-                    |import tools
+                    |use tools
                     |stocks := ns("examples.journal.stocks")
                     |drop table stocks
                     |create table stocks fn(
@@ -2305,7 +2305,7 @@ impl Package for ToolsPkg {
                     |[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
                     | { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
                     | { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
-                    |import tools
+                    |use tools
                     |stocks:::map(fn(row) => {
                     |    symbol: symbol,
                     |    exchange: exchange,
@@ -2317,7 +2317,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::Pop => vec![strip_margin(
                 r#"
-                    |import tools
+                    |use tools
                     |stocks := ns("examples.tools_pop.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -2329,7 +2329,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::Push => vec![strip_margin(
                 r#"
-                    |import tools
+                    |use tools
                     |stocks := ns("examples.push.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -2342,7 +2342,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::Replay => vec![strip_margin(
                 r#"
-                    |import tools
+                    |use tools
                     |stocks := ns("examples.table_fn.stocks")
                     |drop table stocks
                     |create table stocks fn(
@@ -2362,7 +2362,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::Reverse => vec![strip_margin(
                 r#"
-                    |import tools
+                    |use tools
                     |to_table(reverse(
                     |   ['cat', 'dog', 'ferret', 'mouse']
                     |))
@@ -2372,7 +2372,7 @@ impl Package for ToolsPkg {
             ToolsPkg::RowId => vec!["tools::row_id()".into()],
             ToolsPkg::Scan => vec![strip_margin(
                 r#"
-                    |import tools
+                    |use tools
                     |stocks := ns("examples.scan.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
@@ -2388,7 +2388,7 @@ impl Package for ToolsPkg {
             ToolsPkg::ToArray => vec![r#"tools::to_array("Hello")"#.into()],
             ToolsPkg::ToCSV => vec![strip_margin(
                 r#"
-                    |import tools::to_csv
+                    |use tools::to_csv
                     |stocks := ns("examples.csv.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
@@ -2402,7 +2402,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::ToJSON => vec![strip_margin(
                 r#"
-                    |import tools::to_json
+                    |use tools::to_json
                     |stocks := ns("examples.json.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
@@ -3000,7 +3000,7 @@ mod tests {
         fn test_cal_day_of() {
             verify_exact_value_where(
                 r#"
-                import cal
+                use cal
                 now():::day_of()
             "#,
                 |n| matches!(n, Number(U32Value(..))),
@@ -3011,7 +3011,7 @@ mod tests {
         fn test_cal_hour24() {
             verify_exact_value_where(
                 r#"
-                import cal
+                use cal
                 now():::hour24()
             "#,
                 |n| matches!(n, Number(U32Value(..))),
@@ -3022,7 +3022,7 @@ mod tests {
         fn test_cal_hour12() {
             verify_exact_value_where(
                 r#"
-                import cal
+                use cal
                 now():::hour12()
             "#,
                 |n| matches!(n, Number(U32Value(..))),
@@ -3033,7 +3033,7 @@ mod tests {
         fn test_cal_minute_of() {
             verify_exact_value_where(
                 r#"
-                import cal
+                use cal
                 now():::minute_of()
             "#,
                 |n| matches!(n, Number(U32Value(..))),
@@ -3044,7 +3044,7 @@ mod tests {
         fn test_cal_month_of() {
             verify_exact_value_where(
                 r#"
-                import cal
+                use cal
                 now():::month_of()
             "#,
                 |n| matches!(n, Number(U32Value(..))),
@@ -3055,7 +3055,7 @@ mod tests {
         fn test_cal_second_of() {
             verify_exact_value_where(
                 r#"
-                import cal
+                use cal
                 now():::second_of()
             "#,
                 |n| matches!(n, Number(U32Value(..))),
@@ -3066,7 +3066,7 @@ mod tests {
         fn test_cal_year_of() {
             verify_exact_value_where(
                 r#"
-                import cal
+                use cal
                 now():::year_of()
             "#,
                 |n| matches!(n, Number(I32Value(..))),
@@ -3077,7 +3077,7 @@ mod tests {
         fn test_cal_minus() {
             verify_exact_value_where(
                 r#"
-                import cal, durations
+                use cal, durations
                 cal::minus(now(), 3:::days())
             "#,
                 |n| matches!(n, Number(DateValue(..))),
@@ -3088,7 +3088,7 @@ mod tests {
         fn test_cal_plus() {
             verify_exact_value_where(
                 r#"
-                import cal, durations
+                use cal, durations
                 cal::plus(now(), 30:::days())
             "#,
                 |n| matches!(n, Number(DateValue(..))),
@@ -3109,7 +3109,7 @@ mod tests {
         fn test_durations_days() {
             verify_exact_value(
                 r#"
-                import durations
+                use durations
                 3:::days()
             "#,
                 Number(I64Value(3 * DAYS)),
@@ -3120,7 +3120,7 @@ mod tests {
         fn test_durations_hours() {
             verify_exact_value(
                 r#"
-                import durations
+                use durations
                 8:::hours()
             "#,
                 Number(I64Value(8 * HOURS)),
@@ -3131,7 +3131,7 @@ mod tests {
         fn test_durations_hours_f64() {
             verify_exact_value(
                 r#"
-                import durations
+                use durations
                 0.5:::hours()
             "#,
                 Number(F64Value(30.0 * MINUTES.to_f64().unwrap())),
@@ -3142,7 +3142,7 @@ mod tests {
         fn test_durations_millis() {
             verify_exact_value(
                 r#"
-                import durations
+                use durations
                 1000:::millis()
             "#,
                 Number(I64Value(1 * SECONDS)),
@@ -3153,7 +3153,7 @@ mod tests {
         fn test_durations_minutes() {
             verify_exact_value(
                 r#"
-                import durations
+                use durations
                 30:::minutes()
             "#,
                 Number(I64Value(30 * MINUTES)),
@@ -3164,7 +3164,7 @@ mod tests {
         fn test_durations_seconds() {
             verify_exact_value(
                 r#"
-                import durations
+                use durations
                 20:::seconds()
             "#,
                 Number(I64Value(20 * SECONDS)),
@@ -3202,7 +3202,7 @@ mod tests {
         fn test_io_create_file_postfix() {
             verify_exact_value(
                 r#"
-                import io
+                use io
                 "quote.json":::create_file({
                     symbol: "TRX",
                     exchange: "NYSE",
@@ -3214,7 +3214,7 @@ mod tests {
 
             verify_exact_value(
                 r#"
-                import io
+                use io
                 "quote.json":::exists()
             "#,
                 Boolean(true),
@@ -3225,7 +3225,7 @@ mod tests {
         fn test_io_file_exists() {
             verify_exact_value(
                 r#"
-            import io
+            use io
             path_str := oxide::home()
             path_str:::exists()
         "#,
@@ -3237,7 +3237,7 @@ mod tests {
         fn test_io_create_and_read_text_file() {
             verify_exact_value(
                 r#"
-                import io, util
+                use io, util
                 file := "temp_secret.txt"
                 file:::create_file(md5("**keep**this**secret**"))
                 file:::read_text_file()
@@ -3381,7 +3381,7 @@ mod tests {
             let phys_columns = make_quote_columns();
             verify_exact_table(
                 r#"
-                import str
+                use str
                 cur_dir := os::current_dir()
                 prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
                 path_str := prefix + "/demoes/language/include_file.oxide"
@@ -3465,7 +3465,7 @@ mod tests {
         #[test]
         fn test_oxide_eval_postfix() {
             let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_value_with(interpreter, "import oxide", Boolean(true));
+            interpreter = verify_exact_value_with(interpreter, "use oxide", Boolean(true));
             interpreter =
                 verify_exact_value_with(interpreter, "'2 ** 4':::eval()", Number(F64Value(16.)));
             interpreter = verify_exact_value_with(
@@ -3483,7 +3483,7 @@ mod tests {
             // postfix
             verify_exact_value_where(
                 r#"
-                import oxide
+                use oxide
                 help()
             "#,
                 |v| matches!(v, TableValue(..)),
@@ -3527,7 +3527,7 @@ mod tests {
         fn test_str_ends_with_postfix_true() {
             verify_exact_value(
                 r#"
-                import str
+                use str
                 'Hello World':::ends_with('World')
             "#,
                 Boolean(true),
@@ -3538,7 +3538,7 @@ mod tests {
         fn test_str_ends_with_postfix_false() {
             verify_exact_value(
                 r#"
-                import str
+                use str
                 'Hello World':::ends_with('Hello')
             "#,
                 Boolean(false),
@@ -3579,7 +3579,7 @@ mod tests {
         fn test_str_format_postfix() {
             verify_exact_value(
                 r#"
-                import str::format
+                use str::format
                 "This {} the {}":::format("is", "way")
             "#,
                 StringValue("This is the way".into()),
@@ -3590,7 +3590,7 @@ mod tests {
         fn test_str_format_in_scope() {
             verify_exact_value(
                 r#"
-                import str::format
+                use str::format
                 format("This {} the {}", "is", "way")
             "#,
                 StringValue("This is the way".into()),
@@ -3611,7 +3611,7 @@ mod tests {
         fn test_str_index_of_postfix() {
             verify_exact_value(
                 r#"
-                import str
+                use str
                 'The little brown fox':::index_of('brown')
             "#,
                 Number(I64Value(11)),
@@ -3652,7 +3652,7 @@ mod tests {
         fn test_str_left_postfix_valid() {
             verify_exact_value(
                 r#"
-                import str, util
+                use str, util
                 'Hello World':::left(5)
             "#,
                 StringValue("Hello".into()),
@@ -3664,7 +3664,7 @@ mod tests {
             // postfix - invalid case
             verify_exact_value(
                 r#"
-                import str, util
+                use str, util
                 12345:::left(5)
             "#,
                 ErrorValue(Exact("Type Mismatch: Expected a String near 12345".into())),
@@ -3696,7 +3696,7 @@ mod tests {
         fn test_str_len_postfix() {
             verify_exact_value(
                 r#"
-                import str
+                use str
                 'The little brown fox':::len()
             "#,
                 Number(I64Value(20)),
@@ -3739,7 +3739,7 @@ mod tests {
         fn test_str_right_postfix_string_negative() {
             verify_exact_value(
                 r#"
-                import str, util
+                use str, util
                 'Hello World':::right(-5)
             "#,
                 StringValue("Hello".into()),
@@ -3764,7 +3764,7 @@ mod tests {
         fn test_str_split_postfix() {
             verify_exact_value(
                 r#"
-                import str
+                use str
                 'Hello World':::split(' ')
             "#,
                 ArrayValue(Array::from(vec![
@@ -3779,7 +3779,7 @@ mod tests {
             // in-scope
             verify_exact_value(
                 r#"
-                import str
+                use str
                 split('Hello,there World;Yeah!', ' ,;')
             "#,
                 ArrayValue(Array::from(vec![
@@ -3795,7 +3795,7 @@ mod tests {
         fn test_str_starts_with_postfix_true() {
             verify_exact_value(
                 r#"
-                import str
+                use str
                 'Hello World':::starts_with('Hello')
             "#,
                 Boolean(true),
@@ -3876,7 +3876,7 @@ mod tests {
         fn test_str_to_string_postfix() {
             verify_exact_value(
                 r#"
-                import str::to_string
+                use str::to_string
                 123:::to_string()
             "#,
                 StringValue("123".into()),
@@ -3893,7 +3893,7 @@ mod tests {
         #[test]
         fn test_testing_feature() {
             verify_exact_table(r#"
-            import testing
+            use testing
             feature("Matches function", {
                 "Compare Array contents: Equal": fn(ctx) => {
                     assert(matches(
@@ -3950,7 +3950,7 @@ mod tests {
             // test an unordered match
             verify_exact_value(
                 r#"
-                import testing::matches
+                use testing::matches
                 a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
                 b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
                 matches(a, b)
@@ -3964,7 +3964,7 @@ mod tests {
             // test when things do not match 1
             verify_exact_value(
                 r#"
-                import testing
+                use testing
                 a := { first: "Tom", last: "Lane" }
                 b := { first: "Jerry", last: "Lane" }
                 a:::matches(b)
@@ -4141,7 +4141,7 @@ mod tests {
             verify_exact_table_with(
                 interpreter,
                 r#"
-                import tools
+                use tools
                 stocks:::compact()
                 from stocks
             "#,
@@ -4178,7 +4178,7 @@ mod tests {
             // postfix
             verify_exact_table(
                 r#"
-                import tools
+                use tools
                 stocks := ns("platform.describe.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 stocks:::describe()
@@ -4219,7 +4219,7 @@ mod tests {
             // postfix
             verify_exact_table(
                 r#"
-                import tools
+                use tools
                 stocks := to_table([
                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -4260,7 +4260,7 @@ mod tests {
                 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
                  { symbol: "ACDC", exchange: "AMEX", last_sale: 37.43 },
                  { symbol: "UELO", exchange: "NYSE", last_sale: 91.82 }] ~> stocks
-                import tools
+                use tools
                 stocks:::filter(fn(row) => exchange is "AMEX")
            "#,
                 vec![
@@ -4310,7 +4310,7 @@ mod tests {
             interpreter = verify_exact_table_with(
                 interpreter,
                 r#"
-                import tools
+                use tools
                 stocks:::journal()
             "#,
                 vec![
@@ -4348,7 +4348,7 @@ mod tests {
                 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
                  { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
                  { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
-                import tools
+                use tools
                 stocks:::map(fn(row) => {
                     symbol: symbol,
                     exchange: exchange,
@@ -4372,7 +4372,7 @@ mod tests {
         fn test_tools_pop() {
             verify_exact_table(
                 r#"
-                import tools
+                use tools
                 stocks := ns("platform.pop.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -4545,7 +4545,7 @@ mod tests {
             interpreter = verify_exact_table_with(
                 interpreter,
                 r#"
-                import tools
+                use tools
                 stocks:::replay()
                 from stocks
             "#,
@@ -4565,7 +4565,7 @@ mod tests {
         fn test_tools_reverse_arrays() {
             verify_exact_table(
                 r#"
-                import tools
+                use tools
                 to_table(reverse(['cat', 'dog', 'ferret', 'mouse']))
             "#,
                 vec![
@@ -4597,7 +4597,7 @@ mod tests {
             // fully-qualified (ephemeral)
             verify_exact_table(
                 r#"
-                import tools
+                use tools
                 stocks := to_table([
                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
                     { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
@@ -4622,7 +4622,7 @@ mod tests {
             // postfix (durable)
             verify_exact_table(
                 r#"
-                import tools
+                use tools
                 stocks := ns("platform.reverse.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -4648,7 +4648,7 @@ mod tests {
             let result = interpreter
                 .evaluate(
                     r#"
-                import tools
+                use tools
                 stocks := ns("platform.scan.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
@@ -4703,7 +4703,7 @@ mod tests {
         fn test_tools_to_array_with_strings_postfix() {
             verify_exact_value(
                 r#"
-                import tools
+                use tools
                 "World":::to_array()
             "#,
                 ArrayValue(Array::from(vec![
@@ -4762,7 +4762,7 @@ mod tests {
         fn test_tools_to_csv() {
             verify_exact_value(
                 r#"
-                import tools::to_csv
+                use tools::to_csv
                 stocks := ns("platform.csv.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
@@ -4786,7 +4786,7 @@ mod tests {
         fn test_tools_to_json() {
             verify_exact_value(
                 r#"
-                import tools::to_json
+                use tools::to_json
                 stocks := ns("platform.json.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
@@ -4946,7 +4946,7 @@ mod tests {
         fn test_util_to_f32_to_u128() {
             use crate::numbers::Numbers::*;
             let mut interpreter = Interpreter::new();
-            interpreter.evaluate("import util").unwrap();
+            interpreter.evaluate("use util").unwrap();
 
             // floating-point kinds
             interpreter = verify_exact_value_whence(interpreter, "1015:::to_f32()", |n| {
@@ -5002,7 +5002,7 @@ mod tests {
             assert_eq!(interpreter.get("to_u128"), None);
 
             // import all conversion members
-            interpreter.evaluate("import util").unwrap();
+            interpreter.evaluate("use util").unwrap();
 
             // after the import, 'to_u8' should be in scope
             assert_eq!(
@@ -5262,7 +5262,7 @@ mod tests {
                 table(symbol: String(8), exchange: String(8), last_sale: f64)
                     ~> ns("platform.http_workflow.stocks")
 
-                import testing
+                use testing
                 row_id := POST {
                     url: http://localhost:8838/platform/http_workflow/stocks/0
                     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }

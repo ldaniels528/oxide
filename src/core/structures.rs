@@ -1032,7 +1032,7 @@ mod tests {
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
             )
-            import stock
+            use stock
         "#).unwrap();
             assert_eq!(interpreter.get("symbol"), Some(StringValue("ABC".into())));
             assert_eq!(interpreter.get("exchange"), Some(StringValue("NYSE".into())));
@@ -1123,7 +1123,7 @@ mod tests {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
             quote := { symbol: "ABC", exchange: "AMEX" }
-            import quote
+            use quote
         "#).unwrap();
             let machine = interpreter;
             assert_eq!(machine.get("symbol"), Some(StringValue("ABC".into())));

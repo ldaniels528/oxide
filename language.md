@@ -209,7 +209,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-6
+3
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -221,7 +221,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Mon, 19 May 2025 21:01:12 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 01:45:32 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -290,16 +290,16 @@ fact(6)</pre>
 <hr>
 <h4>▶️ Implicit Method Call</h4>
 <h5>example¹</h5>
-<pre>import durations
+<pre>use durations
 8:::hours()</pre>
 <h5>results</h5>
 <pre>
 28800000
 </pre>
 <hr>
-<h4>▶️ Imports</h4>
+<h4>▶️ Import/Use</h4>
 <h5>example¹</h5>
-<pre>import tools
+<pre>use tools
 stocks := to_table([
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -437,7 +437,7 @@ tools::reverse(range)</pre>
 <hr>
 <h4>▶️ Testing</h4>
 <h5>example¹</h5>
-<pre>import testing
+<pre>use testing
 Feature "Matches function" {
     Scenario "Compare Array contents: Equal" {
         assert(matches(

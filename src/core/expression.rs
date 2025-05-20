@@ -163,24 +163,24 @@ impl HttpMethodCalls {
     }
 }
 
-/// Represents an enumeration of import definition variations
+/// Represents an enumeration of use definition variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum ImportOps {
+pub enum UseOps {
     Everything(String),
     Selection(String, Vec<String>),
 }
 
-impl ImportOps {
+impl UseOps {
     pub fn to_code(&self) -> String {
         match self {
-            ImportOps::Everything(pkg) => pkg.to_string(),
-            ImportOps::Selection(pkg, items) =>
+            UseOps::Everything(pkg) => pkg.to_string(),
+            UseOps::Selection(pkg, items) =>
                 format!("{pkg}::{}", items.join(", "))
         }
     }
 }
 
-impl Display for ImportOps {
+impl Display for UseOps {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_code())
     }
@@ -295,7 +295,7 @@ pub enum Expression {
         a: Box<Expression>,
         b: Option<Box<Expression>>,
     },
-    Import(Vec<ImportOps>),
+    Use(Vec<UseOps>),
     Include(Box<Expression>),
     Literal(TypedValue),
     MatchExpression(Box<Expression>, Vec<Expression>),
@@ -400,8 +400,8 @@ impl Expression {
                 format!("if {} {}{}", Self::decompile(condition), Self::decompile(a), b.to_owned()
                     .map(|x| format!(" else {}", Self::decompile(&x)))
                     .unwrap_or("".into())),
-            Expression::Import(args) =>
-                format!("import {}", args.iter().map(|a| a.to_code())
+            Expression::Use(args) =>
+                format!("use {}", args.iter().map(|a| a.to_code())
                     .collect::<Vec<_>>()
                     .join(", ")),
             Expression::Include(path) => format!("include {}", Self::decompile(path)),
@@ -703,7 +703,7 @@ impl Expression {
             HTTP { .. } => UnresolvedType,
             If { a: true_v, b: Some(false_v), .. } => Self::infer_a_or_b(true_v, false_v, hints),
             If { a: true_v, .. } => Self::infer_with_hints(true_v, hints),
-            Import(..) => BooleanType,
+            Use(..) => BooleanType,
             Include(..) => BooleanType,
             Literal(Function { body, .. }) => Self::infer_with_hints(body, hints),
             Literal(PlatformOp(pf)) => pf.get_return_type(),

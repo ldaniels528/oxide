@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn test_feature_with_scenarios() {
         verify_exact_table(r#"
-            import testing
+            use testing
             Feature "Matches function" {
                 Scenario "Compare Array contents: Equal" {
                     assert(matches(

@@ -27,7 +27,7 @@
 <hr>
 <h4>📦 arrays::pop &#8212; Removes and returns a value or object from an array</h4>
 <h5>example1</h5>
-<pre>import arrays
+<pre>use arrays
 stocks := []
 stocks:::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
 stocks:::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
@@ -39,7 +39,7 @@ stocks</pre>
 <hr>
 <h4>📦 arrays::push &#8212; Appends a value or object to an array</h4>
 <h5>example1</h5>
-<pre>import arrays
+<pre>use arrays
 stocks := [
     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -79,7 +79,7 @@ from stocks</pre>
 <hr>
 <h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
 <h5>example1</h5>
-<pre>import cal
+<pre>use cal
 now():::day_of()</pre>
 <h5>results</h5>
 <pre>
@@ -88,34 +88,34 @@ now():::day_of()</pre>
 <hr>
 <h4>📦 cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
 <h5>example1</h5>
-<pre>import cal
+<pre>use cal
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-2
+6
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
 <h5>example1</h5>
-<pre>import cal
+<pre>use cal
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-14
+18
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
 <h5>example1</h5>
-<pre>import cal
+<pre>use cal
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-1
+45
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
 <h5>example1</h5>
-<pre>import cal
+<pre>use cal
 now():::month_of()</pre>
 <h5>results</h5>
 <pre>
@@ -124,16 +124,16 @@ now():::month_of()</pre>
 <hr>
 <h4>📦 cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
 <h5>example1</h5>
-<pre>import cal
+<pre>use cal
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-12
+33
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
 <h5>example1</h5>
-<pre>import cal
+<pre>use cal
 now():::year_of()</pre>
 <h5>results</h5>
 <pre>
@@ -142,11 +142,11 @@ now():::year_of()</pre>
 <hr>
 <h4>📦 cal::minus &#8212; Subtracts a duration from a date</h4>
 <h5>example1</h5>
-<pre>import cal, durations
+<pre>use cal, durations
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-16T21:01:12.735Z
+2025-05-17T01:45:33.094Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -154,21 +154,21 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-19T21:01:12.736Z
+2025-05-20T01:45:33.096Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
 <h5>example1</h5>
-<pre>import cal, durations
+<pre>use cal, durations
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-18T21:01:12.739Z
+2025-06-19T01:45:33.099Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
 <h5>example1</h5>
-<pre>import durations
+<pre>use durations
 3:::days()</pre>
 <h5>results</h5>
 <pre>
@@ -177,7 +177,7 @@ cal::plus(now(), 30:::days())</pre>
 <hr>
 <h4>📦 durations::hours &#8212; Converts a number into the equivalent number of hours</h4>
 <h5>example1</h5>
-<pre>import durations
+<pre>use durations
 8:::hours()</pre>
 <h5>results</h5>
 <pre>
@@ -186,7 +186,7 @@ cal::plus(now(), 30:::days())</pre>
 <hr>
 <h4>📦 durations::millis &#8212; Converts a number into the equivalent number of millis</h4>
 <h5>example1</h5>
-<pre>import durations
+<pre>use durations
 8:::millis()</pre>
 <h5>results</h5>
 <pre>
@@ -195,7 +195,7 @@ cal::plus(now(), 30:::days())</pre>
 <hr>
 <h4>📦 durations::minutes &#8212; Converts a number into the equivalent number of minutes</h4>
 <h5>example1</h5>
-<pre>import durations
+<pre>use durations
 30:::minutes()</pre>
 <h5>results</h5>
 <pre>
@@ -204,7 +204,7 @@ cal::plus(now(), 30:::days())</pre>
 <hr>
 <h4>📦 durations::seconds &#8212; Converts a number into the equivalent number of seconds</h4>
 <h5>example1</h5>
-<pre>import durations
+<pre>use durations
 30:::seconds()</pre>
 <h5>results</h5>
 <pre>
@@ -233,7 +233,7 @@ true
 <hr>
 <h4>📦 io::read_text_file &#8212; Reads the contents of a text file into memory</h4>
 <h5>example1</h5>
-<pre>import io, util
+<pre>use io, util
 file := "temp_secret.txt"
 file:::create_file(md5("**keep**this**secret**"))
 file:::read_text_file()</pre>
@@ -345,7 +345,7 @@ true
 <hr>
 <h4>📦 os::current_dir &#8212; Returns the current directory</h4>
 <h5>example1</h5>
-<pre>import str
+<pre>use str
 cur_dir := os::current_dir()
 prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
 path_str := prefix + "/demoes/language/include_file.oxide"
@@ -455,13 +455,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|---------------------------------------------------------------------------------------------------------------------------|
-| id | name    | module    | signature                  | description                                             | returns |
-|---------------------------------------------------------------------------------------------------------------------------|
-| 0  | seconds | durations | durations::seconds(n: i64) | Converts a number into the equivalent number of seconds | i64     |
-| 1  | minutes | durations | durations::minutes(n: i64) | Converts a number into the equivalent number of minutes | i64     |
-| 2  | millis  | durations | durations::millis(n: i64)  | Converts a number into the equivalent number of millis  | i64     |
-|---------------------------------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------|
+| id | name     | module | signature                 | description                           | returns |
+|------------------------------------------------------------------------------------------------------|
+| 0  | to_array | arrays | arrays::to_array(a)       | Converts a collection into an array   | Array   |
+| 1  | reverse  | arrays | arrays::reverse(a: Array) | Returns a reverse copy of an array    | Array   |
+| 2  | push     | arrays | arrays::push(a: Array, b) | Appends a value or object to an array | Boolean |
+|------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -507,7 +507,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-84dca5e1-f88c-4b5a-9dbf-8f390eab2e34
+b8d739fe-1bfe-47d1-9d67-ca07e2f99042
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -625,7 +625,7 @@ where exchange is 'NYSE'"
 <hr>
 <h4>📦 testing::assert &#8212; Evaluates an assertion returning true or an error</h4>
 <h5>example1</h5>
-<pre>import testing
+<pre>use testing
 assert(matches(
    [ 1 "a" "b" "c" ],
    [ 1 "a" "b" "c" ]
@@ -637,7 +637,7 @@ true
 <hr>
 <h4>📦 testing::feature &#8212; Creates a new test feature</h4>
 <h5>example1</h5>
-<pre>import testing
+<pre>use testing
 feature("Matches function", {
     "Compare Array contents: Equal": fn(ctx) => {
         assert(matches(
@@ -679,7 +679,7 @@ feature("Matches function", {
 <hr>
 <h4>📦 testing::matches &#8212; Compares two values</h4>
 <h5>example1</h5>
-<pre>import testing::matches
+<pre>use testing::matches
 a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
 b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
 matches(a, b)</pre>
@@ -765,7 +765,7 @@ tools::fetch(stocks, 2)</pre>
 <hr>
 <h4>📦 tools::journal &#8212; Retrieves the journal for an event-source or table function</h4>
 <h5>example1</h5>
-<pre>import tools
+<pre>use tools
 stocks := ns("examples.journal.stocks")
 drop table stocks
 create table stocks fn(
@@ -811,7 +811,7 @@ table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
  { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
  { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
-import tools
+use tools
 stocks:::map(fn(row) => {
     symbol: symbol,
     exchange: exchange,
@@ -823,15 +823,15 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-19T21:01:13.138Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-19T21:01:13.139Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-19T21:01:13.140Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T01:45:33.606Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T01:45:33.607Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T01:45:33.608Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 tools::pop &#8212; Removes and returns a value or object from a Sequence</h4>
 <h5>example1</h5>
-<pre>import tools
+<pre>use tools
 stocks := ns("examples.tools_pop.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -849,7 +849,7 @@ stocks:::pop()</pre>
 <hr>
 <h4>📦 tools::push &#8212; Appends a value or object to a Sequence</h4>
 <h5>example1</h5>
-<pre>import tools
+<pre>use tools
 stocks := ns("examples.push.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -871,7 +871,7 @@ stocks</pre>
 <hr>
 <h4>📦 tools::replay &#8212; Reconstructs the state of a journaled table</h4>
 <h5>example1</h5>
-<pre>import tools
+<pre>use tools
 stocks := ns("examples.table_fn.stocks")
 drop table stocks
 create table stocks fn(
@@ -893,7 +893,7 @@ stocks:::replay()</pre>
 <hr>
 <h4>📦 tools::reverse &#8212; Returns a reverse copy of a table, string or array</h4>
 <h5>example1</h5>
-<pre>import tools
+<pre>use tools
 to_table(reverse(
    ['cat', 'dog', 'ferret', 'mouse']
 ))</pre>
@@ -919,7 +919,7 @@ to_table(reverse(
 <hr>
 <h4>📦 tools::scan &#8212; Returns existence metadata for a table</h4>
 <h5>example1</h5>
-<pre>import tools
+<pre>use tools
 stocks := ns("examples.scan.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
@@ -952,7 +952,7 @@ stocks:::scan()</pre>
 <hr>
 <h4>📦 tools::to_csv &#8212; Converts a collection to CSV format</h4>
 <h5>example1</h5>
-<pre>import tools::to_csv
+<pre>use tools::to_csv
 stocks := ns("examples.csv.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
@@ -968,7 +968,7 @@ stocks:::to_csv()</pre>
 <hr>
 <h4>📦 tools::to_json &#8212; Converts a collection to JSON format</h4>
 <h5>example1</h5>
-<pre>import tools::to_json
+<pre>use tools::to_json
 stocks := ns("examples.json.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },

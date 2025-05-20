@@ -43,7 +43,7 @@ use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
 use crate::expression::Ranges::{Exclusive, Inclusive};
-use crate::expression::{Conditions, Expression, HttpMethodCalls, ImportOps, UNDEFINED};
+use crate::expression::{Conditions, Expression, HttpMethodCalls, UseOps, UNDEFINED};
 use crate::expression::{DatabaseOps, Directives, Mutations, Queryables};
 use crate::file_row_collection::FileRowCollection;
 use crate::model_row_collection::ModelRowCollection;
@@ -175,7 +175,7 @@ impl Machine {
             FunctionCall { fx, args } => self.do_function_call(fx, args),
             HTTP(method_call) => self.do_http_exec(method_call),
             If { condition, a, b } => self.do_if_then_else(condition, a, b),
-            Import(ops) => self.do_imports(ops),
+            Use(ops) => self.do_uses(ops),
             Include(path) => self.do_include(path),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
             MatchExpression(src, cases) => self.do_match_cases(src, cases),
@@ -839,7 +839,7 @@ impl Machine {
 
     /// Produces an aggregate [Machine] instance containing
     /// the specified imports
-    fn do_import(
+    fn do_use(
         &self,
         package_name: &str,
         selection: &Vec<String>,
@@ -862,11 +862,11 @@ impl Machine {
         }
     }
 
-    pub fn do_import_by_name(&self, name: &str) -> std::io::Result<Self> {
+    pub fn do_use_by_name(&self, name: &str) -> std::io::Result<Self> {
         let module = vec![
-            ImportOps::Everything(name.to_string())
+            UseOps::Everything(name.to_string())
         ];
-        let result = match self.do_imports(&module) {
+        let result = match self.do_uses(&module) {
             Ok((m, _)) => m,
             Err(err) => {
                 error!("{}", err);
@@ -877,14 +877,14 @@ impl Machine {
         Ok(result)
     }
 
-    fn do_imports(&self, ops: &Vec<ImportOps>) -> std::io::Result<(Self, TypedValue)> {
+    fn do_uses(&self, ops: &Vec<UseOps>) -> std::io::Result<(Self, TypedValue)> {
         let result = ops.iter().fold(
             (self.to_owned(), Undefined),
             |(ms, tv), iop| match iop {
-                ImportOps::Everything(pkg) =>
-                    ms.do_import(pkg, &Vec::new()),
-                ImportOps::Selection(pkg, selection) =>
-                    ms.do_import(pkg, selection),
+                UseOps::Everything(pkg) =>
+                    ms.do_use(pkg, &Vec::new()),
+                UseOps::Selection(pkg, selection) =>
+                    ms.do_use(pkg, selection),
             });
         Ok(result)
     }
@@ -1559,7 +1559,7 @@ mod tests {
         };
 
         let machine = Machine::new_platform()
-            .do_import_by_name("testing").unwrap();
+            .do_use_by_name("testing").unwrap();
         let (_, result) = machine.evaluate(&model).unwrap();
         let table = result.to_table().unwrap();
         let columns = table.get_columns();

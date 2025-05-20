@@ -231,7 +231,7 @@ mod tests {
     fn test_do_terminal_input() {
         let state = REPLState::new();
         let stdout = stdout();
-        let reader = || read_line_from(vec!["import oxide".into(), "help()".into(), "\n".into()]);
+        let reader = || read_line_from(vec!["use oxide".into(), "help()".into(), "\n".into()]);
         let (_, new_state) = do_terminal_input(state, stdout, reader).unwrap();
         assert_eq!(new_state.database, "oxide");
         assert_eq!(new_state.schema, "public");
@@ -358,9 +358,9 @@ mod tests {
 
     #[test]
     fn test_read_until_blank() {
-        let reader = read_line_from(vec!["import oxide".into(), "help()".into()]);
+        let reader = read_line_from(vec!["use oxide".into(), "help()".into()]);
         let code = read_until_blank(reader).unwrap();
-        assert_eq!(code, "import oxide\nhelp()\n")
+        assert_eq!(code, "use oxide\nhelp()\n")
     }
 
     #[test]

@@ -88,20 +88,20 @@ GET https://api.example.com/users
 
 ### 🧮 Transform Arrays and Maps
 ```oxide
-import arrays
+use arrays
 users := [ { name: 'Tom' }, { name: 'Sara' } ]
 names := users:::map(fn(u) => u::name)
 ```
 
 ### 🕒 Work with Dates and Durations
 ```oxide
-import cal, durations
+use cal, durations
 cal::plus(now(), 30:::days())
 ```
 
 ### 🔄 Compose Data Pipelines
 ```oxide
-import tools
+use tools
 [1, 2, 3, 4]:::filter(fn(x) => (x % 2) == 0):::map(fn(x) => x * 10)
 ```
 
@@ -358,7 +358,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::ColonColonColon(..) => vec![
             strip_margin(r#"
-                |import durations
+                |use durations
                 |8:::hours()
             "#, '|')],
         Expression::Condition(..) => vec![
@@ -408,7 +408,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::Feature { .. } => vec![
             strip_margin(r#"
-                |import testing
+                |use testing
                 |Feature "Matches function" {
                 |    Scenario "Compare Array contents: Equal" {
                 |        assert(matches(
@@ -501,9 +501,9 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                     |fact(6)
                     "#, '|'),
         ],
-        Expression::Import(..) => vec![
+        Expression::Use(..) => vec![
             strip_margin(r#"
-                |import tools
+                |use tools
                 |stocks := to_table([
                 |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                 |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -699,7 +699,7 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Query", From(null.clone())),
         ("HTTP", HTTP(HttpMethodCalls::GET(null.clone()))),
         ("IF expression", If { condition: null.clone(), a: null.clone(), b: None }),
-        ("Imports", Import(vec![])),
+        ("Import/Use", Use(vec![])),
         ("Includes", Include(null.clone())),
         //("Match expression", MatchExpression(null.clone(), vec![])),
         ("Mathematics: subtraction", Minus(null.clone(), null.clone())),

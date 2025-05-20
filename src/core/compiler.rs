@@ -384,7 +384,6 @@ impl Compiler {
                 "HEAD" => self.parse_keyword_http(ts),
                 "HTTP" => self.parse_keyword_http(nts),
                 "if" => self.parse_keyword_if(nts),
-                "import" => self.parse_keyword_import(nts),
                 "include" => self.parse_expression_1a(nts, Expression::Include),
                 "limit" => throw(ExactNear(
                     "`from` is expected before `limit`: from stocks limit 5".into(),
@@ -409,6 +408,7 @@ impl Compiler {
                 "undefined" => Ok((UNDEFINED, nts)),
                 "undelete" => self.parse_keyword_undelete(nts),
                 "update" => self.parse_keyword_update(nts),
+                "use" => self.parse_keyword_use(nts),
                 "via" => self.parse_expression_1a(nts, Via),
                 "where" => throw(ExactNear(
                     "`from` is expected before `where`: from stocks where last_sale < 1.0".into(),
@@ -913,7 +913,6 @@ impl Compiler {
                 "HEAD" => self.parse_keyword_http(ts),
                 "HTTP" => self.parse_keyword_http(nts),
                 "if" => self.parse_keyword_if(nts),
-                "import" => self.parse_keyword_import(nts),
                 "include" => self.parse_expression_1a(nts, Expression::Include),
                 "limit" => throw(ExactNear(
                     "`from` is expected before `limit`: from stocks limit 5".into(),
@@ -937,6 +936,7 @@ impl Compiler {
                 "undefined" => Ok((UNDEFINED, nts)),
                 "undelete" => self.parse_keyword_undelete(nts),
                 "update" => self.parse_keyword_update(nts),
+                "use" => self.parse_keyword_use(nts),
                 "via" => self.parse_expression_1a(nts, Via),
                 "where" => throw(ExactNear(
                     "`from` is expected before `where`: from stocks where last_sale < 1.0".into(),
@@ -1210,12 +1210,12 @@ impl Compiler {
         ))
     }
 
-    /// Builds an import statement:
-    ///   ex: import "os"
-    ///   ex: import str::format
-    ///   ex: import oxide::[eval, serve, version]
-    ///   ex: import "os", str::format, oxide::[eval, serve, version]
-    fn parse_keyword_import(
+    /// Builds an use statement:
+    ///   ex: use "os"
+    ///   ex: use str::format
+    ///   ex: use oxide::[eval, serve, version]
+    ///   ex: use "os", str::format, oxide::[eval, serve, version]
+    fn parse_keyword_use(
         &self,
         mut ts: TokenSlice,
     ) -> std::io::Result<(Expression, TokenSlice)> {
@@ -1225,18 +1225,18 @@ impl Compiler {
             let (expr, ts1) = self.compile_next(&ts)?;
             ts = ts1;
             match expr {
-                // import 'cnv'
-                Literal(StringValue(pkg)) => ops.push(ImportOps::Everything(pkg)),
-                // import vm
-                Variable(pkg) => ops.push(ImportOps::Everything(pkg)),
-                // import www::serve | oxide::[eval, serve, version]
+                // use 'cnv'
+                Literal(StringValue(pkg)) => ops.push(UseOps::Everything(pkg)),
+                // use vm
+                Variable(pkg) => ops.push(UseOps::Everything(pkg)),
+                // use www::serve | oxide::[eval, serve, version]
                 ColonColon(a, b) => {
                     match (*a, *b) {
-                        // import www::serve
+                        // use www::serve
                         (Variable(pkg), Variable(func)) => {
-                            ops.push(ImportOps::Selection(pkg, vec![func]))
+                            ops.push(UseOps::Selection(pkg, vec![func]))
                         }
-                        // import oxide::[eval, serve, version]
+                        // use oxide::[eval, serve, version]
                         (Variable(pkg), ArrayExpression(items)) => {
                             let mut func_list = Vec::new();
                             for item in items {
@@ -1250,7 +1250,7 @@ impl Compiler {
                                     }
                                 }
                             }
-                            ops.push(ImportOps::Selection(pkg, func_list))
+                            ops.push(UseOps::Selection(pkg, func_list))
                         }
                         (a, ..) => {
                             return throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(
@@ -1273,7 +1273,7 @@ impl Compiler {
                 ts = ts.skip()
             }
         }
-        Ok((Import(ops), ts))
+        Ok((Use(ops), ts))
     }
 
     /// Translates a `match` declaration into an [Expression]
@@ -1938,7 +1938,7 @@ mod tests {
         use crate::expression::Conditions::*;
         use crate::expression::Expression::*;
         use crate::expression::Ranges::{Exclusive, Inclusive};
-        use crate::expression::{HttpMethodCalls, ImportOps, FALSE, TRUE};
+        use crate::expression::{HttpMethodCalls, UseOps, FALSE, TRUE};
         use crate::machine::Machine;
         use crate::number_kind::NumberKind::{F64Kind, I32Kind, I64Kind, U64Kind};
         use crate::numbers::Numbers::{F64Value, I64Value};
@@ -2729,35 +2729,35 @@ mod tests {
         }
 
         #[test]
-        fn test_import_one() {
-            // single import
+        fn test_use_one() {
+            // single use
             let code = Compiler::build(
                 r#"
-                import "os"
+                use "os"
             "#,
             )
             .unwrap();
-            assert_eq!(code, Import(vec![ImportOps::Everything("os".into())]));
-            assert_eq!(code.to_code(), "import os");
+            assert_eq!(code, Use(vec![UseOps::Everything("os".into())]));
+            assert_eq!(code.to_code(), "use os");
         }
 
         #[test]
-        fn test_import_multiple() {
-            // multiple imports
+        fn test_use_multiple() {
+            // multiple uses
             let code = Compiler::build(
                 r#"
-                import os, util
+                use os, util
             "#,
             )
             .unwrap();
             assert_eq!(
                 code,
-                Import(vec![
-                    ImportOps::Everything("os".into()),
-                    ImportOps::Everything("util".into()),
+                Use(vec![
+                    UseOps::Everything("os".into()),
+                    UseOps::Everything("util".into()),
                 ])
             );
-            assert_eq!(code.to_code(), "import os, util");
+            assert_eq!(code.to_code(), "use os, util");
         }
 
         #[test]
