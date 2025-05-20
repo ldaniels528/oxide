@@ -360,5 +360,23 @@ mod tests {
                 f(6)
             "#, Number(I64Value(720)))
         }
+
+        #[test]
+        fn test_reduce_array() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                 use arrays::reduce
+                 numbers := [1, 2, 3, 4, 5]
+                 numbers:::reduce(0, fn(a, b) => a + b)
+            "#, "15");
+        }
+
+        #[test]
+        fn test_reduce_range() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                 arrays::reduce(1..=5, 0, fn(a, b) => a + b)
+            "#, "15");
+        }
     }
 }

@@ -324,7 +324,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-14
+16
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -336,7 +336,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 03:56:45 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 16:41:10 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -771,6 +771,24 @@ from stocks</pre>
 |------------------------------------|
 </pre>
 <hr>
+<h4>📦 arrays::reduce &#8212; Reduces an array to a single value</h4>
+<h5>example1</h5>
+<pre>arrays::reduce(1..=5, 0, fn(a, b) => a + b)</pre>
+<h5>results</h5>
+<pre>
+15
+</pre>
+<hr>
+<h4>📦 arrays::reduce &#8212; Reduces an array to a single value</h4>
+<h5>example2</h5>
+<pre>use arrays::reduce
+numbers := [1, 2, 3, 4, 5]
+numbers:::reduce(0, fn(a, b) => a + b)</pre>
+<h5>results</h5>
+<pre>
+15
+</pre>
+<hr>
 <h4>📦 arrays::reverse &#8212; Returns a reverse copy of an array</h4>
 <h5>example1</h5>
 <pre>arrays::reverse(['cat', 'dog', 'ferret', 'mouse'])</pre>
@@ -796,7 +814,7 @@ from stocks</pre>
 now():::day_of()</pre>
 <h5>results</h5>
 <pre>
-19
+20
 </pre>
 <hr>
 <h4>📦 cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -805,7 +823,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-8
+9
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -814,7 +832,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-20
+9
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -823,7 +841,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-56
+41
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -841,7 +859,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-46
+10
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -859,7 +877,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T03:56:46.375Z
+2025-05-17T16:41:10.617Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -867,7 +885,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-20T03:56:46.377Z
+2025-05-20T16:41:10.619Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -876,7 +894,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-19T03:56:46.381Z
+2025-06-19T16:41:10.623Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -1168,13 +1186,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------------------------------------------------------|
-| id | name        | module | signature         | description                                     | returns                                      |
-|------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
-| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String                                       |
-| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Boolean                                      |
-|------------------------------------------------------------------------------------------------------------------------------------------------|
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name    | module  | signature                              | description                 | returns                                                                    |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | type_of | testing | testing::type_of(a)                    | Returns the type of a value | String                                                                     |
+| 1  | matches | testing | testing::matches(a, b)                 | Compares two values         | Boolean                                                                    |
+| 2  | feature | testing | testing::feature(a: String, b: Struct) | Creates a new test feature  | Table(level: u16, item: String(256), passed: Boolean, result: String(256)) |
+|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1220,7 +1238,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-1058bd13-2f9b-41a4-874d-fd4339bbfada
+94094c83-4d8c-41ec-ae2b-a541906ee90b
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1536,9 +1554,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T03:56:46.886Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T03:56:46.887Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T03:56:46.888Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T16:41:11.134Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T16:41:11.135Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T16:41:11.135Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

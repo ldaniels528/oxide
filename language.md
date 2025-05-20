@@ -230,7 +230,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-13
+15
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -242,7 +242,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 03:56:44 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 16:41:08 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {

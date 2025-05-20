@@ -5,18 +5,12 @@
 
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::{
-    ArrayType, BinaryType, BooleanType, FunctionType, NumberType, StringType, StructureType,
-    TableType, UnresolvedType,
-};
+use crate::data_types::DataType::{ArrayType, BinaryType, BooleanType, FunctionType, NumberType, StringType, StructureType, TableType, UnresolvedType};
 use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
 use crate::errors::Errors::{AssertionError, Exact, PlatformOpError, TypeMismatch, UnsupportedFeature, UnsupportedPlatformOps};
-use crate::errors::TypeMismatchErrors::{
-    ArgumentsMismatched, CharExpected, CollectionExpected, DateExpected, StructExpected,
-    UnsupportedType,
-};
+use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, ArrayExpected, CharExpected, CollectionExpected, DateExpected, SequenceExpected, StructExpected, UnsupportedType};
 use crate::errors::{throw, TypeMismatchErrors};
-use crate::expression::Expression::{CodeBlock, Literal, Multiply, Scenario};
+use crate::expression::Expression::{CodeBlock, FunctionCall, Literal, Multiply, Scenario, StructureExpression};
 use crate::file_row_collection::FileRowCollection;
 use crate::formatting::DataFormats;
 use crate::journaling::Journaling;
@@ -70,8 +64,40 @@ pub enum ArraysPkg {
     Map,
     Pop,
     Push,
+    Reduce,
     Reverse,
     ToArray,
+}
+
+impl ArraysPkg {
+    fn do_arrays_reduce(
+        ms: Machine,
+        items: &TypedValue,
+        initial: &TypedValue,
+        function: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match function {
+            Function { .. } => match items.to_sequence()? {
+                TheArray(array) => {
+                    let mut result = initial.clone();
+                    for item in array.get_values() {
+                        // apply the function on the current item
+                        let (_, result1) = ms.evaluate(&FunctionCall {
+                            fx: Literal(function.clone()).into(),
+                            args: vec![Literal(result), Literal(item)],
+                        })?;
+                        result = result1
+                    }
+                    Ok((ms, result))
+                }
+                TheRange(..) => Self::do_arrays_reduce(ms, &items.to_array(), initial, function),
+                z => throw(TypeMismatch(ArrayExpected(z.unwrap_value()))),
+            },
+            z => throw(TypeMismatch(TypeMismatchErrors::FunctionExpected(
+                z.to_code(),
+            ))),
+        }
+    }
 }
 
 impl Package for ArraysPkg {
@@ -82,6 +108,7 @@ impl Package for ArraysPkg {
             ArraysPkg::Map => "map".into(),
             ArraysPkg::Pop => "pop".into(),
             ArraysPkg::Push => "push".into(),
+            ArraysPkg::Reduce => "reduce".into(),
             ArraysPkg::Reverse => "reverse".into(),
             ArraysPkg::ToArray => "to_array".into(),
         }
@@ -98,6 +125,7 @@ impl Package for ArraysPkg {
             PackageOps::Arrays(ArraysPkg::Map),
             PackageOps::Arrays(ArraysPkg::Pop),
             PackageOps::Arrays(ArraysPkg::Push),
+            PackageOps::Arrays(ArraysPkg::Reduce),
             PackageOps::Arrays(ArraysPkg::Reverse),
             PackageOps::Arrays(ArraysPkg::ToArray),
         ]
@@ -110,6 +138,7 @@ impl Package for ArraysPkg {
             ArraysPkg::Map => "Transform an array based on a function".into(),
             ArraysPkg::Pop => "Removes and returns a value or object from an array".into(),
             ArraysPkg::Push => "Appends a value or object to an array".into(),
+            ArraysPkg::Reduce => "Reduces an array to a single value".into(),
             ArraysPkg::Reverse => "Returns a reverse copy of an array".into(),
             ArraysPkg::ToArray => "Converts a collection into an array".into(),
         }
@@ -158,6 +187,18 @@ impl Package for ArraysPkg {
                 "#,
                 '|',
             )],
+            ArraysPkg::Reduce => vec![
+                strip_margin(r#"
+                    |arrays::reduce(1..=5, 0, fn(a, b) => a + b)
+                "#, '|'),
+                strip_margin(
+                r#"
+                    |use arrays::reduce
+                    |numbers := [1, 2, 3, 4, 5]
+                    |numbers:::reduce(0, fn(a, b) => a + b)
+                "#,
+                '|')
+            ],
             ArraysPkg::Reverse => vec![strip_margin(
                 r#"
                     |arrays::reverse(['cat', 'dog', 'ferret', 'mouse'])
@@ -195,6 +236,12 @@ impl Package for ArraysPkg {
             ],
             ArraysPkg::Pop | ArraysPkg::Reverse => vec![ArrayType(0)],
             ArraysPkg::Push => vec![ArrayType(0), UnresolvedType],
+            ArraysPkg::Reduce => vec![
+                ArrayType(0), UnresolvedType, FunctionType(vec![
+                    Parameter::new("a", UnresolvedType),
+                    Parameter::new("b", UnresolvedType),
+                ], UnresolvedType.into())
+            ],
             ArraysPkg::ToArray => vec![UnresolvedType],
         }
     }
@@ -204,8 +251,9 @@ impl Package for ArraysPkg {
             ArraysPkg::Filter | ArraysPkg::Map | ArraysPkg::Reverse | ArraysPkg::ToArray => {
                 ArrayType(0)
             }
-            ArraysPkg::Pop | ArraysPkg::Push => BooleanType,
             ArraysPkg::Len => NumberType(I64Kind),
+            ArraysPkg::Pop | ArraysPkg::Push => BooleanType,
+            ArraysPkg::Reduce => UnresolvedType,
         }
     }
 
@@ -220,6 +268,7 @@ impl Package for ArraysPkg {
             ArraysPkg::Map => extract_value_fn2(ms, args, ToolsPkg::do_tools_map),
             ArraysPkg::Pop => extract_value_fn1(ms, args, ToolsPkg::do_tools_pop),
             ArraysPkg::Push => ToolsPkg::do_tools_push(ms, args),
+            ArraysPkg::Reduce => extract_value_fn3(ms, args, Self::do_arrays_reduce),
             ArraysPkg::Reverse => extract_array_fn1(ms, args, |a| ArrayValue(a.rev())),
             ArraysPkg::ToArray => extract_array_fn1(ms, args, |a| ArrayValue(a)),
         }
@@ -1935,9 +1984,8 @@ impl ToolsPkg {
                         PackageOps::apply_fn_over_array(ms, &array, function, filter)
                     }
                     TheDataframe(df) => PackageOps::apply_fn_over_table(ms, &df, function, filter),
-                    z => throw(TypeMismatch(TypeMismatchErrors::SequenceExpected(
-                        z.get_type(),
-                    ))),
+                    TheRange(..) => Self::do_tools_filter(ms, &items.to_array(), function),
+                    TheTuple(..) => throw(TypeMismatch(SequenceExpected(items.get_type()))),
                 }
             }
             z => throw(TypeMismatch(TypeMismatchErrors::FunctionExpected(
@@ -1984,9 +2032,8 @@ impl ToolsPkg {
                         Ok(Some(result))
                     })
                 }
-                z => throw(TypeMismatch(TypeMismatchErrors::SequenceExpected(
-                    z.get_type(),
-                ))),
+                TheRange(..) => Self::do_tools_map(ms, &items.to_array(), function),
+                TheTuple(..) => throw(TypeMismatch(SequenceExpected(items.get_type()))),
             },
             z => throw(TypeMismatch(TypeMismatchErrors::FunctionExpected(
                 z.to_code(),
@@ -2475,23 +2522,23 @@ impl Package for ToolsPkg {
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Machine, TypedValue)> {
         match self {
-            (ToolsPkg::Compact) => extract_value_fn1(ms, args, Self::do_tools_compact),
-            (ToolsPkg::Describe) => extract_value_fn1(ms, args, Self::do_tools_describe),
-            (ToolsPkg::Fetch) => extract_value_fn2(ms, args, Self::do_tools_fetch),
-            (ToolsPkg::Filter) => extract_value_fn2(ms, args, Self::do_tools_filter),
-            (ToolsPkg::Journal) => extract_value_fn1(ms, args, Self::do_tools_journal),
-            (ToolsPkg::Len) => extract_value_fn1(ms, args, Self::do_tools_length),
-            (ToolsPkg::Map) => extract_value_fn2(ms, args, Self::do_tools_map),
-            (ToolsPkg::Pop) => extract_value_fn1(ms, args, Self::do_tools_pop),
-            (ToolsPkg::Push) => Self::do_tools_push(ms, args),
-            (ToolsPkg::Replay) => extract_value_fn1(ms, args, Self::do_tools_replay),
-            (ToolsPkg::Reverse) => extract_value_fn1(ms, args, Self::do_tools_reverse),
-            (ToolsPkg::RowId) => extract_value_fn0(ms, args, Self::do_tools_row_id),
-            (ToolsPkg::Scan) => extract_value_fn1(ms, args, Self::do_tools_scan),
-            (ToolsPkg::ToArray) => extract_array_fn1(ms, args, |a| ArrayValue(a)),
-            (ToolsPkg::ToCSV) => extract_value_fn1(ms, args, Self::do_tools_to_csv),
-            (ToolsPkg::ToJSON) => extract_value_fn1(ms, args, Self::do_tools_to_json),
-            (ToolsPkg::ToTable) => extract_value_fn1(ms, args, Self::do_tools_to_table),
+            ToolsPkg::Compact => extract_value_fn1(ms, args, Self::do_tools_compact),
+            ToolsPkg::Describe => extract_value_fn1(ms, args, Self::do_tools_describe),
+            ToolsPkg::Fetch => extract_value_fn2(ms, args, Self::do_tools_fetch),
+            ToolsPkg::Filter => extract_value_fn2(ms, args, Self::do_tools_filter),
+            ToolsPkg::Journal => extract_value_fn1(ms, args, Self::do_tools_journal),
+            ToolsPkg::Len => extract_value_fn1(ms, args, Self::do_tools_length),
+            ToolsPkg::Map => extract_value_fn2(ms, args, Self::do_tools_map),
+            ToolsPkg::Pop => extract_value_fn1(ms, args, Self::do_tools_pop),
+            ToolsPkg::Push => Self::do_tools_push(ms, args),
+            ToolsPkg::Replay => extract_value_fn1(ms, args, Self::do_tools_replay),
+            ToolsPkg::Reverse => extract_value_fn1(ms, args, Self::do_tools_reverse),
+            ToolsPkg::RowId => extract_value_fn0(ms, args, Self::do_tools_row_id),
+            ToolsPkg::Scan => extract_value_fn1(ms, args, Self::do_tools_scan),
+            ToolsPkg::ToArray => extract_array_fn1(ms, args, |a| ArrayValue(a)),
+            ToolsPkg::ToCSV => extract_value_fn1(ms, args, Self::do_tools_to_csv),
+            ToolsPkg::ToJSON => extract_value_fn1(ms, args, Self::do_tools_to_json),
+            ToolsPkg::ToTable => extract_value_fn1(ms, args, Self::do_tools_to_table),
         }
     }
 }
