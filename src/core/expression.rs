@@ -307,7 +307,6 @@ pub enum Expression {
     New(Box<Expression>),
     Ns(Box<Expression>),
     Parameters(Vec<Parameter>),
-    Pipeline(Box<Expression>, Box<Expression>),
     Plus(Box<Expression>, Box<Expression>),
     PlusPlus(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
@@ -322,6 +321,8 @@ pub enum Expression {
     TupleExpression(Vec<Expression>),
     TypeDef(Box<Expression>),
     Variable(String),
+    VerticalBarArrow(Box<Expression>, Box<Expression>),
+    VerticalBarDoubleArrow(Box<Expression>, Box<Expression>),
     Via(Box<Expression>),
     While {
         condition: Box<Expression>,
@@ -420,8 +421,10 @@ impl Expression {
             Expression::New(a) => format!("new {}", Self::decompile(a)),
             Expression::Ns(a) => format!("ns({})", Self::decompile(a)),
             Expression::Parameters(parameters) => Self::decompile_parameters(parameters),
-            Expression::Pipeline(a, b) =>
+            Expression::VerticalBarArrow(a, b) =>
                 format!("{} |> {}", Self::decompile(a), Self::decompile(b)),
+            Expression::VerticalBarDoubleArrow(a, b) =>
+                format!("{} |>> {}", Self::decompile(a), Self::decompile(b)),
             Expression::Plus(a, b) =>
                 format!("{} + {}", Self::decompile(a), Self::decompile(b)),
             Expression::PlusPlus(a, b) =>
@@ -696,7 +699,6 @@ impl Expression {
             Feature { .. } => BooleanType,
             FnExpression { params, returns, .. } =>
                 FunctionType(params.clone(), Box::new(returns.clone())),
-            Pipeline(_, b) => Self::infer_with_hints(b, hints),
             For { op, .. } => Self::infer_with_hints(op, hints),
             From(..) => TableType(vec![], 0),
             FunctionCall { fx, .. } => Self::infer_with_hints(fx, hints),
@@ -754,6 +756,8 @@ impl Expression {
                             None => UnresolvedType
                         }
                 }
+            VerticalBarArrow(_, b) => Self::infer_with_hints(b, hints),
+            VerticalBarDoubleArrow(_, b) => Self::infer_with_hints(b, hints),
             Via(..) => TableType(vec![], 0),
             While { .. } => UnresolvedType,
         }

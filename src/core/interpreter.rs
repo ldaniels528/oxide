@@ -136,18 +136,30 @@ mod tests {
     }
 
     #[test]
-    fn test_functional_pipeline() {
+    fn test_functional_pipeline_1arg() {
         verify_exact_code(r#"
             "Hello" |> tools::reverse
         "#, "\"olleH\"");
     }
 
-    #[ignore]
     #[test]
-    fn test_functional_pipeline_chain() {
-        verify_exact_value(r#"
-            "Hello" |> util::md5 |> util::hex
-        "#, StringValue("8b1a9953c4611296a827abf8c47804d7".to_string()));
+    fn test_functional_pipeline_2args() {
+        let mut interpreter = Interpreter::new();
+        interpreter = verify_exact_code_with(interpreter, r#"
+            fn add(a, b) => a + b
+        "#, "true");
+
+        interpreter = verify_exact_code_with(interpreter, r#"
+            fn inverse(a) => 1.0 / a
+        "#, "true");
+
+        interpreter = verify_exact_code_with(interpreter, r#"
+            (2, 3) |>> add 
+        "#, "5");
+
+        verify_exact_code_with(interpreter, r#"
+            ((2, 3) |>> add) |> inverse
+        "#, "0.2");
     }
 
     #[test]

@@ -92,7 +92,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-6
+8
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -101,7 +101,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-18
+20
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -110,7 +110,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-45
+56
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -128,7 +128,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-33
+44
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -146,7 +146,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T01:45:33.094Z
+2025-05-17T03:56:44.826Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -154,7 +154,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-20T01:45:33.096Z
+2025-05-20T03:56:44.827Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -163,7 +163,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-19T01:45:33.099Z
+2025-06-19T03:56:44.831Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -455,13 +455,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------------|
-| id | name     | module | signature                 | description                           | returns |
-|------------------------------------------------------------------------------------------------------|
-| 0  | to_array | arrays | arrays::to_array(a)       | Converts a collection into an array   | Array   |
-| 1  | reverse  | arrays | arrays::reverse(a: Array) | Returns a reverse copy of an array    | Array   |
-| 2  | push     | arrays | arrays::push(a: Array, b) | Appends a value or object to an array | Boolean |
-|------------------------------------------------------------------------------------------------------|
+|--------------------------------------------------------------------------------------------------------------|
+| id | name      | module | signature                  | description                                 | returns |
+|--------------------------------------------------------------------------------------------------------------|
+| 0  | year_of   | cal    | cal::year_of(n: Date)      | Returns the year of a Date                  | i32     |
+| 1  | second_of | cal    | cal::second_of(n: Date)    | Returns the seconds of the minute of a Date | u32     |
+| 2  | plus      | cal    | cal::plus(a: Date, b: i64) | Adds a duration to a date                   | Date    |
+|--------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -507,7 +507,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-b8d739fe-1bfe-47d1-9d67-ca07e2f99042
+ee28c614-005a-4906-a1a9-eabe8e9497bc
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -823,9 +823,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T01:45:33.606Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T01:45:33.607Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T01:45:33.608Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T03:56:45.335Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T03:56:45.336Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T03:56:45.337Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

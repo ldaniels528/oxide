@@ -183,6 +183,7 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
             match generate_language_results(example.as_str()) {
                 Ok(out_lines) => file = print_text_block(file, out_lines)?,
                 Err(err) => {
+                    println!("{}", example);
                     println!("ERROR: {}", err.to_string());
                     Err(err.to_string()).unwrap()
                 }
@@ -543,9 +544,6 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::Ns(..) => vec![],
         Expression::Parameters(..) => vec![],
-        Expression::Pipeline(..) => vec![
-            "'Hello' |> tools::reverse".to_string()
-        ],
         Expression::Plus(..) => vec![
             "5 + 6".into()
         ],
@@ -645,6 +643,22 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |c > b
             "#, '|')
         ],
+        Expression::VerticalBarArrow(..) => vec![],
+        Expression::VerticalBarDoubleArrow(..) => vec![
+            strip_margin(r#"
+               |use tools::reverse
+               |result := 'Hello' |> reverse
+               |result
+               "#, '|'),
+            strip_margin(r#"
+               |// arrays, tuples and structures can be deconstructed into arguments
+               |
+               |fn add(a, b) => a + b
+               |fn inverse(a) => 1.0 / a
+               |result := ((2, 3) |>> add) |> inverse
+               |result
+               "#, '|')
+        ],
         Expression::Via(..) => vec![
             strip_margin(r#"
                 |stocks := ns("readme.via.stocks")
@@ -712,6 +726,7 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Structures", StructureExpression(vec![])),
         ("Tuples", TupleExpression(vec![])),
         ("Type Definitions", TypeDef(null.clone())),
+        ("Function Pipelines", VerticalBarDoubleArrow(null.clone(), null.clone())),
         ("Via Clause", Via(null.clone())),
     ];
 

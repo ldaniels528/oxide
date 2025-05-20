@@ -187,7 +187,6 @@ impl Machine {
             New(a) => self.do_new_instance(a),
             Ns(a) => query_engine::eval_ns(self, a),
             Parameters(params) => self.evaluate_parameters(params),
-            Pipeline(a, b) => self.do_functional_pipeline(a, b),
             Plus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa + bb),
             PlusPlus(a, b) => self.eval_inline_2(a, b, Self::do_plus_plus),
             Pow(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
@@ -200,6 +199,8 @@ impl Machine {
             TupleExpression(args) => self.do_tuple(args),
             TypeDef(expr) => self.do_type_decl(expr),
             Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
+            VerticalBarArrow(a, b) => self.do_function_pipeline(a, b, false),
+            VerticalBarDoubleArrow(a, b) => self.do_function_pipeline(a, b, true),
             Via(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
             While { condition, code } => self.do_while(condition, code),
         }
@@ -642,21 +643,37 @@ impl Machine {
         Ok((ms, result))
     }
 
-    /// Functional pipeline
+    /// Evaluates a function pipeline
     /// #### Examples
     /// ```
     /// "Hello" |> tools::md5 |> tools::hex
     /// ```
-    fn do_functional_pipeline(
+    /// ```
+    /// // arrays, tuples and structures can be deconstructed into arguments
+    /// 
+    /// fn add(a, b) => a + b
+    /// fn inverse(a) => 1.0 / a
+    /// (2, 3) |>> add |> inverse
+    /// ```
+    fn do_function_pipeline(
         &self,
         expr: &Expression,
         operation: &Expression,
+        is_destructure: bool,
     ) -> std::io::Result<(Self, TypedValue)> {
+        let args = match is_destructure {
+            true => match expr {
+                ArrayExpression(args) => args.clone(),
+                StructureExpression(items) =>
+                    items.iter().map(|(_, v)| v.clone()).collect(),
+                TupleExpression(args) => args.clone(),
+                item => vec![item.clone()]
+            },
+            false => vec![expr.clone()]
+        };
         self.evaluate(&FunctionCall {
             fx: Box::new(operation.clone()),
-            args: vec![
-                expr.clone()
-            ],
+            args,
         })
     }
 
@@ -895,9 +912,7 @@ impl Machine {
         container: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         let (ms, item_val) = self.evaluate(item)?;
-        println!("do_in: item = {}", item_val.to_code());
         let (ms, container_val) = ms.evaluate(container)?;
-        println!("do_in: container = {}", container_val.to_code());
         let result = match container_val.to_sequence()? {
             TheArray(array) => array.contains(&item_val),
             TheDataframe(df) => {
@@ -1811,8 +1826,8 @@ mod tests {
         #[test]
         fn test_function_pipeline() {
             //  "Hello" |> util::md5 |> util::hex
-            let model = Pipeline(
-                Box::new(Pipeline(
+            let model = VerticalBarArrow(
+                Box::new(VerticalBarArrow(
                     Box::new(Literal(StringValue("Hello".to_string()))),
                     Box::new(ColonColon(
                         Box::new(Variable("util".to_string())),

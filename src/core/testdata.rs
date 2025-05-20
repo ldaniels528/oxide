@@ -120,6 +120,16 @@ pub fn verify_exact_code(code: &str, expected: &str) {
     assert_eq!(actual.to_code(), expected);
 }
 
+pub fn verify_exact_code_with(
+    mut interpreter: Interpreter, 
+    code: &str, 
+    expected: &str
+) -> Interpreter {
+    let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual.to_code(), expected);
+    interpreter
+}
+
 pub fn verify_exact_json(code: &str, expected: Value) {
     let mut interpreter = Interpreter::new();
     let actual = interpreter.evaluate(code).unwrap();

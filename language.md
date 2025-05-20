@@ -184,6 +184,27 @@ rows ~> stocks</pre>
 3
 </pre>
 <hr>
+<h4>▶️ Function Pipelines</h4>
+<h5>example¹</h5>
+<pre>use tools::reverse
+result := 'Hello' |> reverse
+result</pre>
+<h5>results</h5>
+<pre>
+"olleH"
+</pre>
+<h5>example²</h5>
+<pre>// arrays, tuples and structures can be deconstructed into arguments
+
+fn add(a, b) => a + b
+fn inverse(a) => 1.0 / a
+result := ((2, 3) |>> add) |> inverse
+result</pre>
+<h5>results</h5>
+<pre>
+0.2
+</pre>
+<hr>
 <h4>▶️ Functions</h4>
 <h5>example¹</h5>
 <pre>product := fn (a, b) => a * b
@@ -209,7 +230,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-3
+13
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -221,7 +242,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 01:45:32 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 03:56:44 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {

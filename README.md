@@ -278,6 +278,27 @@ rows ~> stocks</pre>
 3
 </pre>
 <hr>
+<h4>▶️ Function Pipelines</h4>
+<h5>example¹</h5>
+<pre>use tools::reverse
+result := 'Hello' |> reverse
+result</pre>
+<h5>results</h5>
+<pre>
+"olleH"
+</pre>
+<h5>example²</h5>
+<pre>// arrays, tuples and structures can be deconstructed into arguments
+
+fn add(a, b) => a + b
+fn inverse(a) => 1.0 / a
+result := ((2, 3) |>> add) |> inverse
+result</pre>
+<h5>results</h5>
+<pre>
+0.2
+</pre>
+<hr>
 <h4>▶️ Functions</h4>
 <h5>example¹</h5>
 <pre>product := fn (a, b) => a * b
@@ -303,7 +324,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-4
+14
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -315,7 +336,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 01:45:34 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 03:56:45 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -784,7 +805,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-6
+8
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -793,7 +814,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-18
+20
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -802,7 +823,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-45
+56
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -820,7 +841,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-34
+46
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -838,7 +859,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T01:45:34.613Z
+2025-05-17T03:56:46.375Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -846,7 +867,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-20T01:45:34.614Z
+2025-05-20T03:56:46.377Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -855,7 +876,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-19T01:45:34.618Z
+2025-06-19T03:56:46.381Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -1147,13 +1168,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------|
-| id | name       | module | signature                  | description                  | returns |
-|------------------------------------------------------------------------------------------------|
-| 0  | url_encode | www    | www::url_encode(s: String) | Encodes a URL string         | String  |
-| 1  | url_decode | www    | www::url_decode(s: String) | Decodes a URL-encoded string | String  |
-| 2  | serve      | www    | www::serve(n: u32)         | Starts a local HTTP service  | Boolean |
-|------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name        | module | signature         | description                                     | returns                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
+| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String                                       |
+| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Boolean                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1199,7 +1220,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-ba93e55b-860c-4a53-9cfa-7bd3d823d9ee
+1058bd13-2f9b-41a4-874d-fd4339bbfada
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1515,9 +1536,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T01:45:35.110Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T01:45:35.111Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T01:45:35.112Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T03:56:46.886Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T03:56:46.887Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T03:56:46.888Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

@@ -221,13 +221,14 @@ impl Compiler {
             "-" => Ok(Expression::Minus(a.into(), b.into())),
             "%" => Ok(Expression::Modulo(a.into(), b.into())),
             "×" | "*" => Ok(Expression::Multiply(a.into(), b.into())),
-            "|>" => Ok(Expression::Pipeline(a.into(), b.into())),
             "+" => Ok(Expression::Plus(a.into(), b.into())),
             "++" => Ok(Expression::PlusPlus(a.into(), b.into())),
             "**" => Ok(Expression::Pow(a.into(), b.into())),
             ".." => Ok(Expression::Range(Exclusive(a.into(), b.into()))),
             "..=" => Ok(Expression::Range(Inclusive(a.into(), b.into()))),
             ":=" => Ok(Expression::SetVariables(a.into(), b.into())),
+            "|>" => Ok(Expression::VerticalBarArrow(a.into(), b.into())),
+            "|>>" => Ok(Expression::VerticalBarDoubleArrow(a.into(), b.into())),
             _ => throw(ExactNear(
                 format!("Invalid operator '{}'", op.get_raw_value()),
                 op.clone(),
@@ -696,7 +697,10 @@ impl Compiler {
                 .parse_expression_2a(ts, expr0, BitwiseShiftRight)
                 .map(|(m, ts)| (Some(m), ts)),
             "|>" => self
-                .parse_expression_2a(ts, expr0, Pipeline)
+                .parse_expression_2a(ts, expr0, VerticalBarArrow)
+                .map(|(m, ts)| (Some(m), ts)),
+            "|>>" => self
+                .parse_expression_2a(ts, expr0, VerticalBarDoubleArrow)
                 .map(|(m, ts)| (Some(m), ts)),
             "(" if ts.is_previous_adjacent() => self.next_operator_brackets_parentheses(expr0, &ts),
             "[" if ts.is_previous_adjacent() => self.next_operator_brackets_square(expr0, &ts),
@@ -2473,8 +2477,8 @@ mod tests {
             let (model, _) = compiler.compile_with_precedence(ts).unwrap();
             assert_eq!(
                 model,
-                Pipeline(
-                    Pipeline(
+                VerticalBarArrow(
+                    VerticalBarArrow(
                         Literal(StringValue("Hello".into())).into(),
                         ColonColon(
                             Variable("util".into()).into(),

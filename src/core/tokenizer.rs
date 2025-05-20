@@ -21,8 +21,8 @@ const OPERATORS_2: [&str; 26] = [
 ];
 
 /// Triple-character operators
-const OPERATORS_3: [&str; 4] = [
-    ":::", "..=", "~>>", "<<~",
+const OPERATORS_3: [&str; 5] = [
+    ":::", "..=", "~>>", "<<~", "|>>"
 ];
 
 /// Pseudo-numerical prefixes
