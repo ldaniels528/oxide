@@ -125,7 +125,7 @@ impl Parameter {
         }
         match self.get_default_value() {
             TypedValue::Null | TypedValue::Undefined => {}
-            default_value => buf = format!("{} := {}", buf, default_value.to_code())
+            default_value => buf = format!("{} = {}", buf, default_value.to_code())
         }
         buf
     }
@@ -134,7 +134,7 @@ impl Parameter {
         let mut buf = self.get_name().to_string();
         match self.get_default_value() {
             TypedValue::Null | TypedValue::Undefined => {}
-            default_value => buf = format!("{} := {}", buf, default_value.to_code())
+            default_value => buf = format!("{} = {}", buf, default_value.to_code())
         }
         buf
     }
@@ -171,7 +171,7 @@ mod tests {
     #[test]
     fn test_to_code() {
         let param = Parameter::with_default("symbol", StringType(8), StringValue("N/A".into()));
-        assert_eq!(param.to_code(), r#"symbol: String(8) := "N/A""#)
+        assert_eq!(param.to_code(), r#"symbol: String(8) = "N/A""#)
     }
 
     #[test]

@@ -8,8 +8,8 @@ use crate::dataframe::Dataframe;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
+use crate::packages::OxidePkg;
 use crate::parameter::Parameter;
-use crate::platform::PackageOps;
 use crate::row_collection::RowCollection;
 use crate::sequences::Array;
 use crate::structures::Structure;
@@ -415,8 +415,8 @@ fn update_history(
     processing_time: f64,
 ) -> std::io::Result<TypedValue> {
     let mut frc = FileRowCollection::open_or_create(
-        &PackageOps::get_oxide_history_ns(),
-        PackageOps::get_oxide_history_parameters())?;
+        &OxidePkg::get_oxide_history_ns(),
+        OxidePkg::get_oxide_history_parameters())?;
     let result = frc.append_row(Row::new(0, vec![
         Number(I64Value(state.session_id)),
         Number(I64Value(state.user_id)),
@@ -613,8 +613,8 @@ mod tests {
         let state = TerminalState::offline().unwrap();
         let _ = update_history(&state, "oxide::help()", 3.5).unwrap();
         let mut frc = FileRowCollection::open_or_create(
-            &PackageOps::get_oxide_history_ns(),
-            PackageOps::get_oxide_history_parameters()).unwrap();
+            &OxidePkg::get_oxide_history_ns(),
+            OxidePkg::get_oxide_history_parameters()).unwrap();
         let count = frc.len().unwrap() as i64;
         let last = max(count - 1, -1);
         let row_id = last as usize;

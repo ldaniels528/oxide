@@ -35,8 +35,8 @@ GET https://api.example.com/users
 ### 🧮 Transform Arrays and Maps
 ```oxide
 use arrays
-users := [ { name: 'Tom' }, { name: 'Sara' } ]
-names := users:::map(fn(u) => u::name)
+users = [ { name: 'Tom' }, { name: 'Sara' } ]
+names = users:::map(fn(u) => u::name)
 ```
 
 ### 🕒 Work with Dates and Durations
@@ -47,8 +47,9 @@ cal::plus(now(), 30:::days())
 
 ### 🔄 Compose Data Pipelines
 ```oxide
-use tools
-[1, 2, 3, 4]:::filter(fn(x) => (x % 2) == 0):::map(fn(x) => x * 10)
+use arrays
+let arr = [1, 2, 3, 4]
+(arr:::filter(fn(x) => (x % 2) == 0)):::map(fn(x) => x * 10)
 ```
 
 ---
@@ -133,7 +134,7 @@ To improve navigation, consider splitting the examples into separate markdown fi
 <h5>example³</h5>
 <pre>// Arrays may be used to assign multiple variables
 
-[a, b, c] := [3, 5, 7]
+let [a, b, c] = [3, 5, 7]
 a + b + c</pre>
 <h5>results</h5>
 <pre>
@@ -150,18 +151,29 @@ arrays::reverse([1, 4, 2, 8, 5, 7])</pre>
 <hr>
 <h4>▶️ Arrays: Indexing</h4>
 <h5>example¹</h5>
-<pre>arr := [1, 4, 2, 8, 5, 7]
+<pre>let arr = [1, 4, 2, 8, 5, 7]
 arr[3]</pre>
 <h5>results</h5>
 <pre>
 8
 </pre>
 <hr>
-<h4>▶️ Assignment</h4>
+<h4>▶️ Assignment (expression)</h4>
 <h5>example¹</h5>
-<pre>a := 3
-b := 5
-c := 7
+<pre>// Use ":=" to simultaneously assign a value and return the assigned value
+
+let i = 0
+while (i < 5) yield (i := i + 1) * 3</pre>
+<h5>results</h5>
+<pre>
+[3, 6, 9, 12, 15]
+</pre>
+<hr>
+<h4>▶️ Assignment (statement)</h4>
+<h5>example¹</h5>
+<pre>let a = 3
+let b = 5
+let c = 7
 a + b + c</pre>
 <h5>results</h5>
 <pre>
@@ -210,13 +222,13 @@ a + b + c</pre>
 <hr>
 <h4>▶️ Code Block</h4>
 <h5>example¹</h5>
-<pre>result := {
-    (a, b, sum) := (0, 1, 0)
+<pre>result = {
+    (a, b, sum) = (0, 1, 0)
     while sum < 10 {
-        sum := sum + (a + b)
-        t := b
-        b := a + b
-        a := t
+        sum = sum + (a + b)
+        t = b
+        b = a + b
+        a = t
     }
     sum
 }
@@ -228,21 +240,21 @@ result</pre>
 <hr>
 <h4>▶️ Conditionals</h4>
 <h5>example¹</h5>
-<pre>x := 10
+<pre>let x = 10
 x in 5..=10</pre>
 <h5>results</h5>
 <pre>
 true
 </pre>
 <h5>example²</h5>
-<pre>x := 10
+<pre>let x = 10
 x in 5..10</pre>
 <h5>results</h5>
 <pre>
 false
 </pre>
 <h5>example³</h5>
-<pre>x := 1..8
+<pre>let x = 1..8
 x contains 7</pre>
 <h5>results</h5>
 <pre>
@@ -251,9 +263,9 @@ x contains 7</pre>
 <hr>
 <h4>▶️ Curvy-Arrow Left</h4>
 <h5>example¹</h5>
-<pre>stocks := ns("expressions.read_next_row.stocks")
+<pre>stocks = ns("expressions.read_next_row.stocks")
 table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
-rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
 rows ~> stocks
 // read the last row
 last_row <~ stocks
@@ -265,9 +277,9 @@ last_row</pre>
 <hr>
 <h4>▶️ Curvy-Arrow Right</h4>
 <h5>example¹</h5>
-<pre>stocks := ns("expressions.into.stocks")
+<pre>stocks = ns("expressions.into.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-rows := [
+rows = [
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -278,10 +290,22 @@ rows ~> stocks</pre>
 3
 </pre>
 <hr>
-<h4>▶️ Function Pipelines</h4>
+<h4>▶️ Do-While expression</h4>
+<h5>example¹</h5>
+<pre>let i = 0
+do {
+    i = i + 1
+    yield i * 2
+} while (i < 5)</pre>
+<h5>results</h5>
+<pre>
+[2, 4, 6, 8, 10]
+</pre>
+<hr>
+<h4>▶️ Function Pipelines (destructuring)</h4>
 <h5>example¹</h5>
 <pre>use tools::reverse
-result := 'Hello' |> reverse
+result = 'Hello' |> reverse
 result</pre>
 <h5>results</h5>
 <pre>
@@ -292,7 +316,7 @@ result</pre>
 
 fn add(a, b) => a + b
 fn inverse(a) => 1.0 / a
-result := ((2, 3) |>> add) |> inverse
+result = ((2, 3) |>> add) |> inverse
 result</pre>
 <h5>results</h5>
 <pre>
@@ -301,7 +325,7 @@ result</pre>
 <hr>
 <h4>▶️ Functions</h4>
 <h5>example¹</h5>
-<pre>product := fn (a, b) => a * b
+<pre>product = fn (a, b) => a * b
 product(2, 5)</pre>
 <h5>results</h5>
 <pre>
@@ -310,7 +334,7 @@ product(2, 5)</pre>
 <hr>
 <h4>▶️ HTTP</h4>
 <h5>example¹</h5>
-<pre>stocks := ns("readme.www.stocks")
+<pre>stocks = ns("readme.www.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 www::serve(8833)</pre>
 <h5>results</h5>
@@ -324,7 +348,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-4
+6
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -336,7 +360,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 22:16:05 GMT"}
+{content-length: "81", content-type: "application/json", date: "Wed, 21 May 2025 23:26:59 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -385,7 +409,7 @@ true
 <h5>example¹</h5>
 <pre>// Oxide provides an if-else statement
 
-x := 4
+let x = 4
 if(x > 5) "Yes"
 else if(x < 5) "Maybe"
 else "No"</pre>
@@ -396,7 +420,7 @@ else "No"</pre>
 <h5>example²</h5>
 <pre>// Oxide also provides iff - a ternary-operator-like if function
 
-fact := fn(n) => iff(n <= 1, 1, n * fact(n - 1))
+fact = fn(n) => iff(n <= 1, 1, n * fact(n - 1))
 fact(6)</pre>
 <h5>results</h5>
 <pre>
@@ -415,7 +439,7 @@ fact(6)</pre>
 <h4>▶️ Import/Use</h4>
 <h5>example¹</h5>
 <pre>use tools
-stocks := to_table([
+stocks = to_table([
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -493,8 +517,8 @@ true
 <hr>
 <h4>▶️ Negative</h4>
 <h5>example¹</h5>
-<pre>i := 75
-j := -i
+<pre>let i = 75
+let j = -i
 j</pre>
 <h5>results</h5>
 <pre>
@@ -514,7 +538,7 @@ j</pre>
 <hr>
 <h4>▶️ Query</h4>
 <h5>example¹</h5>
-<pre>stocks := tools::to_table([
+<pre>stocks = tools::to_table([
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "GRU", exchange: "NYSE", last_sale: 56.88 },
    { symbol: "APK", exchange: "NASDAQ", last_sale: 32.12 }
@@ -534,7 +558,7 @@ from stocks where last_sale > 20.0</pre>
 <h5>example¹</h5>
 <pre>// Ranges may be exclusive
 
-range := 1..5
+range = 1..5
 tools::reverse(range)</pre>
 <h5>results</h5>
 <pre>
@@ -543,7 +567,7 @@ tools::reverse(range)</pre>
 <h5>example²</h5>
 <pre>// Ranges may be inclusive
 
-range := 1..=5
+range = 1..=5
 tools::reverse(range)</pre>
 <h5>results</h5>
 <pre>
@@ -598,7 +622,7 @@ Feature "Matches function" {
 <h5>example¹</h5>
 <pre>// Tuples may be used to assign multiple variables
 
-(a, b, c) := (3, 5, 7)
+(a, b, c) = (3, 5, 7)
 a + b + c</pre>
 <h5>results</h5>
 <pre>
@@ -607,8 +631,8 @@ a + b + c</pre>
 <h5>example²</h5>
 <pre>// Tuples support addition
 
-a := (2, 4, 6)
-b := (1, 2, 3)
+let a = (2, 4, 6)
+let b = (1, 2, 3)
 a + b</pre>
 <h5>results</h5>
 <pre>
@@ -617,8 +641,8 @@ a + b</pre>
 <h5>example³</h5>
 <pre>// Tuples support subtraction
 
-a := (3, 5, 7)
-b := (1, 0, 1)
+let a = (3, 5, 7)
+let b = (1, 0, 1)
 a - b</pre>
 <h5>results</h5>
 <pre>
@@ -635,8 +659,8 @@ a - b</pre>
 <h5>example⁵</h5>
 <pre>// Tuples support multiplication
 
-a := (3, 5, 7)
-b := (1, 0, 1)
+let a = (3, 5, 7)
+let b = (1, 0, 1)
 a * b</pre>
 <h5>results</h5>
 <pre>
@@ -645,8 +669,8 @@ a * b</pre>
 <h5>example⁶</h5>
 <pre>// Tuples support division
 
-a := (3.0, 5.0, 9.0)
-b := (1.0, 2.0, 1.0)
+let a = (3.0, 5.0, 9.0)
+let b = (1.0, 2.0, 1.0)
 a / b</pre>
 <h5>results</h5>
 <pre>
@@ -655,8 +679,8 @@ a / b</pre>
 <h5>example⁷</h5>
 <pre>// Tuples support modulus
 
-a := (3.0, 5.0, 9.0)
-b := (1.0, 2.0, 1.0)
+let a = (3.0, 5.0, 9.0)
+let b = (1.0, 2.0, 1.0)
 a % b</pre>
 <h5>results</h5>
 <pre>
@@ -665,8 +689,8 @@ a % b</pre>
 <h5>example⁸</h5>
 <pre>// Tuples support exponents
 
-a := (2, 4, 6)
-b := (1, 2, 3)
+let a = (2, 4, 6)
+let b = (1, 2, 3)
 a ** b</pre>
 <h5>results</h5>
 <pre>
@@ -675,7 +699,7 @@ a ** b</pre>
 <hr>
 <h4>▶️ Type Definitions</h4>
 <h5>example¹</h5>
-<pre>LabelString := typedef(String(80))
+<pre>LabelString = typedef(String(80))
 LabelString</pre>
 <h5>results</h5>
 <pre>
@@ -684,11 +708,11 @@ String(80)
 <hr>
 <h4>▶️ Via Clause</h4>
 <h5>example¹</h5>
-<pre>stocks := ns("readme.via.stocks")
+<pre>stocks = ns("readme.via.stocks")
 drop table stocks
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 
-rows := [
+rows = [
    { symbol: "ABCQ", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -708,6 +732,18 @@ from stocks</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+</pre>
+<hr>
+<h4>▶️ While expression</h4>
+<h5>example¹</h5>
+<pre>let x = 0
+while (x < 5) {
+    x = x + 1
+    yield x * 2
+}</pre>
+<h5>results</h5>
+<pre>
+[2, 4, 6, 8, 10]
 </pre>
 <hr>
 <h4>▶️ Yield</h4>
@@ -749,7 +785,7 @@ from stocks</pre>
 <h4>📦 arrays::pop &#8212; Removes and returns a value or object from an array</h4>
 <h5>example1</h5>
 <pre>use arrays
-stocks := []
+stocks = []
 stocks:::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
 stocks:::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
 stocks</pre>
@@ -761,7 +797,7 @@ stocks</pre>
 <h4>📦 arrays::push &#8212; Appends a value or object to an array</h4>
 <h5>example1</h5>
 <pre>use arrays
-stocks := [
+stocks = [
     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -790,7 +826,7 @@ from stocks</pre>
 <h4>📦 arrays::reduce &#8212; Reduces an array to a single value</h4>
 <h5>example2</h5>
 <pre>use arrays::reduce
-numbers := [1, 2, 3, 4, 5]
+numbers = [1, 2, 3, 4, 5]
 numbers:::reduce(0, fn(a, b) => a + b)</pre>
 <h5>results</h5>
 <pre>
@@ -822,7 +858,7 @@ numbers:::reduce(0, fn(a, b) => a + b)</pre>
 now():::day_of()</pre>
 <h5>results</h5>
 <pre>
-20
+21
 </pre>
 <hr>
 <h4>📦 cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -831,7 +867,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-3
+4
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -840,7 +876,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-15
+16
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -849,7 +885,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-16
+27
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -867,7 +903,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-5
+0
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -885,7 +921,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-17T22:16:05.840Z
+2025-05-18T23:27:00.279Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -893,7 +929,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-20T22:16:05.841Z
+2025-05-21T23:27:00.280Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -902,7 +938,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-19T22:16:05.844Z
+2025-06-20T23:27:00.284Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -973,7 +1009,7 @@ true
 <h4>📦 io::read_text_file &#8212; Reads the contents of a text file into memory</h4>
 <h5>example1</h5>
 <pre>use io, util
-file := "temp_secret.txt"
+file = "temp_secret.txt"
 file:::create_file(md5("**keep**this**secret**"))
 file:::read_text_file()</pre>
 <h5>results</h5>
@@ -1085,9 +1121,9 @@ true
 <h4>📦 os::current_dir &#8212; Returns the current directory</h4>
 <h5>example1</h5>
 <pre>use str
-cur_dir := os::current_dir()
-prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
-path_str := prefix + "/demoes/language/include_file.oxide"
+cur_dir = os::current_dir()
+prefix = iff(cur_dir:::ends_with("core"), "../..", ".")
+path_str = prefix + "/demoes/language/include_file.oxide"
 include path_str</pre>
 <h5>results</h5>
 <pre>
@@ -1164,7 +1200,7 @@ include path_str</pre>
 <hr>
 <h4>📦 oxide::compile &#8212; Compiles source code from a string input</h4>
 <h5>example1</h5>
-<pre>code := oxide::compile("2 ** 4")
+<pre>code = oxide::compile("2 ** 4")
 code()</pre>
 <h5>results</h5>
 <pre>
@@ -1181,8 +1217,8 @@ code()</pre>
 <hr>
 <h4>📦 oxide::eval &#8212; Evaluates a string containing Oxide code</h4>
 <h5>example1</h5>
-<pre>a := 'Hello '
-b := 'World'
+<pre>a = 'Hello '
+b = 'World'
 oxide::eval("a + b")</pre>
 <h5>results</h5>
 <pre>
@@ -1194,13 +1230,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|------------------------------------------------------------------------------------------------------------|
-| id | name  | module | signature                 | description                                    | returns |
-|------------------------------------------------------------------------------------------------------------|
-| 0  | sqrt  | math   | math::sqrt(n: f64)        | sqrt(x): Returns the square root of x.         | i64     |
-| 1  | round | math   | math::round(n: f64)       | round(x): Rounds x to the nearest integer.     | i64     |
-| 2  | pow   | math   | math::pow(a: f64, b: f64) | pow(x, y): Returns x raised to the power of y. | i64     |
-|------------------------------------------------------------------------------------------------------------|
+|---------------------------------------------------------------------------------------------------|
+| id | name    | module | signature        | description                                  | returns |
+|---------------------------------------------------------------------------------------------------|
+| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
+| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
+| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
+|---------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1246,7 +1282,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-19ff64b6-3d19-489b-b256-eb0d96ecc370
+246aa37b-333f-4df9-a0fc-ea7a9c40745c
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1254,7 +1290,7 @@ true
 <pre>oxide::version()</pre>
 <h5>results</h5>
 <pre>
-"0.36"
+"0.40"
 </pre>
 <hr>
 <h4>📦 str::ends_with &#8212; Returns true if string `a` ends with string `b`</h4>
@@ -1419,8 +1455,8 @@ feature("Matches function", {
 <h4>📦 testing::matches &#8212; Compares two values</h4>
 <h5>example1</h5>
 <pre>use testing::matches
-a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
+a = { scores: [82, 78, 99], first: "Tom", last: "Lane" }
+b = { last: "Lane", first: "Tom", scores: [82, 78, 99] }
 matches(a, b)</pre>
 <h5>results</h5>
 <pre>
@@ -1437,7 +1473,7 @@ true
 <hr>
 <h4>📦 tools::compact &#8212; Shrinks a table by removing deleted rows</h4>
 <h5>example1</h5>
-<pre>stocks := ns("examples.compact.stocks")
+<pre>stocks = ns("examples.compact.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -1479,7 +1515,7 @@ from stocks</pre>
 <hr>
 <h4>📦 tools::fetch &#8212; Retrieves a raw structure from a table</h4>
 <h5>example1</h5>
-<pre>stocks := ns("examples.fetch.stocks")
+<pre>stocks = ns("examples.fetch.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -1505,7 +1541,7 @@ tools::fetch(stocks, 2)</pre>
 <h4>📦 tools::journal &#8212; Retrieves the journal for an event-source or table function</h4>
 <h5>example1</h5>
 <pre>use tools
-stocks := ns("examples.journal.stocks")
+stocks = ns("examples.journal.stocks")
 drop table stocks
 create table stocks fn(
    symbol: String(8), exchange: String(8), last_sale: f64
@@ -1532,7 +1568,7 @@ stocks:::journal()</pre>
 <hr>
 <h4>📦 tools::len &#8212; Returns the length of a table</h4>
 <h5>example1</h5>
-<pre>stocks := ns("examples.table_len.stocks")
+<pre>stocks = ns("examples.table_len.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
  { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
@@ -1545,7 +1581,7 @@ tools::len(stocks)</pre>
 <hr>
 <h4>📦 tools::map &#8212; Transform a collection based on a function</h4>
 <h5>example1</h5>
-<pre>stocks := ns("examples.map_over_table.stocks")
+<pre>stocks = ns("examples.map_over_table.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
  { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
@@ -1562,16 +1598,16 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-20T22:16:06.234Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-20T22:16:06.235Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-20T22:16:06.236Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-21T23:27:00.707Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-21T23:27:00.708Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-21T23:27:00.708Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 tools::pop &#8212; Removes and returns a value or object from a Sequence</h4>
 <h5>example1</h5>
 <pre>use tools
-stocks := ns("examples.tools_pop.stocks")
+stocks = ns("examples.tools_pop.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -1589,7 +1625,7 @@ stocks:::pop()</pre>
 <h4>📦 tools::push &#8212; Appends a value or object to a Sequence</h4>
 <h5>example1</h5>
 <pre>use tools
-stocks := ns("examples.push.stocks")
+stocks = ns("examples.push.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -1611,7 +1647,7 @@ stocks</pre>
 <h4>📦 tools::replay &#8212; Reconstructs the state of a journaled table</h4>
 <h5>example1</h5>
 <pre>use tools
-stocks := ns("examples.table_fn.stocks")
+stocks = ns("examples.table_fn.stocks")
 drop table stocks
 create table stocks fn(
    symbol: String(8), exchange: String(8), last_sale: f64
@@ -1659,7 +1695,7 @@ to_table(reverse(
 <h4>📦 tools::scan &#8212; Returns existence metadata for a table</h4>
 <h5>example1</h5>
 <pre>use tools
-stocks := ns("examples.scan.stocks")
+stocks = ns("examples.scan.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -1692,7 +1728,7 @@ stocks:::scan()</pre>
 <h4>📦 tools::to_csv &#8212; Converts a collection to CSV format</h4>
 <h5>example1</h5>
 <pre>use tools::to_csv
-stocks := ns("examples.csv.stocks")
+stocks = ns("examples.csv.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -1708,7 +1744,7 @@ stocks:::to_csv()</pre>
 <h4>📦 tools::to_json &#8212; Converts a collection to JSON format</h4>
 <h5>example1</h5>
 <pre>use tools::to_json
-stocks := ns("examples.json.stocks")
+stocks = ns("examples.json.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -1915,7 +1951,7 @@ b10a8db164e0754105b7a99be72e3fe5
 <h4>📦 www::serve &#8212; Starts a local HTTP service</h4>
 <h5>example1</h5>
 <pre>www::serve(8822)
-stocks := ns("examples.www.quotes")
+stocks = ns("examples.www.quotes")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
  { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },

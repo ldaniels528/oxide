@@ -17,8 +17,8 @@ use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::U64Kind;
 use crate::numbers::Numbers::{RowId, U64Value};
+use crate::packages::ToolsPkg;
 use crate::parameter::Parameter;
-use crate::platform::PackageOps;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::Array;
 use crate::structures::Row;
@@ -136,7 +136,7 @@ pub trait RowCollection: Debug {
 
     /// Returns a table that describes the structure of the host table
     fn describe(&self) -> TypedValue {
-        let params = PackageOps::get_tools_describe_parameters();
+        let params = ToolsPkg::get_tools_describe_parameters();
         let mut mrc = ModelRowCollection::from_parameters(&params);
         for column in self.get_columns() {
             mrc.append_row(Row::new(0, vec![

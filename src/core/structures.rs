@@ -934,7 +934,7 @@ mod tests {
         #[test]
         fn test_firm_structure_from_table() {
             verify_exact_value(r#"
-                stocks := ns("interpreter.struct.stocks")
+                stocks = ns("interpreter.struct.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
                  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -986,7 +986,7 @@ mod tests {
         #[test]
         fn test_hard_structure_field() {
             verify_exact_value(r#"
-            stock := Struct(
+            stock = Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -998,12 +998,12 @@ mod tests {
         #[test]
         fn test_hard_structure_field_assignment() {
             verify_exact_value(r#"
-            stock := Struct(
+            stock = Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
             )
-            stock::last_sale := 24.11
+            stock::last_sale = 24.11
             stock::last_sale
         "#, Number(F64Value(24.11)));
         }
@@ -1011,7 +1011,7 @@ mod tests {
         #[test]
         fn test_hard_structure_module_method() {
             verify_exact_value(r#"
-            stock := Struct(
+            stock = Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -1027,7 +1027,7 @@ mod tests {
         fn test_hard_structure_import() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-            stock := Struct(
+            stock = Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -1076,7 +1076,7 @@ mod tests {
         #[test]
         fn test_soft_structure_field() {
             verify_exact_code(r#"
-            stock := { symbol:"AAA", price:123.45 }
+            stock = { symbol:"AAA", price:123.45 }
             stock::symbol
         "#, "\"AAA\"".into());
         }
@@ -1084,8 +1084,8 @@ mod tests {
         #[test]
         fn test_soft_structure_field_assignment() {
             verify_exact_code(r#"
-            stock := { symbol:"AAA", price:123.45 }
-            stock::price := 124.11
+            stock = { symbol:"AAA", price:123.45 }
+            stock::price = 124.11
             stock::price
         "#, "124.11");
         }
@@ -1093,7 +1093,7 @@ mod tests {
         #[test]
         fn test_soft_structure_method() {
             verify_exact_code(r#"
-            stock := {
+            stock = {
                 symbol:"ABC",
                 price:123.45,
                 last_sale: 23.67,
@@ -1106,7 +1106,7 @@ mod tests {
         #[test]
         fn test_soft_structure_module_method() {
             verify_exact_code(r#"
-            stock := {
+            stock = {
                 symbol: "ABC",
                 exchange: "NYSE",
                 last_sale: 23.67
@@ -1122,7 +1122,7 @@ mod tests {
         fn test_soft_structure_import() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-            quote := { symbol: "ABC", exchange: "AMEX" }
+            quote = { symbol: "ABC", exchange: "AMEX" }
             use quote
         "#).unwrap();
             let machine = interpreter;

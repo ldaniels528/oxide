@@ -19,6 +19,7 @@ use log::__private_api::Value;
 use shared_lib::cnv_error;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
+use crate::expression::Expression::{DoWhile, While};
 
 fn generate_readme(file: File) -> std::io::Result<File> {
     println!("generate title...");
@@ -89,8 +90,8 @@ GET https://api.example.com/users
 ### 🧮 Transform Arrays and Maps
 ```oxide
 use arrays
-users := [ { name: 'Tom' }, { name: 'Sara' } ]
-names := users:::map(fn(u) => u::name)
+users = [ { name: 'Tom' }, { name: 'Sara' } ]
+names = users:::map(fn(u) => u::name)
 ```
 
 ### 🕒 Work with Dates and Durations
@@ -101,8 +102,9 @@ cal::plus(now(), 30:::days())
 
 ### 🔄 Compose Data Pipelines
 ```oxide
-use tools
-[1, 2, 3, 4]:::filter(fn(x) => (x % 2) == 0):::map(fn(x) => x * 10)
+use arrays
+let arr = [1, 2, 3, 4]
+(arr:::filter(fn(x) => (x % 2) == 0)):::map(fn(x) => x * 10)
 ```
 
 ---
@@ -166,7 +168,7 @@ You'll find the executables in `./target/release/`:
 }
 
 fn generate_language_examples(mut file: File) -> std::io::Result<File> {
-    for (name, examples) in get_language_examples() {
+    for (name, examples) in create_language_examples() {
         // header section
         // ex: "oxide::version - ..."
         writeln!(file, "<hr>")?;
@@ -302,7 +304,7 @@ server response:
     Ok(file)
 }
 
-pub fn get_examples(model: &Expression) -> Vec<String> {
+pub fn get_language_examples(model: &Expression) -> Vec<String> {
     match model {
         Expression::ArrayExpression(..) => vec![
             strip_margin(r#"
@@ -318,7 +320,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |// Arrays may be used to assign multiple variables
                 |
-                |[a, b, c] := [3, 5, 7]
+                |let [a, b, c] = [3, 5, 7]
                 |a + b + c
             "#, '|'),
             strip_margin(r#"
@@ -339,13 +341,13 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::Coalesce(..) => vec![],
         Expression::CodeBlock(..) => vec![
             strip_margin(r#"
-                |result := {
-                |    (a, b, sum) := (0, 1, 0)
+                |result = {
+                |    (a, b, sum) = (0, 1, 0)
                 |    while sum < 10 {
-                |        sum := sum + (a + b)
-                |        t := b
-                |        b := a + b
-                |        a := t
+                |        sum = sum + (a + b)
+                |        t = b
+                |        b = a + b
+                |        a = t
                 |    }
                 |    sum
                 |}
@@ -364,23 +366,23 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::Condition(..) => vec![
             strip_margin(r#"
-                    |x := 10
+                    |let x = 10
                     |x in 5..=10
                 "#, '|'),
             strip_margin(r#"
-                    |x := 10
+                    |let x = 10
                     |x in 5..10
                 "#, '|'),
             strip_margin(r#"
-                    |x := 1..8
+                    |let x = 1..8
                     |x contains 7
                 "#, '|'),
         ],
         Expression::CurvyArrowLeft(..) => vec![
             strip_margin(r#"
-                |stocks := ns("expressions.read_next_row.stocks")
+                |stocks = ns("expressions.read_next_row.stocks")
                 |table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
-                |rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+                |rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
                 |rows ~> stocks
                 |// read the last row
                 |last_row <~ stocks
@@ -388,9 +390,9 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::CurvyArrowRight(..) => vec![
             strip_margin(r#"
-                |stocks := ns("expressions.into.stocks")
+                |stocks = ns("expressions.into.stocks")
                 |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |rows := [
+                |rows = [
                 |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                 |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                 |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -401,9 +403,18 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::Divide(..) => vec![
             "20.0 / 3".into(),
         ],
+        Expression::DoWhile { .. } => vec![
+            strip_margin(r#"
+                |let i = 0
+                |do {
+                |    i = i + 1
+                |    yield i * 2
+                |} while (i < 5)
+            "#, '|')
+        ],
         Expression::ElementAt(..) => vec![
             strip_margin(r#"
-                |arr := [1, 4, 2, 8, 5, 7]
+                |let arr = [1, 4, 2, 8, 5, 7]
                 |arr[3]
             "#, '|')],
         Expression::Feature { .. } => vec![
@@ -435,7 +446,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                 |}"#, '|')],
         Expression::FnExpression { .. } => vec![
             strip_margin(r#"
-                |product := fn (a, b) => a * b
+                |product = fn (a, b) => a * b
                 |product(2, 5)
             "#, '|')],
         Expression::For { .. } => vec![
@@ -446,7 +457,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::From(..) => vec![
             strip_margin(r#"
-                |stocks := tools::to_table([
+                |stocks = tools::to_table([
                 |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                 |   { symbol: "GRU", exchange: "NYSE", last_sale: 56.88 },
                 |   { symbol: "APK", exchange: "NASDAQ", last_sale: 32.12 }
@@ -456,7 +467,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::FunctionCall { .. } => vec![],
         Expression::HTTP(..) => vec![
             strip_margin(r#"
-                    |stocks := ns("readme.www.stocks")
+                    |stocks = ns("readme.www.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |www::serve(8833)
                     "#, '|'),
@@ -489,7 +500,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                     |// Oxide provides an if-else statement
                     |
-                    |x := 4
+                    |let x = 4
                     |if(x > 5) "Yes"
                     |else if(x < 5) "Maybe"
                     |else "No"
@@ -497,14 +508,14 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                     |// Oxide also provides iff - a ternary-operator-like if function
                     |
-                    |fact := fn(n) => iff(n <= 1, 1, n * fact(n - 1))
+                    |fact = fn(n) => iff(n <= 1, 1, n * fact(n - 1))
                     |fact(6)
                     "#, '|'),
         ],
         Expression::Use(..) => vec![
             strip_margin(r#"
                 |use tools
-                |stocks := to_table([
+                |stocks = to_table([
                 |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                 |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                 |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -515,7 +526,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::Literal(..) => vec![],
         Expression::MatchExpression(..) => vec![
             strip_margin(r#"
-                |code := 103
+                |let code = 103
                 |match code [
                 |   n: 100 ~> "Accepted",
                 |   n: 101..104 ~> 'Escalated',
@@ -534,8 +545,8 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::Neg(..) => vec![
             strip_margin(r#"
-                |i := 75
-                |j := -i
+                |let i = 75
+                |let j = -i
                 |j
             "#, '|')],
         Expression::New(..) => vec![
@@ -554,13 +565,13 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |// Ranges may be exclusive
                 |
-                |range := 1..5
+                |range = 1..5
                 |tools::reverse(range)
             "#, '|'),
         strip_margin(r#"
                 |// Ranges may be inclusive
                 |
-                |range := 1..=5
+                |range = 1..=5
                 |tools::reverse(range)
             "#, '|')
         ],
@@ -568,10 +579,18 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::Scenario { .. } => vec![],
         Expression::SetVariables(..) => vec![
             strip_margin(r#"
-                |a := 3
-                |b := 5
-                |c := 7
+                |let a = 3
+                |let b = 5
+                |let c = 7
                 |a + b + c
+            "#, '|'),
+        ],
+        Expression::SetVariablesExpr(..) => vec![
+            strip_margin(r#"
+                |// Use ":=" to simultaneously assign a value and return the assigned value
+                |
+                |let i = 0
+                |while (i < 5) yield (i := i + 1) * 3
             "#, '|'),
         ],
         Expression::StructureExpression(..) => vec![],
@@ -579,21 +598,21 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |// Tuples may be used to assign multiple variables
                 |
-                |(a, b, c) := (3, 5, 7)
+                |(a, b, c) = (3, 5, 7)
                 |a + b + c
             "#, '|'),
             strip_margin(r#"
                 |// Tuples support addition
                 |
-                |a := (2, 4, 6)
-                |b := (1, 2, 3)
+                |let a = (2, 4, 6)
+                |let b = (1, 2, 3)
                 |a + b
             "#, '|'),
             strip_margin(r#"
                 |// Tuples support subtraction
                 |
-                |a := (3, 5, 7)
-                |b := (1, 0, 1)
+                |let a = (3, 5, 7)
+                |let b = (1, 0, 1)
                 |a - b
             "#, '|'),
             strip_margin(r#"
@@ -604,41 +623,41 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |// Tuples support multiplication
                 |
-                |a := (3, 5, 7)
-                |b := (1, 0, 1)
+                |let a = (3, 5, 7)
+                |let b = (1, 0, 1)
                 |a * b
             "#, '|'),
             strip_margin(r#"
                 |// Tuples support division
                 |
-                |a := (3.0, 5.0, 9.0)
-                |b := (1.0, 2.0, 1.0)
+                |let a = (3.0, 5.0, 9.0)
+                |let b = (1.0, 2.0, 1.0)
                 |a / b
                 "#, '|'),
             strip_margin(r#"
                 |// Tuples support modulus
                 |
-                |a := (3.0, 5.0, 9.0)
-                |b := (1.0, 2.0, 1.0)
+                |let a = (3.0, 5.0, 9.0)
+                |let b = (1.0, 2.0, 1.0)
                 |a % b
                 "#, '|'),
             strip_margin(r#"
                 |// Tuples support exponents
                 |
-                |a := (2, 4, 6)
-                |b := (1, 2, 3)
+                |let a = (2, 4, 6)
+                |let b = (1, 2, 3)
                 |a ** b
             "#, '|'),
         ],
         Expression::TypeDef(..) => vec![
             strip_margin(r#"
-                |LabelString := typedef(String(80))
+                |LabelString = typedef(String(80))
                 |LabelString
             "#, '|')
         ],
         Expression::Variable(..) => vec![
             strip_margin(r#"
-                |(a, b, c) := (3, 5, 7)
+                |let (a, b, c) = (3, 5, 7)
                 |c > b
             "#, '|')
         ],
@@ -646,7 +665,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
         Expression::VerticalBarDoubleArrow(..) => vec![
             strip_margin(r#"
                |use tools::reverse
-               |result := 'Hello' |> reverse
+               |result = 'Hello' |> reverse
                |result
                "#, '|'),
             strip_margin(r#"
@@ -654,17 +673,17 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
                |
                |fn add(a, b) => a + b
                |fn inverse(a) => 1.0 / a
-               |result := ((2, 3) |>> add) |> inverse
+               |result = ((2, 3) |>> add) |> inverse
                |result
                "#, '|')
         ],
         Expression::Via(..) => vec![
             strip_margin(r#"
-                |stocks := ns("readme.via.stocks")
+                |stocks = ns("readme.via.stocks")
                 |drop table stocks
                 |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 |
-                |rows := [
+                |rows = [
                 |   { symbol: "ABCQ", exchange: "AMEX", last_sale: 12.49 },
                 |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                 |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -678,8 +697,11 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::While { .. } => vec![
             strip_margin(r#"
-                while (x < 5) x := x + 1
-                x
+                |let x = 0
+                |while (x < 5) {
+                |    x = x + 1
+                |    yield x * 2
+                |}
             "#, '|')
         ],
         Expression::Yield(..) => vec![
@@ -690,7 +712,7 @@ pub fn get_examples(model: &Expression) -> Vec<String> {
     }
 }
 
-fn get_language_examples() -> Vec<(String, Vec<String>)> {
+fn create_language_examples() -> Vec<(String, Vec<String>)> {
     use crate::expression::Expression::*;
     let null = Box::new(Literal(TypedValue::Null));
     let models = vec![
@@ -709,6 +731,7 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Curvy-Arrow Right", CurvyArrowRight(null.clone(), null.clone())),
         ("SQL", DatabaseOp(DatabaseOps::Queryable(Where { from: null.clone(), condition: Conditions::True }))),
         ("Mathematics: division", Divide(null.clone(), null.clone())),
+        ("Do-While expression", DoWhile { condition: null.clone(), code: null.clone() }),
         ("Arrays: Indexing", ElementAt(null.clone(), null.clone())),
         ("Testing", Feature { title: null.clone(), scenarios: vec![] }),
         ("Functions", FnExpression { params: vec![], body: None, returns: DataType::BooleanType }),
@@ -717,7 +740,6 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Query", From(null.clone())),
         ("HTTP", HTTP(HttpMethodCalls::GET(null.clone()))),
         ("IF expression", If { condition: null.clone(), a: null.clone(), b: None }),
-        ("Import/Use", Use(vec![])),
         ("Includes", Include(null.clone())),
         //("Match expression", MatchExpression(null.clone(), vec![])),
         ("Mathematics: subtraction", Minus(null.clone(), null.clone())),
@@ -726,17 +748,21 @@ fn get_language_examples() -> Vec<(String, Vec<String>)> {
         ("Mathematics: addition", Plus(null.clone(), null.clone())),
         ("New Instances", New(null.clone())),
         ("Ranges", Range(Exclusive(null.clone(), null.clone()))),
-        ("Assignment", SetVariables(null.clone(), null.clone())),
+        ("Assignment (statement)", SetVariables(null.clone(), null.clone())),
+        ("Assignment (expression)", SetVariablesExpr(null.clone(), null.clone())),
         ("Structures", StructureExpression(vec![])),
         ("Tuples", TupleExpression(vec![])),
         ("Type Definitions", TypeDef(null.clone())),
-        ("Function Pipelines", VerticalBarDoubleArrow(null.clone(), null.clone())),
+        ("Function Pipelines", VerticalBarArrow(null.clone(), null.clone())),
+        ("Function Pipelines (destructuring)", VerticalBarDoubleArrow(null.clone(), null.clone())),
+        ("Import/Use", Use(vec![])),
         ("Via Clause", Via(null.clone())),
+        ("While expression", While { condition: null.clone(), code: null.clone() }),
         ("Yield", Yield(null.clone())),
     ];
 
     let mut examples = models.iter()
-        .map(|(title, model)| (title.to_string(), get_examples(&model)))
+        .map(|(title, model)| (title.to_string(), get_language_examples(&model)))
         .filter(|(_, examples)| !examples.is_empty())
         .collect::<Vec<_>>();
     examples.sort_by(|a, b| a.0.cmp(&b.0));

@@ -226,7 +226,8 @@ impl Compiler {
             "**" => Ok(Pow(a.into(), b.into())),
             ".." => Ok(Range(Exclusive(a.into(), b.into()))),
             "..=" => Ok(Range(Inclusive(a.into(), b.into()))),
-            ":=" => Ok(SetVariables(a.into(), b.into())),
+            "=" => Ok(SetVariables(a.into(), b.into())),
+            ":=" => Ok(SetVariablesExpr(a.into(), b.into())),
             "|>" => Ok(VerticalBarArrow(a.into(), b.into())),
             "|>>" => Ok(VerticalBarDoubleArrow(a.into(), b.into())),
             _ => throw(ExactNear(
@@ -367,6 +368,7 @@ impl Compiler {
                 "append" => self.parse_keyword_append(nts),
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
+                "do" => self.parse_keyword_do_while(nts),
                 "DELETE" => self.parse_keyword_http(ts),
                 "drop" => self.parse_mutate_target(nts, |m| DatabaseOp(Mutation(Drop(m)))),
                 "false" => Ok((FALSE, nts)),
@@ -628,6 +630,9 @@ impl Compiler {
             "=" => self
                 .parse_expression_2a(ts, expr0, SetVariables)
                 .map(|(m, ts)| (Some(m), ts)),
+            ":=" => self
+                .parse_expression_2a(ts, expr0, SetVariablesExpr)
+                .map(|(m, ts)| (Some(m), ts)),
             "==" => self
                 .parse_condition_2a(ts, expr0, Equal)
                 .map(|(m, ts)| (Some(m), ts)),
@@ -687,9 +692,6 @@ impl Compiler {
                 .map(|(m, ts)| (Some(m), ts)),
             "..=" => self
                 .parse_expression_2a(ts, expr0, |a, b| Range(Inclusive(a, b)))
-                .map(|(m, ts)| (Some(m), ts)),
-            ":=" => self
-                .parse_expression_set(ts, expr0)
                 .map(|(m, ts)| (Some(m), ts)),
             "<<" => self
                 .parse_expression_2a(ts, expr0, BitwiseShiftLeft)
@@ -857,30 +859,6 @@ impl Compiler {
         }
     }
 
-    /// compiles the [TokenSlice] into a name-value parameter [Expression]
-    fn parse_expression_set(
-        &self,
-        ts: TokenSlice,
-        expr0: Expression,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        let (expr1, ts) = self.compile_next(&ts)?;
-        match expr0 {
-            ArrayExpression(items) => Ok((
-                SetVariables(Box::new(ArrayExpression(items)), expr1.into()),
-                ts,
-            )),
-            TupleExpression(items) => Ok((
-                SetVariables(Box::new(TupleExpression(items)), expr1.into()),
-                ts,
-            )),
-            Variable(name) => Ok((SetVariables(Variable(name).into(), expr1.into()), ts)),
-            _ => throw(ExactNear(
-                "an identifier name was expected".into(),
-                ts.current(),
-            )),
-        }
-    }
-
     /// Parses an identifier.
     fn parse_identifier(
         &self,
@@ -901,6 +879,7 @@ impl Compiler {
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
                 "DELETE" => self.parse_keyword_http(ts),
+                "do" => self.parse_keyword_do_while(nts),
                 "drop" => self.parse_mutate_target(nts, |m| DatabaseOp(Mutation(Drop(m)))),
                 "false" => Ok((FALSE, nts)),
                 "Feature" => self.parse_keyword_feature(nts),
@@ -1060,6 +1039,25 @@ impl Compiler {
         ))
     }
 
+    /// Parses do-while statement
+    /// #### Examples
+    /// ```
+    /// do {
+    ///     let x = 10;
+    ///     let y = 20;
+    ///     yield x + y
+    /// } while x < 100;
+    /// ```
+    fn parse_keyword_do_while(
+        &self,
+        ts: TokenSlice
+    ) -> std::io::Result<(Expression, TokenSlice)> {
+        let (code, mut ts) = self.compile_next(&ts)?;
+        ts = ts.expect("while")?;
+        let (condition, ts) = self.compile_next(&ts)?;
+        Ok((DoWhile { condition: condition.into(), code: code.into() }, ts))
+    }
+
     fn parse_keyword_feature(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (title, ts) = self.compile_next(&ts)?;
         let ts = ts.expect("{")?;
@@ -1119,7 +1117,7 @@ impl Compiler {
     }
 
     /// Builds a language model from a function variant
-    /// ex: f := fn (x, y) => x + y
+    /// ex: f = fn (x, y) => x + y
     fn parse_keyword_fn(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         // parse the function
         match ts.next() {
@@ -1234,9 +1232,23 @@ impl Compiler {
         ))
     }
 
+    /// Builds a variable assignment model
+    /// #### Returns
+    /// - an [Expression]
+    /// #### Examples
+    /// ```
+    /// let n = 100
+    /// ```
+    /// ```
+    /// let (x, y, z) = (3, 6, 9)
+    /// ```
+    /// ```
+    /// let [a, b, c, d] = [1, 3, 5, 7]
+    /// ```
     fn parse_keyword_let(&self, ts0: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         match self.next_expression(None, &ts0)? {
             (Some(SetVariables(name, value)), ts) => Ok((SetVariables(name, value), ts)),
+            (Some(SetVariablesExpr(name, value)), ts) => Ok((SetVariablesExpr(name, value), ts)),
             (Some(_), _) => throw(ExactNear("Expected assignment: let x = y".into(), ts0.current())),
             (None, _) => throw(ExactNear("Expected identifier".into(), ts0.current()))
         }
@@ -1424,7 +1436,7 @@ impl Compiler {
     }
 
     /// Builds a language model from a table expression.
-    /// ex: stocks := table (symbol: String(8), exchange: String(8), last_sale: f64)
+    /// ex: stocks = table (symbol: String(8), exchange: String(8), last_sale: f64)
     fn parse_keyword_table(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         // detect whether this is a table function
         let mut ts = ts;
@@ -1511,17 +1523,15 @@ impl Compiler {
     }
 
     /// Builds a language model from a while expression
-    /// ex: x := 0 while (x < 5) { x := x + 1 }
+    /// #### Examples
+    /// x = 0 
+    /// while (x < 5) { 
+    ///     yield x = x + 1 
+    /// }
     fn parse_keyword_while(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (condition, ts) = self.compile_next(&ts)?;
         let (code, ts) = self.compile_next(&ts)?;
-        Ok((
-            While {
-                condition: Box::new(condition),
-                code: Box::new(code),
-            },
-            ts,
-        ))
+        Ok((While { condition: condition.into(), code: code.into() }, ts))
     }
 
     /// Parses a mutate-target expression.
@@ -2073,7 +2083,7 @@ mod tests {
             Compiler::build_and_save(
                 src_path,
                 r#"
-            (a, b, c) := (3, 5, 7)
+            (a, b, c) = (3, 5, 7)
             a + b + c
         "#,
             )
@@ -2088,8 +2098,8 @@ mod tests {
         #[test]
         fn test_code_block() {
             verify_build_with_decompile(
-                "{ x := 19 ^ 13 x }",
-                "{\nx := 19 ^ 13\nx\n}",
+                "{ x = 19 ^ 13 x }",
+                "{\nx = 19 ^ 13\nx\n}",
                 CodeBlock(vec![
                     SetVariables(
                         Variable("x".into()).into(),
@@ -2165,11 +2175,7 @@ mod tests {
         #[test]
         fn test_curvy_arrow_left() {
             let compiler = Compiler::new();
-            let ts = TokenSlice::from_string(
-                r#"
-                n: 200 <~ "Rejected"
-            "#,
-            );
+            let ts = TokenSlice::from_string(r#"n: 200 <~ "Rejected""#);
             let (model, _) = compiler.compile_with_precedence(ts).unwrap();
             assert_eq!(
                 model,
@@ -2183,11 +2189,7 @@ mod tests {
         #[test]
         fn test_curvy_arrow_right() {
             let compiler = Compiler::new();
-            let ts = TokenSlice::from_string(
-                r#"
-                n: 100 ~> "Accepted"
-            "#,
-            );
+            let ts = TokenSlice::from_string(r#"n: 100 ~> "Accepted""#);
             let (model, _) = compiler.compile_with_precedence(ts).unwrap();
             assert_eq!(
                 model,
@@ -2196,6 +2198,27 @@ mod tests {
                     Literal(StringValue("Accepted".into())).into()
                 )
             )
+        }
+
+        #[test]
+        fn test_do_while_loop() {
+            let model = Compiler::build(r#"do x = x + 1 while (x < 5)"#)
+                .unwrap();
+            assert_eq!(
+                model,
+                DoWhile {
+                    condition: Condition(LessThan(
+                        Box::new(Variable("x".into())),
+                        Box::new(Literal(Number(I64Value(5)))),
+                    )).into(),
+                    code: SetVariables(
+                        Variable("x".into()).into(),
+                        Plus(
+                            Variable("x".into()).into(),
+                            Literal(Number(I64Value(1))).into()
+                        ).into(),
+                    ).into(),
+                });
         }
 
         #[test]
@@ -2258,12 +2281,8 @@ mod tests {
 
         #[test]
         fn test_fn_anonymous_function_with_explicit_types() {
-            let code = Compiler::build(
-                r#"
-                fn (a: i64, b: i64) : i64 => a * b
-            "#,
-            )
-            .unwrap();
+            let code = Compiler::build(r#"fn (a: i64, b: i64) : i64 => a * b"#)
+                .unwrap();
             assert_eq!(
                 code,
                 FnExpression {
@@ -2282,12 +2301,7 @@ mod tests {
 
         #[test]
         fn test_fn_anonymous_function_with_inferred_types() {
-            let code = Compiler::build(
-                r#"
-                fn (a, b) => a * b
-            "#,
-            )
-            .unwrap();
+            let code = Compiler::build("fn (a, b) => a * b").unwrap();
             assert_eq!(
                 code,
                 FnExpression {
@@ -2458,7 +2472,7 @@ mod tests {
         fn test_for_iteration() {
             verify_build_with_decompile(
                 "for(i = 0, i < 5, i = i + 1) println(i)",
-                "for (i := 0, i < 5, i := i + 1) println(i)",
+                "for (i = 0, i < 5, i = i + 1) println(i)",
                 For {
                     construct:
                     TupleExpression(vec![
@@ -3151,7 +3165,7 @@ mod tests {
         #[test]
         fn test_set_variables_array_deconstruction() {
             verify_build(
-                "[a, b, c, d] := [2, 4, 6, 8]",
+                "[a, b, c, d] = [2, 4, 6, 8]",
                 SetVariables(
                     ArrayExpression(vec![
                         Variable("a".into()),
@@ -3174,7 +3188,7 @@ mod tests {
         #[test]
         fn test_set_variables_tuple_deconstruction() {
             verify_build(
-                "(a, b, c) := (3, 5, 7)",
+                "(a, b, c) = (3, 5, 7)",
                 SetVariables(
                     TupleExpression(vec![
                         Variable("a".into()),
@@ -3337,19 +3351,15 @@ mod tests {
 
         #[test]
         fn test_while_loop() {
-            let model = Compiler::build(
-                r#"
-                while (x < 5) x := x + 1
-            "#,
-            )
-            .unwrap();
+            let model = Compiler::build(r#"while (x < 5) x = x + 1"#)
+                .unwrap();
             assert_eq!(
                 model,
                 While {
-                    condition: Box::new(Condition(LessThan(
-                        Box::new(Variable("x".into())),
-                        Box::new(Literal(Number(I64Value(5)))),
-                    ))),
+                    condition: Condition(LessThan(
+                        Variable("x".into()).into(),
+                        Literal(Number(I64Value(5))).into(),
+                    )).into(),
                     code: SetVariables(
                         Variable("x".into()).into(),
                         Plus(
@@ -3359,16 +3369,15 @@ mod tests {
                         .into(),
                     )
                     .into(),
-                }
-            );
+                });
         }
 
         #[test]
         fn test_while_loop_fix() {
             let model = Compiler::build(
                 r#"
-                x := 0
-                while x < 7 x := x + 1
+                x = 0
+                while x < 7 x = x + 1
                 x
             "#,
             )

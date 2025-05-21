@@ -602,7 +602,7 @@ mod tests {
         #[test]
         fn test_enums_1() {
             verify_type_construction(
-                "Enum(AMEX := 1, NASDAQ := 2, NYSE := 3, OTCBB := 4)",
+                "Enum(AMEX = 1, NASDAQ = 2, NYSE = 3, OTCBB = 4)",
                 EnumType(vec![
                     Parameter::with_default("AMEX", NumberType(I64Kind), Number(I64Value(1))),
                     Parameter::with_default("NASDAQ", NumberType(I64Kind), Number(I64Value(2))),

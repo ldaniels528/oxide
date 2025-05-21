@@ -269,6 +269,10 @@ pub enum Expression {
     CurvyArrowRight(Box<Expression>, Box<Expression>),
     DatabaseOp(DatabaseOps),
     Divide(Box<Expression>, Box<Expression>),
+    DoWhile {
+        condition: Box<Expression>,
+        code: Box<Expression>,
+    },
     ElementAt(Box<Expression>, Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
     FnExpression {
@@ -307,6 +311,7 @@ pub enum Expression {
         verifications: Vec<Expression>,
     },
     SetVariables(Box<Expression>, Box<Expression>),
+    SetVariablesExpr(Box<Expression>, Box<Expression>),
     StructureExpression(Vec<(String, Expression)>),
     TupleExpression(Vec<Expression>),
     TypeDef(Box<Expression>),
@@ -358,6 +363,8 @@ impl Expression {
                 },
             Expression::Divide(a, b) =>
                 format!("{} / {}", Self::decompile(a), Self::decompile(b)),
+            Expression::DoWhile { condition, code } => 
+                format!("do {} while {}", Self::decompile(condition), Self::decompile(code)),
             Expression::ElementAt(a, b) =>
                 format!("{}[{}]", Self::decompile(a), Self::decompile(b)),
             Expression::ColonColon(a, b) =>
@@ -435,6 +442,8 @@ impl Expression {
                 format!("scenario {title} {{\n{verifications}\n}}")
             }
             Expression::SetVariables(vars, values) =>
+                format!("{} = {}", Self::decompile(vars), Self::decompile(values)),
+            Expression::SetVariablesExpr(vars, values) =>
                 format!("{} := {}", Self::decompile(vars), Self::decompile(values)),
             Expression::StructureExpression(items) =>
                 format!("{{{}}}", items.iter()
@@ -676,6 +685,7 @@ impl Expression {
                 }
             }
             Divide(a, b) => Self::infer_a_or_b(a, b, hints),
+            DoWhile { code, .. } => Self::infer_with_hints(code, hints),
             ElementAt(..) => UnresolvedType,
             Feature { .. } => BooleanType,
             FnExpression { params, returns, .. } =>
@@ -712,6 +722,7 @@ impl Expression {
             Return(a) => Self::infer_with_hints(a, hints),
             Scenario { .. } => BooleanType,
             SetVariables(..) => BooleanType,
+            SetVariablesExpr(_, b) => b.infer_type(),
             // structures: { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
             StructureExpression(key_values) => {
                 let mut params = vec![];
@@ -740,7 +751,7 @@ impl Expression {
             VerticalBarArrow(_, b) => Self::infer_with_hints(b, hints),
             VerticalBarDoubleArrow(_, b) => Self::infer_with_hints(b, hints),
             Via(..) => TableType(vec![], 0),
-            While { .. } => UnresolvedType,
+            While { code, .. } => Self::infer_with_hints(code, hints),
             Yield(..) => ArrayType(0),
         }
     }
@@ -1309,7 +1320,7 @@ mod expression_tests {
                 returns: UnresolvedType,
             }.into(),
         );
-        assert_eq!(Expression::decompile(&model), "add := fn(a, b) => a + b")
+        assert_eq!(Expression::decompile(&model), "add = fn(a, b) => a + b")
     }
 
     #[test]
@@ -1356,7 +1367,7 @@ mod expression_tests {
         }));
         assert_eq!(
             Expression::decompile(&model),
-            r#"create table ns("compiler.create.stocks") (symbol: String(8) := "ABC", exchange: String(8) := "NYSE", last_sale: f64 := 0.0)"#)
+            r#"create table ns("compiler.create.stocks") (symbol: String(8) = "ABC", exchange: String(8) = "NYSE", last_sale: f64 = 0.0)"#)
     }
 
     #[test]

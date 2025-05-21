@@ -16,6 +16,7 @@ use crate::formatting::DataFormats;
 use crate::journaling::Journaling;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
+use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
@@ -105,6 +106,19 @@ impl ArraysPkg {
             ))),
         }
     }
+
+    pub fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Arrays(ArraysPkg::Filter),
+            PackageOps::Arrays(ArraysPkg::Len),
+            PackageOps::Arrays(ArraysPkg::Map),
+            PackageOps::Arrays(ArraysPkg::Pop),
+            PackageOps::Arrays(ArraysPkg::Push),
+            PackageOps::Arrays(ArraysPkg::Reduce),
+            PackageOps::Arrays(ArraysPkg::Reverse),
+            PackageOps::Arrays(ArraysPkg::ToArray),
+        ]
+    }
 }
 
 impl Package for ArraysPkg {
@@ -123,19 +137,6 @@ impl Package for ArraysPkg {
 
     fn get_package_name(&self) -> String {
         "arrays".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Arrays(ArraysPkg::Filter),
-            PackageOps::Arrays(ArraysPkg::Len),
-            PackageOps::Arrays(ArraysPkg::Map),
-            PackageOps::Arrays(ArraysPkg::Pop),
-            PackageOps::Arrays(ArraysPkg::Push),
-            PackageOps::Arrays(ArraysPkg::Reduce),
-            PackageOps::Arrays(ArraysPkg::Reverse),
-            PackageOps::Arrays(ArraysPkg::ToArray),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -174,7 +175,7 @@ impl Package for ArraysPkg {
             ArraysPkg::Pop => vec![strip_margin(
                 r#"
                     |use arrays
-                    |stocks := []
+                    |stocks = []
                     |stocks:::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
                     |stocks:::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
                     |stocks
@@ -184,7 +185,7 @@ impl Package for ArraysPkg {
             ArraysPkg::Push => vec![strip_margin(
                 r#"
                     |use arrays
-                    |stocks := [
+                    |stocks = [
                     |    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     |    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                     |    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -201,7 +202,7 @@ impl Package for ArraysPkg {
                 strip_margin(
                 r#"
                     |use arrays::reduce
-                    |numbers := [1, 2, 3, 4, 5]
+                    |numbers = [1, 2, 3, 4, 5]
                     |numbers:::reduce(0, fn(a, b) => a + b)
                 "#,
                 '|')
@@ -356,6 +357,21 @@ impl CalPkg {
     ) -> std::io::Result<(Machine, TypedValue)> {
         Ok((ms, Number(DateValue(date.to_i64() + duration.to_i64()))))
     }
+
+    pub fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Cal(CalPkg::DateDay),
+            PackageOps::Cal(CalPkg::DateHour12),
+            PackageOps::Cal(CalPkg::DateHour24),
+            PackageOps::Cal(CalPkg::DateMinute),
+            PackageOps::Cal(CalPkg::DateMonth),
+            PackageOps::Cal(CalPkg::DateSecond),
+            PackageOps::Cal(CalPkg::DateYear),
+            PackageOps::Cal(CalPkg::Minus),
+            PackageOps::Cal(CalPkg::Now),
+            PackageOps::Cal(CalPkg::Plus),
+        ]
+    }
 }
 
 impl Package for CalPkg {
@@ -376,21 +392,6 @@ impl Package for CalPkg {
 
     fn get_package_name(&self) -> String {
         "cal".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Cal(CalPkg::DateDay),
-            PackageOps::Cal(CalPkg::DateHour12),
-            PackageOps::Cal(CalPkg::DateHour24),
-            PackageOps::Cal(CalPkg::DateMinute),
-            PackageOps::Cal(CalPkg::DateMonth),
-            PackageOps::Cal(CalPkg::DateSecond),
-            PackageOps::Cal(CalPkg::DateYear),
-            PackageOps::Cal(CalPkg::Minus),
-            PackageOps::Cal(CalPkg::Now),
-            PackageOps::Cal(CalPkg::Plus),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -574,6 +575,16 @@ impl DurationsPkg {
         );
         ms.evaluate(&op)
     }
+    
+    pub fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Durations(DurationsPkg::Days),
+            PackageOps::Durations(DurationsPkg::Hours),
+            PackageOps::Durations(DurationsPkg::Millis),
+            PackageOps::Durations(DurationsPkg::Minutes),
+            PackageOps::Durations(DurationsPkg::Seconds),
+        ]
+    }
 }
 
 impl Package for DurationsPkg {
@@ -589,16 +600,6 @@ impl Package for DurationsPkg {
 
     fn get_package_name(&self) -> String {
         "durations".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Durations(DurationsPkg::Days),
-            PackageOps::Durations(DurationsPkg::Hours),
-            PackageOps::Durations(DurationsPkg::Millis),
-            PackageOps::Durations(DurationsPkg::Minutes),
-            PackageOps::Durations(DurationsPkg::Seconds),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -735,6 +736,16 @@ impl IoPkg {
         out.flush()?;
         Ok((ms, Boolean(true)))
     }
+    
+    pub fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Io(IoPkg::FileCreate),
+            PackageOps::Io(IoPkg::FileExists),
+            PackageOps::Io(IoPkg::FileReadText),
+            PackageOps::Io(IoPkg::StdErr),
+            PackageOps::Io(IoPkg::StdOut),
+        ]
+    }
 }
 
 impl Package for IoPkg {
@@ -750,16 +761,6 @@ impl Package for IoPkg {
             IoPkg::StdErr => extract_value_fn1(ms, args, Self::do_io_stderr),
             IoPkg::StdOut => extract_value_fn1(ms, args, Self::do_io_stdout),
         }
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Io(IoPkg::FileCreate),
-            PackageOps::Io(IoPkg::FileExists),
-            PackageOps::Io(IoPkg::FileReadText),
-            PackageOps::Io(IoPkg::StdErr),
-            PackageOps::Io(IoPkg::StdOut),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -788,7 +789,7 @@ impl Package for IoPkg {
             IoPkg::FileReadText => vec![strip_margin(
                 r#"
                     |use io, util
-                    |file := "temp_secret.txt"
+                    |file = "temp_secret.txt"
                     |file:::create_file(md5("**keep**this**secret**"))
                     |file:::read_text_file()
                 "#,
@@ -844,6 +845,21 @@ pub enum MathPkg {
     Sqrt,
 }
 
+impl MathPkg {
+    pub fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Math(MathPkg::Abs),
+            PackageOps::Math(MathPkg::Ceil),
+            PackageOps::Math(MathPkg::Floor),
+            PackageOps::Math(MathPkg::Max),
+            PackageOps::Math(MathPkg::Min),
+            PackageOps::Math(MathPkg::Pow),
+            PackageOps::Math(MathPkg::Round),
+            PackageOps::Math(MathPkg::Sqrt),
+        ]
+    }
+}
+
 impl Package for MathPkg {
     fn get_name(&self) -> String {
         match self {
@@ -860,19 +876,6 @@ impl Package for MathPkg {
 
     fn get_package_name(&self) -> String {
         "math".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Math(MathPkg::Abs),
-            PackageOps::Math(MathPkg::Ceil),
-            PackageOps::Math(MathPkg::Floor),
-            PackageOps::Math(MathPkg::Max),
-            PackageOps::Math(MathPkg::Min),
-            PackageOps::Math(MathPkg::Pow),
-            PackageOps::Math(MathPkg::Round),
-            PackageOps::Math(MathPkg::Sqrt),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -996,7 +999,7 @@ impl OxidePkg {
 
     /// returns a table describing all modules
     fn do_oxide_help(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
-        let mut mrc = ModelRowCollection::from_parameters(&PackageOps::get_oxide_help_parameters());
+        let mut mrc = ModelRowCollection::from_parameters(&OxidePkg::get_oxide_help_parameters());
         for (module_name, module) in ms.get_variables().iter() {
             match module {
                 Structured(Hard(mod_struct)) => {
@@ -1037,8 +1040,8 @@ impl OxidePkg {
         // re-executes a saved command
         fn re_run(ms: Machine, pid: usize) -> std::io::Result<(Machine, TypedValue)> {
             let frc = FileRowCollection::open_or_create(
-                &PackageOps::get_oxide_history_ns(),
-                PackageOps::get_oxide_history_parameters(),
+                &OxidePkg::get_oxide_history_ns(),
+                OxidePkg::get_oxide_history_parameters(),
             )?;
             let row_maybe = frc.read_one(pid)?;
             let code = row_maybe
@@ -1061,8 +1064,8 @@ impl OxidePkg {
             // history()
             [] => {
                 let frc = FileRowCollection::open_or_create(
-                    &PackageOps::get_oxide_history_ns(),
-                    PackageOps::get_oxide_history_parameters(),
+                    &OxidePkg::get_oxide_history_ns(),
+                    OxidePkg::get_oxide_history_parameters(),
                 )?;
                 Ok((ms, TableValue(Disk(frc))))
             }
@@ -1075,6 +1078,44 @@ impl OxidePkg {
 
     fn do_oxide_version(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         Ok((ms, StringValue(VERSION.into())))
+    }
+
+    pub fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Oxide(OxidePkg::Compile),
+            PackageOps::Oxide(OxidePkg::Debug),
+            PackageOps::Oxide(OxidePkg::Eval),
+            PackageOps::Oxide(OxidePkg::Help),
+            PackageOps::Oxide(OxidePkg::History),
+            PackageOps::Oxide(OxidePkg::Home),
+            PackageOps::Oxide(OxidePkg::Println),
+            PackageOps::Oxide(OxidePkg::Reset),
+            PackageOps::Oxide(OxidePkg::UUID),
+            PackageOps::Oxide(OxidePkg::Version),
+        ]
+    }
+
+    pub fn get_oxide_help_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("name", StringType(20)),
+            Parameter::new("module", StringType(20)),
+            Parameter::new("signature", StringType(32)),
+            Parameter::new("description", StringType(60)),
+            Parameter::new("returns", StringType(32)),
+        ]
+    }
+
+    pub fn get_oxide_history_ns() -> Namespace {
+        Namespace::new("oxide", "public", "history")
+    }
+
+    pub fn get_oxide_history_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("session_id", NumberType(I64Kind)),
+            Parameter::new("user_id", NumberType(I64Kind)),
+            Parameter::new("cpu_time_ms", NumberType(F64Kind)),
+            Parameter::new("input", StringType(65536)),
+        ]
     }
 }
 
@@ -1096,21 +1137,6 @@ impl Package for OxidePkg {
 
     fn get_package_name(&self) -> String {
         "oxide".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Oxide(OxidePkg::Compile),
-            PackageOps::Oxide(OxidePkg::Debug),
-            PackageOps::Oxide(OxidePkg::Eval),
-            PackageOps::Oxide(OxidePkg::Help),
-            PackageOps::Oxide(OxidePkg::History),
-            PackageOps::Oxide(OxidePkg::Home),
-            PackageOps::Oxide(OxidePkg::Println),
-            PackageOps::Oxide(OxidePkg::Reset),
-            PackageOps::Oxide(OxidePkg::UUID),
-            PackageOps::Oxide(OxidePkg::Version),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -1136,7 +1162,7 @@ impl Package for OxidePkg {
         match self {
             OxidePkg::Compile => vec![strip_margin(
                 r#"
-                    |code := oxide::compile("2 ** 4")
+                    |code = oxide::compile("2 ** 4")
                     |code()
                 "#,
                 '|',
@@ -1145,8 +1171,8 @@ impl Package for OxidePkg {
             OxidePkg::Println => vec![r#"oxide::println("Hello World")"#.into()],
             OxidePkg::Eval => vec![strip_margin(
                 r#"
-                    |a := 'Hello '
-                    |b := 'World'
+                    |a = 'Hello '
+                    |b = 'World'
                     |oxide::eval("a + b")
                 "#,
                 '|',
@@ -1180,8 +1206,8 @@ impl Package for OxidePkg {
             // function
             OxidePkg::Compile | OxidePkg::Debug => FunctionType(vec![], UnresolvedType.into()),
             OxidePkg::Eval | OxidePkg::Home => StringType(0),
-            OxidePkg::Help => TableType(PackageOps::get_oxide_help_parameters(), 0),
-            OxidePkg::History => TableType(PackageOps::get_oxide_history_parameters(), 0),
+            OxidePkg::Help => TableType(OxidePkg::get_oxide_help_parameters(), 0),
+            OxidePkg::History => TableType(OxidePkg::get_oxide_history_parameters(), 0),
             OxidePkg::Println | OxidePkg::Reset => BooleanType,
             // f64
             OxidePkg::Version => NumberType(F64Kind),
@@ -1280,6 +1306,22 @@ impl OsPkg {
         }
         Ok((ms, TableValue(Model(mrc))))
     }
+
+    pub(crate) fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Os(OsPkg::Call),
+            PackageOps::Os(OsPkg::Clear),
+            PackageOps::Os(OsPkg::CurrentDir),
+            PackageOps::Os(OsPkg::Env),
+        ]
+    }
+
+    pub fn get_os_env_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("key", StringType(256)),
+            Parameter::new("value", StringType(8192)),
+        ]
+    }
 }
 
 impl Package for OsPkg {
@@ -1294,15 +1336,6 @@ impl Package for OsPkg {
 
     fn get_package_name(&self) -> String {
         "os".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Os(OsPkg::Call),
-            PackageOps::Os(OsPkg::Clear),
-            PackageOps::Os(OsPkg::CurrentDir),
-            PackageOps::Os(OsPkg::Env),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -1331,9 +1364,9 @@ impl Package for OsPkg {
             OsPkg::CurrentDir => vec![strip_margin(
                 r#"
                     |use str
-                    |cur_dir := os::current_dir()
-                    |prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
-                    |path_str := prefix + "/demoes/language/include_file.oxide"
+                    |cur_dir = os::current_dir()
+                    |prefix = iff(cur_dir:::ends_with("core"), "../..", ".")
+                    |path_str = prefix + "/demoes/language/include_file.oxide"
                     |include path_str
                 "#,
                 '|',
@@ -1354,7 +1387,7 @@ impl Package for OsPkg {
         match self {
             OsPkg::Call | OsPkg::CurrentDir => StringType(0),
             OsPkg::Clear => BooleanType,
-            OsPkg::Env => TableType(PackageOps::get_os_env_parameters(), 0),
+            OsPkg::Env => TableType(OsPkg::get_os_env_parameters(), 0),
         }
     }
 
@@ -1565,6 +1598,23 @@ impl StringsPkg {
             },
         ))
     }
+
+    pub(crate) fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Strings(StringsPkg::EndsWith),
+            PackageOps::Strings(StringsPkg::Format),
+            PackageOps::Strings(StringsPkg::IndexOf),
+            PackageOps::Strings(StringsPkg::Join),
+            PackageOps::Strings(StringsPkg::Left),
+            PackageOps::Strings(StringsPkg::Len),
+            PackageOps::Strings(StringsPkg::Right),
+            PackageOps::Strings(StringsPkg::Split),
+            PackageOps::Strings(StringsPkg::StartsWith),
+            PackageOps::Strings(StringsPkg::StripMargin),
+            PackageOps::Strings(StringsPkg::Substring),
+            PackageOps::Strings(StringsPkg::ToString),
+        ]
+    }
 }
 
 impl Package for StringsPkg {
@@ -1587,23 +1637,6 @@ impl Package for StringsPkg {
 
     fn get_package_name(&self) -> String {
         "str".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Strings(StringsPkg::EndsWith),
-            PackageOps::Strings(StringsPkg::Format),
-            PackageOps::Strings(StringsPkg::IndexOf),
-            PackageOps::Strings(StringsPkg::Join),
-            PackageOps::Strings(StringsPkg::Left),
-            PackageOps::Strings(StringsPkg::Len),
-            PackageOps::Strings(StringsPkg::Right),
-            PackageOps::Strings(StringsPkg::Split),
-            PackageOps::Strings(StringsPkg::StartsWith),
-            PackageOps::Strings(StringsPkg::StripMargin),
-            PackageOps::Strings(StringsPkg::Substring),
-            PackageOps::Strings(StringsPkg::ToString),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -1790,6 +1823,15 @@ impl TestingPkg {
     fn do_testing_type_of(ms: Machine, a: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
         Ok((ms, StringValue(a.get_type_name())))
     }
+
+    pub(crate) fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Testing(TestingPkg::Assert),
+            PackageOps::Testing(TestingPkg::Feature),
+            PackageOps::Testing(TestingPkg::Matches),
+            PackageOps::Testing(TestingPkg::TypeOf),
+        ]
+    }
 }
 
 impl Package for TestingPkg {
@@ -1804,15 +1846,6 @@ impl Package for TestingPkg {
 
     fn get_package_name(&self) -> String {
         "testing".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Testing(TestingPkg::Assert),
-            PackageOps::Testing(TestingPkg::Feature),
-            PackageOps::Testing(TestingPkg::Matches),
-            PackageOps::Testing(TestingPkg::TypeOf),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -1867,8 +1900,8 @@ impl Package for TestingPkg {
             TestingPkg::Matches => vec![strip_margin(
                 r#"
                     |use testing::matches
-                    |a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-                    |b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
+                    |a = { scores: [82, 78, 99], first: "Tom", last: "Lane" }
+                    |b = { last: "Lane", first: "Tom", scores: [82, 78, 99] }
                     |matches(a, b)
                 "#,
                 '|',
@@ -1900,7 +1933,7 @@ impl Package for TestingPkg {
             // string
             TestingPkg::TypeOf => StringType(0),
             // table
-            TestingPkg::Feature => TableType(PackageOps::get_testing_feature_parameters(), 0),
+            TestingPkg::Feature => TableType(UtilsPkg::get_testing_feature_parameters(), 0),
         }
     }
 
@@ -2201,6 +2234,37 @@ impl ToolsPkg {
         let mrc = ModelRowCollection::from_columns_and_rows(columns, &rows);
         Ok((ms, TableValue(Model(mrc))))
     }
+
+    pub(crate) fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Tools(ToolsPkg::Compact),
+            PackageOps::Tools(ToolsPkg::Describe),
+            PackageOps::Tools(ToolsPkg::Fetch),
+            PackageOps::Tools(ToolsPkg::Filter),
+            PackageOps::Tools(ToolsPkg::Journal),
+            PackageOps::Tools(ToolsPkg::Len),
+            PackageOps::Tools(ToolsPkg::Map),
+            PackageOps::Tools(ToolsPkg::Pop),
+            PackageOps::Tools(ToolsPkg::Push),
+            PackageOps::Tools(ToolsPkg::Replay),
+            PackageOps::Tools(ToolsPkg::Reverse),
+            PackageOps::Tools(ToolsPkg::RowId),
+            PackageOps::Tools(ToolsPkg::Scan),
+            PackageOps::Tools(ToolsPkg::ToArray),
+            PackageOps::Tools(ToolsPkg::ToCSV),
+            PackageOps::Tools(ToolsPkg::ToJSON),
+            PackageOps::Tools(ToolsPkg::ToTable),
+        ]
+    }    
+    
+    pub fn get_tools_describe_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("name", StringType(128)),
+            Parameter::new("type", StringType(128)),
+            Parameter::new("default_value", StringType(128)),
+            Parameter::new("is_nullable", BooleanType),
+        ]
+    }
 }
 
 impl Package for ToolsPkg {
@@ -2228,28 +2292,6 @@ impl Package for ToolsPkg {
 
     fn get_package_name(&self) -> String {
         "tools".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Tools(ToolsPkg::Compact),
-            PackageOps::Tools(ToolsPkg::Describe),
-            PackageOps::Tools(ToolsPkg::Fetch),
-            PackageOps::Tools(ToolsPkg::Filter),
-            PackageOps::Tools(ToolsPkg::Journal),
-            PackageOps::Tools(ToolsPkg::Len),
-            PackageOps::Tools(ToolsPkg::Map),
-            PackageOps::Tools(ToolsPkg::Pop),
-            PackageOps::Tools(ToolsPkg::Push),
-            PackageOps::Tools(ToolsPkg::Replay),
-            PackageOps::Tools(ToolsPkg::Reverse),
-            PackageOps::Tools(ToolsPkg::RowId),
-            PackageOps::Tools(ToolsPkg::Scan),
-            PackageOps::Tools(ToolsPkg::ToArray),
-            PackageOps::Tools(ToolsPkg::ToCSV),
-            PackageOps::Tools(ToolsPkg::ToJSON),
-            PackageOps::Tools(ToolsPkg::ToTable),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -2281,7 +2323,7 @@ impl Package for ToolsPkg {
             // tools
             ToolsPkg::Compact => vec![strip_margin(
                 r#"
-                    |stocks := ns("examples.compact.stocks")
+                    |stocks = ns("examples.compact.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
                     | { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -2307,7 +2349,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::Fetch => vec![strip_margin(
                 r#"
-                    |stocks := ns("examples.fetch.stocks")
+                    |stocks = ns("examples.fetch.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -2325,7 +2367,7 @@ impl Package for ToolsPkg {
             ToolsPkg::Journal => vec![strip_margin(
                 r#"
                     |use tools
-                    |stocks := ns("examples.journal.stocks")
+                    |stocks = ns("examples.journal.stocks")
                     |drop table stocks
                     |create table stocks fn(
                     |   symbol: String(8), exchange: String(8), last_sale: f64
@@ -2344,7 +2386,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::Len => vec![strip_margin(
                 r#"
-                    |stocks := ns("examples.table_len.stocks")
+                    |stocks = ns("examples.table_len.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
                     | { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
@@ -2355,7 +2397,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::Map => vec![strip_margin(
                 r#"
-                    |stocks := ns("examples.map_over_table.stocks")
+                    |stocks = ns("examples.map_over_table.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
                     | { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
@@ -2373,7 +2415,7 @@ impl Package for ToolsPkg {
             ToolsPkg::Pop => vec![strip_margin(
                 r#"
                     |use tools
-                    |stocks := ns("examples.tools_pop.stocks")
+                    |stocks = ns("examples.tools_pop.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -2385,7 +2427,7 @@ impl Package for ToolsPkg {
             ToolsPkg::Push => vec![strip_margin(
                 r#"
                     |use tools
-                    |stocks := ns("examples.push.stocks")
+                    |stocks = ns("examples.push.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -2398,7 +2440,7 @@ impl Package for ToolsPkg {
             ToolsPkg::Replay => vec![strip_margin(
                 r#"
                     |use tools
-                    |stocks := ns("examples.table_fn.stocks")
+                    |stocks = ns("examples.table_fn.stocks")
                     |drop table stocks
                     |create table stocks fn(
                     |   symbol: String(8), exchange: String(8), last_sale: f64
@@ -2428,7 +2470,7 @@ impl Package for ToolsPkg {
             ToolsPkg::Scan => vec![strip_margin(
                 r#"
                     |use tools
-                    |stocks := ns("examples.scan.stocks")
+                    |stocks = ns("examples.scan.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
                     | { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -2444,7 +2486,7 @@ impl Package for ToolsPkg {
             ToolsPkg::ToCSV => vec![strip_margin(
                 r#"
                     |use tools::to_csv
-                    |stocks := ns("examples.csv.stocks")
+                    |stocks = ns("examples.csv.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
                     | { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -2458,7 +2500,7 @@ impl Package for ToolsPkg {
             ToolsPkg::ToJSON => vec![strip_margin(
                 r#"
                     |use tools::to_json
-                    |stocks := ns("examples.json.stocks")
+                    |stocks = ns("examples.json.stocks")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
                     | { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -2509,7 +2551,7 @@ impl Package for ToolsPkg {
             | ToolsPkg::Reverse
             | ToolsPkg::Scan
             | ToolsPkg::ToTable => TableType(Vec::new(), 0),
-            ToolsPkg::Describe => TableType(PackageOps::get_tools_describe_parameters(), 0),
+            ToolsPkg::Describe => TableType(ToolsPkg::get_tools_describe_parameters(), 0),
             ToolsPkg::Len => NumberType(I64Kind),
             ToolsPkg::Replay => BooleanType,
             ToolsPkg::RowId => NumberType(I64Kind),
@@ -2667,6 +2709,40 @@ impl UtilsPkg {
             true => Ok((ms, Number(UUIDValue(Uuid::new_v4().as_u128())))),
         }
     }
+
+    pub(crate) fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Utils(UtilsPkg::Base64),
+            PackageOps::Utils(UtilsPkg::Binary),
+            PackageOps::Utils(UtilsPkg::Gzip),
+            PackageOps::Utils(UtilsPkg::Gunzip),
+            PackageOps::Utils(UtilsPkg::Hex),
+            PackageOps::Utils(UtilsPkg::MD5),
+            PackageOps::Utils(UtilsPkg::ToASCII),
+            PackageOps::Utils(UtilsPkg::ToDate),
+            PackageOps::Utils(UtilsPkg::ToF32),
+            PackageOps::Utils(UtilsPkg::ToF64),
+            PackageOps::Utils(UtilsPkg::ToI8),
+            PackageOps::Utils(UtilsPkg::ToI16),
+            PackageOps::Utils(UtilsPkg::ToI32),
+            PackageOps::Utils(UtilsPkg::ToI64),
+            PackageOps::Utils(UtilsPkg::ToI128),
+            PackageOps::Utils(UtilsPkg::ToU8),
+            PackageOps::Utils(UtilsPkg::ToU16),
+            PackageOps::Utils(UtilsPkg::ToU32),
+            PackageOps::Utils(UtilsPkg::ToU64),
+            PackageOps::Utils(UtilsPkg::ToU128),
+        ]
+    }
+
+    pub fn get_testing_feature_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("level", NumberType(U16Kind)),
+            Parameter::new("item", StringType(256)),
+            Parameter::new("passed", BooleanType),
+            Parameter::new("result", StringType(256)),
+        ]
+    }
 }
 
 impl Package for UtilsPkg {
@@ -2697,31 +2773,6 @@ impl Package for UtilsPkg {
 
     fn get_package_name(&self) -> String {
         "util".into()
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Utils(UtilsPkg::Base64),
-            PackageOps::Utils(UtilsPkg::Binary),
-            PackageOps::Utils(UtilsPkg::Gzip),
-            PackageOps::Utils(UtilsPkg::Gunzip),
-            PackageOps::Utils(UtilsPkg::Hex),
-            PackageOps::Utils(UtilsPkg::MD5),
-            PackageOps::Utils(UtilsPkg::ToASCII),
-            PackageOps::Utils(UtilsPkg::ToDate),
-            PackageOps::Utils(UtilsPkg::ToF32),
-            PackageOps::Utils(UtilsPkg::ToF64),
-            PackageOps::Utils(UtilsPkg::ToI8),
-            PackageOps::Utils(UtilsPkg::ToI16),
-            PackageOps::Utils(UtilsPkg::ToI32),
-            PackageOps::Utils(UtilsPkg::ToI64),
-            PackageOps::Utils(UtilsPkg::ToI128),
-            PackageOps::Utils(UtilsPkg::ToU8),
-            PackageOps::Utils(UtilsPkg::ToU16),
-            PackageOps::Utils(UtilsPkg::ToU32),
-            PackageOps::Utils(UtilsPkg::ToU64),
-            PackageOps::Utils(UtilsPkg::ToU128),
-        ]
     }
 
     fn get_description(&self) -> String {
@@ -2859,10 +2910,16 @@ impl WwwPkg {
 
     fn do_www_url_encode(ms: Machine, url: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
         let uri = pull_string(url)?;
-        Ok((
-            ms,
-            StringValue(urlencoding::encode(uri.as_str()).to_string()),
-        ))
+        let encoded_url = urlencoding::encode(uri.as_str());
+        Ok((ms, StringValue(encoded_url.to_string())))
+    }
+
+    pub(crate) fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Www(WwwPkg::URLDecode),
+            PackageOps::Www(WwwPkg::URLEncode),
+            PackageOps::Www(WwwPkg::Serve),
+        ]
     }
 }
 
@@ -2879,14 +2936,6 @@ impl Package for WwwPkg {
         "www".into()
     }
 
-    fn get_contents() -> Vec<PackageOps> {
-        vec![
-            PackageOps::Www(WwwPkg::URLDecode),
-            PackageOps::Www(WwwPkg::URLEncode),
-            PackageOps::Www(WwwPkg::Serve),
-        ]
-    }
-
     fn get_description(&self) -> String {
         match self {
             WwwPkg::Serve => "Starts a local HTTP service".into(),
@@ -2900,7 +2949,7 @@ impl Package for WwwPkg {
             WwwPkg::Serve => vec![strip_margin(
                 r#"
                     |www::serve(8822)
-                    |stocks := ns("examples.www.quotes")
+                    |stocks = ns("examples.www.quotes")
                     |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                     |[{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
                     | { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
@@ -3021,7 +3070,7 @@ mod tests {
         #[test]
         fn test_arrays_pop() {
             verify_exact_code(r#"
-                stocks := ["ABC", "BOOM", "JET", "DEX"]
+                stocks = ["ABC", "BOOM", "JET", "DEX"]
                 arrays::pop(stocks)
             "#, r#"(["ABC", "BOOM", "JET"], "DEX")"#);
         }
@@ -3031,8 +3080,8 @@ mod tests {
         fn test_arrays_push() {
             verify_exact_code(
                 r#"
-                stocks := ["ABC", "BOOM", "JET"]
-                stocks := arrays::push(stocks, "DEX")
+                stocks = ["ABC", "BOOM", "JET"]
+                stocks = arrays::push(stocks, "DEX")
                 stocks
             "#,
                 r#"["ABC", "BOOM", "JET", "DEX"]"#,
@@ -3043,7 +3092,7 @@ mod tests {
         fn test_arrays_reduce() {
             verify_exact_code(r#"
                  use arrays::reduce
-                 numbers := [1, 2, 3, 4, 5]
+                 numbers = [1, 2, 3, 4, 5]
                  numbers:::reduce(0, fn(a, b) => a + b)
             "#, "15");
         }
@@ -3324,7 +3373,7 @@ mod tests {
             verify_exact_value(
                 r#"
             use io
-            path_str := oxide::home()
+            path_str = oxide::home()
             path_str:::exists()
         "#,
                 Boolean(true),
@@ -3336,7 +3385,7 @@ mod tests {
             verify_exact_value(
                 r#"
                 use io, util
-                file := "temp_secret.txt"
+                file = "temp_secret.txt"
                 file:::create_file(md5("**keep**this**secret**"))
                 file:::read_text_file()
             "#,
@@ -3480,9 +3529,9 @@ mod tests {
             verify_exact_table(
                 r#"
                 use str
-                cur_dir := os::current_dir()
-                prefix := iff(cur_dir:::ends_with("core"), "../..", ".")
-                path_str := prefix + "/demoes/language/include_file.oxide"
+                cur_dir = os::current_dir()
+                prefix = iff(cur_dir:::ends_with("core"), "../..", ".")
+                path_str = prefix + "/demoes/language/include_file.oxide"
                 include path_str
         "#,
                 vec![
@@ -3520,7 +3569,7 @@ mod tests {
         fn test_oxide_compile() {
             verify_exact_value(
                 r#"
-                code := oxide::compile("2 ** 4")
+                code = oxide::compile("2 ** 4")
                 code()
             "#,
                 Number(F64Value(16.)),
@@ -3531,8 +3580,8 @@ mod tests {
         fn test_oxide_compile_closure() {
             verify_exact_value(
                 r#"
-                n := 5
-                code := oxide::compile("n * n")
+                n = 5
+                code = oxide::compile("n * n")
                 code()
             "#,
                 Number(I64Value(25)),
@@ -3543,8 +3592,8 @@ mod tests {
         fn test_oxide_eval_closure() {
             verify_exact_value(
                 r#"
-                a := 'Hello '
-                b := 'World'
+                a = 'Hello '
+                b = 'World'
                 oxide::eval("a + b")
             "#,
                 StringValue("Hello World".to_string()),
@@ -4035,8 +4084,8 @@ mod tests {
             // test a perfect match
             verify_exact_value(
                 r#"
-                a := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
-                b := { first: "Tom", last: "Lane", scores: [82, 78, 99] }
+                a = { first: "Tom", last: "Lane", scores: [82, 78, 99] }
+                b = { first: "Tom", last: "Lane", scores: [82, 78, 99] }
                 testing::matches(a, b)
             "#,
                 Boolean(true),
@@ -4049,8 +4098,8 @@ mod tests {
             verify_exact_value(
                 r#"
                 use testing::matches
-                a := { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-                b := { last: "Lane", first: "Tom", scores: [82, 78, 99] }
+                a = { scores: [82, 78, 99], first: "Tom", last: "Lane" }
+                b = { last: "Lane", first: "Tom", scores: [82, 78, 99] }
                 matches(a, b)
             "#,
                 Boolean(true),
@@ -4063,8 +4112,8 @@ mod tests {
             verify_exact_value(
                 r#"
                 use testing
-                a := { first: "Tom", last: "Lane" }
-                b := { first: "Jerry", last: "Lane" }
+                a = { first: "Tom", last: "Lane" }
+                b = { first: "Jerry", last: "Lane" }
                 a:::matches(b)
             "#,
                 Boolean(false),
@@ -4076,8 +4125,8 @@ mod tests {
             // test when things do not match 2
             verify_exact_value(
                 r#"
-                a := { key: "123", values: [1, 74, 88] }
-                b := { key: "123", values: [1, 74, 88, 0] }
+                a = { key: "123", values: [1, 74, 88] }
+                b = { key: "123", values: [1, 74, 88, 0] }
                 testing::matches(a, b)
             "#,
                 Boolean(false),
@@ -4140,7 +4189,7 @@ mod tests {
         fn test_testing_type_of_structure_hard() {
             verify_exact_string(
                 r#"testing::type_of(Struct(symbol: String(3) = "ABC"))"#,
-                r#"Struct(symbol: String(3) := "ABC")"#,
+                r#"Struct(symbol: String(3) = "ABC")"#,
             );
         }
 
@@ -4148,7 +4197,7 @@ mod tests {
         fn test_testing_type_of_structure_soft() {
             verify_exact_string(
                 r#"testing::type_of({symbol:"ABC"})"#,
-                r#"Struct(symbol: String(3) := "ABC")"#,
+                r#"Struct(symbol: String(3) = "ABC")"#,
             );
         }
 
@@ -4213,7 +4262,7 @@ mod tests {
             interpreter = verify_exact_table_with(
                 interpreter,
                 r#"
-                stocks := ns("platform.compact.stocks")
+                stocks = ns("platform.compact.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
                  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -4277,7 +4326,7 @@ mod tests {
             verify_exact_table(
                 r#"
                 use tools
-                stocks := ns("platform.describe.stocks")
+                stocks = ns("platform.describe.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 stocks:::describe()
             "#,
@@ -4298,7 +4347,7 @@ mod tests {
             // fully-qualified
             verify_exact_table(
                 r#"
-                stocks := ns("platform.fetch.stocks")
+                stocks = ns("platform.fetch.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -4318,7 +4367,7 @@ mod tests {
             verify_exact_table(
                 r#"
                 use tools
-                stocks := to_table([
+                stocks = to_table([
                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -4353,7 +4402,7 @@ mod tests {
         fn test_tools_filter_over_table() {
             verify_exact_table(
                 r#"
-                stocks := ns("platform.filter_over_table.stocks")
+                stocks = ns("platform.filter_over_table.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
                  { symbol: "ACDC", exchange: "AMEX", last_sale: 37.43 },
@@ -4377,7 +4426,7 @@ mod tests {
             interpreter = verify_exact_value_whence(
                 interpreter,
                 r#"
-                stocks := ns("platform.journal.stocks")
+                stocks = ns("platform.journal.stocks")
                 drop table stocks
             "#,
                 |result| matches!(result, Boolean(_)),
@@ -4441,7 +4490,7 @@ mod tests {
         fn test_tools_map_over_table() {
             verify_exact_table(
                 r#"
-                stocks := ns("platform.map_over_table.stocks")
+                stocks = ns("platform.map_over_table.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
                  { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
@@ -4471,7 +4520,7 @@ mod tests {
             verify_exact_table(
                 r#"
                 use tools
-                stocks := ns("platform.pop.stocks")
+                stocks = ns("platform.pop.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -4488,7 +4537,7 @@ mod tests {
             );
             verify_exact_table(
                 r#"
-                stocks := ns("platform.pop.stocks")
+                stocks = ns("platform.pop.stocks")
                 tools::pop(stocks)
             "#,
                 vec![
@@ -4535,12 +4584,12 @@ mod tests {
         fn test_tools_push_array_evaluate() {
             verify_exact_table(
                 r#"
-                stocks := [
+                stocks = [
                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
                 ]
-                stocks := tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
+                stocks = tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
                 from stocks
             "#,
                 vec![
@@ -4560,7 +4609,7 @@ mod tests {
         fn test_tools_push_table_evaluate() {
             verify_exact_table(
                 r#"
-                stocks := ns("platform.push.stocks")
+                stocks = ns("platform.push.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -4585,12 +4634,12 @@ mod tests {
         fn test_tools_push_tuple_evaluate() {
             verify_exact_table(
                 r#"
-                stocks := [
+                stocks = [
                     ("ABC", "AMEX", 12.49),
                     ("BOOM", "NYSE", 56.88),
                     ("JET", "NASDAQ", 32.12)
                 ]
-                stocks := tools::push(stocks, ("DEX", "OTC_BB", 0.0086))
+                stocks = tools::push(stocks, ("DEX", "OTC_BB", 0.0086))
                 from tools::to_table(stocks)
             "#,
                 vec![
@@ -4612,7 +4661,7 @@ mod tests {
             interpreter = verify_exact_value_whence(
                 interpreter,
                 r#"
-                stocks := ns("platform.replay.stocks")
+                stocks = ns("platform.replay.stocks")
                 drop table stocks
             "#,
                 |result| matches!(result, Boolean(_)),
@@ -4696,7 +4745,7 @@ mod tests {
             verify_exact_table(
                 r#"
                 use tools
-                stocks := to_table([
+                stocks = to_table([
                     { symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
                     { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
                     { symbol: "XYZ", exchange: "NASDAQ", last_sale: 89.11 }
@@ -4721,7 +4770,7 @@ mod tests {
             verify_exact_table(
                 r#"
                 use tools
-                stocks := ns("platform.reverse.stocks")
+                stocks = ns("platform.reverse.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -4747,7 +4796,7 @@ mod tests {
                 .evaluate(
                     r#"
                 use tools
-                stocks := ns("platform.scan.stocks")
+                stocks = ns("platform.scan.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
                  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -4861,7 +4910,7 @@ mod tests {
             verify_exact_value(
                 r#"
                 use tools::to_csv
-                stocks := ns("platform.csv.stocks")
+                stocks = ns("platform.csv.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
                  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -4885,7 +4934,7 @@ mod tests {
             verify_exact_value(
                 r#"
                 use tools::to_json
-                stocks := ns("platform.json.stocks")
+                stocks = ns("platform.json.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
                  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -4949,7 +4998,7 @@ mod tests {
         fn test_tools_to_table_with_soft_and_hard_structures() {
             verify_exact_table(
                 r#"
-                stocks := tools::to_table([
+                stocks = tools::to_table([
                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                     { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
                 ])
@@ -5002,7 +5051,7 @@ mod tests {
         fn test_util_gzip_and_gunzip() {
             verify_exact_value(
                 r#"
-                compressed := util::gzip('Hello World')
+                compressed = util::gzip('Hello World')
                 util::gunzip(compressed)
             "#,
                 Binary(b"Hello World".to_vec()),
@@ -5165,7 +5214,7 @@ mod tests {
                 .evaluate(
                     r#"
                 www::serve(8822)
-                stocks := ns("platform.www.quotes")
+                stocks = ns("platform.www.quotes")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
                  { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
@@ -5194,7 +5243,7 @@ mod tests {
             let result = interpreter
                 .evaluate(
                     r#"
-                stocks := ns("platform.www.stocks")
+                stocks = ns("platform.www.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             "#,
                 )
@@ -5361,7 +5410,7 @@ mod tests {
                     ~> ns("platform.http_workflow.stocks")
 
                 use testing
-                row_id := POST {
+                row_id = POST {
                     url: http://localhost:8838/platform/http_workflow/stocks/0
                     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
                 }

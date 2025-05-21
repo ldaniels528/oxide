@@ -39,7 +39,7 @@
 <h5>example³</h5>
 <pre>// Arrays may be used to assign multiple variables
 
-[a, b, c] := [3, 5, 7]
+let [a, b, c] = [3, 5, 7]
 a + b + c</pre>
 <h5>results</h5>
 <pre>
@@ -56,18 +56,29 @@ arrays::reverse([1, 4, 2, 8, 5, 7])</pre>
 <hr>
 <h4>▶️ Arrays: Indexing</h4>
 <h5>example¹</h5>
-<pre>arr := [1, 4, 2, 8, 5, 7]
+<pre>let arr = [1, 4, 2, 8, 5, 7]
 arr[3]</pre>
 <h5>results</h5>
 <pre>
 8
 </pre>
 <hr>
-<h4>▶️ Assignment</h4>
+<h4>▶️ Assignment (expression)</h4>
 <h5>example¹</h5>
-<pre>a := 3
-b := 5
-c := 7
+<pre>// Use ":=" to simultaneously assign a value and return the assigned value
+
+let i = 0
+while (i < 5) yield (i := i + 1) * 3</pre>
+<h5>results</h5>
+<pre>
+[3, 6, 9, 12, 15]
+</pre>
+<hr>
+<h4>▶️ Assignment (statement)</h4>
+<h5>example¹</h5>
+<pre>let a = 3
+let b = 5
+let c = 7
 a + b + c</pre>
 <h5>results</h5>
 <pre>
@@ -116,13 +127,13 @@ a + b + c</pre>
 <hr>
 <h4>▶️ Code Block</h4>
 <h5>example¹</h5>
-<pre>result := {
-    (a, b, sum) := (0, 1, 0)
+<pre>result = {
+    (a, b, sum) = (0, 1, 0)
     while sum < 10 {
-        sum := sum + (a + b)
-        t := b
-        b := a + b
-        a := t
+        sum = sum + (a + b)
+        t = b
+        b = a + b
+        a = t
     }
     sum
 }
@@ -134,21 +145,21 @@ result</pre>
 <hr>
 <h4>▶️ Conditionals</h4>
 <h5>example¹</h5>
-<pre>x := 10
+<pre>let x = 10
 x in 5..=10</pre>
 <h5>results</h5>
 <pre>
 true
 </pre>
 <h5>example²</h5>
-<pre>x := 10
+<pre>let x = 10
 x in 5..10</pre>
 <h5>results</h5>
 <pre>
 false
 </pre>
 <h5>example³</h5>
-<pre>x := 1..8
+<pre>let x = 1..8
 x contains 7</pre>
 <h5>results</h5>
 <pre>
@@ -157,9 +168,9 @@ x contains 7</pre>
 <hr>
 <h4>▶️ Curvy-Arrow Left</h4>
 <h5>example¹</h5>
-<pre>stocks := ns("expressions.read_next_row.stocks")
+<pre>stocks = ns("expressions.read_next_row.stocks")
 table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
-rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
 rows ~> stocks
 // read the last row
 last_row <~ stocks
@@ -171,9 +182,9 @@ last_row</pre>
 <hr>
 <h4>▶️ Curvy-Arrow Right</h4>
 <h5>example¹</h5>
-<pre>stocks := ns("expressions.into.stocks")
+<pre>stocks = ns("expressions.into.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-rows := [
+rows = [
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -184,10 +195,22 @@ rows ~> stocks</pre>
 3
 </pre>
 <hr>
-<h4>▶️ Function Pipelines</h4>
+<h4>▶️ Do-While expression</h4>
+<h5>example¹</h5>
+<pre>let i = 0
+do {
+    i = i + 1
+    yield i * 2
+} while (i < 5)</pre>
+<h5>results</h5>
+<pre>
+[2, 4, 6, 8, 10]
+</pre>
+<hr>
+<h4>▶️ Function Pipelines (destructuring)</h4>
 <h5>example¹</h5>
 <pre>use tools::reverse
-result := 'Hello' |> reverse
+result = 'Hello' |> reverse
 result</pre>
 <h5>results</h5>
 <pre>
@@ -198,7 +221,7 @@ result</pre>
 
 fn add(a, b) => a + b
 fn inverse(a) => 1.0 / a
-result := ((2, 3) |>> add) |> inverse
+result = ((2, 3) |>> add) |> inverse
 result</pre>
 <h5>results</h5>
 <pre>
@@ -207,7 +230,7 @@ result</pre>
 <hr>
 <h4>▶️ Functions</h4>
 <h5>example¹</h5>
-<pre>product := fn (a, b) => a * b
+<pre>product = fn (a, b) => a * b
 product(2, 5)</pre>
 <h5>results</h5>
 <pre>
@@ -216,7 +239,7 @@ product(2, 5)</pre>
 <hr>
 <h4>▶️ HTTP</h4>
 <h5>example¹</h5>
-<pre>stocks := ns("readme.www.stocks")
+<pre>stocks = ns("readme.www.stocks")
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 www::serve(8833)</pre>
 <h5>results</h5>
@@ -230,7 +253,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-3
+5
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -242,7 +265,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 20 May 2025 22:16:04 GMT"}
+{content-length: "81", content-type: "application/json", date: "Wed, 21 May 2025 23:26:58 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -291,7 +314,7 @@ true
 <h5>example¹</h5>
 <pre>// Oxide provides an if-else statement
 
-x := 4
+let x = 4
 if(x > 5) "Yes"
 else if(x < 5) "Maybe"
 else "No"</pre>
@@ -302,7 +325,7 @@ else "No"</pre>
 <h5>example²</h5>
 <pre>// Oxide also provides iff - a ternary-operator-like if function
 
-fact := fn(n) => iff(n <= 1, 1, n * fact(n - 1))
+fact = fn(n) => iff(n <= 1, 1, n * fact(n - 1))
 fact(6)</pre>
 <h5>results</h5>
 <pre>
@@ -321,7 +344,7 @@ fact(6)</pre>
 <h4>▶️ Import/Use</h4>
 <h5>example¹</h5>
 <pre>use tools
-stocks := to_table([
+stocks = to_table([
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -399,8 +422,8 @@ true
 <hr>
 <h4>▶️ Negative</h4>
 <h5>example¹</h5>
-<pre>i := 75
-j := -i
+<pre>let i = 75
+let j = -i
 j</pre>
 <h5>results</h5>
 <pre>
@@ -420,7 +443,7 @@ j</pre>
 <hr>
 <h4>▶️ Query</h4>
 <h5>example¹</h5>
-<pre>stocks := tools::to_table([
+<pre>stocks = tools::to_table([
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "GRU", exchange: "NYSE", last_sale: 56.88 },
    { symbol: "APK", exchange: "NASDAQ", last_sale: 32.12 }
@@ -440,7 +463,7 @@ from stocks where last_sale > 20.0</pre>
 <h5>example¹</h5>
 <pre>// Ranges may be exclusive
 
-range := 1..5
+range = 1..5
 tools::reverse(range)</pre>
 <h5>results</h5>
 <pre>
@@ -449,7 +472,7 @@ tools::reverse(range)</pre>
 <h5>example²</h5>
 <pre>// Ranges may be inclusive
 
-range := 1..=5
+range = 1..=5
 tools::reverse(range)</pre>
 <h5>results</h5>
 <pre>
@@ -504,7 +527,7 @@ Feature "Matches function" {
 <h5>example¹</h5>
 <pre>// Tuples may be used to assign multiple variables
 
-(a, b, c) := (3, 5, 7)
+(a, b, c) = (3, 5, 7)
 a + b + c</pre>
 <h5>results</h5>
 <pre>
@@ -513,8 +536,8 @@ a + b + c</pre>
 <h5>example²</h5>
 <pre>// Tuples support addition
 
-a := (2, 4, 6)
-b := (1, 2, 3)
+let a = (2, 4, 6)
+let b = (1, 2, 3)
 a + b</pre>
 <h5>results</h5>
 <pre>
@@ -523,8 +546,8 @@ a + b</pre>
 <h5>example³</h5>
 <pre>// Tuples support subtraction
 
-a := (3, 5, 7)
-b := (1, 0, 1)
+let a = (3, 5, 7)
+let b = (1, 0, 1)
 a - b</pre>
 <h5>results</h5>
 <pre>
@@ -541,8 +564,8 @@ a - b</pre>
 <h5>example⁵</h5>
 <pre>// Tuples support multiplication
 
-a := (3, 5, 7)
-b := (1, 0, 1)
+let a = (3, 5, 7)
+let b = (1, 0, 1)
 a * b</pre>
 <h5>results</h5>
 <pre>
@@ -551,8 +574,8 @@ a * b</pre>
 <h5>example⁶</h5>
 <pre>// Tuples support division
 
-a := (3.0, 5.0, 9.0)
-b := (1.0, 2.0, 1.0)
+let a = (3.0, 5.0, 9.0)
+let b = (1.0, 2.0, 1.0)
 a / b</pre>
 <h5>results</h5>
 <pre>
@@ -561,8 +584,8 @@ a / b</pre>
 <h5>example⁷</h5>
 <pre>// Tuples support modulus
 
-a := (3.0, 5.0, 9.0)
-b := (1.0, 2.0, 1.0)
+let a = (3.0, 5.0, 9.0)
+let b = (1.0, 2.0, 1.0)
 a % b</pre>
 <h5>results</h5>
 <pre>
@@ -571,8 +594,8 @@ a % b</pre>
 <h5>example⁸</h5>
 <pre>// Tuples support exponents
 
-a := (2, 4, 6)
-b := (1, 2, 3)
+let a = (2, 4, 6)
+let b = (1, 2, 3)
 a ** b</pre>
 <h5>results</h5>
 <pre>
@@ -581,7 +604,7 @@ a ** b</pre>
 <hr>
 <h4>▶️ Type Definitions</h4>
 <h5>example¹</h5>
-<pre>LabelString := typedef(String(80))
+<pre>LabelString = typedef(String(80))
 LabelString</pre>
 <h5>results</h5>
 <pre>
@@ -590,11 +613,11 @@ String(80)
 <hr>
 <h4>▶️ Via Clause</h4>
 <h5>example¹</h5>
-<pre>stocks := ns("readme.via.stocks")
+<pre>stocks = ns("readme.via.stocks")
 drop table stocks
 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
 
-rows := [
+rows = [
    { symbol: "ABCQ", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
@@ -614,6 +637,18 @@ from stocks</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+</pre>
+<hr>
+<h4>▶️ While expression</h4>
+<h5>example¹</h5>
+<pre>let x = 0
+while (x < 5) {
+    x = x + 1
+    yield x * 2
+}</pre>
+<h5>results</h5>
+<pre>
+[2, 4, 6, 8, 10]
 </pre>
 <hr>
 <h4>▶️ Yield</h4>

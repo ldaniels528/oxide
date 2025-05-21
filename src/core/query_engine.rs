@@ -858,7 +858,7 @@ mod tests {
     fn test_create_table_fn() {
         let mut interpreter = Interpreter::new();
         interpreter = verify_exact_value_with(interpreter, r#"
-            stocks := ns("query_engine.table_fn.stocks")
+            stocks = ns("query_engine.table_fn.stocks")
             drop table stocks
             create table stocks fn(
                symbol: String(8), exchange: String(8), last_sale: f64
@@ -893,7 +893,7 @@ mod tests {
 
         let mut interpreter = Interpreter::new();
         interpreter = verify_exact_value_with(interpreter, r#"
-            stocks := ns("query_engine.crud.stocks")
+            stocks = ns("query_engine.crud.stocks")
         "#, Boolean(true));
 
         // create the table
@@ -967,7 +967,7 @@ mod tests {
     #[test]
     fn test_table_into_then_delete() {
         verify_exact_table(r#"
-            stocks := ns("query_engine.into_then_delete.stocks")
+            stocks = ns("query_engine.into_then_delete.stocks")
             table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
              { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -993,7 +993,7 @@ mod tests {
         // create a table and append some rows
         let mut interpreter = Interpreter::new();
         interpreter = verify_exact_value_with(interpreter, r#"
-            stocks := ns("query_engine.select1.stocks")
+            stocks = ns("query_engine.select1.stocks")
             table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             append stocks from [
                 { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
@@ -1027,7 +1027,7 @@ mod tests {
 
         // set up the interpreter
         verify_exact_table(r#"
-            stocks := ns("query_engine.select.stocks")
+            stocks = ns("query_engine.select.stocks")
             table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
              { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -1052,7 +1052,7 @@ mod tests {
     #[test]
     fn test_table_embedded_describe() {
         verify_exact_table(r#"
-            stocks := ns("query_engine.embedded_a.stocks")
+            stocks = ns("query_engine.embedded_a.stocks")
             table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
             tools::describe(stocks)
         "#, vec![
@@ -1068,9 +1068,9 @@ mod tests {
     #[test]
     fn test_table_embedded_empty() {
         verify_exact_table(r#"
-            stocks := ns("query_engine.embedded_b.stocks")
+            stocks = ns("query_engine.embedded_b.stocks")
             table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
-            rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+            rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
             rows ~> stocks
             from stocks
         "#, vec![
@@ -1085,9 +1085,9 @@ mod tests {
     #[test]
     fn test_read_next_row() {
         verify_exact_table(r#"
-            stocks := ns("query_engine.read_next_row.stocks")
+            stocks = ns("query_engine.read_next_row.stocks")
             table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
-            rows := [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+            rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
             rows ~> stocks
             // read the last row
             last_row <~ stocks
@@ -1103,7 +1103,7 @@ mod tests {
     #[test]
     fn test_table_append_rows_with_embedded_table() {
         verify_exact_table(r#"
-            stocks := ns("query_engine.embedded_c.stocks")
+            stocks = ns("query_engine.embedded_c.stocks")
             table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64)) ~> stocks
             append stocks from [
                 { symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66 } },
@@ -1127,7 +1127,7 @@ mod tests {
 
         // set up the interpreter
         verify_exact_table(r#"
-            stocks := ns("query-engine.select.stocks")
+            stocks = ns("query-engine.select.stocks")
             table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
             [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
              { symbol: "BIZ", exchange: "NYSE", last_sale: 0.66 },

@@ -79,15 +79,15 @@ mod tests {
     #[test]
     fn test_basic_state_manipulation() {
         let mut interpreter = Interpreter::new();
-        interpreter = verify_exact_value_with(interpreter, "x := 5", Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "x = 5", Boolean(true));
         interpreter = verify_exact_value_with(interpreter, "-x", Number(I64Value(-5)));
-        interpreter = verify_exact_value_with(interpreter, "x := x + 1", Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "x = x + 1", Boolean(true));
         interpreter = verify_exact_value_with(interpreter, "x", Number(I64Value(6)));
         interpreter = verify_exact_value_with(interpreter, "x < 7", Boolean(true));
-        interpreter = verify_exact_value_with(interpreter, "x := x ** 2", Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "x = x ** 2", Boolean(true));
         interpreter = verify_exact_value_with(interpreter, "x", Number(F64Value(36.)));
         interpreter = verify_exact_value_with(interpreter, "x / 0", Number(NaNValue));
-        interpreter = verify_exact_value_with(interpreter, "x := x - 1", Boolean(true));
+        interpreter = verify_exact_value_with(interpreter, "x = x - 1", Boolean(true));
         interpreter = verify_exact_value_with(interpreter, "x % 5", Number(F64Value(0.)));
         interpreter = verify_exact_value_with(interpreter, "x < 35", Boolean(false));
         interpreter = verify_exact_value_with(interpreter, "x >= 35", Boolean(true));
@@ -172,34 +172,33 @@ mod tests {
 
     #[test]
     fn test_tuple_assignment() {
-        verify_exact_value(r#"
-            (a, b, c) := (3, 5, 7)
+        verify_exact_code(r#"
+            (a, b, c) = (3, 5, 7)
             a + b + c
-        "#, Number(I64Value(15)))
+        "#, "15")
     }
 
     /// Control-Flow tests
     #[cfg(test)]
     mod control_flow_tests {
         use crate::interpreter::Interpreter;
-        use crate::numbers::Numbers::I64Value;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
         #[test]
         fn test_for_each_item_in_an_array() {
             verify_exact_code(r#"
-                for item in [1, 5, 6, 11, 17] yield item
-            "#, "[1, 5, 6, 11, 17]");
+                for item in [1, 5, 6, 11, 17] yield item / 2.0
+            "#, "[0.5, 2.5, 3, 5.5, 8.5]");
         }
 
         #[test]
         fn test_for_each_array_in_an_array() {
             verify_exact_code(r#"
-                for [a, b] in [[1, 5], [6, 11], [17, 21]] {
-                   yield b - a
+                for [a, b, c] in [[1, 5, 7], [6, 11, 15], [17, 21, 27]] {
+                   yield (b - a) * c
                 }
-            "#, "[4, 5, 4]");
+            "#, "[28, 75, 108]");
         }
 
         #[test]
@@ -214,13 +213,16 @@ mod tests {
         #[test]
         fn test_for_each_row_in_a_table() {
             verify_exact_code(r#"
-                for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime'])
-                    yield row::value
-            "#, r#"["apple", "berry", "kiwi", "lime"]"#);
+                for row in tools::to_table([
+                    {symbol: "ABC", exchange: "NYSE", last_sale: 23.77},
+                    {symbol: "BOX", exchange: "AMEX", last_sale: 123.43},
+                    {symbol: "GMO", exchange: "NASD", last_sale: 5.007}
+                ]) yield row::last_sale
+            "#, r#"[23.77, 123.43, 5.007]"#);
         }
 
         #[test]
-        fn test_for_yield_expression() {
+        fn test_for_yield_iteration() {
             verify_exact_code(r#"
                 for(i = 0, i < 5, i = i + 1) yield i * 5
             "#, "[0, 5, 10, 15, 20]");
@@ -229,23 +231,23 @@ mod tests {
         #[test]
         fn test_if_when_result_is_defined() {
             verify_exact_code(r#"
-                x := 7
+                x = 7
                 if(x > 5) "Yes"
             "#, "\"Yes\"");
         }
 
         #[test]
         fn test_if_when_result_is_undefined() {
-            verify_exact_value(r#"
-                x := 4
+            verify_exact_code(r#"
+                x = 4
                 if(x > 5) "Yes"
-            "#, Undefined);
+            "#, "undefined");
         }
 
         #[test]
         fn test_if_else_expression() {
             verify_exact_code(r#"
-                x := 4
+                x = 4
                 if(x > 5) "Yes"
                 else if(x < 5) "Maybe"
                 else "No"
@@ -255,7 +257,7 @@ mod tests {
         #[test]
         fn test_if_function() {
             verify_exact_code(r#"
-                x := 4
+                x = 4
                 iff(x > 5, "Yes", iff(x < 5, "Maybe", "No"))
             "#, "\"Maybe\"");
         }
@@ -264,7 +266,7 @@ mod tests {
         #[test]
         fn test_match() {
             verify_exact_code(r#"
-                code := 100
+                code = 100
                 match code [
                    n: 100 ~> "Accepted",
                    n: 101..=104 ~> 'Escalated',
@@ -275,13 +277,23 @@ mod tests {
         }
 
         #[test]
-        fn test_while_loop() {
+        fn test_do_while_yield_loop() {
             let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_value_with(interpreter, "x := 0", Boolean(true));
-            interpreter = verify_exact_value_with(interpreter, r#"
-                while (x < 5) x := x + 1
-            "#, Boolean(true));
-            interpreter = verify_exact_value_with(interpreter, "x", Number(I64Value(5)));
+            interpreter = verify_exact_code_with(interpreter, "i = 0", "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                do {
+                    yield (i := i + 1) * 5
+                } while (i < 5)
+            "#, "[5, 10, 15, 20, 25]");
+        }
+
+        #[test]
+        fn test_while_yield_loop() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, "i = 0", "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                while (i < 5) yield (i := i + 1) * 3
+            "#, "[3, 6, 9, 12, 15]");
         }
     }
 
@@ -289,46 +301,45 @@ mod tests {
     #[cfg(test)]
     mod function_tests {
         use crate::interpreter::Interpreter;
-        use crate::numbers::Numbers::I64Value;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
         #[test]
         fn test_function_lambda() {
             let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_value_with(interpreter, r#"
-                product := fn (a, b) => a * b
-            "#, Boolean(true));
-            interpreter = verify_exact_value_with(interpreter, r#"
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product = fn (a, b) => a * b
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
                 product(2, 5)
-            "#, Number(I64Value(10)))
+            "#, "10")
         }
 
         #[test]
         fn test_function_named() {
             let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_value_with(interpreter, r#"
+            interpreter = verify_exact_code_with(interpreter, r#"
                 fn product(a, b) => a * b
-            "#, Boolean(true));
-            interpreter = verify_exact_value_with(interpreter, r#"
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
                 product(3, 7)
-            "#, Number(I64Value(21)))
+            "#, "21")
         }
 
         #[test]
         fn test_function_recursion_1() {
-            verify_exact_value(r#"
-                f := fn(n: i64) => if(n <= 1) 1 else n * f(n - 1)
+            verify_exact_code(r#"
+                f = fn(n: i64) => if(n <= 1) 1 else n * f(n - 1)
                 f(5)
-            "#, Number(I64Value(120)))
+            "#, "120")
         }
 
         #[test]
         fn test_function_recursion_2() {
-            verify_exact_value(r#"
-                f := fn(n) => iff(n <= 1, 1, n * f(n - 1))
+            verify_exact_code(r#"
+                f = fn(n) => iff(n <= 1, 1, n * f(n - 1))
                 f(6)
-            "#, Number(I64Value(720)))
+            "#, "720")
         }
     }
 }

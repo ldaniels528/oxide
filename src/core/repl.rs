@@ -11,6 +11,7 @@ use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
 use crate::oxide_server::SharedState;
+use crate::packages::OxidePkg;
 use crate::parameter::Parameter;
 use crate::platform::PackageOps;
 use crate::repl;
@@ -203,8 +204,8 @@ fn update_history(
     processing_time: f64,
 ) -> std::io::Result<TypedValue> {
     let mut frc = FileRowCollection::open_or_create(
-        &PackageOps::get_oxide_history_ns(),
-        PackageOps::get_oxide_history_parameters(),
+        &OxidePkg::get_oxide_history_ns(),
+        OxidePkg::get_oxide_history_parameters(),
     )?;
     let result = frc.append_row(Row::new(
         0,
@@ -402,8 +403,8 @@ mod tests {
         let state = REPLState::new();
         let _ = update_history(&state, "oxide::help()", 3.5).unwrap();
         let mut frc = FileRowCollection::open_or_create(
-            &PackageOps::get_oxide_history_ns(),
-            PackageOps::get_oxide_history_parameters(),
+            &OxidePkg::get_oxide_history_ns(),
+            OxidePkg::get_oxide_history_parameters(),
         )
         .unwrap();
         let count = frc.len().unwrap() as i64;

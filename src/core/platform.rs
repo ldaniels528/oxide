@@ -40,14 +40,13 @@ use std::io::{Read, Write};
 use std::ops::Deref;
 
 pub const MAJOR_VERSION: u8 = 0;
-pub const MINOR_VERSION: u8 = 36;
-pub const VERSION: &str = "0.36";
+pub const MINOR_VERSION: u8 = 40;
+pub const VERSION: &str = "0.40";
 
 /// Represents an Oxide Platform Package
 pub trait Package {
     fn get_name(&self) -> String;
     fn get_package_name(&self) -> String;
-    fn get_contents() -> Vec<PackageOps>;
     fn get_description(&self) -> String;
     fn get_examples(&self) -> Vec<String>;
     fn get_parameter_types(&self) -> Vec<DataType>;
@@ -104,12 +103,46 @@ impl PackageOps {
             .map(|pf| pf.clone())
     }
 
+    pub fn get_contents() -> Vec<PackageOps> {
+        let mut contents = Vec::with_capacity(125);
+        contents.extend(ArraysPkg::get_contents());
+        contents.extend(CalPkg::get_contents());
+        contents.extend(DurationsPkg::get_contents());
+        contents.extend(IoPkg::get_contents());
+        contents.extend(MathPkg::get_contents());
+        contents.extend(OsPkg::get_contents());
+        contents.extend(OxidePkg::get_contents());
+        contents.extend(StringsPkg::get_contents());
+        contents.extend(TestingPkg::get_contents());
+        contents.extend(ToolsPkg::get_contents());
+        contents.extend(UtilsPkg::get_contents());
+        contents.extend(WwwPkg::get_contents());
+        contents
+    }
+
     /////////////////////////////////////////////////////////
     //      INSTANCE METHODS
     /////////////////////////////////////////////////////////
 
     pub fn encode(&self) -> std::io::Result<Vec<u8>> {
         ByteCodeCompiler::unwrap_as_result(bincode::serialize(self))
+    }
+
+    pub fn get_package(&self) -> Box<dyn Package> {
+        match self {
+            PackageOps::Arrays(pkg) => Box::new(pkg.clone()),
+            PackageOps::Cal(pkg) => Box::new(pkg.clone()),
+            PackageOps::Durations(pkg) => Box::new(pkg.clone()),
+            PackageOps::Io(pkg) => Box::new(pkg.clone()),
+            PackageOps::Math(pkg) => Box::new(pkg.clone()),
+            PackageOps::Os(pkg) => Box::new(pkg.clone()),
+            PackageOps::Oxide(pkg) => Box::new(pkg.clone()),
+            PackageOps::Strings(pkg) => Box::new(pkg.clone()),
+            PackageOps::Testing(pkg) => Box::new(pkg.clone()),
+            PackageOps::Tools(pkg) => Box::new(pkg.clone()),
+            PackageOps::Utils(pkg) => Box::new(pkg.clone()),
+            PackageOps::Www(pkg) => Box::new(pkg.clone()),
+        }
     }
 
     pub fn get_parameters(&self) -> Vec<Parameter> {
@@ -272,54 +305,6 @@ impl PackageOps {
         }
     }
 
-    pub fn get_testing_feature_parameters() -> Vec<Parameter> {
-        vec![
-            Parameter::new("level", NumberType(U16Kind)),
-            Parameter::new("item", StringType(256)),
-            Parameter::new("passed", BooleanType),
-            Parameter::new("result", StringType(256)),
-        ]
-    }
-
-    pub fn get_os_env_parameters() -> Vec<Parameter> {
-        vec![
-            Parameter::new("key", StringType(256)),
-            Parameter::new("value", StringType(8192)),
-        ]
-    }
-
-    pub fn get_oxide_help_parameters() -> Vec<Parameter> {
-        vec![
-            Parameter::new("name", StringType(20)),
-            Parameter::new("module", StringType(20)),
-            Parameter::new("signature", StringType(32)),
-            Parameter::new("description", StringType(60)),
-            Parameter::new("returns", StringType(32)),
-        ]
-    }
-
-    pub fn get_oxide_history_ns() -> Namespace {
-        Namespace::new("oxide", "public", "history")
-    }
-
-    pub fn get_oxide_history_parameters() -> Vec<Parameter> {
-        vec![
-            Parameter::new("session_id", NumberType(I64Kind)),
-            Parameter::new("user_id", NumberType(I64Kind)),
-            Parameter::new("cpu_time_ms", NumberType(F64Kind)),
-            Parameter::new("input", StringType(65536)),
-        ]
-    }
-
-    pub fn get_tools_describe_parameters() -> Vec<Parameter> {
-        vec![
-            Parameter::new("name", StringType(128)),
-            Parameter::new("type", StringType(128)),
-            Parameter::new("default_value", StringType(128)),
-            Parameter::new("is_nullable", BooleanType),
-        ]
-    }
-
     fn open_namespace(ns: &Namespace) -> TypedValue {
         match FileRowCollection::open(ns) {
             Err(err) => ErrorValue(Exact(err.to_string())),
@@ -338,128 +323,31 @@ impl PackageOps {
 
 impl Package for PackageOps {
     fn get_name(&self) -> String {
-        match self {
-            PackageOps::Arrays(pkgs) => pkgs.get_name(),
-            PackageOps::Cal(pkg) => pkg.get_name(),
-            PackageOps::Durations(pkg) => pkg.get_name(),
-            PackageOps::Io(pkg) => pkg.get_name(),
-            PackageOps::Math(pkg) => pkg.get_name(),
-            PackageOps::Os(pkg) => pkg.get_name(),
-            PackageOps::Oxide(pkg) => pkg.get_name(),
-            PackageOps::Strings(pkg) => pkg.get_name(),
-            PackageOps::Testing(pkg) => pkg.get_name(),
-            PackageOps::Tools(pkg) => pkg.get_name(),
-            PackageOps::Utils(pkg) => pkg.get_name(),
-            PackageOps::Www(pkg) => pkg.get_name(),
-        }
+        self.get_package().get_name()
     }
 
     fn get_package_name(&self) -> String {
-        match self {
-            PackageOps::Arrays(pkgs) => pkgs.get_package_name(),
-            PackageOps::Cal(pkg) => pkg.get_package_name(),
-            PackageOps::Durations(pkg) => pkg.get_package_name(),
-            PackageOps::Io(pkg) => pkg.get_package_name(),
-            PackageOps::Math(pkg) => pkg.get_package_name(),
-            PackageOps::Os(pkg) => pkg.get_package_name(),
-            PackageOps::Oxide(pkg) => pkg.get_package_name(),
-            PackageOps::Strings(pkg) => pkg.get_package_name(),
-            PackageOps::Testing(pkg) => pkg.get_package_name(),
-            PackageOps::Tools(pkg) => pkg.get_package_name(),
-            PackageOps::Utils(pkg) => pkg.get_package_name(),
-            PackageOps::Www(pkg) => pkg.get_package_name(),
-        }
-    }
-
-    fn get_contents() -> Vec<PackageOps> {
-        let mut contents = Vec::with_capacity(125);
-        contents.extend(ArraysPkg::get_contents());
-        contents.extend(CalPkg::get_contents());
-        contents.extend(DurationsPkg::get_contents());
-        contents.extend(IoPkg::get_contents());
-        contents.extend(MathPkg::get_contents());
-        contents.extend(OsPkg::get_contents());
-        contents.extend(OxidePkg::get_contents());
-        contents.extend(StringsPkg::get_contents());
-        contents.extend(TestingPkg::get_contents());
-        contents.extend(ToolsPkg::get_contents());
-        contents.extend(UtilsPkg::get_contents());
-        contents.extend(WwwPkg::get_contents());
-        contents
+        self.get_package().get_package_name()
     }
 
     fn get_description(&self) -> String {
-        match self {
-            PackageOps::Arrays(pkg) => pkg.get_description(),
-            PackageOps::Cal(pkg) => pkg.get_description(),
-            PackageOps::Durations(pkg) => pkg.get_description(),
-            PackageOps::Io(pkg) => pkg.get_description(),
-            PackageOps::Math(pkg) => pkg.get_description(),
-            PackageOps::Os(pkg) => pkg.get_description(),
-            PackageOps::Oxide(pkg) => pkg.get_description(),
-            PackageOps::Strings(pkg) => pkg.get_description(),
-            PackageOps::Testing(pkg) => pkg.get_description(),
-            PackageOps::Tools(pkg) => pkg.get_description(),
-            PackageOps::Utils(pkg) => pkg.get_description(),
-            PackageOps::Www(pkg) => pkg.get_description(),
-        }
+        self.get_package().get_description()
     }
 
     fn get_examples(&self) -> Vec<String> {
-        let examples = match self {
-            PackageOps::Arrays(pkg) => pkg.get_examples(),
-            PackageOps::Cal(pkg) => pkg.get_examples(),
-            PackageOps::Durations(pkg) => pkg.get_examples(),
-            PackageOps::Io(pkg) => pkg.get_examples(),
-            PackageOps::Math(pkg) => pkg.get_examples(),
-            PackageOps::Os(pkg) => pkg.get_examples(),
-            PackageOps::Oxide(pkg) => pkg.get_examples(),
-            PackageOps::Strings(pkg) => pkg.get_examples(),
-            PackageOps::Testing(pkg) => pkg.get_examples(),
-            PackageOps::Tools(pkg) => pkg.get_examples(),
-            PackageOps::Utils(pkg) => pkg.get_examples(),
-            PackageOps::Www(pkg) => pkg.get_examples(),
-        };
-
         // trim all example code
-        examples
+        self.get_package().get_examples()
             .iter()
             .map(|s| s.trim().to_string())
             .collect::<Vec<_>>()
     }
 
     fn get_parameter_types(&self) -> Vec<DataType> {
-        match self {
-            PackageOps::Arrays(pkgs) => pkgs.get_parameter_types(),
-            PackageOps::Cal(pkg) => pkg.get_parameter_types(),
-            PackageOps::Durations(pkg) => pkg.get_parameter_types(),
-            PackageOps::Io(pkg) => pkg.get_parameter_types(),
-            PackageOps::Math(pkg) => pkg.get_parameter_types(),
-            PackageOps::Os(pkg) => pkg.get_parameter_types(),
-            PackageOps::Oxide(pkg) => pkg.get_parameter_types(),
-            PackageOps::Strings(pkg) => pkg.get_parameter_types(),
-            PackageOps::Testing(pkg) => pkg.get_parameter_types(),
-            PackageOps::Tools(pkg) => pkg.get_parameter_types(),
-            PackageOps::Utils(pkg) => pkg.get_parameter_types(),
-            PackageOps::Www(pkg) => pkg.get_parameter_types(),
-        }
+        self.get_package().get_parameter_types()
     }
 
     fn get_return_type(&self) -> DataType {
-        match self {
-            PackageOps::Arrays(pkgs) => pkgs.get_return_type(),
-            PackageOps::Cal(pkg) => pkg.get_return_type(),
-            PackageOps::Durations(pkg) => pkg.get_return_type(),
-            PackageOps::Io(pkg) => pkg.get_return_type(),
-            PackageOps::Math(pkg) => pkg.get_return_type(),
-            PackageOps::Os(pkg) => pkg.get_return_type(),
-            PackageOps::Oxide(pkg) => pkg.get_return_type(),
-            PackageOps::Strings(pkg) => pkg.get_return_type(),
-            PackageOps::Testing(pkg) => pkg.get_return_type(),
-            PackageOps::Tools(pkg) => pkg.get_return_type(),
-            PackageOps::Utils(pkg) => pkg.get_return_type(),
-            PackageOps::Www(pkg) => pkg.get_return_type(),
-        }
+        self.get_package().get_return_type()
     }
 
     /// Evaluates the platform function
@@ -468,20 +356,7 @@ impl Package for PackageOps {
         ms: Machine,
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        match self {
-            PackageOps::Arrays(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Cal(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Durations(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Io(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Math(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Os(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Oxide(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Strings(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Testing(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Tools(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Utils(pkg) => pkg.evaluate(ms, args),
-            PackageOps::Www(pkg) => pkg.evaluate(ms, args),
-        }
+        self.get_package().evaluate(ms, args)
     }
 }
 
@@ -498,21 +373,7 @@ mod tests {
     fn test_encode_decode() {
         for expected in PackageOps::get_contents() {
             let bytes = expected.encode().unwrap();
-            match expected {
-                PackageOps::Arrays(..)
-                | PackageOps::Cal(..)
-                | PackageOps::Durations(..)
-                | PackageOps::Io(..)
-                | PackageOps::Math(..)
-                | PackageOps::Os(..)
-                | PackageOps::Oxide(..)
-                | PackageOps::Strings(..)
-                | PackageOps::Testing(..)
-                | PackageOps::Tools(..)
-                | PackageOps::Utils(..)
-                | PackageOps::Www(..) => assert_eq!(bytes.len(), 8),
-                _ => assert_eq!(bytes.len(), 4),
-            }
+            assert_eq!(bytes.len(), 8);
 
             let actual = PackageOps::decode(bytes).unwrap();
             assert_eq!(actual, expected);
