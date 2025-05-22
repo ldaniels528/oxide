@@ -305,6 +305,17 @@ mod tests {
         use crate::typed_values::TypedValue::*;
 
         #[test]
+        fn test_new_function_lambda() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product = (a, b) -> a * b
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(2, 5)
+            "#, "10")
+        }
+
+        #[test]
         fn test_function_lambda() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"

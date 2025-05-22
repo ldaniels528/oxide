@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 /// Represents an enumeration of compiler errors
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum CompileErrors {
-    ExpectedEOF,
+    UnexpectedEOF,
     ExpectedHttpMethod,
     IllegalHttpMethod(String),
 }
@@ -22,7 +22,7 @@ pub enum CompileErrors {
 impl Display for CompileErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let text = match self {
-            CompileErrors::ExpectedEOF =>
+            CompileErrors::UnexpectedEOF =>
                 "Unexpected end of input".into(),
             CompileErrors::ExpectedHttpMethod =>
                 "HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT".into(),

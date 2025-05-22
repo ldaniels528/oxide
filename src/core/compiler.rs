@@ -6,7 +6,9 @@
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::UnresolvedType;
+use crate::errors::CompileErrors::UnexpectedEOF;
 use crate::errors::Errors::{CompilerError, Exact, ExactNear, SyntaxError, TypeMismatch};
+use crate::errors::SyntaxErrors::IllegalExpression;
 use crate::errors::TypeMismatchErrors::ParameterExpected;
 use crate::errors::{throw, CompileErrors, SyntaxErrors};
 use crate::expression::Conditions::*;
@@ -361,6 +363,64 @@ impl Compiler {
         }
     }
 
+    /// Parses a function definition
+    /// #### Examples
+    /// ```
+    /// product = (a, b) -> a * b
+    /// ```
+    /// ```
+    /// power = (a, b = 1) -> a * b
+    /// ```
+    fn next_function(
+        &self,
+        expr0: Expression,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
+        // get the function body
+        let (Some(body), ts) = self.next_expression(None, &ts)? else {
+            return throw(CompilerError(UnexpectedEOF, ts.current()));
+        };
+
+        // resolve the parameters and build the model
+        let params = Self::resolve_parameters(expr0)?;
+        let fx = FnExpression {
+            params,
+            returns: body.infer_type(),
+            body: Some(body.into()),
+        };
+
+        Ok((Some(fx), ts))
+    }
+
+    fn resolve_parameters(expr: Expression) -> std::io::Result<Vec<Parameter>> {
+        match expr {
+            Parameters(params) => Ok(params),
+            TupleExpression(items) => Self::convert_to_parameters_vec(items),
+            Variable(name) => Ok(vec![Parameter::new(name, UnresolvedType)]),
+            other => throw(SyntaxError(IllegalExpression(other.to_code()))),
+        }
+    }
+
+    fn convert_to_parameters_vec(items: Vec<Expression>) -> std::io::Result<Vec<Parameter>> {
+        let mut params = vec![];
+        for item in items {
+            match item.clone() {
+                SetVariables(var_names, default_value) => {
+                    match (var_names.deref(), default_value.deref()) {
+                        // (x = 5, y) -> x * y
+                        (Variable(name), Literal(value)) =>
+                            params.push(Parameter::with_default(name, value.get_type(), value.clone())),
+                        _ => return throw(SyntaxError(IllegalExpression(item.to_code())))
+                    }
+                }
+                // x -> x + 1
+                Variable(name) => params.push(Parameter::new(name, UnresolvedType)),
+                other => return throw(SyntaxError(IllegalExpression(other.to_code())))
+            }
+        }
+        Ok(params)
+    }
+
     /// Parses reserved words (i.e. keyword)
     fn next_keyword(&self, ts: TokenSlice) -> std::io::Result<(Option<Expression>, TokenSlice)> {
         if let (Some(Atom { text, .. }), nts) = ts.next() {
@@ -657,6 +717,8 @@ impl Compiler {
             "<=" => self
                 .parse_condition_2a(ts, expr0, LessOrEqual)
                 .map(|(m, ts)| (Some(m), ts)),
+            "->" => self
+                .next_function( expr0, ts),
             "-" => self
                 .parse_expression_2a(ts, expr0, Minus)
                 .map(|(m, ts)| (Some(m), ts)),
@@ -1154,7 +1216,7 @@ impl Compiler {
     fn parse_keyword_for(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         // for [item in items] [block]
         let (construct, ts) = self.compile_next(&ts)?;
-        match construct { 
+        match construct {
             Condition(In(item, items)) => {
                 let (block, ts) = self.compile_next(&ts)?;
                 Ok((For {
@@ -1199,7 +1261,7 @@ impl Compiler {
     fn parse_keyword_http(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(Atom { text: method, .. }), ts) = ts.next() {
             match self.next_expression(None, &ts)? {
-                (None, ts) => throw(CompilerError(CompileErrors::ExpectedEOF, ts.current())),
+                (None, ts) => throw(CompilerError(CompileErrors::UnexpectedEOF, ts.current())),
                 (Some(expr), ts) => match HttpMethodCalls::new(method.as_str(), expr) {
                     None => throw(CompilerError(
                         CompileErrors::IllegalHttpMethod(method),
@@ -1524,9 +1586,9 @@ impl Compiler {
 
     /// Builds a language model from a while expression
     /// #### Examples
-    /// x = 0 
-    /// while (x < 5) { 
-    ///     yield x = x + 1 
+    /// x = 0
+    /// while (x < 5) {
+    ///     yield x = x + 1
     /// }
     fn parse_keyword_while(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (condition, ts) = self.compile_next(&ts)?;
