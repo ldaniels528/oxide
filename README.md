@@ -348,7 +348,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-6
+12
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -360,7 +360,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Wed, 21 May 2025 23:26:59 GMT"}
+{content-length: "81", content-type: "application/json", date: "Thu, 22 May 2025 02:05:49 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -867,7 +867,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-4
+7
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -876,7 +876,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-16
+19
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -885,7 +885,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-27
+5
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -903,7 +903,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-0
+49
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -921,7 +921,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-18T23:27:00.279Z
+2025-05-19T02:05:49.959Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -929,7 +929,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-21T23:27:00.280Z
+2025-05-22T02:05:49.960Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -938,7 +938,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-20T23:27:00.284Z
+2025-06-21T02:05:49.962Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -1230,13 +1230,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|---------------------------------------------------------------------------------------------------|
-| id | name    | module | signature        | description                                  | returns |
-|---------------------------------------------------------------------------------------------------|
-| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
-| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
-| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
-|---------------------------------------------------------------------------------------------------|
+|---------------------------------------------------------------------------------------------------------------------------|
+| id | name    | module    | signature                  | description                                             | returns |
+|---------------------------------------------------------------------------------------------------------------------------|
+| 0  | seconds | durations | durations::seconds(n: i64) | Converts a number into the equivalent number of seconds | i64     |
+| 1  | minutes | durations | durations::minutes(n: i64) | Converts a number into the equivalent number of minutes | i64     |
+| 2  | millis  | durations | durations::millis(n: i64)  | Converts a number into the equivalent number of millis  | i64     |
+|---------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -1282,7 +1282,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-246aa37b-333f-4df9-a0fc-ea7a9c40745c
+d4490d66-f2b8-403a-b2bc-afac63eaafa3
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1388,6 +1388,14 @@ where exchange is 'NYSE'"
 <h5>results</h5>
 <pre>
 "Hello"
+</pre>
+<hr>
+<h4>📦 str::superscript &#8212; Returns a superscript of a number `n`</h4>
+<h5>example1</h5>
+<pre>str::superscript(5)</pre>
+<h5>results</h5>
+<pre>
+"⁵"
 </pre>
 <hr>
 <h4>📦 str::to_string &#8212; Converts a value to its text-based representation</h4>
@@ -1598,9 +1606,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-21T23:27:00.707Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-21T23:27:00.708Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-21T23:27:00.708Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-22T02:05:50.359Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-22T02:05:50.360Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-22T02:05:50.360Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

@@ -110,7 +110,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-4
+7
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -119,7 +119,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-16
+19
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -128,7 +128,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-26
+5
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -146,7 +146,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-58
+48
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -164,7 +164,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-18T23:26:59.002Z
+2025-05-19T02:05:48.738Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -172,7 +172,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-21T23:26:59.003Z
+2025-05-22T02:05:48.739Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -181,7 +181,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-20T23:26:59.006Z
+2025-06-21T02:05:48.742Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -473,13 +473,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|---------------------------------------------------------------------------------------------------------------------------|
-| id | name    | module    | signature                  | description                                             | returns |
-|---------------------------------------------------------------------------------------------------------------------------|
-| 0  | seconds | durations | durations::seconds(n: i64) | Converts a number into the equivalent number of seconds | i64     |
-| 1  | minutes | durations | durations::minutes(n: i64) | Converts a number into the equivalent number of minutes | i64     |
-| 2  | millis  | durations | durations::millis(n: i64)  | Converts a number into the equivalent number of millis  | i64     |
-|---------------------------------------------------------------------------------------------------------------------------|
+|-------------------------------------------------------------------------------------------------------------------------------------|
+| id | name        | module | signature                                 | description                                       | returns |
+|-------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | to_string   | str    | str::to_string(a)                         | Converts a value to its text-based representation | String  |
+| 1  | superscript | str    | str::superscript(n: i64)                  | Returns a superscript of a number `n`             | String  |
+| 2  | substring   | str    | str::substring(s: String, m: i64, n: i64) | Returns a substring of string `s` from `m` to `n` | String  |
+|-------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
@@ -525,7 +525,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-3dd953a1-44c8-4635-8544-eb111789a280
+64d3f5a2-3432-4064-a13f-430c0c6c36e2
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -631,6 +631,14 @@ where exchange is 'NYSE'"
 <h5>results</h5>
 <pre>
 "Hello"
+</pre>
+<hr>
+<h4>📦 str::superscript &#8212; Returns a superscript of a number `n`</h4>
+<h5>example1</h5>
+<pre>str::superscript(5)</pre>
+<h5>results</h5>
+<pre>
+"⁵"
 </pre>
 <hr>
 <h4>📦 str::to_string &#8212; Converts a value to its text-based representation</h4>
@@ -841,9 +849,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-21T23:26:59.417Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-21T23:26:59.417Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-21T23:26:59.418Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-22T02:05:49.143Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-22T02:05:49.144Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-22T02:05:49.145Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

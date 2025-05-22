@@ -32,7 +32,7 @@ use crate::typed_values::TypedValue::{
     ArrayValue, Binary, Boolean, ErrorValue, Function, NamespaceValue, Null, Number, PlatformOp,
     Sequenced, StringValue, Structured, TableValue, TupleValue, Undefined,
 };
-use crate::utils::{extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0, extract_value_fn1, extract_value_fn2, extract_value_fn3, pull_array, pull_string, strip_margin};
+use crate::utils::{extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0, extract_value_fn1, extract_value_fn2, extract_value_fn3, pull_array, pull_string, strip_margin, superscript};
 use crate::{machine, oxide_server};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
@@ -1419,6 +1419,7 @@ pub enum StringsPkg {
     StartsWith,
     StripMargin,
     Substring,
+    SuperScript,
     ToString,
 }
 
@@ -1585,18 +1586,22 @@ impl StringsPkg {
         a: &TypedValue,
         b: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        Ok((
-            ms,
-            match string {
-                StringValue(s) => match (a, b) {
-                    (Number(na), Number(nb)) => {
-                        StringValue(s[na.to_usize()..nb.to_usize()].to_string())
-                    }
-                    (..) => Undefined,
-                },
-                _ => Undefined,
+        Ok((ms, match string {
+            StringValue(s) => match (a, b) {
+                (Number(na), Number(nb)) => {
+                    StringValue(s[na.to_usize()..nb.to_usize()].to_string())
+                }
+                (..) => Undefined,
             },
-        ))
+            _ => Undefined,
+        }))
+    }
+    
+    fn do_str_superscript(
+        ms: Machine,
+        number: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(superscript(number.to_usize()))))
     }
 
     pub(crate) fn get_contents() -> Vec<PackageOps> {
@@ -1612,6 +1617,7 @@ impl StringsPkg {
             PackageOps::Strings(StringsPkg::StartsWith),
             PackageOps::Strings(StringsPkg::StripMargin),
             PackageOps::Strings(StringsPkg::Substring),
+            PackageOps::Strings(StringsPkg::SuperScript),
             PackageOps::Strings(StringsPkg::ToString),
         ]
     }
@@ -1631,6 +1637,7 @@ impl Package for StringsPkg {
             StringsPkg::StartsWith => "starts_with".into(),
             StringsPkg::StripMargin => "strip_margin".into(),
             StringsPkg::Substring => "substring".into(),
+            StringsPkg::SuperScript => "superscript".into(),
             StringsPkg::ToString => "to_string".into(),
         }
     }
@@ -1652,6 +1659,7 @@ impl Package for StringsPkg {
             StringsPkg::StartsWith => "Returns true if string `a` starts with string `b`".into(),
             StringsPkg::StripMargin => "Returns the string with all characters on each line are striped up to the margin character".into(),
             StringsPkg::Substring => "Returns a substring of string `s` from `m` to `n`".into(),
+            StringsPkg::SuperScript => "Returns a superscript of a number `n`".into(),
             StringsPkg::ToString => "Converts a value to its text-based representation".into(),
         }
     }
@@ -1671,15 +1679,16 @@ impl Package for StringsPkg {
             StringsPkg::StartsWith => vec!["str::starts_with('Hello World', 'World')".into()],
             StringsPkg::StripMargin => vec![strip_margin(
                 r#"
-                    ^str::strip_margin("
-                    ^|Code example:
-                    ^|
-                    ^|from stocks
-                    ^|where exchange is 'NYSE'
-                    ^", '|')"#,
-                '^',
+                    |str::strip_margin("
+                    ||Code example:
+                    ||
+                    ||from stocks
+                    ||where exchange is 'NYSE'
+                    |", '|')"#,
+                '|',
             )],
             StringsPkg::Substring => vec!["str::substring('Hello World', 0, 5)".into()],
+            StringsPkg::SuperScript => vec!["str::superscript(5)".into()],
             StringsPkg::ToString => vec!["str::to_string(125.75)".into()],
         }
     }
@@ -1701,13 +1710,14 @@ impl Package for StringsPkg {
             StringsPkg::Join => vec![ArrayType(0), StringType(0)],
             // three-parameter (string, i64, i64)
             StringsPkg::Substring => vec![StringType(0), NumberType(I64Kind), NumberType(I64Kind)],
+            StringsPkg::SuperScript => vec![NumberType(I64Kind)],
             StringsPkg::ToString => vec![UnresolvedType],
         }
     }
 
     fn get_return_type(&self) -> DataType {
         match self {
-            // boolean
+            // Boolean
             StringsPkg::EndsWith | StringsPkg::StartsWith => BooleanType,
             StringsPkg::Format
             | StringsPkg::Join
@@ -1716,10 +1726,12 @@ impl Package for StringsPkg {
             | StringsPkg::StripMargin
             | StringsPkg::Substring
             | StringsPkg::ToString => StringType(0),
-            // number
+            // Number
             StringsPkg::IndexOf | StringsPkg::Len => NumberType(I64Kind),
-            // array
+            // Array
             StringsPkg::Split => ArrayType(0),
+            // String
+            StringsPkg::SuperScript => StringType(0),
         }
     }
 
@@ -1740,6 +1752,7 @@ impl Package for StringsPkg {
             StringsPkg::StartsWith => extract_value_fn2(ms, args, Self::do_str_start_with),
             StringsPkg::StripMargin => extract_value_fn2(ms, args, Self::do_str_strip_margin),
             StringsPkg::Substring => extract_value_fn3(ms, args, Self::do_str_substring),
+            StringsPkg::SuperScript => extract_value_fn1(ms, args, Self::do_str_superscript),
             StringsPkg::ToString => {
                 extract_value_fn1(ms, args, |ms, v| Ok((ms, StringValue(v.unwrap_value()))))
             }
@@ -3974,14 +3987,13 @@ mod tests {
             verify_exact_value(
                 strip_margin(
                     r#"
-                ^str::strip_margin("
-                ^|Code example:
-                ^|
-                ^|from stocks
-                ^|where exchange is 'NYSE'
-                ^", '|')"#,
-                    '^',
-                )
+                |str::strip_margin("
+                ||Code example:
+                ||
+                ||from stocks
+                ||where exchange is 'NYSE'
+                |", '|')"#,
+                    '|')
                 .as_str(),
                 StringValue("\nCode example:\n\nfrom stocks\nwhere exchange is 'NYSE'".into()),
             )
@@ -4010,13 +4022,17 @@ mod tests {
         }
 
         #[test]
+        fn test_str_superscript() {
+            verify_exact_code(r#"
+                str::superscript(123)
+            "#, r#""¹²³""#)
+        }
+
+        #[test]
         fn test_str_to_string_qualified() {
-            verify_exact_value(
-                r#"
+            verify_exact_code(r#"
                 str::to_string(125.75)
-            "#,
-                StringValue("125.75".into()),
-            );
+            "#, r#""125.75""#)
         }
 
         #[test]
