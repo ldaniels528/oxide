@@ -300,6 +300,7 @@ mod tests {
     /// Function tests
     #[cfg(test)]
     mod function_tests {
+        use crate::compiler::Compiler;
         use crate::interpreter::Interpreter;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
@@ -313,6 +314,68 @@ mod tests {
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(2, 5)
             "#, "10")
+        }
+
+        #[test]
+        fn test_new_function_lambda_with_parameter_types() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product = (a: i64, b: i64) -> a * b
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(3, 3)
+            "#, "9")
+        }
+
+        #[test]
+        fn test_new_function_named() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(a, b) -> a * b
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(4, 5)
+            "#, "20")
+        }
+
+        #[test]
+        fn test_new_function_named_with_parameter_types() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(a: i64, b: i64) -> a * b
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(4, 9)
+            "#, "36")
+        }
+        
+        #[ignore]
+        #[test]
+        fn test_new_function_named_with_parameter_types_and_return_type() {
+            let model =   Compiler::build(r#"
+                product(a: i64, b: i64): i64 -> a * b
+            "#).unwrap();
+            println!("model {:?}", model);
+            println!("model.to_code() {:?}", model.to_code());
+
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(a: i64, b: i64): i64 -> a * b
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(5, 6)
+            "#, "30")
+        }
+
+        #[test]
+        fn test_transitional_function_lambda_with_parameter_types() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product = fn (a: i64, b: i64) -> a * b
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(3, 7)
+            "#, "21")
         }
 
         #[test]
@@ -340,7 +403,7 @@ mod tests {
         #[test]
         fn test_function_recursion_1() {
             verify_exact_code(r#"
-                f = fn(n: i64) => if(n <= 1) 1 else n * f(n - 1)
+                f = (n: i64) -> if(n <= 1) 1 else n * f(n - 1)
                 f(5)
             "#, "120")
         }
@@ -348,7 +411,7 @@ mod tests {
         #[test]
         fn test_function_recursion_2() {
             verify_exact_code(r#"
-                f = fn(n) => iff(n <= 1, 1, n * f(n - 1))
+                f = n -> iff(n <= 1, 1, n * f(n - 1))
                 f(6)
             "#, "720")
         }

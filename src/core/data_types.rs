@@ -80,7 +80,7 @@ impl DataType {
 
     /// deciphers a datatype from an expression (e.g. "String" | "String(20)")
     pub fn decipher_type(model: &Expression) -> std::io::Result<DataType> {
-        decode_model(model)
+        decipher_model(model)
     }
 
     /// decodes the typed value based on the supplied data type and buffer
@@ -306,7 +306,7 @@ impl DataType {
 
     /// Indicates whether the given name represents a known type
     pub fn is_type_name(name: &str) -> bool {
-        decode_model_variable(name).is_ok()
+        decipher_model_variable(name).is_ok()
     }
 
     pub fn render(types: &Vec<DataType>) -> String {
@@ -379,38 +379,35 @@ impl Display for DataType {
     }
 }
 
-fn decode_model(model: &Expression) -> std::io::Result<DataType> {
+fn decipher_model(model: &Expression) -> std::io::Result<DataType> {
     use crate::typed_values::TypedValue::Structured;
     match model {
         // e.g. [String, String, f64]
-        ArrayExpression(params) => decode_model_array(params),
+        ArrayExpression(params) => decipher_model_array(params),
         // e.g. fn(a, b, c)
         FnExpression { params, returns, .. } =>
             Ok(FunctionType(params.clone(), returns.clone().into())),
         // e.g. String(80)
-        FunctionCall { fx, args } => decode_model_function_call(fx, args),
+        FunctionCall { fx, args } => decipher_model_function_call(fx, args),
         // e.g. Structure(symbol: String, exchange: String, last_sale: f64)
         Literal(Structured(s)) => Ok(StructureType(s.get_parameters())),
         // e.g. (f64, f64, f64)
-        TupleExpression(params) => decode_model_tuple(params),
+        TupleExpression(params) => decipher_model_tuple(params),
         // e.g. i64
-        Variable(name) => decode_model_variable(name),
+        Variable(name) => decipher_model_variable(name),
         other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
     }
 }
 
-fn decode_model_array(items: &Vec<Expression>) -> std::io::Result<DataType> {
+fn decipher_model_array(items: &Vec<Expression>) -> std::io::Result<DataType> {
     let mut kinds = vec![];
     for item in items {
-        match decode_model(item) {
-            Ok(kind) => kinds.push(kind),
-            Err(err) => return throw(Exact(err.to_string()))
-        }
+        kinds.push(decipher_model(item)?); 
     }
     Ok(ArrayType(kinds.len()))
 }
 
-fn decode_model_function_call(
+fn decipher_model_function_call(
     fx: &Expression,
     args: &Vec<Expression>,
 ) -> std::io::Result<DataType> {
@@ -426,7 +423,7 @@ fn decode_model_function_call(
     }
     fn expect_type(args: &Vec<Expression>, f: fn(DataType) -> DataType) -> std::io::Result<DataType> {
         match args.as_slice() {
-            [item] => Ok(f(decode_model(item)?)),
+            [item] => Ok(f(decipher_model(item)?)),
             other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
         }
     }
@@ -434,7 +431,8 @@ fn decode_model_function_call(
         let mut params: Vec<Parameter> = vec![];
         for arg in args {
             let param = match arg {
-                AsValue(name, model) => Parameter::new(name, decode_model(model)?),
+                NamedType(name, data_type) => Parameter::new(name, data_type.clone()),
+                NamedValue(name, model) => Parameter::new(name, decipher_model(model)?),
                 SetVariables(var_expr, expr) =>
                     match var_expr.deref() {
                         Variable(name) => Parameter::from_tuple(name, expr.to_pure()?),
@@ -460,25 +458,22 @@ fn decode_model_function_call(
                 "String" => expect_size(args, |size| StringType(size)),
                 "Struct" => expect_params(args, |params| StructureType(params)),
                 "Table" => expect_params(args, |params| TableType(params, 0)),
-                type_name if args.is_empty() => decode_model_variable(type_name),
+                type_name if args.is_empty() => decipher_model_variable(type_name),
                 type_name => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(type_name.into())))
             }
         other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
     }
 }
 
-fn decode_model_tuple(items: &Vec<Expression>) -> std::io::Result<DataType> {
+fn decipher_model_tuple(items: &Vec<Expression>) -> std::io::Result<DataType> {
     let mut kinds = vec![];
     for item in items {
-        match decode_model(item) {
-            Ok(kind) => kinds.push(kind),
-            Err(err) => return throw(Exact(err.to_string()))
-        }
+        kinds.push(decipher_model(item)?);
     }
     Ok(TupleType(kinds))
 }
 
-fn decode_model_variable(name: &str) -> std::io::Result<DataType> {
+fn decipher_model_variable(name: &str) -> std::io::Result<DataType> {
     match name {
         "Boolean" => Ok(BooleanType),
         "Date" => Ok(NumberType(DateKind)),

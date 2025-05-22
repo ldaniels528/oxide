@@ -62,9 +62,15 @@ impl Compiler {
         let mut params = vec![];
         for arg in args.iter() {
             match arg {
-                AsValue(name, expr) => {
+                // (a: i64, b: i64)
+                NamedType(name, data_type) => {
+                    params.push(Parameter::new(name, data_type.clone()));
+                }
+                // (a: i64, b: i64)
+                NamedValue(name, expr) => {
                     params.push(Parameter::new(name, DataType::decipher_type(expr)?))
                 }
+                // (a, b)
                 Variable(name) => params.push(Parameter::new(name, UnresolvedType)),
                 expr => return throw(TypeMismatch(ParameterExpected(expr.to_code()))),
             }
@@ -208,7 +214,7 @@ impl Compiler {
             "<" => Ok(Condition(Conditions::LessThan(a.into(), b.into()))),
             "!=" => Ok(Condition(Conditions::NotEqual(a.into(), b.into()))),
             "||" => Ok(Condition(Conditions::Or(a.into(), b.into()))),
-            ":" => Ok(AsValue(pull_name(&a)?, b.into())),
+            ":" => Ok(NamedValue(pull_name(&a)?, b.into())), // TODO check for data type
             "&" => Ok(BitwiseAnd(a.into(), b.into())),
             "|" => Ok(BitwiseOr(a.into(), b.into())),
             "<<" => Ok(BitwiseShiftLeft(a.into(), b.into())),
@@ -281,7 +287,6 @@ impl Compiler {
         expr0: Expression,
         ts: &TokenSlice,
     ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
-        //println!("next_expression_postfix: expr0 {expr0:?} ts {:?}", ts.current());
         match ts.next() {
             // keyword operator "in"
             (Some(Atom { text, .. }), ts) if text == "in" => {
@@ -366,6 +371,15 @@ impl Compiler {
     /// Parses a function definition
     /// #### Examples
     /// ```
+    /// product(a: i64, b: i64): i64 -> a * b
+    /// ```
+    /// ```
+    /// product(a: i64, b: i64) -> a * b
+    /// ```
+    /// ```
+    /// product(a, b) -> a * b
+    /// ```
+    /// ```
     /// product = (a, b) -> a * b
     /// ```
     /// ```
@@ -381,23 +395,52 @@ impl Compiler {
             return throw(CompilerError(UnexpectedEOF, ts.current()));
         };
 
-        // resolve the parameters and build the model
-        let params = Self::resolve_parameters(expr0)?;
+        // resolve the optional name, parameters and return type
+        let (name_maybe, params, return_type_maybe) =
+            Self::resolve_name_and_parameters_and_return_type(expr0)?;
         let fx = FnExpression {
             params,
-            returns: body.infer_type(),
+            returns: return_type_maybe.unwrap_or(body.infer_type()),
             body: Some(body.into()),
         };
 
-        Ok((Some(fx), ts))
+        // build the model
+        match name_maybe {
+            None => Ok((Some(fx), ts)),
+            Some(name) => Ok((Some(
+                SetVariables(Variable(name).into(), fx.into())
+            ), ts))
+        }
     }
 
-    fn resolve_parameters(expr: Expression) -> std::io::Result<Vec<Parameter>> {
+    fn resolve_name_and_parameters_and_return_type(
+        expr: Expression
+    ) -> std::io::Result<(Option<String>, Vec<Parameter>, Option<DataType>)> {
         match expr {
-            Parameters(params) => Ok(params),
-            TupleExpression(items) => Self::convert_to_parameters_vec(items),
-            Variable(name) => Ok(vec![Parameter::new(name, UnresolvedType)]),
-            other => throw(SyntaxError(IllegalExpression(other.to_code()))),
+            // product(a: i64, b: i64) -> a * b
+            FnExpression { params, body, returns } if body.is_none() => {
+                Ok((None, params, Some(returns)))
+            },
+            // product(a: i64, b: i64) -> a * b
+            FunctionCall { fx, args } => {
+                let name_maybe = match fx.deref() {
+                    Variable(name) => Some(name.clone()),
+                    other =>
+                        return throw(SyntaxError(IllegalExpression(other.to_code()))),
+                };
+                Self::convert_to_parameters_vec(args)
+                    .map(|params| (name_maybe, params, None))
+            },
+            // (a: i64, b: i64) -> a * b
+            Parameters(params) => Ok((None, params, None)),
+            // (a, b) -> a * b
+            TupleExpression(items) =>
+                Self::convert_to_parameters_vec(items).map(|params| (None, params, None)),
+            // x -> x + 1
+            Variable(name) =>
+                Ok((None, vec![Parameter::new(name, UnresolvedType)], None)),
+            other =>
+                throw(SyntaxError(IllegalExpression(other.to_code()))),
         }
     }
 
@@ -405,15 +448,19 @@ impl Compiler {
         let mut params = vec![];
         for item in items {
             match item.clone() {
+                // (a: i64, b: i64)
+                NamedType(name, data_type) => {
+                    params.push(Parameter::new(name, data_type));
+                }
+                // (x = 5, y)
                 SetVariables(var_names, default_value) => {
                     match (var_names.deref(), default_value.deref()) {
-                        // (x = 5, y) -> x * y
                         (Variable(name), Literal(value)) =>
                             params.push(Parameter::with_default(name, value.get_type(), value.clone())),
                         _ => return throw(SyntaxError(IllegalExpression(item.to_code())))
                     }
                 }
-                // x -> x + 1
+                // x
                 Variable(name) => params.push(Parameter::new(name, UnresolvedType)),
                 other => return throw(SyntaxError(IllegalExpression(other.to_code())))
             }
@@ -547,10 +594,13 @@ impl Compiler {
         self.next_list_of_items(&ts, ")", |items| {
             let (mut is_qualified, mut expressions, mut params) = (false, vec![], vec![]);
             for item in items.iter() {
-                //println!("next_operator_prefix: item[{n}] => {item:?}");
                 expressions.push(item.clone());
                 match item.clone() {
-                    AsValue(name, model) => {
+                    NamedType(name, data_type) => {
+                        params.push(Parameter::new(name, data_type.clone()));
+                        is_qualified = true;
+                    }
+                    NamedValue(name, model) => {
                         match model.deref() {
                             // name: String(80)
                             FunctionCall { fx, args } => match fx.deref() {
@@ -602,7 +652,7 @@ impl Compiler {
             for item in items {
                 expressions.push(item.clone());
                 match item {
-                    AsValue(name, value) => key_values.push((name, *value)),
+                    NamedValue(name, value) => key_values.push((name, *value)),
                     _ => {}
                 }
             }
@@ -650,7 +700,6 @@ impl Compiler {
         ts: TokenSlice,
         symbol: &str,
     ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
-        //println!("next_operator_postfix: expr0 {expr0:?}, symbol {symbol:?}");
         match symbol {
             ";" => Ok((None, ts.skip())),
             "⁰" => self.next_operator_postfix_power(expr0, 0, ts),
@@ -697,7 +746,7 @@ impl Compiler {
                 .parse_condition_2a(ts, expr0, Equal)
                 .map(|(m, ts)| (Some(m), ts)),
             ":" => self
-                .parse_expression_2nv(ts, expr0, AsValue)
+                .parse_colon(ts, expr0)
                 .map(|(m, ts)| (Some(m), ts)),
             "::" => self
                 .parse_expression_2a(ts, expr0, ColonColon)
@@ -718,7 +767,7 @@ impl Compiler {
                 .parse_condition_2a(ts, expr0, LessOrEqual)
                 .map(|(m, ts)| (Some(m), ts)),
             "->" => self
-                .next_function( expr0, ts),
+                .next_function(expr0, ts),
             "-" => self
                 .parse_expression_2a(ts, expr0, Minus)
                 .map(|(m, ts)| (Some(m), ts)),
@@ -801,7 +850,7 @@ impl Compiler {
                 for item in items {
                     expressions.push(item.clone());
                     match item {
-                        AsValue(name, value) => key_values.push((name, *value)),
+                        NamedValue(name, value) => key_values.push((name, *value)),
                         _ => {}
                     }
                 }
@@ -899,25 +948,34 @@ impl Compiler {
     }
 
     /// compiles the [TokenSlice] into a name-value parameter [Expression]
-    fn parse_expression_2nv(
+    fn parse_colon(
         &self,
         ts: TokenSlice,
         expr0: Expression,
-        f: fn(String, Box<Expression>) -> Expression,
     ) -> std::io::Result<(Expression, TokenSlice)> {
-        match expr0 {
-            Literal(StringValue(name)) => {
-                let (expr1, ts) = self.compile_next(&ts)?;
-                Ok((f(name, expr1.into()), ts))
+        let (expr1, ts) = self.compile_next(&ts)?;
+        match (expr0, expr1) {
+            // "name": "apple"
+            (Literal(StringValue(name)), value) => Ok((NamedValue(name, value.into()), ts)),
+            // n: i64
+            (Variable(name), Variable(type_name)) if DataType::is_type_name(&type_name) => {
+                let data_type = DataType::from_str(&type_name)?;
+                Ok((NamedType(name, data_type), ts))
             }
-            Variable(name) => {
-                let (expr1, ts) = self.compile_next(&ts)?;
-                Ok((f(name, expr1.into()), ts))
+            // name: "ABC"
+            (Variable(name), value) => Ok((NamedValue(name, value.into()), ts)),
+            // function expression: "product(a: i64, b: i64): i64"
+            (expr0, Variable(type_name)) if DataType::is_type_name(&type_name) => {
+                let data_type = DataType::from_str(&type_name)?;
+                println!("parse_colon: expr0 {expr0:?} data_type {data_type:?}");
+                todo!()//Ok((NamedType(name, data_type), ts))
             }
-            _ => throw(ExactNear(
-                "an identifier name was expected".into(),
-                ts.current(),
-            )),
+            // unhandled case
+            (expr0, expr1) => {
+                println!("parse_colon: expr0 {expr0:?}");
+                println!("parse_colon: expr1 {expr1:?}");
+                throw(ExactNear(format!("an identifier name was expected near {:?}", expr0), ts.current()))
+            },
         }
     }
 
@@ -2056,7 +2114,7 @@ mod tests {
             verify_build_with_decompile(
                 r#""name": "Bill Bass""#,
                 r#"name: "Bill Bass""#,
-                AsValue(
+                NamedValue(
                     "name".into(),
                     Literal(StringValue("Bill Bass".into())).into(),
                 ),
@@ -2067,7 +2125,7 @@ mod tests {
         fn test_as_value_unquoted() {
             verify_build(
                 r#"symbol: "ABC""#,
-                AsValue("symbol".into(), Literal(StringValue("ABC".into())).into()),
+                NamedValue("symbol".into(), Literal(StringValue("ABC".into())).into()),
             );
         }
 
@@ -2242,7 +2300,7 @@ mod tests {
             assert_eq!(
                 model,
                 CurvyArrowLeft(
-                    AsValue("n".into(), Literal(Number(I64Value(200))).into()).into(),
+                    NamedValue("n".into(), Literal(Number(I64Value(200))).into()).into(),
                     Literal(StringValue("Rejected".into())).into()
                 )
             )
@@ -2256,7 +2314,7 @@ mod tests {
             assert_eq!(
                 model,
                 CurvyArrowRight(
-                    AsValue("n".into(), Literal(Number(I64Value(100))).into()).into(),
+                    NamedValue("n".into(), Literal(Number(I64Value(100))).into()).into(),
                     Literal(StringValue("Accepted".into())).into()
                 )
             )
@@ -2363,7 +2421,7 @@ mod tests {
 
         #[test]
         fn test_fn_anonymous_function_with_inferred_types() {
-            let code = Compiler::build("fn (a, b) => a * b").unwrap();
+            let code = Compiler::build("(a, b) -> a * b").unwrap();
             assert_eq!(
                 code,
                 FnExpression {
@@ -2915,12 +2973,12 @@ mod tests {
                     vec![
                         // n: 100 ~> "Accepted",
                         CurvyArrowRight(
-                            AsValue("n".into(), Literal(Number(I64Value(100))).into()).into(),
+                            NamedValue("n".into(), Literal(Number(I64Value(100))).into()).into(),
                             Literal(StringValue("Accepted".into())).into()
                         ),
                         // n: 101..104 ~> "Escalated",
                         CurvyArrowRight(
-                            AsValue(
+                            NamedValue(
                                 "n".into(),
                                 Range(Exclusive(
                                     Literal(Number(I64Value(101))).into(),
@@ -2933,7 +2991,7 @@ mod tests {
                         ),
                         // n: n > 0 && n < 100 ~> "Pending",
                         CurvyArrowRight(
-                            AsValue(
+                            NamedValue(
                                 "n".into(),
                                 Condition(And(
                                     Condition(GreaterThan(

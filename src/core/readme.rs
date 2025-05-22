@@ -91,7 +91,7 @@ GET https://api.example.com/users
 ```oxide
 use arrays
 users = [ { name: 'Tom' }, { name: 'Sara' } ]
-names = users:::map(fn(u) => u::name)
+names = users:::map(u -> u::name)
 ```
 
 ### 🕒 Work with Dates and Durations
@@ -104,7 +104,7 @@ cal::plus(now(), 30:::days())
 ```oxide
 use arrays
 let arr = [1, 2, 3, 4]
-(arr:::filter(fn(x) => (x % 2) == 0)):::map(fn(x) => x * 10)
+(arr:::filter(x -> (x % 2) == 0)):::map(x -> x * 10)
 ```
 
 ---
@@ -318,7 +318,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |[1, 4, 2, 8, 5, 7]
             "#, '|'),
             strip_margin(r#"
-                |// Arrays may be used to assign multiple variables
+                |// Arrays may be destructured to assign multiple variables
                 |
                 |let [a, b, c] = [3, 5, 7]
                 |a + b + c
@@ -328,10 +328,6 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |
                 |arrays::reverse([1, 4, 2, 8, 5, 7])
             "#, '|')
-        ],
-        Expression::AsValue(..) => vec![
-            "name: 'Tom'".into(),
-            "from { name: 'Tom' }".into()
         ],
         Expression::BitwiseAnd(..) => vec!["0b1111 & 0b0101".into()],
         Expression::BitwiseOr(..) => vec!["0b1010 | 0b0101".into()],
@@ -446,7 +442,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |}"#, '|')],
         Expression::FnExpression { .. } => vec![
             strip_margin(r#"
-                |product = fn (a, b) => a * b
+                |product = (a, b) -> a * b
                 |product(2, 5)
             "#, '|')],
         Expression::For { .. } => vec![
@@ -508,21 +504,12 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                     |// Oxide also provides iff - a ternary-operator-like if function
                     |
-                    |fact = fn(n) => iff(n <= 1, 1, n * fact(n - 1))
+                    |fact = n -> iff(n <= 1, 1, n * fact(n - 1))
                     |fact(6)
                     "#, '|'),
         ],
-        Expression::Use(..) => vec![
-            strip_margin(r#"
-                |use tools
-                |stocks = to_table([
-                |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-                |])
-                |stocks
-            "#, '|')],
         Expression::Include(..) => vec![],
+        Expression::KeyValue(..) => vec![],
         Expression::Literal(..) => vec![],
         Expression::MatchExpression(..) => vec![
             strip_margin(r#"
@@ -542,6 +529,11 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
         Expression::Modulo(..) => vec![],
         Expression::Multiply(..) => vec![
             "5 * 6".into()
+        ],
+        Expression::NamedType(..) => vec![],
+        Expression::NamedValue(..) => vec![
+            "name: 'Tom'".into(),
+            "from { name: 'Tom' }".into()
         ],
         Expression::Neg(..) => vec![
             strip_margin(r#"
@@ -596,7 +588,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
         Expression::StructureExpression(..) => vec![],
         Expression::TupleExpression(..) => vec![
             strip_margin(r#"
-                |// Tuples may be used to assign multiple variables
+                |// Tuples may be destructured to assign multiple variables
                 |
                 |(a, b, c) = (3, 5, 7)
                 |a + b + c
@@ -653,6 +645,17 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |LabelString = typedef(String(80))
                 |LabelString
+            "#, '|')
+        ],
+        Expression::Use(..) => vec![
+            strip_margin(r#"
+                |use tools
+                |stocks = to_table([
+                |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                |])
+                |stocks
             "#, '|')
         ],
         Expression::Variable(..) => vec![
@@ -717,7 +720,7 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
     let null = Box::new(Literal(TypedValue::Null));
     let models = vec![
         ("Arrays", ArrayExpression(vec![])),
-        ("Aliases", AsValue("".into(), null.clone())),
+        ("Aliases", NamedValue("".into(), null.clone())),
         ("Bitwise And", BitwiseAnd(null.clone(), null.clone())),
         ("Bitwise Or", BitwiseOr(null.clone(), null.clone())),
         ("Bitwise Shift-Left", BitwiseShiftLeft(null.clone(), null.clone())),

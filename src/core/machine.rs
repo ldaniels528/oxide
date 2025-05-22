@@ -150,10 +150,6 @@ impl Machine {
         use crate::expression::Expression::*;
         match expression {
             ArrayExpression(items) => self.eval_as_array(items),
-            AsValue(name, expr) => {
-                let (machine, tv) = self.evaluate(expr)?;
-                Ok((machine.with_variable(name, tv.to_owned()), tv))
-            }
             BitwiseAnd(a, b) => self.eval_inline_2(a, b, |aa, bb| aa & bb),
             BitwiseOr(a, b) => self.eval_inline_2(a, b, |aa, bb| aa | bb),
             BitwiseShiftLeft(a, b) => self.eval_inline_2(a, b, |aa, bb| aa << bb),
@@ -177,14 +173,28 @@ impl Machine {
             FunctionCall { fx, args } => self.do_function_call(fx, args),
             HTTP(method_call) => self.do_http_exec(method_call),
             If { condition, a, b } => self.do_if_then_else(condition, a, b),
-            Use(ops) => self.do_uses(ops),
             Include(path) => self.do_include(path),
+            KeyValue(key, value) => {
+                let (ms, key_val) = self.evaluate(key)?;
+                let (ms, value_val) = ms.evaluate(value)?;
+                Ok((ms.with_variable(
+                    key_val.unwrap_value().as_str(),
+                    value_val.clone()), value_val))
+            }
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
             MatchExpression(src, cases) => self.do_match_cases(src, cases),
             Minus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa - bb),
             Module(name, ops) => self.do_structure_module(name, ops),
             Modulo(a, b) => self.eval_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) => self.eval_inline_2(a, b, |aa, bb| aa * bb),
+            NamedType(name, data_type) => {
+                let kind = Kind(data_type.clone());
+                Ok((self.with_variable(name, kind.clone()), kind))
+            }
+            NamedValue(name, expr) => {
+                let (machine, tv) = self.evaluate(expr)?;
+                Ok((machine.with_variable(name, tv.clone()), tv))
+            }
             Neg(a) => self.do_negate(a),
             New(a) => self.do_new_instance(a),
             Ns(a) => query_engine::eval_ns(self, a),
@@ -201,6 +211,7 @@ impl Machine {
             StructureExpression(items) => self.do_structure_soft(items),
             TupleExpression(args) => self.do_tuple(args),
             TypeDef(expr) => self.do_type_decl(expr),
+            Use(ops) => self.do_uses(ops),
             Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
             VerticalBarArrow(a, b) => self.do_function_pipeline(a, b, false),
             VerticalBarDoubleArrow(a, b) => self.do_function_pipeline(a, b, true),
@@ -1031,7 +1042,7 @@ impl Machine {
             match case {
                 CurvyArrowRight(cond_expr, op_expr) =>
                     match cond_expr.deref() {
-                        (AsValue(name, expr)) => {
+                        (NamedValue(name, expr)) => {
                             let cond = match expr.deref() {
                                 // condition case: `n: if n > 0 && n < 100 ~> "Pending"`
                                 Condition(cond) => cond.clone(),
@@ -1574,7 +1585,7 @@ mod tests {
 
     #[test]
     fn test_aliases() {
-        let model = AsValue(
+        let model = NamedValue(
             "symbol".to_string(),
             Box::new(Literal(StringValue("ABC".into()))),
         );
@@ -1758,12 +1769,12 @@ mod tests {
                 vec![
                     // n: 100 ~> "Accepted",
                     CurvyArrowRight(
-                        AsValue("n".into(), Literal(Number(I64Value(100))).into()).into(),
+                        NamedValue("n".into(), Literal(Number(I64Value(100))).into()).into(),
                         Literal(StringValue("Accepted".into())).into()
                     ),
                     // n: 101..104 ~> "Escalated",
                     CurvyArrowRight(
-                        AsValue("n".into(), Range(Exclusive(
+                        NamedValue("n".into(), Range(Exclusive(
                             Literal(Number(I64Value(101))).into(),
                             Literal(Number(I64Value(104))).into()
                         )).into()).into(),
@@ -1771,7 +1782,7 @@ mod tests {
                     ),
                     // n: n > 0 && n < 100 ~> "Pending",
                     CurvyArrowRight(
-                        AsValue(
+                        NamedValue(
                             "n".into(),
                             Condition(And(
                                 Condition(GreaterThan(

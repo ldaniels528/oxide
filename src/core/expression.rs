@@ -254,7 +254,6 @@ pub enum Ranges {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Expression {
     ArrayExpression(Vec<Expression>),
-    AsValue(String, Box<Expression>),
     BitwiseAnd(Box<Expression>, Box<Expression>),
     BitwiseOr(Box<Expression>, Box<Expression>),
     BitwiseShiftLeft(Box<Expression>, Box<Expression>),
@@ -289,14 +288,16 @@ pub enum Expression {
         a: Box<Expression>,
         b: Option<Box<Expression>>,
     },
-    Use(Vec<UseOps>),
     Include(Box<Expression>),
+    KeyValue(Box<Expression>, Box<Expression>),
     Literal(TypedValue),
     MatchExpression(Box<Expression>, Vec<Expression>),
     Minus(Box<Expression>, Box<Expression>),
     Module(String, Vec<Expression>),
     Modulo(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
+    NamedValue(String, Box<Expression>),
+    NamedType(String, DataType),
     Neg(Box<Expression>),
     New(Box<Expression>),
     Ns(Box<Expression>),
@@ -315,6 +316,7 @@ pub enum Expression {
     StructureExpression(Vec<(String, Expression)>),
     TupleExpression(Vec<Expression>),
     TypeDef(Box<Expression>),
+    Use(Vec<UseOps>),
     Variable(String),
     VerticalBarArrow(Box<Expression>, Box<Expression>),
     VerticalBarDoubleArrow(Box<Expression>, Box<Expression>),
@@ -336,8 +338,6 @@ impl Expression {
         match expr {
             Expression::ArrayExpression(items) =>
                 format!("[{}]", items.iter().map(|i| Self::decompile(i)).collect::<Vec<String>>().join(", ")),
-            Expression::AsValue(name, expr) =>
-                format!("{}: {}", name, Self::decompile(expr)),
             Expression::BitwiseAnd(a, b) =>
                 format!("{} & {}", Self::decompile(a), Self::decompile(b)),
             Expression::BitwiseOr(a, b) =>
@@ -397,11 +397,8 @@ impl Expression {
                 format!("if {} {}{}", Self::decompile(condition), Self::decompile(a), b.to_owned()
                     .map(|x| format!(" else {}", Self::decompile(&x)))
                     .unwrap_or("".into())),
-            Expression::Use(args) =>
-                format!("use {}", args.iter().map(|a| a.to_code())
-                    .collect::<Vec<_>>()
-                    .join(", ")),
             Expression::Include(path) => format!("include {}", Self::decompile(path)),
+            Expression::KeyValue(a, b) => format!("{}: {}", Self::decompile(a), Self::decompile(b)),
             Expression::Literal(value) => value.to_code(),
             Expression::MatchExpression(a, b) =>
                 format!("match {} {}", Self::decompile(a), Self::decompile(&ArrayExpression(b.clone()))),
@@ -413,10 +410,18 @@ impl Expression {
                 format!("{} % {}", Self::decompile(a), Self::decompile(b)),
             Expression::Multiply(a, b) =>
                 format!("{} * {}", Self::decompile(a), Self::decompile(b)),
+            Expression::NamedType(name, data_type) =>
+                format!("{}: {}", name, data_type.to_code()),
+            Expression::NamedValue(name, expr) =>
+                format!("{}: {}", name, Self::decompile(expr)),
             Expression::Neg(a) => format!("-({})", Self::decompile(a)),
             Expression::New(a) => format!("new {}", Self::decompile(a)),
             Expression::Ns(a) => format!("ns({})", Self::decompile(a)),
             Expression::Parameters(parameters) => Self::decompile_parameters(parameters),
+            Expression::Use(args) =>
+                format!("use {}", args.iter().map(|a| a.to_code())
+                    .collect::<Vec<_>>()
+                    .join(", ")),
             Expression::VerticalBarArrow(a, b) =>
                 format!("{} |> {}", Self::decompile(a), Self::decompile(b)),
             Expression::VerticalBarDoubleArrow(a, b) =>
@@ -651,8 +656,6 @@ impl Expression {
     ) -> DataType {
         match expr {
             ArrayExpression(items) => ArrayType(items.len()),
-            // alias functions: name: get_name()
-            AsValue(_, e) => Self::infer_with_hints(e, hints),
             BitwiseAnd(a, b) => Self::infer_a_or_b(a, b, hints),
             BitwiseOr(a, b) => Self::infer_a_or_b(a, b, hints),
             BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b, hints),
@@ -696,8 +699,8 @@ impl Expression {
             HTTP { .. } => UnresolvedType,
             If { a: true_v, b: Some(false_v), .. } => Self::infer_a_or_b(true_v, false_v, hints),
             If { a: true_v, .. } => Self::infer_with_hints(true_v, hints),
-            Use(..) => BooleanType,
             Include(..) => BooleanType,
+            KeyValue(_, b) => Self::infer_with_hints(b, hints),
             Literal(Function { body, .. }) => Self::infer_with_hints(body, hints),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
@@ -710,6 +713,8 @@ impl Expression {
             Module(..) => BooleanType,
             Modulo(a, b) => Self::infer_a_or_b(a, b, hints),
             Multiply(a, b) => Self::infer_a_or_b(a, b, hints),
+            NamedType(_, data_type) => data_type.clone(),
+            NamedValue(_, e) => Self::infer_with_hints(e, hints),
             Neg(a) => Self::infer_with_hints(a, hints),
             New(a) => Self::infer_with_hints(a, hints),
             Ns(..) => BooleanType,
@@ -739,6 +744,7 @@ impl Expression {
                 .map(|p| Self::infer_with_hints(p, hints))
                 .collect::<Vec<_>>()),
             TypeDef(expr) => Self::infer_with_hints(expr, hints),
+            Use(..) => BooleanType,
             Variable(name) =>
                 match name {
                     s if s == machine::ROW_ID => NumberType(I64Kind),
@@ -799,7 +805,7 @@ impl Expression {
     /// Attempts to resolve the [Expression] as a [TypedValue]
     pub fn to_pure(&self) -> std::io::Result<TypedValue> {
         match self {
-            Expression::AsValue(_, expr) => expr.to_pure(),
+            Expression::NamedValue(_, expr) => expr.to_pure(),
             Expression::ArrayExpression(items) => Self::purify(items),
             Expression::BitwiseAnd(a, b) => Ok(a.to_pure()? & b.to_pure()?),
             Expression::BitwiseOr(a, b) => Ok(a.to_pure()? | b.to_pure()?),
@@ -1212,7 +1218,7 @@ mod expression_tests {
 
     #[test]
     fn test_alias() {
-        let model = AsValue("symbol".into(), Box::new(Literal(StringValue("ABC".into()))));
+        let model = NamedValue("symbol".into(), Box::new(Literal(StringValue("ABC".into()))));
         assert_eq!(Expression::decompile(&model), r#"symbol: "ABC""#);
     }
 

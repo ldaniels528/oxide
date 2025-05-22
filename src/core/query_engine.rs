@@ -770,7 +770,7 @@ fn resolve_field_as_column(
 ) -> std::io::Result<Column> {
     match field {
         // label: value
-        AsValue(label, expr) =>
+        NamedValue(label, expr) =>
             match expr.deref() {
                 // price: last_sale
                 Variable(name) =>

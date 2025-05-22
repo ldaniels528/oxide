@@ -156,7 +156,7 @@ impl Package for ArraysPkg {
         match self {
             ArraysPkg::Filter => vec![strip_margin(
                 r#"
-                    |arrays::filter(1..7, fn(n) => (n % 2) == 0)
+                    |arrays::filter(1..7, n -> (n % 2) == 0)
                "#,
                 '|',
             )],
@@ -168,7 +168,7 @@ impl Package for ArraysPkg {
             )],
             ArraysPkg::Map => vec![strip_margin(
                 r#"
-                    |arrays::map([1, 2, 3], fn(n) => n * 2)
+                    |arrays::map([1, 2, 3], n -> n * 2)
                "#,
                 '|',
             )],
@@ -197,13 +197,13 @@ impl Package for ArraysPkg {
             )],
             ArraysPkg::Reduce => vec![
                 strip_margin(r#"
-                    |arrays::reduce(1..=5, 0, fn(a, b) => a + b)
+                    |arrays::reduce(1..=5, 0, (a, b) -> a + b)
                 "#, '|'),
                 strip_margin(
                 r#"
                     |use arrays::reduce
                     |numbers = [1, 2, 3, 4, 5]
-                    |numbers:::reduce(0, fn(a, b) => a + b)
+                    |numbers:::reduce(0, (a, b) -> a + b)
                 "#,
                 '|')
             ],
@@ -1887,22 +1887,22 @@ impl Package for TestingPkg {
                 r#"
                     |use testing
                     |feature("Matches function", {
-                    |    "Compare Array contents: Equal": fn(ctx) => {
+                    |    "Compare Array contents: Equal": ctx -> {
                     |        assert(matches(
                     |            [ 1 "a" "b" "c" ],
                     |            [ 1 "a" "b" "c" ]))
                     |    },
-                    |    "Compare Array contents: Not Equal": fn(ctx) => {
+                    |    "Compare Array contents: Not Equal": ctx -> {
                     |        assert(!matches(
                     |            [ 1 "a" "b" "c" ],
                     |            [ 0 "x" "y" "z" ]))
                     |    },
-                    |    "Compare JSON contents (in sequence)": fn(ctx) => {
+                    |    "Compare JSON contents (in sequence)": ctx -> {
                     |        assert(matches(
                     |            { first: "Tom" last: "Lane" },
                     |            { first: "Tom" last: "Lane" }))
                     |    },
-                    |    "Compare JSON contents (out of sequence)": fn(ctx) => {
+                    |    "Compare JSON contents (out of sequence)": ctx -> {
                     |        assert(matches(
                     |            { scores: [82 78 99], id: "A1537" },
                     |            { id: "A1537", scores: [82 78 99] }))
@@ -2373,7 +2373,7 @@ impl Package for ToolsPkg {
             )],
             ToolsPkg::Filter => vec![strip_margin(
                 r#"
-                    |tools::filter(1..11, fn(n) => (n % 2) == 0)
+                    |tools::filter(1..11, n -> (n % 2) == 0)
                 "#,
                 '|',
             )],
@@ -3024,7 +3024,7 @@ mod tests {
         fn test_arrays_filter() {
             verify_exact_code(
                 r#"
-                arrays::filter([123, 56, 89, 66], fn(n) => (n % 3) == 0)
+                arrays::filter([123, 56, 89, 66], n -> (n % 3) == 0)
            "#,
                 "[123, 66]",
             )
@@ -3034,7 +3034,7 @@ mod tests {
         fn test_arrays_filter_with_range() {
             verify_exact_code(
                 r#"
-                arrays::filter(1..7, fn(n) => (n % 2) == 0)
+                arrays::filter(1..7, n -> (n % 2) == 0)
            "#,
                 "[2, 4, 6]",
             )
@@ -3064,7 +3064,7 @@ mod tests {
         fn test_arrays_map() {
             verify_exact_code(
                 r#"
-                arrays::map([1, 2, 3], fn(n) => n * 2)
+                arrays::map([1, 2, 3], n -> n * 2)
            "#,
                 "[2, 4, 6]",
             )
@@ -3074,7 +3074,7 @@ mod tests {
         fn test_arrays_map_with_range() {
             verify_exact_code(
                 r#"
-                arrays::map(1..4, fn(n) => n * 2)
+                arrays::map(1..4, n -> n * 2)
            "#,
                 "[2, 4, 6]",
             )
@@ -3106,14 +3106,14 @@ mod tests {
             verify_exact_code(r#"
                  use arrays::reduce
                  numbers = [1, 2, 3, 4, 5]
-                 numbers:::reduce(0, fn(a, b) => a + b)
+                 numbers:::reduce(0, (a, b) -> a + b)
             "#, "15");
         }
 
         #[test]
         fn test_arrays_reduce_with_range() {
             verify_exact_code(r#"
-                 arrays::reduce(1..=5, 0, fn(a, b) => a + b)
+                 arrays::reduce(1..=5, 0, (a, b) -> a + b)
             "#, "15");
         }
 
@@ -4058,22 +4058,22 @@ mod tests {
             verify_exact_table(r#"
             use testing
             feature("Matches function", {
-                "Compare Array contents: Equal": fn(ctx) => {
+                "Compare Array contents: Equal": ctx -> {
                     assert(matches(
                         [ 1 "a" "b" "c" ],
                         [ 1 "a" "b" "c" ]))
                 },
-                "Compare Array contents: Not Equal": fn(ctx) => {
+                "Compare Array contents: Not Equal": ctx -> {
                     assert(!matches(
                         [ 1 "a" "b" "c" ],
                         [ 0 "x" "y" "z" ]))
                 },
-                "Compare JSON contents (in sequence)": fn(ctx) => {
+                "Compare JSON contents (in sequence)": ctx -> {
                     assert(matches(
                         { first: "Tom" last: "Lane" },
                         { first: "Tom" last: "Lane" }))
                 },
-                "Compare JSON contents (out of sequence)": fn(ctx) => {
+                "Compare JSON contents (out of sequence)": ctx -> {
                     assert(matches(
                         { scores: [82 78 99], id: "A1537" },
                         { id: "A1537", scores: [82 78 99] }))
@@ -4182,7 +4182,7 @@ mod tests {
 
         #[test]
         fn test_testing_type_of_fn() {
-            verify_exact_string("testing::type_of(fn(a, b) => a + b)", "fn(a, b)");
+            verify_exact_string("testing::type_of((a, b) -> a + b)", "fn(a, b)");
         }
 
         #[test]
@@ -4404,7 +4404,7 @@ mod tests {
         fn test_tools_filter_over_array() {
             verify_exact_value(
                 r#"
-                tools::filter(1..7, fn(n) => (n % 2) == 0)
+                tools::filter(1..7, n -> (n % 2) == 0)
            "#,
                 ArrayValue(Array::from(vec![
                     Number(I64Value(2)),
@@ -4424,7 +4424,7 @@ mod tests {
                  { symbol: "ACDC", exchange: "AMEX", last_sale: 37.43 },
                  { symbol: "UELO", exchange: "NYSE", last_sale: 91.82 }] ~> stocks
                 use tools
-                stocks:::filter(fn(row) => exchange is "AMEX")
+                stocks:::filter(row -> exchange is "AMEX")
            "#,
                 vec![
                     "|------------------------------------|",
@@ -4492,7 +4492,7 @@ mod tests {
         fn test_tools_map_over_array() {
             verify_exact_value(
                 r#"
-                tools::map([1, 2, 3], fn(n) => n * 2)
+                tools::map([1, 2, 3], n -> n * 2)
            "#,
                 ArrayValue(Array::from(vec![
                     Number(I64Value(2)),
@@ -4512,7 +4512,7 @@ mod tests {
                  { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
                  { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
                 use tools
-                stocks:::map(fn(row) => {
+                stocks:::map(row -> {
                     symbol: symbol,
                     exchange: exchange,
                     last_sale: last_sale,
@@ -4748,7 +4748,7 @@ mod tests {
         fn test_tools_reverse_strings() {
             verify_exact_value(
                 r#"
-                fn backwards(a) => tools::reverse(a)
+                backwards(a) -> tools::reverse(a)
                 "Hello World":::backwards()
             "#,
                 StringValue("dlroW olleH".into()),
