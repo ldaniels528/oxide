@@ -3,7 +3,7 @@
 <hr>
 <h4>📦 arrays::filter &#8212; Filters an array based on a function</h4>
 <h5>example1</h5>
-<pre>arrays::filter(1..7, fn(n) => (n % 2) == 0)</pre>
+<pre>arrays::filter(1..7, n -> (n % 2) == 0)</pre>
 <h5>results</h5>
 <pre>
 [2, 4, 6]
@@ -19,7 +19,7 @@
 <hr>
 <h4>📦 arrays::map &#8212; Transform an array based on a function</h4>
 <h5>example1</h5>
-<pre>arrays::map([1, 2, 3], fn(n) => n * 2)</pre>
+<pre>arrays::map([1, 2, 3], n -> n * 2)</pre>
 <h5>results</h5>
 <pre>
 [2, 4, 6]
@@ -60,7 +60,7 @@ from stocks</pre>
 <hr>
 <h4>📦 arrays::reduce &#8212; Reduces an array to a single value</h4>
 <h5>example1</h5>
-<pre>arrays::reduce(1..=5, 0, fn(a, b) => a + b)</pre>
+<pre>arrays::reduce(1..=5, 0, (a, b) -> a + b)</pre>
 <h5>results</h5>
 <pre>
 15
@@ -70,7 +70,7 @@ from stocks</pre>
 <h5>example2</h5>
 <pre>use arrays::reduce
 numbers = [1, 2, 3, 4, 5]
-numbers:::reduce(0, fn(a, b) => a + b)</pre>
+numbers:::reduce(0, (a, b) -> a + b)</pre>
 <h5>results</h5>
 <pre>
 15
@@ -101,7 +101,7 @@ numbers:::reduce(0, fn(a, b) => a + b)</pre>
 now():::day_of()</pre>
 <h5>results</h5>
 <pre>
-21
+26
 </pre>
 <hr>
 <h4>📦 cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -110,7 +110,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-7
+6
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -119,7 +119,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-19
+18
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -128,7 +128,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-5
+19
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -146,7 +146,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-48
+25
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -164,7 +164,7 @@ now():::year_of()</pre>
 cal::minus(now(), 3:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-05-19T02:05:48.738Z
+1969-12-29T00:00:00.000Z
 </pre>
 <hr>
 <h4>📦 cal::now &#8212; Returns the current local date and time</h4>
@@ -172,7 +172,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-22T02:05:48.739Z
+2025-05-27T01:19:25.129Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -181,7 +181,7 @@ cal::minus(now(), 3:::days())</pre>
 cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
-2025-06-21T02:05:48.742Z
+1970-01-31T00:00:00.000Z
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
@@ -340,6 +340,97 @@ true
 5
 </pre>
 <hr>
+<h4>📦 nsd::exists &#8212; Returns true if the source path exists</h4>
+<h5>example1</h5>
+<pre>nsd::save('packages.exists.stocks', new Table(
+   symbol: String(8),
+   exchange: String(8),
+   last_sale: f64
+))
+nsd::exists("packages.exists.stocks")</pre>
+<h5>results</h5>
+<pre>
+true
+</pre>
+<hr>
+<h4>📦 nsd::exists &#8212; Returns true if the source path exists</h4>
+<h5>example2</h5>
+<pre>nsd::exists("packages.not_exists.stocks")</pre>
+<h5>results</h5>
+<pre>
+false
+</pre>
+<hr>
+<h4>📦 nsd::load &#8212; Loads a dataframe from a namespace</h4>
+<h5>example1</h5>
+<pre>let stocks =
+   nsd::save('packages.save_load.stocks', new Table(
+       symbol: String(8),
+       exchange: String(8),
+       last_sale: f64
+   ))
+
+let rows = 
+   [{ symbol: "CAZ", exchange: "AMEX", last_sale: 65.13 },
+    { symbol: "BAL", exchange: "NYSE", last_sale: 82.78 },
+    { symbol: "RCE", exchange: "NASDAQ", last_sale: 124.09 }] 
+
+rows ~> stocks
+
+nsd::load('packages.save_load.stocks')</pre>
+<h5>results</h5>
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 0  | CAZ    | AMEX     | 65.13     |
+| 1  | BAL    | NYSE     | 82.78     |
+| 2  | RCE    | NASDAQ   | 124.09    |
+|------------------------------------|
+</pre>
+<hr>
+<h4>📦 nsd::remove &#8212; Deletes a dataframe from a namespace</h4>
+<h5>example1</h5>
+<pre>nsd::save('packages.remove.stocks', new Table(
+    symbol: String(8),
+    exchange: String(8),
+    last_sale: f64
+))
+
+nsd::remove('packages.remove.stocks')
+nsd::exists('packages.remove.stocks')</pre>
+<h5>results</h5>
+<pre>
+false
+</pre>
+<hr>
+<h4>📦 nsd::save &#8212; Creates a new dataframe</h4>
+<h5>example1</h5>
+<pre>let stocks =
+   nsd::save('packages.save.stocks', new Table(
+       symbol: String(8),
+       exchange: String(8),
+       last_sale: f64
+   ))
+
+let rows = 
+   [{ symbol: "TCO", exchange: "NYSE", last_sale: 38.53 },
+    { symbol: "SHMN", exchange: "NYSE", last_sale: 6.57 },
+    { symbol: "HMU", exchange: "NASDAQ", last_sale: 27.12 }] 
+
+rows ~> stocks
+stocks</pre>
+<h5>results</h5>
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 0  | TCO    | NYSE     | 38.53     |
+| 1  | SHMN   | NYSE     | 6.57      |
+| 2  | HMU    | NASDAQ   | 27.12     |
+|------------------------------------|
+</pre>
+<hr>
 <h4>📦 os::call &#8212; Invokes an operating system application</h4>
 <h5>example1</h5>
 <pre>create table ns("examples.os.call") (
@@ -384,61 +475,61 @@ include path_str</pre>
 <pre>os::env()</pre>
 <h5>results</h5>
 <pre>
-|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| id | key                        | value                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | BUN_INSTALL                | /Users/ldaniels/.bun                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 1  | CARGO                      | /Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo                                                                                                                                                                                                                                                                                                                                                               |
-| 2  | CARGO_HOME                 | /Users/ldaniels/.cargo                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 3  | CARGO_MANIFEST_DIR         | /Users/ldaniels/GitHub/oxide/src/core                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 4  | CARGO_MANIFEST_PATH        | /Users/ldaniels/GitHub/oxide/src/core/Cargo.toml                                                                                                                                                                                                                                                                                                                                                                                       |
-| 5  | CARGO_PKG_AUTHORS          |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 6  | CARGO_PKG_DESCRIPTION      |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 7  | CARGO_PKG_HOMEPAGE         |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 8  | CARGO_PKG_LICENSE          |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 9  | CARGO_PKG_LICENSE_FILE     |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 10 | CARGO_PKG_NAME             | core                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 11 | CARGO_PKG_README           |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 12 | CARGO_PKG_REPOSITORY       |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 13 | CARGO_PKG_RUST_VERSION     |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 14 | CARGO_PKG_VERSION          | 0.1.0                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 15 | CARGO_PKG_VERSION_MAJOR    | 0                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 16 | CARGO_PKG_VERSION_MINOR    | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 17 | CARGO_PKG_VERSION_PATCH    | 0                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 18 | CARGO_PKG_VERSION_PRE      |                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 19 | COMMAND_MODE               | unix2003                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 20 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-b2743e594d963e4d/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib                                              |
-| 21 | HOME                       | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 22 | IDEA_INITIAL_DIRECTORY     | /                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 23 | IJ_RESTARTER_LOG           | /Users/ldaniels/Library/Logs/JetBrains/IntelliJIdea2025.1/restarter.log                                                                                                                                                                                                                                                                                                                                                                |
-| 24 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                        |
-| 25 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 26 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 27 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 28 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:. |
-| 29 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 30 | RR_REAL_RUSTDOC            | /Users/ldaniels/.cargo/bin/rustdoc                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 31 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 32 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 33 | RUSTDOC                    | /Users/ldaniels/Library/Application Support/JetBrains/IntelliJIdea2025.1/plugins/intellij-rust/bin/mac/aarch64/intellij-rust-native-helper                                                                                                                                                                                                                                                                                             |
-| 34 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 35 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 36 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 37 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 38 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 39 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 40 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 41 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 42 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 43 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.6To52j2ZMT/Listeners                                                                                                                                                                                                                                                                                                                                                                                    |
-| 44 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 45 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                      |
-| 46 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 47 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 48 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.104316344.5C0B2A87-542B-4DF3-B0FD-53F35CC8C3D3                                                                                                                                                                                                                                                                                                                                               |
-| 49 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 50 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                          |
-|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | key                        | value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | BUN_INSTALL                | /Users/ldaniels/.bun                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 1  | CARGO                      | /Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 2  | CARGO_HOME                 | /Users/ldaniels/.cargo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 3  | CARGO_MANIFEST_DIR         | /Users/ldaniels/GitHub/oxide/src/core                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 4  | CARGO_MANIFEST_PATH        | /Users/ldaniels/GitHub/oxide/src/core/Cargo.toml                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 5  | CARGO_PKG_AUTHORS          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 6  | CARGO_PKG_DESCRIPTION      |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 7  | CARGO_PKG_HOMEPAGE         |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 8  | CARGO_PKG_LICENSE          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 9  | CARGO_PKG_LICENSE_FILE     |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 10 | CARGO_PKG_NAME             | core                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 11 | CARGO_PKG_README           |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 12 | CARGO_PKG_REPOSITORY       |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 13 | CARGO_PKG_RUST_VERSION     |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 14 | CARGO_PKG_VERSION          | 0.1.0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 15 | CARGO_PKG_VERSION_MAJOR    | 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 16 | CARGO_PKG_VERSION_MINOR    | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 17 | CARGO_PKG_VERSION_PATCH    | 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 18 | CARGO_PKG_VERSION_PRE      |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 19 | COMMAND_MODE               | unix2003                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 20 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/curl-sys-976ef1fd41b2ae67/out/build:/Users/ldaniels/GitHub/oxide/target/debug/build/libnghttp2-sys-03d0e22189823925/out/i/lib:/Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-b2743e594d963e4d/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib |
+| 21 | HOME                       | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 22 | IDEA_INITIAL_DIRECTORY     | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 23 | IJ_RESTARTER_LOG           | /Users/ldaniels/Library/Logs/JetBrains/IntelliJIdea2025.1/restarter.log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 24 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 25 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 26 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 27 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 28 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:.                                                                                                                                  |
+| 29 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 30 | RR_REAL_RUSTDOC            | /Users/ldaniels/.cargo/bin/rustdoc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 31 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 32 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 33 | RUSTDOC                    | /Users/ldaniels/Library/Application Support/JetBrains/IntelliJIdea2025.1/plugins/intellij-rust/bin/mac/aarch64/intellij-rust-native-helper                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 34 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 35 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 36 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 37 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 38 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 39 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 40 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 41 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 42 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 43 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.6To52j2ZMT/Listeners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 44 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 45 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 46 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 47 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 48 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.104316344.5C0B2A87-542B-4DF3-B0FD-53F35CC8C3D3                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 49 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 50 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::compile &#8212; Compiles source code from a string input</h4>
@@ -473,27 +564,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|-------------------------------------------------------------------------------------------------------------------------------------|
-| id | name        | module | signature                                 | description                                       | returns |
-|-------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | to_string   | str    | str::to_string(a)                         | Converts a value to its text-based representation | String  |
-| 1  | superscript | str    | str::superscript(n: i64)                  | Returns a superscript of a number `n`             | String  |
-| 2  | substring   | str    | str::substring(s: String, m: i64, n: i64) | Returns a substring of string `s` from `m` to `n` | String  |
-|-------------------------------------------------------------------------------------------------------------------------------------|
-</pre>
-<hr>
-<h4>📦 oxide::history &#8212; Returns all commands successfully executed during the session</h4>
-<h5>example1</h5>
-<pre>from oxide::history() limit 3</pre>
-<h5>results</h5>
-<pre>
-|-------------------------------------------------------------------|
-| id | session_id    | user_id | cpu_time_ms | input                |
-|-------------------------------------------------------------------|
-| 0  | 1747102264947 | 501     | 1.647       | import oxide; help() |
-| 1  | 1747102265222 | 501     | 1.935       | import oxide; help() |
-| 2  | 1747106351999 | 501     | 2.134       | import oxide; help() |
-|-------------------------------------------------------------------|
+|---------------------------------------------------------------------------------------------------------------------------|
+| id | name    | module    | signature                  | description                                             | returns |
+|---------------------------------------------------------------------------------------------------------------------------|
+| 0  | seconds | durations | durations::seconds(n: i64) | Converts a number into the equivalent number of seconds | i64     |
+| 1  | minutes | durations | durations::minutes(n: i64) | Converts a number into the equivalent number of minutes | i64     |
+| 2  | millis  | durations | durations::millis(n: i64)  | Converts a number into the equivalent number of millis  | i64     |
+|---------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::home &#8212; Returns the Oxide home directory path</h4>
@@ -525,7 +602,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-64d3f5a2-3432-4064-a13f-430c0c6c36e2
+70fefc6b-77e4-4d92-9c6e-10d148df0725
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -665,22 +742,22 @@ true
 <h5>example1</h5>
 <pre>use testing
 feature("Matches function", {
-    "Compare Array contents: Equal": fn(ctx) => {
+    "Compare Array contents: Equal": ctx -> {
         assert(matches(
             [ 1 "a" "b" "c" ],
             [ 1 "a" "b" "c" ]))
     },
-    "Compare Array contents: Not Equal": fn(ctx) => {
+    "Compare Array contents: Not Equal": ctx -> {
         assert(!matches(
             [ 1 "a" "b" "c" ],
             [ 0 "x" "y" "z" ]))
     },
-    "Compare JSON contents (in sequence)": fn(ctx) => {
+    "Compare JSON contents (in sequence)": ctx -> {
         assert(matches(
             { first: "Tom" last: "Lane" },
             { first: "Tom" last: "Lane" }))
     },
-    "Compare JSON contents (out of sequence)": fn(ctx) => {
+    "Compare JSON contents (out of sequence)": ctx -> {
         assert(matches(
             { scores: [82 78 99], id: "A1537" },
             { id: "A1537", scores: [82 78 99] }))
@@ -783,7 +860,7 @@ tools::fetch(stocks, 2)</pre>
 <hr>
 <h4>📦 tools::filter &#8212; Filters a collection based on a function</h4>
 <h5>example1</h5>
-<pre>tools::filter(1..11, fn(n) => (n % 2) == 0)</pre>
+<pre>tools::filter(1..11, n -> (n % 2) == 0)</pre>
 <h5>results</h5>
 <pre>
 [2, 4, 6, 8, 10]
@@ -849,9 +926,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-22T02:05:49.143Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-22T02:05:49.144Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-22T02:05:49.145Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-27T01:19:25.501Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-27T01:19:25.502Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-27T01:19:25.503Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>
@@ -1071,6 +1148,14 @@ stocks:::to_json()</pre>
 b10a8db164e0754105b7a99be72e3fe5
 </pre>
 <hr>
+<h4>📦 util::to &#8212; Converts a value to the desired type</h4>
+<h5>example1</h5>
+<pre>util::to(1376438453123, Date)</pre>
+<h5>results</h5>
+<pre>
+2013-08-14T00:00:53.123Z
+</pre>
+<hr>
 <h4>📦 util::to_ascii &#8212; Converts an integer to ASCII</h4>
 <h5>example1</h5>
 <pre>util::to_ascii(177)</pre>
@@ -1087,44 +1172,12 @@ b10a8db164e0754105b7a99be72e3fe5
 1970-01-01T00:00:00.177Z
 </pre>
 <hr>
-<h4>📦 util::to_f32 &#8212; Converts a value to f32</h4>
-<h5>example1</h5>
-<pre>util::to_f32(4321)</pre>
-<h5>results</h5>
-<pre>
-4321
-</pre>
-<hr>
 <h4>📦 util::to_f64 &#8212; Converts a value to f64</h4>
 <h5>example1</h5>
 <pre>util::to_f64(4321)</pre>
 <h5>results</h5>
 <pre>
 4321
-</pre>
-<hr>
-<h4>📦 util::to_i8 &#8212; Converts a value to i8</h4>
-<h5>example1</h5>
-<pre>util::to_i8(88)</pre>
-<h5>results</h5>
-<pre>
-88
-</pre>
-<hr>
-<h4>📦 util::to_i16 &#8212; Converts a value to i16</h4>
-<h5>example1</h5>
-<pre>util::to_i16(88)</pre>
-<h5>results</h5>
-<pre>
-88
-</pre>
-<hr>
-<h4>📦 util::to_i32 &#8212; Converts a value to i32</h4>
-<h5>example1</h5>
-<pre>util::to_i32(88)</pre>
-<h5>results</h5>
-<pre>
-88
 </pre>
 <hr>
 <h4>📦 util::to_i64 &#8212; Converts a value to i64</h4>
@@ -1138,38 +1191,6 @@ b10a8db164e0754105b7a99be72e3fe5
 <h4>📦 util::to_i128 &#8212; Converts a value to i128</h4>
 <h5>example1</h5>
 <pre>util::to_i128(88)</pre>
-<h5>results</h5>
-<pre>
-88
-</pre>
-<hr>
-<h4>📦 util::to_u8 &#8212; Converts a value to u8</h4>
-<h5>example1</h5>
-<pre>util::to_u8(88)</pre>
-<h5>results</h5>
-<pre>
-88
-</pre>
-<hr>
-<h4>📦 util::to_u16 &#8212; Converts a value to u16</h4>
-<h5>example1</h5>
-<pre>util::to_u16(88)</pre>
-<h5>results</h5>
-<pre>
-88
-</pre>
-<hr>
-<h4>📦 util::to_u32 &#8212; Converts a value to u32</h4>
-<h5>example1</h5>
-<pre>util::to_u32(88)</pre>
-<h5>results</h5>
-<pre>
-88
-</pre>
-<hr>
-<h4>📦 util::to_u64 &#8212; Converts a value to u64</h4>
-<h5>example1</h5>
-<pre>util::to_u64(88)</pre>
 <h5>results</h5>
 <pre>
 88

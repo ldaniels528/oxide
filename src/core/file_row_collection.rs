@@ -13,14 +13,14 @@ use crate::field;
 use crate::field::FieldMetadata;
 use crate::machine::Machine;
 use crate::namespaces::Namespace;
-use crate::number_kind::NumberKind::U64Kind;
+use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers;
 use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::platform::PackageOps;
 use crate::row_collection::{RowCollection, RowEncoding};
 use crate::row_metadata::RowMetadata;
-use crate::structures::Row;
+use crate::structures::{Row, Structure};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, ErrorValue, Number};
 use log::error;
@@ -298,7 +298,7 @@ impl RowCollection for FileRowCollection {
         let values = columns.iter().map(|column| {
             let fmd = FieldMetadata::decode(buffer[column.get_offset()]);
             if fmd.is_external {
-                let offset = NumberType(U64Kind).decode_field_value(&buffer, column.get_offset()).to_u64();
+                let offset = NumberType(I64Kind).decode_field_value(&buffer, column.get_offset()).to_u64();
                 let (_, value) = self.blobs.read(offset)
                     .unwrap_or_else(|err| (BLOBCellMetadata::new(0, 0, 0), ErrorValue(Errors::Exact(err.to_string()))));
                 value

@@ -18,7 +18,7 @@ use crate::machine;
 use crate::machine::Machine;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers;
-use crate::numbers::Numbers::U64Value;
+use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
@@ -46,7 +46,7 @@ impl HashTableRowCollection {
     /// Generates the columns for the index base on the source column
     fn create_hash_keys_columns(src_column: &Column) -> Vec<Column> {
         Column::from_parameters(&vec![
-            Parameter::new(machine::ROW_ID, NumberType(U64Kind)),
+            Parameter::new(machine::ROW_ID, NumberType(I64Kind)),
             src_column.to_parameter()
         ])
     }
@@ -58,7 +58,7 @@ impl HashTableRowCollection {
         new_value: &TypedValue,
     ) -> Row {
         Row::new(keys_row_id, vec![
-            Number(U64Value(data_row_id as u64)),
+            Number(I64Value(data_row_id as i64)),
             new_value.to_owned(),
         ])
     }

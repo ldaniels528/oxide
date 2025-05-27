@@ -134,7 +134,7 @@ pub fn eval_into_ns(
     let m0 = ms.to_owned();
     let (machine, rows) = match source {
         From(source) => do_table_rows_from_query(&ms, source, table)?,
-        Literal(Kind(TableType(_params, _size))) => (m0, vec![]),
+        Literal(Kind(TableType(_params))) => (m0, vec![]),
         Literal(NamespaceValue(ns)) => (m0, FileRowCollection::open(ns)?.read_active_rows()?),
         Literal(TableValue(rc)) => (m0, rc.get_rows()),
         DatabaseOp(DatabaseOps::Mutation(Declare(TableEntity { columns, from }))) =>
@@ -180,7 +180,7 @@ pub fn eval_ns(
                 _ => Ok((ms, ErrorValue(InvalidNamespace(path))))
             }
         NamespaceValue(ns) => Ok((ms, NamespaceValue(ns))),
-        other => throw(TypeMismatch(UnsupportedType(TableType(vec![], 0), other.get_type()))),
+        other => throw(TypeMismatch(UnsupportedType(TableType(vec![]), other.get_type()))),
     }
 }
 
@@ -212,7 +212,7 @@ fn do_create_table(
     match result.to_owned() {
         Null | Undefined => Ok((ms, result)),
         ErrorValue(err) => throw(err),
-        TableValue(_rcv) => throw(Exact("Memory collections do not use 'create' keyword".to_string())),
+        TableValue(_) => throw(Exact("Memory collections do not use 'create' keyword".to_string())),
         NamespaceValue(ns) => do_create_table_ns(&ms, &ns, columns, from, options),
         x => throw(TypeMismatch(CollectionExpected(x.to_code())))
     }
@@ -534,7 +534,7 @@ fn do_select_from_dataframe(
             (_ms, other) => return throw(TypeMismatch(UnsupportedType(
                 TableType(new_columns.iter()
                               .map(|c| c.to_parameter())
-                              .collect::<Vec<_>>(), 0),
+                              .collect::<Vec<_>>()),
                 other.get_type(),
             ))),
         };
@@ -603,7 +603,7 @@ fn step_2_transform_eligible_rows(
     let (ms, result) = match transform_table(ms, rc1, fields, new_columns, condition)? {
         (ms, TableValue(rc)) => (ms, TableValue(rc)),
         (_ms, other) => return throw(TypeMismatch(UnsupportedType(
-            TableType(vec![], 0),
+            TableType(vec![]),
             other.get_type(),
         ))),
     };
@@ -680,7 +680,7 @@ fn expect_rows(
         NamespaceValue(ns) => FileRowCollection::open(&ns)?.read_active_rows(),
         Structured(s) => Ok(vec![Row::from_tuples(0, columns, &s.to_name_values())]),
         TableValue(rcv) => Ok(rcv.get_rows()),
-        tv => throw(TypeMismatch(UnsupportedType(TableType(Parameter::from_columns(columns), 0), tv.get_type())))
+        tv => throw(TypeMismatch(UnsupportedType(TableType(Parameter::from_columns(columns)), tv.get_type())))
     }
 }
 
@@ -810,26 +810,7 @@ mod tests {
     use crate::numbers::Numbers::I64Value;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
-
-    #[test]
-    fn test_in_range_exclusive() {
-        verify_exact_value("19 in 1..20", Boolean(true));
-        verify_exact_value("20 in 1..20", Boolean(false));
-    }
-
-    #[test]
-    fn test_in_range_inclusive() {
-        verify_exact_value("20 in 1..=20", Boolean(true));
-        verify_exact_value("21 in 1..=20", Boolean(false));
-    }
-
-    #[test]
-    fn test_like() {
-        verify_exact_value("'Hello' like 'H*o'", Boolean(true));
-        verify_exact_value("'Hello' like 'H.ll.'", Boolean(true));
-        verify_exact_value("'Hello' like 'H%ll%'", Boolean(false));
-    }
-
+    
     #[test]
     fn test_table_create_ephemeral() {
         verify_exact_value(r#"
@@ -1077,8 +1058,8 @@ mod tests {
             "|----------------------------------|",
             "| id | symbol | exchange | history |",
             "|----------------------------------|",
-            "| 0  | BIZ    | NYSE     | null    |",
-            "| 1  | GOTO   | OTC      | null    |",
+            "| 0  | BIZ    | NYSE     | []      |",
+            "| 1  | GOTO   | OTC      | []      |",
             "|----------------------------------|"])
     }
 
@@ -1096,7 +1077,7 @@ mod tests {
             "|----------------------------------|",
             "| id | symbol | exchange | history |",
             "|----------------------------------|",
-            "| 1  | GOTO   | OTC      | null    |",
+            "| 1  | GOTO   | OTC      | []      |",
             "|----------------------------------|"])
     }
 

@@ -37,7 +37,7 @@
 [1, 4, 2, 8, 5, 7]
 </pre>
 <h5>example³</h5>
-<pre>// Arrays may be used to assign multiple variables
+<pre>// Arrays may be destructured to assign multiple variables
 
 let [a, b, c] = [3, 5, 7]
 a + b + c</pre>
@@ -163,7 +163,7 @@ false
 x contains 7</pre>
 <h5>results</h5>
 <pre>
-7
+true
 </pre>
 <hr>
 <h4>▶️ Curvy-Arrow Left</h4>
@@ -177,7 +177,7 @@ last_row <~ stocks
 last_row</pre>
 <h5>results</h5>
 <pre>
-{"exchange":"OTC","history":null,"symbol":"GOTO"}
+{"exchange":"OTC","history":[],"symbol":"GOTO"}
 </pre>
 <hr>
 <h4>▶️ Curvy-Arrow Right</h4>
@@ -230,7 +230,7 @@ result</pre>
 <hr>
 <h4>▶️ Functions</h4>
 <h5>example¹</h5>
-<pre>product = fn (a, b) => a * b
+<pre>product = (a, b) -> a * b
 product(2, 5)</pre>
 <h5>results</h5>
 <pre>
@@ -253,7 +253,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-11
+1
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -265,7 +265,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Thu, 22 May 2025 02:05:48 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 01:19:24 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -325,7 +325,7 @@ else "No"</pre>
 <h5>example²</h5>
 <pre>// Oxide also provides iff - a ternary-operator-like if function
 
-fact = fn(n) => iff(n <= 1, 1, n * fact(n - 1))
+fact = n -> iff(n <= 1, 1, n * fact(n - 1))
 fact(6)</pre>
 <h5>results</h5>
 <pre>
@@ -525,7 +525,7 @@ Feature "Matches function" {
 <hr>
 <h4>▶️ Tuples</h4>
 <h5>example¹</h5>
-<pre>// Tuples may be used to assign multiple variables
+<pre>// Tuples may be destructured to assign multiple variables
 
 (a, b, c) = (3, 5, 7)
 a + b + c</pre>

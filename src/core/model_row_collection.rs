@@ -225,7 +225,7 @@ mod tests {
     use crate::columns::Column;
     use crate::dataframe::Dataframe::Model;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::Numbers::U64Value;
+    use crate::numbers::Numbers::I64Value;
     use crate::row_collection::RowCollection;
     use crate::testdata::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
@@ -268,7 +268,7 @@ mod tests {
     fn test_index_of() {
         let (mrc, phys_columns) = create_data_set();
         let row = make_quote(3, "GOTO", "OTC", 0.1442);
-        assert_eq!(mrc.index_of(&row), Number(U64Value(3)));
+        assert_eq!(mrc.index_of(&row), Number(I64Value(3)));
     }
 
     fn create_data_set() -> (ModelRowCollection, Vec<Column>) {

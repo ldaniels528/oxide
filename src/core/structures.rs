@@ -15,7 +15,7 @@ use crate::errors::Errors::Exact;
 use crate::expression::Conditions;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
-use crate::numbers::Numbers::U64Value;
+use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::{Array, Tuple};
@@ -822,7 +822,7 @@ impl Row {
 
     pub fn with_variable(&self, name: &str, value: TypedValue) -> SoftStructure {
         let mut new_tuples = Vec::with_capacity(self.values.len() + 2);
-        new_tuples.push(("_id".to_string(), Number(U64Value(self.id as u64))));
+        new_tuples.push(("_id".to_string(), Number(I64Value(self.id as i64))));
         new_tuples.extend(self.to_name_values());
         new_tuples.push((name.to_string(), value));
         SoftStructure::from_tuples(new_tuples)
@@ -1430,8 +1430,8 @@ mod tests {
         fn test_new() {
             let structure = HardStructure::new(make_quote_parameters(), Vec::new());
             assert_eq!(structure.get_fields(), vec![
-                Parameter::new("symbol", StringType(8)),
-                Parameter::new("exchange", StringType(8)),
+                Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                 Parameter::new("last_sale", NumberType(F64Kind)),
             ]);
             println!("structure {}", structure);
@@ -1550,7 +1550,7 @@ mod tests {
     /// soft structure unit tests
     #[cfg(test)]
     mod soft_structure_tests {
-        use crate::numbers::Numbers::U8Value;
+        use crate::numbers::Numbers::I64Value;
         use crate::structures::{SoftStructure, Structure};
         use crate::typed_values::TypedValue::{Number, StringValue};
 
@@ -1568,7 +1568,7 @@ mod tests {
             let model = SoftStructure::new(&vec![
                 ("first_name", StringValue("Thomas".into())),
                 ("last_name", StringValue("Brady".into())),
-                ("age", Number(U8Value(41))),
+                ("age", Number(I64Value(41))),
             ]);
 
             assert_eq!(

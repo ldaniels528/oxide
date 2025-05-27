@@ -11,7 +11,7 @@ use crate::data_types::DataType::NumberType;
 use crate::dataframe::Dataframe;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::I64Kind;
-use crate::numbers::Numbers::U64Value;
+use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::structures::Row;
@@ -72,7 +72,7 @@ impl TableRenderer {
 
         // define rows by prepending ID values to each row's data
         let rows: Vec<Row> = rc.read_active_rows()?.into_iter().map(|row| {
-            let mut values = vec![Number(U64Value(row.get_id() as u64))];
+            let mut values = vec![Number(I64Value(row.get_id() as i64))];
             values.extend(row.get_values());
             Row::new(row.get_id(), values)
         })

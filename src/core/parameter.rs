@@ -148,7 +148,7 @@ impl Parameter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_types::DataType::{NumberType, StringType};
+    use crate::data_types::DataType::{FixedSizeType, NumberType, StringType};
 
     use crate::number_kind::NumberKind::F64Kind;
     use crate::typed_values::TypedValue::{Null, StringValue};
@@ -156,13 +156,13 @@ mod tests {
     #[test]
     fn test_from_columns() {
         let parameters = vec![
-            Parameter::new("symbol", StringType(8)),
-            Parameter::new("exchange", StringType(8)),
+            Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+            Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
             Parameter::new("last_sale", NumberType(F64Kind)),
         ];
         let columns = vec![
-            Column::new("symbol", StringType(8), Null, 9),
-            Column::new("exchange", StringType(8), Null, 26),
+            Column::new("symbol", FixedSizeType(StringType.into(), 8), Null, 9),
+            Column::new("exchange", FixedSizeType(StringType.into(), 8), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ];
         assert_eq!(Parameter::from_columns(&columns), parameters);
@@ -170,13 +170,13 @@ mod tests {
 
     #[test]
     fn test_to_code() {
-        let param = Parameter::with_default("symbol", StringType(8), StringValue("N/A".into()));
+        let param = Parameter::with_default("symbol", FixedSizeType(StringType.into(), 8), StringValue("N/A".into()));
         assert_eq!(param.to_code(), r#"symbol: String(8) = "N/A""#)
     }
 
     #[test]
     fn test_to_json() {
-        let param = Parameter::new("symbol", StringType(8));
-        assert_eq!(param.to_json().to_string(), r#"{"data_type":{"StringType":8},"default_value":"Null","name":"symbol"}"#.to_string())
+        let param = Parameter::new("symbol", FixedSizeType(StringType.into(), 8));
+        assert_eq!(param.to_json().to_string(), r#"{"data_type":{"FixedSizeType":["StringType",8]},"default_value":"Null","name":"symbol"}"#.to_string())
     }
 }

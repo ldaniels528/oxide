@@ -178,6 +178,32 @@ mod tests {
         "#, "15")
     }
 
+    /// Condition tests
+    #[cfg(test)]
+    mod condition_tests {
+        use crate::testdata::verify_exact_value;
+        use crate::typed_values::TypedValue::Boolean;
+
+        #[test]
+        fn test_in_range_exclusive() {
+            verify_exact_value("19 in 1..20", Boolean(true));
+            verify_exact_value("20 in 1..20", Boolean(false));
+        }
+
+        #[test]
+        fn test_in_range_inclusive() {
+            verify_exact_value("20 in 1..=20", Boolean(true));
+            verify_exact_value("21 in 1..=20", Boolean(false));
+        }
+
+        #[test]
+        fn test_like() {
+            verify_exact_value("'Hello' like 'H*o'", Boolean(true));
+            verify_exact_value("'Hello' like 'H.ll.'", Boolean(true));
+            verify_exact_value("'Hello' like 'H%ll%'", Boolean(false));
+        }
+    }
+
     /// Control-Flow tests
     #[cfg(test)]
     mod control_flow_tests {

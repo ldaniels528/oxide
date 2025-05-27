@@ -17,7 +17,7 @@ use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::{F64Kind, I64Kind};
-use crate::numbers::Numbers::{F64Value, U64Value};
+use crate::numbers::Numbers::{F64Value, I64Value};
 use crate::object_config::ObjectConfig;
 use crate::oxide_server::start_http_server;
 use crate::parameter::Parameter;
@@ -64,8 +64,8 @@ pub fn make_quote_columns() -> Vec<Column> {
 
 pub fn make_quote_parameters() -> Vec<Parameter> {
     vec![
-        Parameter::new("symbol", StringType(8)),
-        Parameter::new("exchange", StringType(8)),
+        Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+        Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
         Parameter::new("last_sale", NumberType(F64Kind)),
     ]
 }
@@ -81,7 +81,7 @@ pub fn make_scan_quote(
         StringValue(symbol.into()),
         StringValue(exchange.into()),
         Number(F64Value(last_sale)),
-        Number(U64Value(id as u64)),
+        Number(I64Value(id as i64)),
         Boolean(_active)
     ])
 }

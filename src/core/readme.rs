@@ -4,6 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType;
+use crate::expression::Expression::{DoWhile, While};
 use crate::expression::Queryables::Where;
 use crate::expression::Ranges::Exclusive;
 use crate::expression::{Conditions, DatabaseOps, Expression, HttpMethodCalls};
@@ -19,7 +20,6 @@ use log::__private_api::Value;
 use shared_lib::cnv_error;
 use std::fs::{File, OpenOptions};
 use std::io::Write;
-use crate::expression::Expression::{DoWhile, While};
 
 fn generate_readme(file: File) -> std::io::Result<File> {
     println!("generate title...");
@@ -169,6 +169,8 @@ You'll find the executables in `./target/release/`:
 
 fn generate_language_examples(mut file: File) -> std::io::Result<File> {
     for (name, examples) in create_language_examples() {
+        println!("[+] {}", name);
+        
         // header section
         // ex: "oxide::version - ..."
         writeln!(file, "<hr>")?;

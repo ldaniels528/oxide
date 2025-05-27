@@ -5,6 +5,7 @@
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
+use crate::dataframe::Dataframe::Model;
 use crate::expression::{Conditions, Expression};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
@@ -95,12 +96,7 @@ impl Dataframe {
         }
         Ok((df, Number(I64Value(overwritten))))
     }
-
-    pub fn to_model(self) -> ModelRowCollection {
-        let (rows, columns) = (self.get_rows(), self.get_columns());
-        ModelRowCollection::from_columns_and_rows(columns, &rows)
-    }
-
+    
     /// restores rows from the table based on a condition
     pub fn undelete_where(
         &mut self,
@@ -162,6 +158,27 @@ impl Dataframe {
         let mut mrc = Self::Model(ModelRowCollection::new(columns));
         for df in dataframes { merge(&mut mrc, &df); }
         mrc
+    }
+
+    pub fn to_model(self) -> ModelRowCollection {
+        let (rows, columns) = (self.get_rows(), self.get_columns());
+        ModelRowCollection::from_columns_and_rows(columns, &rows)
+    }
+
+    pub fn sublist(&self, start: usize, end: usize) -> Self {
+        let mut mrc = ModelRowCollection::new(self.get_columns().clone());
+        let mut row_id = start;
+        while row_id < end {
+            match self.read_one(row_id) {
+                Ok(Some(row)) => {
+                    mrc.append_row(row.clone());
+                },
+                Ok(None) => {  },
+                Err(e) => { eprintln!("Error reading row[{row_id}]: {e}") }
+            }
+            row_id += 1;
+        }
+        Model(mrc)
     }
 
     /// updates rows that match the supplied criteria
@@ -368,23 +385,23 @@ mod tests {
     fn test_get_combined_parameters() {
         let dfs = vec![
             Model(ModelRowCollection::from_parameters(&vec![
-                Parameter::new("symbol", StringType(0)),
-                Parameter::new("exchange", StringType(0))
+                Parameter::new("symbol", StringType),
+                Parameter::new("exchange", StringType)
             ])),
             Model(ModelRowCollection::from_parameters(&vec![
-                Parameter::new("symbol", StringType(0)),
-                Parameter::new("exchange", StringType(0)),
+                Parameter::new("symbol", StringType),
+                Parameter::new("exchange", StringType),
                 Parameter::new("last_sale", NumberType(F64Kind))
             ])),
             Model(ModelRowCollection::from_parameters(&vec![
-                Parameter::new("symbol", StringType(0)),
+                Parameter::new("symbol", StringType),
                 Parameter::new("last_sale", NumberType(F64Kind)),
                 Parameter::new("beta", NumberType(F64Kind))
             ])),
         ];
         assert_eq!(Dataframe::get_combined_parameters(&dfs), vec![
-            Parameter::new("symbol", StringType(0)),
-            Parameter::new("exchange", StringType(0)),
+            Parameter::new("symbol", StringType),
+            Parameter::new("exchange", StringType),
             Parameter::new("last_sale", NumberType(F64Kind)),
             Parameter::new("beta", NumberType(F64Kind))
         ])
@@ -394,22 +411,22 @@ mod tests {
     fn test_combine_tables() {
         let dfs = vec![
             Model(ModelRowCollection::from_parameters_and_rows(&vec![
-                Parameter::new("symbol", StringType(0)),
-                Parameter::new("exchange", StringType(0))
+                Parameter::new("symbol", StringType),
+                Parameter::new("exchange", StringType)
             ], &vec![
                 Row::new(0, vec![StringValue("ABC".into()), StringValue("AMEX".into())]),
             ])),
             Model(ModelRowCollection::from_parameters_and_rows(&vec![
-                Parameter::new("symbol", StringType(0)),
-                Parameter::new("exchange", StringType(0)),
+                Parameter::new("symbol", StringType),
+                Parameter::new("exchange", StringType),
                 Parameter::new("last_sale", NumberType(F64Kind))
             ], &vec![
                 make_quote(1, "UNO", "OTC", 0.2456),
                 make_quote(2, "BIZ", "NYSE", 23.66),
             ])),
             Model(ModelRowCollection::from_parameters_and_rows(&vec![
-                Parameter::new("symbol", StringType(0)),
-                Parameter::new("market", StringType(0)),
+                Parameter::new("symbol", StringType),
+                Parameter::new("market", StringType),
                 Parameter::new("beta", NumberType(F64Kind))
             ], &vec![
                 make_quote(3, "GOTO", "DSE", 0.1421),

@@ -655,7 +655,7 @@ impl Expression {
         hints: &Vec<Parameter>,
     ) -> DataType {
         match expr {
-            ArrayExpression(items) => ArrayType(items.len()),
+            ArrayExpression(items) => FixedSizeType(ArrayType.into(), items.len()),
             BitwiseAnd(a, b) => Self::infer_a_or_b(a, b, hints),
             BitwiseOr(a, b) => Self::infer_a_or_b(a, b, hints),
             BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b, hints),
@@ -681,7 +681,7 @@ impl Expression {
             CurvyArrowLeft(..) => StructureType(vec![]),
             CurvyArrowRight(..) => BooleanType,
             DatabaseOp(a) => match a {
-                DatabaseOps::Queryable(_) => TableType(vec![], 0),
+                DatabaseOps::Queryable(_) => TableType(vec![]),
                 DatabaseOps::Mutation(m) => match m {
                     Mutations::Append { .. } => NumberType(NumberKind::RowIdKind),
                     _ => NumberType(NumberKind::I64Kind),
@@ -694,7 +694,7 @@ impl Expression {
             FnExpression { params, returns, .. } =>
                 FunctionType(params.clone(), Box::new(returns.clone())),
             For { op, .. } => Self::infer_with_hints(op, hints),
-            From(..) => TableType(vec![], 0),
+            From(..) => TableType(vec![]),
             FunctionCall { fx, .. } => Self::infer_with_hints(fx, hints),
             HTTP { .. } => UnresolvedType,
             If { a: true_v, b: Some(false_v), .. } => Self::infer_a_or_b(true_v, false_v, hints),
@@ -718,7 +718,7 @@ impl Expression {
             Neg(a) => Self::infer_with_hints(a, hints),
             New(a) => Self::infer_with_hints(a, hints),
             Ns(..) => BooleanType,
-            Parameters(params) => ArrayType(params.len()),
+            Parameters(params) => FixedSizeType(ArrayType.into(), params.len()),
             Plus(a, b) => Self::infer_a_or_b(a, b, hints),
             PlusPlus(a, b) => Self::infer_a_or_b(a, b, hints),
             Pow(a, b) => Self::infer_a_or_b(a, b, hints),
@@ -756,9 +756,9 @@ impl Expression {
                 }
             VerticalBarArrow(_, b) => Self::infer_with_hints(b, hints),
             VerticalBarDoubleArrow(_, b) => Self::infer_with_hints(b, hints),
-            Via(..) => TableType(vec![], 0),
+            Via(..) => TableType(vec![]),
             While { code, .. } => Self::infer_with_hints(code, hints),
-            Yield(..) => ArrayType(0),
+            Yield(..) => ArrayType,
         }
     }
 
@@ -964,10 +964,10 @@ mod expression_tests {
     fn test_in_range_exclusive_expression() {
         let machine = Machine::empty();
         let model = In(
-            Literal(Number(I32Value(10))).into(),
+            Literal(Number(I64Value(10))).into(),
             Range(Exclusive(
-                Literal(Number(I32Value(1))).into(),
-                Literal(Number(I32Value(10))).into()
+                Literal(Number(I64Value(1))).into(),
+                Literal(Number(I64Value(10))).into()
             )).into(),
         );
         let (_, result) = machine.do_condition(&model).unwrap();
@@ -979,10 +979,10 @@ mod expression_tests {
     fn test_in_range_inclusive_expression() {
         let machine = Machine::empty();
         let model = In(
-            Literal(Number(I32Value(10))).into(),
+            Literal(Number(I64Value(10))).into(),
             Range(Inclusive(
-                Literal(Number(I32Value(1))).into(),
-                Literal(Number(I32Value(10))).into()
+                Literal(Number(I64Value(1))).into(),
+                Literal(Number(I64Value(10))).into()
             )).into(),
         );
         let (_, result) = machine.do_condition(&model).unwrap();
@@ -994,8 +994,8 @@ mod expression_tests {
     fn test_equality_integers() {
         let machine = Machine::empty();
         let model = Equal(
-            Box::new(Literal(Number(I32Value(5)))),
-            Box::new(Literal(Number(I32Value(5)))),
+            Box::new(Literal(Number(I64Value(5)))),
+            Box::new(Literal(Number(I64Value(5)))),
         );
         let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -1031,7 +1031,7 @@ mod expression_tests {
         let model = FnExpression {
             params: vec![],
             body: None,
-            returns: StringType(0),
+            returns: StringType,
         };
         assert_eq!(model.to_code(), "fn(): String")
     }
@@ -1065,8 +1065,8 @@ mod expression_tests {
     fn test_greater_than_or_equal() {
         let machine = Machine::empty();
         let model = GreaterOrEqual(
-            Box::new(Literal(Number(I32Value(5)))),
-            Box::new(Literal(Number(I32Value(1)))),
+            Box::new(Literal(Number(I64Value(5)))),
+            Box::new(Literal(Number(I64Value(1)))),
         );
         let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -1077,8 +1077,8 @@ mod expression_tests {
     fn test_less_than() {
         let machine = Machine::empty();
         let model = LessThan(
-            Box::new(Literal(Number(I32Value(4)))),
-            Box::new(Literal(Number(I32Value(5)))),
+            Box::new(Literal(Number(I64Value(4)))),
+            Box::new(Literal(Number(I64Value(5)))),
         );
         let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -1089,8 +1089,8 @@ mod expression_tests {
     fn test_less_than_or_equal() {
         let machine = Machine::empty();
         let model = LessOrEqual(
-            Box::new(Literal(Number(I32Value(1)))),
-            Box::new(Literal(Number(I32Value(5)))),
+            Box::new(Literal(Number(I64Value(1)))),
+            Box::new(Literal(Number(I64Value(5)))),
         );
         let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -1101,8 +1101,8 @@ mod expression_tests {
     fn test_not_equal() {
         let machine = Machine::empty();
         let model = NotEqual(
-            Box::new(Literal(Number(I32Value(-5)))),
-            Box::new(Literal(Number(I32Value(5)))),
+            Box::new(Literal(Number(I64Value(-5)))),
+            Box::new(Literal(Number(I64Value(5)))),
         );
         let (_, result) = machine.do_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
@@ -1129,8 +1129,8 @@ mod expression_tests {
         let model = Condition(In(
             Variable("x".into()).into(),
             Range(Inclusive(
-                Literal(Number(I32Value(1))).into(),
-                Literal(Number(I32Value(10))).into(),
+                Literal(Number(I64Value(1))).into(),
+                Literal(Number(I64Value(10))).into(),
             )).into()
         ));
         assert_eq!(model.to_code(), "x in 1..=10");
@@ -1149,8 +1149,8 @@ mod expression_tests {
                 Box::new(Variable("x".into())),
                 Box::new(Variable("y".into())),
             ))),
-            a: Box::new(Literal(Number(I32Value(1)))),
-            b: Some(Box::new(Literal(Number(I32Value(10))))),
+            a: Box::new(Literal(Number(I64Value(1)))),
+            b: Some(Box::new(Literal(Number(I64Value(10))))),
         };
         assert!(op.is_control_flow());
         assert_eq!(op.to_code(), "if x < y 1 else 10");
@@ -1206,7 +1206,7 @@ mod expression_tests {
                 Box::new(Variable("x".into())),
                 Box::new(Variable("y".into())))
             )),
-            code: Box::new(Literal(Number(I32Value(1)))),
+            code: Box::new(Literal(Number(I64Value(1)))),
         };
         assert!(op.is_control_flow());
     }
@@ -1364,8 +1364,8 @@ mod expression_tests {
             path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
             entity: TableEntity {
                 columns: vec![
-                    Parameter::with_default("symbol", StringType(8), StringValue("ABC".into())),
-                    Parameter::with_default("exchange", StringType(8), StringValue("NYSE".into())),
+                    Parameter::with_default("symbol", FixedSizeType(StringType.into(), 8), StringValue("ABC".into())),
+                    Parameter::with_default("exchange", FixedSizeType(StringType.into(), 8), StringValue("NYSE".into())),
                     Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.))),
                 ],
                 from: None,
@@ -1380,8 +1380,8 @@ mod expression_tests {
     fn test_declare_table() {
         let model = DatabaseOp(Mutation(Mutations::Declare(TableEntity {
             columns: vec![
-                Parameter::new("symbol", StringType(8)),
-                Parameter::new("exchange", StringType(8)),
+                Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                 Parameter::new("last_sale", NumberType(F64Kind)),
             ],
             from: None,
@@ -1396,7 +1396,7 @@ mod expression_tests {
 #[cfg(test)]
 mod pure_expression_tests {
     use crate::compiler::Compiler;
-    use crate::numbers::Numbers::{F64Value, I64Value, U64Value};
+    use crate::numbers::Numbers::{F64Value, I64Value};
     use crate::sequences::Array;
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::{ArrayValue, Boolean, Number};
@@ -1418,27 +1418,27 @@ mod pure_expression_tests {
 
     #[test]
     fn test_to_pure_bitwise_and() {
-        verify_pure("0b1011 & 0b1101", Number(U64Value(9)))
+        verify_pure("0b1011 & 0b1101", Number(I64Value(9)))
     }
 
     #[test]
     fn test_to_pure_bitwise_or() {
-        verify_pure("0b0110 | 0b0011", Number(U64Value(7)))
+        verify_pure("0b0110 | 0b0011", Number(I64Value(7)))
     }
 
     #[test]
     fn test_to_pure_bitwise_shl() {
-        verify_pure("0b0001 << 0x03", Number(U64Value(8)))
+        verify_pure("0b0001 << 0x03", Number(I64Value(8)))
     }
 
     #[test]
     fn test_to_pure_bitwise_shr() {
-        verify_pure("0b1_000_000 >> 0b0010", Number(U64Value(16)))
+        verify_pure("0b1_000_000 >> 0b0010", Number(I64Value(16)))
     }
 
     #[test]
     fn test_to_pure_bitwise_xor() {
-        verify_pure("0b0110 ^ 0b0011", Number(U64Value(5))) // 0b0101
+        verify_pure("0b0110 ^ 0b0011", Number(I64Value(5))) // 0b0101
     }
 
     #[test]
@@ -1511,7 +1511,7 @@ mod inference_tests {
         let kind = Expression::infer(
             &Literal(StringValue("hello world".into()))
         );
-        assert_eq!(kind, StringType(11))
+        assert_eq!(kind, FixedSizeType(StringType.into(), 11))
     }
 
     #[test]
@@ -1521,7 +1521,7 @@ mod inference_tests {
             &Literal(StringValue("hello".into())),
             &vec![],
         );
-        assert_eq!(kind, StringType(5))
+        assert_eq!(kind, FixedSizeType(StringType.into(), 5))
     }
 
     #[test]

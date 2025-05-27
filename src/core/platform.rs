@@ -66,6 +66,7 @@ pub enum PackageOps {
     Durations(DurationsPkg),
     Io(IoPkg),
     Math(MathPkg),
+    Nsd(NsdPkg),
     Oxide(OxidePkg),
     Os(OsPkg),
     Strings(StringsPkg),
@@ -110,6 +111,7 @@ impl PackageOps {
         contents.extend(DurationsPkg::get_contents());
         contents.extend(IoPkg::get_contents());
         contents.extend(MathPkg::get_contents());
+        contents.extend(NsdPkg::get_contents());
         contents.extend(OsPkg::get_contents());
         contents.extend(OxidePkg::get_contents());
         contents.extend(StringsPkg::get_contents());
@@ -135,6 +137,7 @@ impl PackageOps {
             PackageOps::Durations(pkg) => Box::new(pkg.clone()),
             PackageOps::Io(pkg) => Box::new(pkg.clone()),
             PackageOps::Math(pkg) => Box::new(pkg.clone()),
+            PackageOps::Nsd(pkg) => Box::new(pkg.clone()),
             PackageOps::Os(pkg) => Box::new(pkg.clone()),
             PackageOps::Oxide(pkg) => Box::new(pkg.clone()),
             PackageOps::Strings(pkg) => Box::new(pkg.clone()),
@@ -146,14 +149,21 @@ impl PackageOps {
     }
 
     pub fn get_parameters(&self) -> Vec<Parameter> {
-        let names = match self.get_parameter_types().as_slice() {
+        let names = match self.get_parameter_types()
+            .iter()
+            .map(|dt| match dt {
+                FixedSizeType(data_type, _) => data_type.deref().clone(),
+                _ => dt.clone()
+            })
+            .collect::<Vec<_>>()
+            .as_slice() {
             [BooleanType] => vec!['b'],
             [NumberType(..)] => vec!['n'],
-            [StringType(..)] => vec!['s'],
-            [StringType(..), NumberType(..)] => vec!['s', 'n'],
+            [StringType] => vec!['s'],
+            [StringType, NumberType(..)] => vec!['s', 'n'],
             [TableType(..)] => vec!['t'],
             [TableType(..), NumberType(..)] => vec!['t', 'n'],
-            [StringType(..), NumberType(..), NumberType(..)] => vec!['s', 'm', 'n'],
+            [StringType, NumberType(..), NumberType(..)] => vec!['s', 'm', 'n'],
             params => params
                 .iter()
                 .enumerate()
@@ -423,6 +433,7 @@ mod tests {
                 Durations(op) => format!("Durations(DurationsPkg::{:?})", op),
                 Io(op) => format!("Io(IoPkg::{:?})", op),
                 Math(op) => format!("Math(MathPkg::{:?})", op),
+                Nsd(op) => format!("Nsd(NsdPkg::{:?})", op),
                 Oxide(op) => format!("Oxide(OxidePkg::{:?})", op),
                 Os(op) => format!("Os(OsPkg::{:?})", op),
                 Strings(op) => format!("Strings(StringsPkg::{:?})", op),
@@ -458,13 +469,13 @@ mod tests {
         );
         assert_eq!(Arrays(ArraysPkg::ToArray).to_code(), "arrays::to_array(a)");
         // cal
-        assert_eq!(Cal(CalPkg::DateDay).to_code(), "cal::day_of(n: Date)");
-        assert_eq!(Cal(CalPkg::DateHour12).to_code(), "cal::hour12(n: Date)");
-        assert_eq!(Cal(CalPkg::DateHour24).to_code(), "cal::hour24(n: Date)");
-        assert_eq!(Cal(CalPkg::DateMinute).to_code(), "cal::minute_of(n: Date)");
-        assert_eq!(Cal(CalPkg::DateMonth).to_code(), "cal::month_of(n: Date)");
-        assert_eq!(Cal(CalPkg::DateSecond).to_code(), "cal::second_of(n: Date)");
-        assert_eq!(Cal(CalPkg::DateYear).to_code(), "cal::year_of(n: Date)");
+        assert_eq!(Cal(CalPkg::DateDay).to_code(), "cal::day_of(a: Date)");
+        assert_eq!(Cal(CalPkg::DateHour12).to_code(), "cal::hour12(a: Date)");
+        assert_eq!(Cal(CalPkg::DateHour24).to_code(), "cal::hour24(a: Date)");
+        assert_eq!(Cal(CalPkg::DateMinute).to_code(), "cal::minute_of(a: Date)");
+        assert_eq!(Cal(CalPkg::DateMonth).to_code(), "cal::month_of(a: Date)");
+        assert_eq!(Cal(CalPkg::DateSecond).to_code(), "cal::second_of(a: Date)");
+        assert_eq!(Cal(CalPkg::DateYear).to_code(), "cal::year_of(a: Date)");
         assert_eq!(Cal(CalPkg::Minus).to_code(), "cal::minus(a: Date, b: i64)");
         assert_eq!(Cal(CalPkg::Now).to_code(), "cal::now()");
         assert_eq!(Cal(CalPkg::Plus).to_code(), "cal::plus(a: Date, b: i64)");
@@ -600,7 +611,7 @@ mod tests {
         );
         assert_eq!(
             Tools(ToolsPkg::Fetch).to_code(),
-            "tools::fetch(t: Table, n: u64)"
+            "tools::fetch(t: Table, n: i64)"
         );
         assert_eq!(Tools(ToolsPkg::Filter).to_code(), "tools::filter(a, b)");
         assert_eq!(
@@ -635,19 +646,11 @@ mod tests {
         assert_eq!(Utils(UtilsPkg::Gunzip).to_code(), "util::gunzip(a)");
         assert_eq!(Utils(UtilsPkg::Hex).to_code(), "util::hex(a)");
         assert_eq!(Utils(UtilsPkg::MD5).to_code(), "util::md5(a)");
-        assert_eq!(Utils(UtilsPkg::ToASCII).to_code(), "util::to_ascii(n: u32)");
+        assert_eq!(Utils(UtilsPkg::ToASCII).to_code(), "util::to_ascii(n: i64)");
         assert_eq!(Utils(UtilsPkg::ToDate).to_code(), "util::to_date(a)");
-        assert_eq!(Utils(UtilsPkg::ToF32).to_code(), "util::to_f32(a)");
         assert_eq!(Utils(UtilsPkg::ToF64).to_code(), "util::to_f64(a)");
-        assert_eq!(Utils(UtilsPkg::ToI8).to_code(), "util::to_i8(a)");
-        assert_eq!(Utils(UtilsPkg::ToI16).to_code(), "util::to_i16(a)");
-        assert_eq!(Utils(UtilsPkg::ToI32).to_code(), "util::to_i32(a)");
         assert_eq!(Utils(UtilsPkg::ToI64).to_code(), "util::to_i64(a)");
         assert_eq!(Utils(UtilsPkg::ToI128).to_code(), "util::to_i128(a)");
-        assert_eq!(Utils(UtilsPkg::ToU8).to_code(), "util::to_u8(a)");
-        assert_eq!(Utils(UtilsPkg::ToU16).to_code(), "util::to_u16(a)");
-        assert_eq!(Utils(UtilsPkg::ToU32).to_code(), "util::to_u32(a)");
-        assert_eq!(Utils(UtilsPkg::ToU64).to_code(), "util::to_u64(a)");
         assert_eq!(Utils(UtilsPkg::ToU128).to_code(), "util::to_u128(a)");
         // www
         assert_eq!(
@@ -658,6 +661,6 @@ mod tests {
             Www(WwwPkg::URLEncode).to_code(),
             "www::url_encode(s: String)"
         );
-        assert_eq!(Www(WwwPkg::Serve).to_code(), "www::serve(n: u32)");
+        assert_eq!(Www(WwwPkg::Serve).to_code(), "www::serve(n: i64)");
     }
 }

@@ -125,10 +125,10 @@ mod tests {
 
     #[test]
     fn test_from_column() {
-        let params = Parameter::with_default("exchange", StringType(10), StringValue("N/A".into()));
+        let params = Parameter::with_default("exchange", FixedSizeType(StringType.into(), 10), StringValue("N/A".into()));
         let column = Column::from_parameter(&params, 0);
         assert_eq!(column.name, "exchange");
-        assert_eq!(column.data_type, StringType(10));
+        assert_eq!(column.data_type, FixedSizeType(StringType.into(), 10));
         assert_eq!(column.default_value, StringValue("N/A".into()));
         assert_eq!(column.data_type.to_type_declaration(), params.get_param_type());
         assert_eq!(column.fixed_size, 19);
@@ -137,13 +137,13 @@ mod tests {
     #[test]
     fn test_from_parameters() {
         let parameters = vec![
-            Parameter::new("symbol", StringType(8)),
-            Parameter::new("exchange", StringType(8)),
+            Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+            Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
             Parameter::new("last_sale", NumberType(F64Kind)),
         ];
         let columns = vec![
-            Column::new("symbol", StringType(8), Null, 9),
-            Column::new("exchange", StringType(8), Null, 26),
+            Column::new("symbol", FixedSizeType(StringType.into(), 8), Null, 9),
+            Column::new("exchange", FixedSizeType(StringType.into(), 8), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ];
         assert_eq!(Column::from_parameters(&parameters), columns);
@@ -153,8 +153,8 @@ mod tests {
     fn test_differences() {
         let generated: Vec<Column> = Column::from_parameters(&make_quote_parameters());
         let natural: Vec<Column> = vec![
-            Column::new("symbol", StringType(8), Null, 9),
-            Column::new("exchange", StringType(8), Null, 26),
+            Column::new("symbol", FixedSizeType(StringType.into(), 8), Null, 9),
+            Column::new("exchange", FixedSizeType(StringType.into(), 8), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ];
         assert_eq!(generated, natural);

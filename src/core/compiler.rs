@@ -7,9 +7,8 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::UnresolvedType;
 use crate::errors::CompileErrors::UnexpectedEOF;
-use crate::errors::Errors::{CompilerError, Exact, ExactNear, SyntaxError, TypeMismatch};
+use crate::errors::Errors::{CompilerError, Exact, ExactNear, SyntaxError};
 use crate::errors::SyntaxErrors::IllegalExpression;
-use crate::errors::TypeMismatchErrors::ParameterExpected;
 use crate::errors::{throw, CompileErrors, SyntaxErrors};
 use crate::expression::Conditions::*;
 use crate::expression::CreationEntity::{IndexEntity, TableEntity, TableFnEntity};
@@ -29,7 +28,7 @@ use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Null, Number, StringValue, Structured};
-use crate::utils::pull_name;
+use crate::utils::{pull_name, pull_variable};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::ops::Deref;
@@ -55,27 +54,6 @@ impl Compiler {
         let expr = Self::build(source_code)?;
         Self::save(path, &expr)?;
         Ok(expr)
-    }
-
-    /// Converts the collection of arguments into [Parameters]
-    fn convert_to_parameters(args: &[Expression]) -> std::io::Result<Expression> {
-        let mut params = vec![];
-        for arg in args.iter() {
-            match arg {
-                // (a: i64, b: i64)
-                NamedType(name, data_type) => {
-                    params.push(Parameter::new(name, data_type.clone()));
-                }
-                // (a: i64, b: i64)
-                NamedValue(name, expr) => {
-                    params.push(Parameter::new(name, DataType::decipher_type(expr)?))
-                }
-                // (a, b)
-                Variable(name) => params.push(Parameter::new(name, UnresolvedType)),
-                expr => return throw(TypeMismatch(ParameterExpected(expr.to_code()))),
-            }
-        }
-        Ok(Parameters(params))
     }
 
     fn expect(ts: &TokenSlice, text: &str) -> std::io::Result<TokenSlice> {
@@ -288,6 +266,11 @@ impl Compiler {
         ts: &TokenSlice,
     ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
         match ts.next() {
+            // keyword operator "contains"
+            (Some(Atom { text, .. }), ts) if text == "contains" => {
+                let (expr1, ts) = self.compile_next(&ts)?;
+                Ok((Some(Condition(Contains(expr0.into(), expr1.into()))), ts))
+            }
             // keyword operator "in"
             (Some(Atom { text, .. }), ts) if text == "in" => {
                 let (expr1, ts) = self.compile_next(&ts)?;
@@ -417,25 +400,21 @@ impl Compiler {
         expr: Expression
     ) -> std::io::Result<(Option<String>, Vec<Parameter>, Option<DataType>)> {
         match expr {
-            // product(a: i64, b: i64) -> a * b
-            FnExpression { params, body, returns } if body.is_none() => {
-                Ok((None, params, Some(returns)))
-            },
-            // product(a: i64, b: i64) -> a * b
+            // product(a: i64, b: i64): i64
+            FnExpression { params, body, returns } if body.is_none() => 
+                Ok((None, params, Some(returns))),
+            // product(a: i64, b: i64) 
             FunctionCall { fx, args } => {
-                let name_maybe = match fx.deref() {
-                    Variable(name) => Some(name.clone()),
-                    other =>
-                        return throw(SyntaxError(IllegalExpression(other.to_code()))),
-                };
-                Self::convert_to_parameters_vec(args)
-                    .map(|params| (name_maybe, params, None))
-            },
-            // (a: i64, b: i64) -> a * b
+                let fx_name = pull_variable(fx.deref())?;
+                Self::convert_to_parameters(args)
+                    .map(|params| (Some(fx_name), params, None))
+            }
+            // (a: i64, b: i64) 
             Parameters(params) => Ok((None, params, None)),
-            // (a, b) -> a * b
+            // (a, b) 
             TupleExpression(items) =>
-                Self::convert_to_parameters_vec(items).map(|params| (None, params, None)),
+                Self::convert_to_parameters(items)
+                    .map(|params| (None, params, None)),
             // x -> x + 1
             Variable(name) =>
                 Ok((None, vec![Parameter::new(name, UnresolvedType)], None)),
@@ -444,7 +423,7 @@ impl Compiler {
         }
     }
 
-    fn convert_to_parameters_vec(items: Vec<Expression>) -> std::io::Result<Vec<Parameter>> {
+    fn convert_to_parameters(items: Vec<Expression>) -> std::io::Result<Vec<Parameter>> {
         let mut params = vec![];
         for item in items {
             match item.clone() {
@@ -954,6 +933,16 @@ impl Compiler {
         expr0: Expression,
     ) -> std::io::Result<(Expression, TokenSlice)> {
         let (expr1, ts) = self.compile_next(&ts)?;
+        self.next_colon(ts, expr0, expr1)
+    }
+
+    /// compiles the [TokenSlice] into a name-value parameter [Expression]
+    fn next_colon(
+        &self,
+        ts: TokenSlice,
+        expr0: Expression,
+        expr1: Expression,
+    ) -> std::io::Result<(Expression, TokenSlice)> {
         match (expr0, expr1) {
             // "name": "apple"
             (Literal(StringValue(name)), value) => Ok((NamedValue(name, value.into()), ts)),
@@ -965,11 +954,11 @@ impl Compiler {
             // name: "ABC"
             (Variable(name), value) => Ok((NamedValue(name, value.into()), ts)),
             // function expression: "product(a: i64, b: i64): i64"
-            (expr0, Variable(type_name)) if DataType::is_type_name(&type_name) => {
-                let data_type = DataType::from_str(&type_name)?;
-                println!("parse_colon: expr0 {expr0:?} data_type {data_type:?}");
-                todo!()//Ok((NamedType(name, data_type), ts))
-            }
+            // (expr0, Variable(type_name)) if DataType::is_type_name(&type_name) => {
+            //     let data_type = DataType::from_str(&type_name)?;
+            //     println!("parse_colon: expr0 {expr0:?} data_type {data_type:?}");
+            //     todo!()//Ok((NamedType(name, data_type), ts))
+            // }
             // unhandled case
             (expr0, expr1) => {
                 println!("parse_colon: expr0 {expr0:?}");
@@ -1804,7 +1793,7 @@ impl Compiler {
 
     /// Expects function parameters and a body
     /// ex: (a, b) => a + b
-    /// ex: (a: i32, b: i32) => a + b
+    /// ex: (a: i64, b: i64) => a + b
     /// ex: (a: String, b: String): String => a + b
     fn expect_function_parameters_and_body(
         &self,
@@ -1861,7 +1850,7 @@ impl Compiler {
     }
 
     /// Expects function parameters
-    /// ex: (a: i32, b: i32)
+    /// ex: (a: i64, b: i64)
     pub fn expect_parameters(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let mut parameters = Vec::new();
         let mut ts = ts.expect("(")?;
@@ -1879,7 +1868,7 @@ impl Compiler {
     }
 
     /// Expects a single function parameter
-    /// ex: a: i32
+    /// ex: a: i64
     fn expect_parameter(&self, ts: TokenSlice) -> std::io::Result<(Parameter, TokenSlice)> {
         // attempt to match the parameter name
         // name: String(8) | cost: Float = 0.0
@@ -2096,13 +2085,13 @@ mod tests {
     mod integration_tests {
         use super::*;
         use crate::compiler::Compiler;
-        use crate::data_types::DataType::{NumberType, StringType, StructureType, UnresolvedType};
+        use crate::data_types::DataType::{FixedSizeType, NumberType, StringType, StructureType, UnresolvedType};
         use crate::expression::Conditions::*;
         use crate::expression::Expression::*;
         use crate::expression::Ranges::{Exclusive, Inclusive};
         use crate::expression::{HttpMethodCalls, UseOps, FALSE, TRUE};
         use crate::machine::Machine;
-        use crate::number_kind::NumberKind::{F64Kind, I32Kind, I64Kind, U64Kind};
+        use crate::number_kind::NumberKind::{F64Kind, I64Kind};
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::parameter::Parameter;
         use crate::token_slice::TokenSlice;
@@ -2439,7 +2428,7 @@ mod tests {
         fn test_fn_named_function_with_explicit_types() {
             let code = Compiler::build(
                 r#"
-                fn add(a: i32, b: i32): i32 => a + b
+                fn add(a: i64, b: i64): i64 => a + b
             "#,
             )
             .unwrap();
@@ -2449,14 +2438,14 @@ mod tests {
                     Variable("add".into()).into(),
                     FnExpression {
                         params: vec![
-                            Parameter::new("a", NumberType(I32Kind)),
-                            Parameter::new("b", NumberType(I32Kind)),
+                            Parameter::new("a", NumberType(I64Kind)),
+                            Parameter::new("b", NumberType(I64Kind)),
                         ],
                         body: Some(Box::new(Plus(
                             Box::new(Variable("a".into())),
                             Box::new(Variable("b".into()))
                         ))),
-                        returns: NumberType(I32Kind)
+                        returns: NumberType(I64Kind)
                     }
                     .into()
                 )
@@ -2467,7 +2456,7 @@ mod tests {
         fn test_fn_named_function_with_explicit_and_inferred_types() {
             let code = Compiler::build(
                 r#"
-                fn add(a: i32, b: i32) => a + b
+                fn add(a: i64, b: i64) => a + b
             "#,
             )
             .unwrap();
@@ -2477,14 +2466,14 @@ mod tests {
                     Variable("add".into()).into(),
                     FnExpression {
                         params: vec![
-                            Parameter::new("a", NumberType(I32Kind)),
-                            Parameter::new("b", NumberType(I32Kind)),
+                            Parameter::new("a", NumberType(I64Kind)),
+                            Parameter::new("b", NumberType(I64Kind)),
                         ],
                         body: Some(Box::new(Plus(
                             Box::new(Variable("a".into())),
                             Box::new(Variable("b".into()))
                         ))),
-                        returns: NumberType(I32Kind)
+                        returns: NumberType(I64Kind)
                     }
                     .into()
                 )
@@ -2524,7 +2513,7 @@ mod tests {
                     symbol: String(8),
                     exchange: String(8),
                     last_sale: f64
-                ): Struct(symbol: String(8), exchange: String(8), last_sale: f64, uid: u64) =>
+                ): Struct(symbol: String(8), exchange: String(8), last_sale: f64, uid: i64) =>
                     {
                         symbol: symbol,
                         market: exchange,
@@ -2538,8 +2527,8 @@ mod tests {
                 code,
                 FnExpression {
                     params: vec![
-                        Parameter::new("symbol", StringType(8)),
-                        Parameter::new("exchange", StringType(8)),
+                        Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                        Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                         Parameter::new("last_sale", NumberType(F64Kind)),
                     ],
                     body: Some(Box::new(StructureExpression(vec![
@@ -2555,10 +2544,10 @@ mod tests {
                         ("uid".to_string(), Variable("__row_id__".into()))
                     ]))),
                     returns: StructureType(vec![
-                        Parameter::new("symbol", StringType(8)),
-                        Parameter::new("exchange", StringType(8)),
+                        Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                        Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                         Parameter::new("last_sale", NumberType(F64Kind)),
-                        Parameter::new("uid", NumberType(U64Kind)),
+                        Parameter::new("uid", NumberType(I64Kind)),
                     ])
                 }
             )
@@ -3630,7 +3619,7 @@ mod tests {
     #[cfg(test)]
     mod sql_tests {
         use crate::compiler::Compiler;
-        use crate::data_types::DataType::{NumberType, StringType, StructureType};
+        use crate::data_types::DataType::{DateTimeType, FixedSizeType, NumberType, StringType, StructureType};
         use crate::expression::Conditions::{Equal, GreaterOrEqual, LessOrEqual, LessThan, True};
         use crate::expression::CreationEntity::{IndexEntity, TableEntity};
         use crate::expression::DatabaseOps::{Mutation, Queryable};
@@ -3638,7 +3627,7 @@ mod tests {
         use crate::expression::MutateTarget::TableTarget;
         use crate::expression::Mutations::{Create, Declare, Drop};
         use crate::expression::{CreationEntity, Expression, Mutations, Queryables};
-        use crate::number_kind::NumberKind::{DateKind, F64Kind};
+        use crate::number_kind::NumberKind::F64Kind;
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::parameter::Parameter;
         use crate::typed_values::TypedValue::{Number, StringValue};
@@ -3767,12 +3756,12 @@ mod tests {
                         columns: vec![
                             Parameter::with_default(
                                 "symbol",
-                                StringType(8),
+                                FixedSizeType(StringType.into(), 8),
                                 StringValue("ABC".into())
                             ),
                             Parameter::with_default(
                                 "exchange",
-                                StringType(8),
+                                FixedSizeType(StringType.into(), 8),
                                 StringValue("NYSE".into())
                             ),
                             Parameter::with_default(
@@ -3802,8 +3791,8 @@ mod tests {
                     entity: CreationEntity::TableFnEntity {
                         fx: Box::new(FnExpression {
                             params: vec![
-                                Parameter::new("symbol", StringType(8)),
-                                Parameter::new("exchange", StringType(8)),
+                                Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                                Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                                 Parameter::new("last_sale", NumberType(F64Kind)),
                             ],
                             body: Some(Box::new(StructureExpression(vec![
@@ -3822,10 +3811,10 @@ mod tests {
                                 )
                             ]))),
                             returns: StructureType(vec![
-                                Parameter::new("symbol", StringType(8)),
-                                Parameter::new("market", StringType(8)),
+                                Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                                Parameter::new("market", FixedSizeType(StringType.into(), 8)),
                                 Parameter::new("last_sale", NumberType(F64Kind)),
-                                Parameter::new("process_time", NumberType(DateKind)),
+                                Parameter::new("process_time", DateTimeType),
                             ])
                         })
                     }
@@ -3854,8 +3843,8 @@ mod tests {
                         path: Box::new(Ns(Box::new(Literal(StringValue(ns_path.into()))))),
                         entity: TableEntity {
                             columns: vec![
-                                Parameter::new("symbol", StringType(8)),
-                                Parameter::new("exchange", StringType(8)),
+                                Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                                Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                                 Parameter::new("last_sale", NumberType(F64Kind)),
                             ],
                             from: None,
@@ -3884,8 +3873,8 @@ mod tests {
                 model,
                 DatabaseOp(Mutation(Declare(TableEntity {
                     columns: vec![
-                        Parameter::new("symbol", StringType(8)),
-                        Parameter::new("exchange", StringType(8)),
+                        Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                        Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                         Parameter::new("last_sale", NumberType(F64Kind)),
                     ],
                     from: None,
@@ -3908,8 +3897,8 @@ mod tests {
                 ColonColonColon(
                     Box::new(DatabaseOp(Mutation(Declare(TableEntity {
                         columns: vec![
-                            Parameter::new("symbol", StringType(8)),
-                            Parameter::new("exchange", StringType(8)),
+                            Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                            Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                             Parameter::new("last_sale", NumberType(F64Kind)),
                         ],
                         from: None,

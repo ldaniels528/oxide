@@ -9,7 +9,7 @@ use crate::dataframe::Dataframe::Model;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
-use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
+use crate::numbers::Numbers::{F64Value, I64Value};
 use crate::oxide_server::SharedState;
 use crate::packages::OxidePkg;
 use crate::parameter::Parameter;
@@ -21,7 +21,7 @@ use crate::structures::Row;
 use crate::structures::Structures::{Hard, Soft};
 use crate::structures::{HardStructure, SoftStructure, Structure};
 use crate::table_renderer::TableRenderer;
-use crate::terminal::{build_output, build_output_header, cleanup, get_hard_type, get_host_and_port, get_soft_type, get_table_type, limit_width, read_until_blank, show_title};
+use crate::terminal::{build_output, build_output_header, cleanup, compile_only, get_hard_type, get_host_and_port, get_soft_type, get_table_type, limit_width, read_until_blank, show_title};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use crate::utils::compute_time_millis;
@@ -111,11 +111,11 @@ fn do_terminal_input(
 
     // get and process the input
     let raw_input = read_until_blank(reader())?;
-    let input = raw_input.trim();
-    if input == "q!" {
-        state.die()
-    } else {
-        if !input.is_empty() {
+    match raw_input.trim() {
+        "@compile" => stdout = compile_only(stdout, reader)?,
+        "q!" => state.die(),
+        input if input.is_empty() => {}
+        input => {
             let t0 = Local::now();
             match state.interpreter.evaluate(input) {
                 Ok(result) => {
@@ -136,7 +136,7 @@ fn do_terminal_input(
                 Err(err) => eprintln!("{}", err),
             }
             state.counter += 1;
-            stdout.flush()?
+            stdout.flush()? 
         }
     }
     Ok((stdout, state))
@@ -167,10 +167,10 @@ fn setup_system_variables(mut state: REPLState, args: Vec<String>) -> REPLState 
     if let Ok((width, height)) = terminal::size() {
         state
             .interpreter
-            .with_variable("__COLUMNS__", Number(U16Value(width)));
+            .with_variable("__COLUMNS__", Number(I64Value(width as i64)));
         state
             .interpreter
-            .with_variable("__HEIGHT__", Number(U16Value(height)));
+            .with_variable("__HEIGHT__", Number(I64Value(height as i64)));
     }
     state
 }

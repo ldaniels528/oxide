@@ -9,8 +9,6 @@ use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
 use log::{error, info};
 use regex::Error;
-use reqwest::blocking::{multipart, Client, RequestBuilder, Response};
-use reqwest::multipart::{Form, Part};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::HashMap;
@@ -22,6 +20,8 @@ use std::ops::{Deref, Neg};
 use std::path::Path;
 use std::process::Output;
 use std::{env, fs, thread};
+use futures_util::SinkExt;
+use isahc::{Body, ReadResponseExt, Request, RequestExt, Response};
 use tokio::runtime::Runtime;
 use tokio_tungstenite::tungstenite::http::Method;
 use uuid::Uuid;
@@ -212,7 +212,7 @@ impl Machine {
             TupleExpression(args) => self.do_tuple(args),
             TypeDef(expr) => self.do_type_decl(expr),
             Use(ops) => self.do_uses(ops),
-            Variable(name) => Ok((self.to_owned(), self.get_or_else(&name, || Undefined))),
+            Variable(name) => self.do_get_variable(name),
             VerticalBarArrow(a, b) => self.do_function_pipeline(a, b, false),
             VerticalBarDoubleArrow(a, b) => self.do_function_pipeline(a, b, true),
             Via(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
@@ -484,9 +484,9 @@ impl Machine {
         let parameters = UtilsPkg::get_testing_feature_parameters();
         let verification_columns = Column::from_parameters(&parameters);
         let mut report = ModelRowCollection::new(verification_columns.to_owned());
-        let mut capture = |level: u16, text: String, passed: bool, result: TypedValue| {
+        let mut capture = |level: i64, text: String, passed: bool, result: TypedValue| {
             let outcome = report.push_row(Row::new(0, vec![
-                Number(U16Value(level)), StringValue(text), Boolean(passed), result,
+                Number(I64Value(level)), StringValue(text), Boolean(passed), result,
             ]));
             let count = match outcome {
                 Number(n) => n.to_usize(),
@@ -513,7 +513,7 @@ impl Machine {
                     capture(1, subtitle.unwrap_value(), true, Boolean(true))?;
 
                     // verification processing
-                    let level: u16 = 2;
+                    let level = 2;
                     let mut errors = 0;
                     for verification in verifications {
                         let (msb, result) = ms.evaluate(verification)?;
@@ -716,12 +716,25 @@ impl Machine {
         }
     }
 
+    fn do_get_variable(
+        &self,
+        name: &str,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let result = match self.get(name) {
+            Some(value) => value,
+            None if DataType::is_type_name(name) =>
+                Kind(DataType::decipher_type(&Variable(name.into()))?),
+            None => return throw(Exact(format!("Variable '{}' not found", name))),
+        };
+        Ok((self.clone(), result))
+    }
+
     fn do_http_exec(&self, call: &HttpMethodCalls) -> std::io::Result<(Self, TypedValue)> {
-        fn create_form(structure: Box<dyn Structure>) -> Form {
-            structure.to_name_values().iter().fold(Form::new(), |form, (name, value)| {
-                form.part(name.to_owned(), Part::text(value.unwrap_value()))
-            })
-        }
+        // fn create_form(structure: Box<dyn Structure>) -> Form {
+        //     structure.to_name_values().iter().fold(Form::new(), |form, (name, value)| {
+        //         form.part(name.to_owned(), Part::text(value.unwrap_value()))
+        //     })
+        // }
 
         fn extract_string_tuples(value: TypedValue) -> std::io::Result<Vec<(String, String)>> {
             extract_value_tuples(value)
@@ -741,7 +754,7 @@ impl Machine {
         match self.evaluate(&call.get_url_or_config())? {
             // GET http://localhost:9000/quotes/AAPL/NYSE
             (ms, StringValue(url)) =>
-                ms.do_http_request(call, url.to_string(), None, Vec::new(), None),
+                ms.do_http_request(call, url.to_string(), None, Vec::new()),
             // POST {
             //     url: http://localhost:8080/machine/append/stocks
             //     body: stocks
@@ -755,7 +768,7 @@ impl Machine {
                     None => Vec::new(),
                     Some(headers) => extract_string_tuples(headers)?
                 };
-                ms.do_http_request(call, url.unwrap_value(), maybe_body, headers, None)
+                ms.do_http_request(call, url.unwrap_value(), maybe_body, headers)
             }
             // unsupported expression
             (_ms, other) =>
@@ -769,39 +782,46 @@ impl Machine {
         url: String,
         body: Option<String>,
         headers: Vec<(String, String)>,
-        _multipart: Option<multipart::Form>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let client = Client::new();
-        let mut request = match method_call {
-            HttpMethodCalls::CONNECT(..) => client.request(Method::CONNECT, url),
-            HttpMethodCalls::DELETE(..) => client.delete(url),
-            HttpMethodCalls::GET(..) => client.get(url),
-            HttpMethodCalls::HEAD(..) => client.head(url),
-            HttpMethodCalls::OPTIONS(..) => client.request(Method::OPTIONS, url),
-            HttpMethodCalls::PATCH(..) => client.patch(url),
-            HttpMethodCalls::POST(..) => client.post(url),
-            HttpMethodCalls::PUT(..) => client.put(url),
-            HttpMethodCalls::TRACE(..) => client.request(Method::TRACE, url),
+        let mut builder = match method_call {
+            HttpMethodCalls::CONNECT(..) => Request::connect(url),
+            HttpMethodCalls::DELETE(..) => Request::delete(url),
+            HttpMethodCalls::GET(..) => Request::get(url),
+            HttpMethodCalls::HEAD(..) => Request::head(url),
+            HttpMethodCalls::OPTIONS(..) => Request::options(url),
+            HttpMethodCalls::PATCH(..) => Request::patch(url),
+            HttpMethodCalls::POST(..) => Request::post(url),
+            HttpMethodCalls::PUT(..) => Request::put(url),
+            HttpMethodCalls::TRACE(..) => Request::trace(url),
         };
 
         // enrich and submit the request
         for (key, value) in headers {
-            request = request.header(&key, &value);
+            builder = builder.header(&key, &value);
         }
-        if let Some(body) = body {
-            request = request.header("Content-Type", "application/json");
-            request = request.body(body);
+        let response = if let Some(body) = body {
+            builder = builder.header("Content-Type", "application/json");
+            builder
+                .body(body)
+                .map_err(|e| cnv_error!(e))?
+                .send()
+                .map_err(|e| cnv_error!(e))?
+        } else {
+            builder = builder.header("Content-Type", "application/json");
+            builder
+                .body(())
+                .map_err(|e| cnv_error!(e))?
+                .send()
+                .map_err(|e| cnv_error!(e))?
         };
-        match request.send() {
-            Ok(response) => Ok((self.to_owned(), self.do_http_response(response, method_call.is_header_only())?)),
-            Err(err) => throw(Exact(format!("Error making request: {}", err))),
-        }
+        self.do_http_response(response, method_call.is_header_only())
+            .map(|result| (self.clone(), result))
     }
 
     /// Converts a [Response] to a [TypedValue]
     pub fn do_http_response(
         &self,
-        response: Response,
+        mut response: Response<Body>,
         is_header_only: bool,
     ) -> std::io::Result<TypedValue> {
         if response.status().is_success() {
@@ -819,19 +839,16 @@ impl Machine {
                 }
                 Ok(Structured(Soft(SoftStructure::ordered(key_values))))
             } else {
-                match response.text() {
-                    Ok(body) =>
-                        match Compiler::build(body.as_str()) {
-                            Ok(expr) => {
-                                Ok(match self.evaluate(&expr) {
-                                    Ok((_, Undefined)) => Structured(Soft(SoftStructure::empty())),
-                                    Ok((_, value)) => value,
-                                    Err(_) => StringValue(body)
-                                })
-                            }
-                            _ => Ok(StringValue(body))
-                        }
-                    Err(err) => throw(Exact(format!("Error reading response body: {}", err))),
+                let body = response.text().map_err(|e| cnv_error!(e))?;
+                match Compiler::build(body.as_str()) {
+                    Ok(expr) => {
+                        Ok(match self.evaluate(&expr) {
+                            Ok((_, Undefined)) => Structured(Soft(SoftStructure::empty())),
+                            Ok((_, value)) => value,
+                            Err(_) => StringValue(body)
+                        })
+                    }
+                    _ => Ok(StringValue(body))
                 }
             }
         } else {
@@ -946,7 +963,7 @@ impl Machine {
             let opcode = Compiler::build(script_code.as_str())?;
             machine.evaluate(&opcode)
         } else {
-            throw(TypeMismatch(UnsupportedType(StringType(0), path_value.get_type())))
+            throw(TypeMismatch(UnsupportedType(StringType, path_value.get_type())))
         }
     }
 
@@ -1671,19 +1688,19 @@ mod tests {
         let dump = rows.iter().map(|row| row.get_values()).collect::<Vec<_>>();
         assert_eq!(dump, vec![
             vec![
-                Number(U16Value(0)),
+                Number(I64Value(0)),
                 StringValue("Karate translator".into()),
                 Boolean(true),
                 Boolean(true),
             ],
             vec![
-                Number(U16Value(1)),
+                Number(I64Value(1)),
                 StringValue("Translate Karate Scenario to Oxide Scenario".into()),
                 Boolean(true),
                 Boolean(true),
             ],
             vec![
-                Number(U16Value(2)),
+                Number(I64Value(2)),
                 StringValue("assert(true)".into()),
                 Boolean(true),
                 Boolean(true),
@@ -1708,10 +1725,10 @@ mod tests {
     #[test]
     fn test_variables() {
         let machine = Machine::empty()
-            .with_variable("abc", Number(I32Value(5)))
-            .with_variable("xyz", Number(I32Value(58)));
-        assert_eq!(machine.get("abc"), Some(Number(I32Value(5))));
-        assert_eq!(machine.get("xyz"), Some(Number(I32Value(58))));
+            .with_variable("abc", Number(I64Value(5)))
+            .with_variable("xyz", Number(I64Value(58)));
+        assert_eq!(machine.get("abc"), Some(Number(I64Value(5))));
+        assert_eq!(machine.get("xyz"), Some(Number(I64Value(58))));
     }
 
     /// Control Flow tests
@@ -2165,8 +2182,8 @@ mod tests {
         fn test_declare_table() {
             let model = DatabaseOp(Mutation(Declare(TableEntity {
                 columns: vec![
-                    Parameter::new("symbol", StringType(8)),
-                    Parameter::new("exchange", StringType(8)),
+                    Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                    Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                     Parameter::new("last_sale", NumberType(F64Kind)),
                 ],
                 from: None,

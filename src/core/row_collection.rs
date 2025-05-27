@@ -15,13 +15,13 @@ use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
-use crate::number_kind::NumberKind::U64Kind;
-use crate::numbers::Numbers::{RowId, U64Value};
+use crate::number_kind::NumberKind::I64Kind;
+use crate::numbers::Numbers::{I64Value, RowId};
 use crate::packages::ToolsPkg;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::Array;
-use crate::structures::Row;
+use crate::structures::{Row, Structure};
 use crate::structures::Structures::{Firm, Hard};
 use crate::table_scan::{TableScanPlan, TableScanTypes};
 use crate::typed_values::TypedValue;
@@ -153,7 +153,7 @@ pub trait RowCollection: Debug {
         // create the augmented columns
         let mut columns = self.get_columns().to_owned();
         let record_size = self.get_record_size();
-        columns.push(Column::new("_id", NumberType(U64Kind), Undefined, record_size));
+        columns.push(Column::new("_id", NumberType(I64Kind), Undefined, record_size));
         columns.push(Column::new("_active", BooleanType, Undefined, 8 + record_size));
 
         // gather the row data
@@ -166,7 +166,7 @@ pub trait RowCollection: Debug {
             };
             // augment the values with the extras
             let mut values = row.get_values();
-            values.push(Number(U64Value(row_id as u64)));
+            values.push(Number(I64Value(row_id as i64)));
             values.push(Boolean(meta.is_allocated));
             // build a new row
             let row = Row::new(row_id, values);
@@ -436,7 +436,7 @@ pub trait RowCollection: Debug {
         let mut it = self.iter();
         while let Some(row) = it.next() {
             if row.get_values() == item.get_values() {
-                return Number(U64Value(row.get_id() as u64));
+                return Number(I64Value(row.get_id() as i64));
             }
         }
         Undefined
@@ -697,6 +697,14 @@ pub trait RowCollection: Debug {
     fn to_array(&self) -> Array {
         let columns = self.get_parameters();
         Array::from(self.iter().map(|row| Structured(Hard(row.as_hard(&columns)))).collect())
+    }
+
+    fn to_bytes(&self) -> std::io::Result<Vec<u8>> {
+        let mut bytes = Vec::with_capacity(self.len()? * self.get_record_size());
+        for row in self.iter() {
+            bytes.extend(row.encode()?)
+        }
+        Ok(bytes)
     }
 
     /// Restores a deleted row by ID to an active state within the table
@@ -1837,7 +1845,7 @@ mod tests {
             mrc.append_row(Row::new(0, vec![
                 StringValue(name.to_owned()),
                 StringValue(kind.to_owned()),
-                Number(U64Value(processed)),
+                Number(I64Value(processed as i64)),
                 Number(F64Value(execution_time)),
                 Number(F64Value(round_2sf(rate))),
             ]));
@@ -1845,9 +1853,9 @@ mod tests {
         }
 
         let mut mrc = ModelRowCollection::from_parameters(&vec![
-            Parameter::new("name", StringType(64)),
-            Parameter::new("kind", StringType(20)),
-            Parameter::new("processed", NumberType(U64Kind)),
+            Parameter::new("name", FixedSizeType(StringType.into(), 64)),
+            Parameter::new("kind", FixedSizeType(StringType.into(), 20)),
+            Parameter::new("processed", NumberType(I64Kind)),
             Parameter::new("process_time_millis", NumberType(F64Kind)),
             Parameter::new("rows_per_millis", NumberType(F64Kind)),
         ]);

@@ -458,7 +458,7 @@ mod tests {
         let resp = test::call_service(&mut app, req).await;
         assert!(resp.status().is_success());
         let body = String::from_utf8(test::read_body(resp).await.to_vec()).unwrap();
-        assert_eq!(body, r#"{"TableConfig":{"columns":[{"name":"symbol","data_type":{"StringType":8},"default_value":"Null"},{"name":"exchange","data_type":{"StringType":8},"default_value":"Null"},{"name":"last_sale","data_type":{"NumberType":"F64Kind"},"default_value":"Null"}],"indices":[],"partitions":[]}}"#);
+        assert_eq!(body, r#"{"TableConfig":{"columns":[{"name":"symbol","data_type":{"FixedSizeType":["StringType",8]},"default_value":"Null"},{"name":"exchange","data_type":{"FixedSizeType":["StringType",8]},"default_value":"Null"},{"name":"last_sale","data_type":{"NumberType":"F64Kind"},"default_value":"Null"}],"indices":[],"partitions":[]}}"#);
 
         // DELETE the config
         let req = test::TestRequest::delete().uri(&ns_uri(database, schema, name)).to_request();

@@ -28,20 +28,17 @@ use crate::sequences::{range_diff, Array, Sequence};
 use crate::structures::Structures::{Hard, Soft};
 use crate::structures::{Row, Structure};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{
-    ArrayValue, Binary, Boolean, ErrorValue, Function, NamespaceValue, Null, Number, PlatformOp,
-    Sequenced, StringValue, Structured, TableValue, TupleValue, Undefined,
-};
+use crate::typed_values::TypedValue::{ArrayValue, Binary, Boolean, DateValue, ErrorValue, Function, NamespaceValue, Null, Number, PlatformOp, Sequenced, StringValue, Structured, TableValue, TupleValue, Undefined};
 use crate::utils::{extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0, extract_value_fn1, extract_value_fn2, extract_value_fn3, pull_array, pull_string, strip_margin, superscript};
 use crate::{machine, oxide_server};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
-use std::env;
 use std::fs::File;
 use std::io::{stderr, stdout, Read, Write};
 use std::ops::Deref;
 use std::path::Path;
+use std::{env, fs};
 use uuid::Uuid;
 
 // duration unit constants
@@ -154,36 +151,32 @@ impl Package for ArraysPkg {
 
     fn get_examples(&self) -> Vec<String> {
         match self {
-            ArraysPkg::Filter => vec![strip_margin(
-                r#"
+            ArraysPkg::Filter => vec![
+                strip_margin(r#"
                     |arrays::filter(1..7, n -> (n % 2) == 0)
-               "#,
-                '|',
-            )],
-            ArraysPkg::Len => vec![strip_margin(
-                r#"
+               "#, '|')
+            ],
+            ArraysPkg::Len => vec![
+                strip_margin(r#"
                     |arrays::len([1, 5, 2, 4, 6, 0])
-               "#,
-                '|',
-            )],
-            ArraysPkg::Map => vec![strip_margin(
-                r#"
+               "#, '|')
+            ],
+            ArraysPkg::Map => vec![
+                strip_margin(r#"
                     |arrays::map([1, 2, 3], n -> n * 2)
-               "#,
-                '|',
-            )],
-            ArraysPkg::Pop => vec![strip_margin(
-                r#"
+               "#, '|')
+            ],
+            ArraysPkg::Pop => vec![
+                strip_margin(r#"
                     |use arrays
                     |stocks = []
                     |stocks:::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
                     |stocks:::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
                     |stocks
-                "#,
-                '|',
-            )],
-            ArraysPkg::Push => vec![strip_margin(
-                r#"
+                "#, '|')
+            ],
+            ArraysPkg::Push => vec![
+                strip_margin(r#"
                     |use arrays
                     |stocks = [
                     |    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -192,9 +185,8 @@ impl Package for ArraysPkg {
                     |]
                     |stocks:::push({ symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
                     |from stocks
-                "#,
-                '|',
-            )],
+                "#, '|')
+            ],
             ArraysPkg::Reduce => vec![
                 strip_margin(r#"
                     |arrays::reduce(1..=5, 0, (a, b) -> a + b)
@@ -207,45 +199,43 @@ impl Package for ArraysPkg {
                 "#,
                 '|')
             ],
-            ArraysPkg::Reverse => vec![strip_margin(
-                r#"
+            ArraysPkg::Reverse => vec![
+                strip_margin(r#"
                     |arrays::reverse(['cat', 'dog', 'ferret', 'mouse'])
-                "#,
-                '|',
-            )],
-            ArraysPkg::ToArray => vec![strip_margin(
-                r#"
+                "#, '|')
+            ],
+            ArraysPkg::ToArray => vec![
+                strip_margin(r#"
                     |arrays::to_array(tools::to_table([
                     |   { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                     |   { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
                     |]))
-                "#,
-                '|',
-            )],
+                "#, '|')
+            ],
         }
     }
 
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
             ArraysPkg::Filter => vec![
-                ArrayType(0),
+                ArrayType,
                 FunctionType(
                     vec![Parameter::new("item", UnresolvedType)],
                     BooleanType.into(),
                 ),
             ],
-            ArraysPkg::Len => vec![ArrayType(0)],
+            ArraysPkg::Len => vec![ArrayType],
             ArraysPkg::Map => vec![
-                ArrayType(0),
+                ArrayType,
                 FunctionType(
                     vec![Parameter::new("item", UnresolvedType)],
                     UnresolvedType.into(),
                 ),
             ],
-            ArraysPkg::Pop | ArraysPkg::Reverse => vec![ArrayType(0)],
-            ArraysPkg::Push => vec![ArrayType(0), UnresolvedType],
+            ArraysPkg::Pop | ArraysPkg::Reverse => vec![ArrayType],
+            ArraysPkg::Push => vec![ArrayType, UnresolvedType],
             ArraysPkg::Reduce => vec![
-                ArrayType(0), UnresolvedType, FunctionType(vec![
+                ArrayType, UnresolvedType, FunctionType(vec![
                     Parameter::new("a", UnresolvedType),
                     Parameter::new("b", UnresolvedType),
                 ], UnresolvedType.into())
@@ -259,7 +249,7 @@ impl Package for ArraysPkg {
             ArraysPkg::Filter
             | ArraysPkg::Map
             | ArraysPkg::Reverse
-            | ArraysPkg::ToArray => ArrayType(0),
+            | ArraysPkg::ToArray => ArrayType,
             ArraysPkg::Len => NumberType(I64Kind),
             ArraysPkg::Pop | ArraysPkg::Push => BooleanType,
             ArraysPkg::Reduce => UnresolvedType,
@@ -321,20 +311,20 @@ impl CalPkg {
         plat: &CalPkg,
     ) -> std::io::Result<(Machine, TypedValue)> {
         match value {
-            Number(DateValue(epoch_millis)) => {
+            DateValue(epoch_millis) => {
                 let datetime = {
                     let seconds = epoch_millis / 1000;
                     let millis_part = epoch_millis % 1000;
                     Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
                 };
                 match plat {
-                    CalPkg::DateDay => Ok((ms, Number(U32Value(datetime.day())))),
-                    CalPkg::DateHour12 => Ok((ms, Number(U32Value(datetime.hour12().1)))),
-                    CalPkg::DateHour24 => Ok((ms, Number(U32Value(datetime.hour())))),
-                    CalPkg::DateMinute => Ok((ms, Number(U32Value(datetime.minute())))),
-                    CalPkg::DateMonth => Ok((ms, Number(U32Value(datetime.month())))),
-                    CalPkg::DateSecond => Ok((ms, Number(U32Value(datetime.second())))),
-                    CalPkg::DateYear => Ok((ms, Number(I32Value(datetime.year())))),
+                    CalPkg::DateDay => Ok((ms, Number(I64Value(datetime.day() as i64)))),
+                    CalPkg::DateHour12 => Ok((ms, Number(I64Value(datetime.hour12().1 as i64)))),
+                    CalPkg::DateHour24 => Ok((ms, Number(I64Value(datetime.hour() as i64)))),
+                    CalPkg::DateMinute => Ok((ms, Number(I64Value(datetime.minute() as i64)))),
+                    CalPkg::DateMonth => Ok((ms, Number(I64Value(datetime.month() as i64)))),
+                    CalPkg::DateSecond => Ok((ms, Number(I64Value(datetime.second() as i64)))),
+                    CalPkg::DateYear => Ok((ms, Number(I64Value(datetime.year() as i64)))),
                     pf => throw(PlatformOpError(Cal(pf.to_owned()))),
                 }
             }
@@ -347,7 +337,7 @@ impl CalPkg {
         date: &TypedValue,
         duration: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        Ok((ms, Number(DateValue(date.to_i64() - duration.to_i64()))))
+        Ok((ms, DateValue(date.to_i64() - duration.to_i64())))
     }
 
     fn do_cal_date_plus(
@@ -355,7 +345,7 @@ impl CalPkg {
         date: &TypedValue,
         duration: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        Ok((ms, Number(DateValue(date.to_i64() + duration.to_i64()))))
+        Ok((ms, DateValue(date.to_i64() + duration.to_i64())))
     }
 
     pub fn get_contents() -> Vec<PackageOps> {
@@ -489,9 +479,9 @@ impl Package for CalPkg {
             | CalPkg::DateMinute
             | CalPkg::DateMonth
             | CalPkg::DateSecond
-            | CalPkg::DateYear => vec![NumberType(DateKind)],
+            | CalPkg::DateYear => vec![DateTimeType],
             // two-parameter (date, i64)
-            CalPkg::Minus | CalPkg::Plus => vec![NumberType(DateKind), NumberType(I64Kind)],
+            CalPkg::Minus | CalPkg::Plus => vec![DateTimeType, NumberType(I64Kind)],
         }
     }
 
@@ -502,10 +492,10 @@ impl Package for CalPkg {
             | CalPkg::DateHour24
             | CalPkg::DateMinute
             | CalPkg::DateMonth
-            | CalPkg::DateSecond => NumberType(U32Kind),
-            CalPkg::DateYear => NumberType(I32Kind),
+            | CalPkg::DateSecond => NumberType(I64Kind),
+            CalPkg::DateYear => NumberType(I64Kind),
             // date
-            CalPkg::Minus | CalPkg::Now | CalPkg::Plus => NumberType(DateKind),
+            CalPkg::Minus | CalPkg::Now | CalPkg::Plus => DateTimeType,
         }
     }
 
@@ -524,7 +514,7 @@ impl Package for CalPkg {
             CalPkg::DateYear => self.adapter_pf_fn1(ms, args, Self::do_cal_date_part),
             CalPkg::Minus => extract_value_fn2(ms, args, Self::do_cal_date_minus),
             CalPkg::Now => extract_value_fn0(ms, args, |ms| {
-                Ok((ms, Number(DateValue(Local::now().timestamp_millis()))))
+                Ok((ms, DateValue(Local::now().timestamp_millis())))
             }),
             CalPkg::Plus => extract_value_fn2(ms, args, Self::do_cal_date_plus),
         }
@@ -698,7 +688,7 @@ impl IoPkg {
         let path = pull_string(path_v)?;
         let mut file = File::create(path)?;
         let n_bytes = file.write(contents_v.unwrap_value().as_bytes())? as u64;
-        Ok((ms, Number(U64Value(n_bytes))))
+        Ok((ms, Number(I64Value(n_bytes as i64))))
     }
 
     fn do_io_exists(
@@ -816,18 +806,18 @@ impl Package for IoPkg {
 
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
-            IoPkg::FileCreate => vec![StringType(0), StringType(0)],
+            IoPkg::FileCreate => vec![StringType, StringType],
             IoPkg::FileExists | IoPkg::FileReadText | IoPkg::StdErr | IoPkg::StdOut => {
-                vec![StringType(0)]
+                vec![StringType]
             }
         }
     }
 
     fn get_return_type(&self) -> DataType {
         match self {
-            IoPkg::FileReadText => ArrayType(0),
+            IoPkg::FileReadText => ArrayType,
             IoPkg::FileCreate | IoPkg::FileExists => BooleanType,
-            IoPkg::StdErr | IoPkg::StdOut => StringType(0),
+            IoPkg::StdErr | IoPkg::StdOut => StringType,
         }
     }
 }
@@ -949,6 +939,186 @@ impl Package for MathPkg {
             MathPkg::Pow => extract_number_fn2(ms, args, |n, m| n.pow(m)),
             MathPkg::Round => extract_number_fn1(ms, args, |n| n.round()),
             MathPkg::Sqrt => extract_number_fn1(ms, args, |n| n.sqrt()),
+        }
+    }
+}
+
+/// NSD package
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum NsdPkg {
+    Exists,
+    Load,
+    Remove,
+    Save,
+}
+
+impl NsdPkg {
+    /// Indicates whether a dataframe exists within a namespace
+    pub fn do_nsd_exists(ms: Machine, path_v: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        let path = pull_string(path_v)?;
+        let ns = Namespace::parse(path.as_str())?;
+        Ok((ms, Boolean(Path::new(ns.get_table_file_path().as_str()).exists())))
+    }
+    
+    /// Loads a dataframe from a namespace
+    pub fn do_nsd_load(ms: Machine, path_v: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        let path = pull_string(path_v)?;
+        let ns = Namespace::parse(path.as_str())?;
+        let frc = FileRowCollection::open(&ns)?;
+        Ok((ms, TableValue(Disk(frc))))
+    }
+    
+    /// Deletes a dataframe from a namespace
+    pub fn do_nsd_remove(ms: Machine, path_v: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        let path = pull_string(path_v)?;
+        let ns = Namespace::parse(path.as_str())?;
+        let result = fs::remove_file(ns.get_table_file_path());
+        Ok((ms, Boolean(result.is_ok())))
+    }
+
+    /// Creates or replaces a dataframe within a namespace
+    pub fn do_nsd_save(
+        ms: Machine,
+        path_v: &TypedValue,
+        contents_v: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let path = pull_string(path_v)?;
+        match contents_v.to_table_or_value() {
+            TableValue(mrc) => {
+                let ns = Namespace::parse(path.as_str())?;
+                let params = mrc.get_parameters();
+                let frc = FileRowCollection::create_table(&ns, &params)?;
+                Ok((ms, TableValue(Disk(frc))))
+            }
+            x => throw(Exact(format!("Expected type near {}", x.to_code())))
+        }
+    }
+    
+    pub fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Nsd(NsdPkg::Exists),
+            PackageOps::Nsd(NsdPkg::Load),
+            PackageOps::Nsd(NsdPkg::Remove),
+            PackageOps::Nsd(NsdPkg::Save),
+        ]
+    }
+}
+
+impl Package for NsdPkg {
+    fn get_name(&self) -> String {
+        match self {
+            NsdPkg::Exists => "exists".into(),
+            NsdPkg::Load => "load".into(),
+            NsdPkg::Remove => "remove".into(),
+            NsdPkg::Save => "save".into(),
+        }
+    }
+
+    fn get_package_name(&self) -> String {
+        "nsd".into()
+    }
+
+    fn get_description(&self) -> String {
+        match self {
+            NsdPkg::Exists => "Returns true if the source path exists".into(),
+            NsdPkg::Save => "Creates a new dataframe".into(),
+            NsdPkg::Remove => "Deletes a dataframe from a namespace".into(),
+            NsdPkg::Load => "Loads a dataframe from a namespace".into(),       
+        }
+    }
+
+    fn get_examples(&self) -> Vec<String> {
+        match self {
+            NsdPkg::Exists => vec![
+                strip_margin(r#"
+                    |nsd::save('packages.exists.stocks', new Table(
+                    |   symbol: String(8),
+                    |   exchange: String(8),
+                    |   last_sale: f64
+                    |))
+                    |nsd::exists("packages.exists.stocks")
+                "#, '|'),
+                strip_margin(r#"
+                    |nsd::exists("packages.not_exists.stocks")
+                "#, '|')
+            ],
+            NsdPkg::Load => vec![
+                strip_margin(r#"
+                    |let stocks =
+                    |   nsd::save('packages.save_load.stocks', new Table(
+                    |       symbol: String(8),
+                    |       exchange: String(8),
+                    |       last_sale: f64
+                    |   ))
+                    |
+                    |let rows = 
+                    |   [{ symbol: "CAZ", exchange: "AMEX", last_sale: 65.13 },
+                    |    { symbol: "BAL", exchange: "NYSE", last_sale: 82.78 },
+                    |    { symbol: "RCE", exchange: "NASDAQ", last_sale: 124.09 }] 
+                    |
+                    |rows ~> stocks
+                    |
+                    |nsd::load('packages.save_load.stocks')
+                    |"#, '|')
+            ],
+            NsdPkg::Remove => vec![
+                strip_margin(r#"
+                    |nsd::save('packages.remove.stocks', new Table(
+                    |    symbol: String(8),
+                    |    exchange: String(8),
+                    |    last_sale: f64
+                    |))
+                    |
+                    |nsd::remove('packages.remove.stocks')
+                    |nsd::exists('packages.remove.stocks')
+                    |"#, '|')
+            ],
+            NsdPkg::Save => vec![
+                strip_margin(r#"
+                    |let stocks =
+                    |   nsd::save('packages.save.stocks', new Table(
+                    |       symbol: String(8),
+                    |       exchange: String(8),
+                    |       last_sale: f64
+                    |   ))
+                    |
+                    |let rows = 
+                    |   [{ symbol: "TCO", exchange: "NYSE", last_sale: 38.53 },
+                    |    { symbol: "SHMN", exchange: "NYSE", last_sale: 6.57 },
+                    |    { symbol: "HMU", exchange: "NASDAQ", last_sale: 27.12 }] 
+                    |
+                    |rows ~> stocks
+                    |stocks
+                    |"#, '|')
+            ],
+        }
+    }
+
+    fn get_parameter_types(&self) -> Vec<DataType> {
+        match self {
+            NsdPkg::Save => vec![StringType, TableType(vec![])],
+            NsdPkg::Exists 
+            | NsdPkg::Remove 
+            | NsdPkg::Load => vec![StringType]
+        }
+    }
+
+    fn get_return_type(&self) -> DataType {
+        match self {
+            NsdPkg::Exists => BooleanType,
+            NsdPkg::Save => TableType(vec![]),
+            NsdPkg::Remove => BooleanType,
+            NsdPkg::Load => TableType(vec![]),       
+        }
+    }
+
+    fn evaluate(&self, ms: Machine, args: Vec<TypedValue>) -> std::io::Result<(Machine, TypedValue)> {
+        println!("evaluate: args {:?}", args);
+        match self {
+            NsdPkg::Exists => extract_value_fn1(ms, args, Self::do_nsd_exists),
+            NsdPkg::Save => extract_value_fn2(ms, args, Self::do_nsd_save),
+            NsdPkg::Remove => extract_value_fn1(ms, args, Self::do_nsd_remove),
+            NsdPkg::Load => extract_value_fn1(ms, args, Self::do_nsd_load),
         }
     }
 }
@@ -1097,11 +1267,11 @@ impl OxidePkg {
 
     pub fn get_oxide_help_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("name", StringType(20)),
-            Parameter::new("module", StringType(20)),
-            Parameter::new("signature", StringType(32)),
-            Parameter::new("description", StringType(60)),
-            Parameter::new("returns", StringType(32)),
+            Parameter::new("name", FixedSizeType(StringType.into(), 20)),
+            Parameter::new("module", FixedSizeType(StringType.into(), 20)),
+            Parameter::new("signature", FixedSizeType(StringType.into(), 32)),
+            Parameter::new("description", FixedSizeType(StringType.into(), 60)),
+            Parameter::new("returns", FixedSizeType(StringType.into(), 32)),
         ]
     }
 
@@ -1114,7 +1284,7 @@ impl OxidePkg {
             Parameter::new("session_id", NumberType(I64Kind)),
             Parameter::new("user_id", NumberType(I64Kind)),
             Parameter::new("cpu_time_ms", NumberType(F64Kind)),
-            Parameter::new("input", StringType(65536)),
+            Parameter::new("input", FixedSizeType(StringType.into(), 65536)),
         ]
     }
 }
@@ -1178,7 +1348,7 @@ impl Package for OxidePkg {
                 '|',
             )],
             OxidePkg::Help => vec![r#"from oxide::help() limit 3"#.into()],
-            OxidePkg::History => vec!["from oxide::history() limit 3".into()],
+            OxidePkg::History => vec![],
             OxidePkg::Home => vec!["oxide::home()".into()],
             OxidePkg::Reset => vec!["oxide::reset()".into()],
             OxidePkg::UUID => vec!["oxide::uuid()".into()],
@@ -1196,7 +1366,7 @@ impl Package for OxidePkg {
             | OxidePkg::UUID => vec![],
             // single-parameter (string)
             OxidePkg::Println | OxidePkg::Compile | OxidePkg::Debug | OxidePkg::Eval => {
-                vec![StringType(0)]
+                vec![StringType]
             }
         }
     }
@@ -1205,9 +1375,9 @@ impl Package for OxidePkg {
         match self {
             // function
             OxidePkg::Compile | OxidePkg::Debug => FunctionType(vec![], UnresolvedType.into()),
-            OxidePkg::Eval | OxidePkg::Home => StringType(0),
-            OxidePkg::Help => TableType(OxidePkg::get_oxide_help_parameters(), 0),
-            OxidePkg::History => TableType(OxidePkg::get_oxide_history_parameters(), 0),
+            OxidePkg::Eval | OxidePkg::Home => StringType,
+            OxidePkg::Help => TableType(OxidePkg::get_oxide_help_parameters()),
+            OxidePkg::History => TableType(OxidePkg::get_oxide_history_parameters()),
             OxidePkg::Println | OxidePkg::Reset => BooleanType,
             // f64
             OxidePkg::Version => NumberType(F64Kind),
@@ -1294,8 +1464,8 @@ impl OsPkg {
     fn do_os_env(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         use std::env;
         let mut mrc = ModelRowCollection::from_parameters(&vec![
-            Parameter::new("key", StringType(256)),
-            Parameter::new("value", StringType(8192)),
+            Parameter::new("key", FixedSizeType(StringType.into(), 256)),
+            Parameter::new("value", FixedSizeType(StringType.into(), 8192)),
         ]);
         for (key, value) in env::vars() {
             if let ErrorValue(err) =
@@ -1318,8 +1488,8 @@ impl OsPkg {
 
     pub fn get_os_env_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("key", StringType(256)),
-            Parameter::new("value", StringType(8192)),
+            Parameter::new("key", FixedSizeType(StringType.into(), 256)),
+            Parameter::new("value", FixedSizeType(StringType.into(), 8192)),
         ]
     }
 }
@@ -1378,16 +1548,16 @@ impl Package for OsPkg {
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
             // zero-parameter
-            OsPkg::Call => vec![StringType(0)],
+            OsPkg::Call => vec![StringType],
             OsPkg::Clear | OsPkg::CurrentDir | OsPkg::Env => vec![],
         }
     }
 
     fn get_return_type(&self) -> DataType {
         match self {
-            OsPkg::Call | OsPkg::CurrentDir => StringType(0),
+            OsPkg::Call | OsPkg::CurrentDir => StringType,
             OsPkg::Clear => BooleanType,
-            OsPkg::Env => TableType(OsPkg::get_os_env_parameters(), 0),
+            OsPkg::Env => TableType(OsPkg::get_os_env_parameters()),
         }
     }
 
@@ -1700,16 +1870,16 @@ impl Package for StringsPkg {
             | StringsPkg::Format
             | StringsPkg::Split
             | StringsPkg::StartsWith
-            | StringsPkg::StripMargin => vec![StringType(0), StringType(0)],
+            | StringsPkg::StripMargin => vec![StringType, StringType],
             // two-parameter (string, i64)
             StringsPkg::IndexOf | StringsPkg::Left | StringsPkg::Right => {
-                vec![StringType(0), NumberType(I64Kind)]
+                vec![StringType, NumberType(I64Kind)]
             }
-            StringsPkg::Len => vec![StringType(0)],
+            StringsPkg::Len => vec![StringType],
             // two-parameter (array, string)
-            StringsPkg::Join => vec![ArrayType(0), StringType(0)],
+            StringsPkg::Join => vec![ArrayType, StringType],
             // three-parameter (string, i64, i64)
-            StringsPkg::Substring => vec![StringType(0), NumberType(I64Kind), NumberType(I64Kind)],
+            StringsPkg::Substring => vec![StringType, NumberType(I64Kind), NumberType(I64Kind)],
             StringsPkg::SuperScript => vec![NumberType(I64Kind)],
             StringsPkg::ToString => vec![UnresolvedType],
         }
@@ -1725,13 +1895,13 @@ impl Package for StringsPkg {
             | StringsPkg::Right
             | StringsPkg::StripMargin
             | StringsPkg::Substring
-            | StringsPkg::ToString => StringType(0),
+            | StringsPkg::ToString => StringType,
             // Number
             StringsPkg::IndexOf | StringsPkg::Len => NumberType(I64Kind),
             // Array
-            StringsPkg::Split => ArrayType(0),
+            StringsPkg::Split => ArrayType,
             // String
-            StringsPkg::SuperScript => StringType(0),
+            StringsPkg::SuperScript => StringType,
         }
     }
 
@@ -1791,7 +1961,7 @@ impl TestingPkg {
             StringValue(s) => Literal(StringValue(s.to_string())),
             other => {
                 return throw(TypeMismatch(UnsupportedType(
-                    StringType(0),
+                    StringType,
                     other.get_type(),
                 )))
             }
@@ -1815,7 +1985,7 @@ impl TestingPkg {
                 .collect::<Vec<_>>(),
             other => {
                 return throw(TypeMismatch(UnsupportedType(
-                    ArrayType(0),
+                    ArrayType,
                     other.get_type(),
                 )))
             }
@@ -1934,7 +2104,7 @@ impl Package for TestingPkg {
                 vec![UnresolvedType, UnresolvedType]
             }
             // two-parameter (string, struct)
-            TestingPkg::Feature => vec![StringType(0), StructureType(vec![])],
+            TestingPkg::Feature => vec![StringType, StructureType(vec![])],
         }
     }
 
@@ -1944,9 +2114,9 @@ impl Package for TestingPkg {
             // outcome
             TestingPkg::Assert => BooleanType,
             // string
-            TestingPkg::TypeOf => StringType(0),
+            TestingPkg::TypeOf => StringType,
             // table
-            TestingPkg::Feature => TableType(UtilsPkg::get_testing_feature_parameters(), 0),
+            TestingPkg::Feature => TableType(UtilsPkg::get_testing_feature_parameters()),
         }
     }
 
@@ -2053,7 +2223,7 @@ impl ToolsPkg {
             EventSource(mut df) => Ok((ms, TableValue(df.get_journal()))),
             TableFn(mut df) => Ok((ms, TableValue(df.get_journal()))),
             _ => throw(TypeMismatch(UnsupportedType(
-                TableType(vec![], 0),
+                TableType(vec![]),
                 value.get_type(),
             ))),
         }
@@ -2164,7 +2334,7 @@ impl ToolsPkg {
             EventSource(mut df) => Ok((ms, df.replay()?)),
             TableFn(mut df) => Ok((ms, df.replay()?)),
             _ => throw(TypeMismatch(UnsupportedType(
-                TableType(vec![], 0),
+                TableType(vec![]),
                 value.get_type(),
             ))),
         }
@@ -2186,7 +2356,7 @@ impl ToolsPkg {
     fn do_tools_row_id(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         let result = ms
             .get(machine::ROW_ID)
-            .unwrap_or_else(|| Number(U64Value(0)));
+            .unwrap_or_else(|| Number(I64Value(0)));
         Ok((ms, result))
     }
 
@@ -2272,9 +2442,9 @@ impl ToolsPkg {
     
     pub fn get_tools_describe_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("name", StringType(128)),
-            Parameter::new("type", StringType(128)),
-            Parameter::new("default_value", StringType(128)),
+            Parameter::new("name", FixedSizeType(StringType.into(), 128)),
+            Parameter::new("type", FixedSizeType(StringType.into(), 128)),
+            Parameter::new("default_value", FixedSizeType(StringType.into(), 128)),
             Parameter::new("is_nullable", BooleanType),
         ]
     }
@@ -2546,8 +2716,8 @@ impl Package for ToolsPkg {
             | ToolsPkg::Scan
             | ToolsPkg::ToArray
             | ToolsPkg::ToCSV
-            | ToolsPkg::ToJSON => vec![TableType(Vec::new(), 0)],
-            ToolsPkg::Fetch => vec![TableType(vec![], 0), NumberType(U64Kind)],
+            | ToolsPkg::ToJSON => vec![TableType(vec![])],
+            ToolsPkg::Fetch => vec![TableType(vec![]), NumberType(I64Kind)],
             ToolsPkg::Filter | ToolsPkg::Map | ToolsPkg::Push => {
                 vec![UnresolvedType, UnresolvedType]
             }
@@ -2563,8 +2733,8 @@ impl Package for ToolsPkg {
             | ToolsPkg::Journal
             | ToolsPkg::Reverse
             | ToolsPkg::Scan
-            | ToolsPkg::ToTable => TableType(Vec::new(), 0),
-            ToolsPkg::Describe => TableType(ToolsPkg::get_tools_describe_parameters(), 0),
+            | ToolsPkg::ToTable => TableType(vec![]),
+            ToolsPkg::Describe => TableType(ToolsPkg::get_tools_describe_parameters()),
             ToolsPkg::Len => NumberType(I64Kind),
             ToolsPkg::Replay => BooleanType,
             ToolsPkg::RowId => NumberType(I64Kind),
@@ -2572,7 +2742,7 @@ impl Package for ToolsPkg {
             | ToolsPkg::ToJSON
             | ToolsPkg::Filter
             | ToolsPkg::Map
-            | ToolsPkg::ToArray => TableType(vec![], 0),
+            | ToolsPkg::ToArray => TableType(vec![]),
             // row|structure
             ToolsPkg::Pop => StructureType(vec![]),
             ToolsPkg::Push => BooleanType,
@@ -2615,19 +2785,12 @@ pub enum UtilsPkg {
     Gunzip,
     Hex,
     MD5,
+    To,
     ToASCII,
     ToDate,
-    ToF32,
     ToF64,
-    ToI8,
-    ToI16,
-    ToI32,
     ToI64,
     ToI128,
-    ToU8,
-    ToU16,
-    ToU32,
-    ToU64,
     ToU128,
 }
 
@@ -2678,18 +2841,10 @@ impl UtilsPkg {
         plat: &UtilsPkg,
     ) -> std::io::Result<(Machine, TypedValue)> {
         let result = match plat {
-            UtilsPkg::ToDate => Number(DateValue(value.to_i64())),
-            UtilsPkg::ToF32 => Number(F32Value(value.to_f32())),
+            UtilsPkg::ToDate => DateValue(value.to_i64()),
             UtilsPkg::ToF64 => Number(F64Value(value.to_f64())),
-            UtilsPkg::ToI8 => Number(I8Value(value.to_i8())),
-            UtilsPkg::ToI16 => Number(I16Value(value.to_i16())),
-            UtilsPkg::ToI32 => Number(I32Value(value.to_i32())),
             UtilsPkg::ToI64 => Number(I64Value(value.to_i64())),
             UtilsPkg::ToI128 => Number(I128Value(value.to_i128())),
-            UtilsPkg::ToU8 => Number(U8Value(value.to_u8())),
-            UtilsPkg::ToU16 => Number(U16Value(value.to_u16())),
-            UtilsPkg::ToU32 => Number(U32Value(value.to_u32())),
-            UtilsPkg::ToU64 => Number(U64Value(value.to_u64())),
             UtilsPkg::ToU128 => Number(U128Value(value.to_u128())),
             plat => return throw(UnsupportedPlatformOps(PackageOps::Utils(plat.to_owned()))),
         };
@@ -2719,7 +2874,18 @@ impl UtilsPkg {
     ) -> std::io::Result<(Machine, TypedValue)> {
         match args.is_empty() {
             false => throw(TypeMismatch(ArgumentsMismatched(0, args.len()))),
-            true => Ok((ms, Number(UUIDValue(Uuid::new_v4().as_u128())))),
+            true => Ok((ms, TypedValue::UUIDValue(Uuid::new_v4().as_u128()))),
+        }
+    }
+    
+    fn do_util_to_xxx(
+        ms: Machine, 
+        value: &TypedValue, 
+        to_type: &TypedValue
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match to_type { 
+            TypedValue::Kind(data_type) => Ok((ms, value.convert_to(data_type.clone())?)),
+            other => throw(Exact(format!("Expected a type near {other}")))
         }
     }
 
@@ -2731,29 +2897,22 @@ impl UtilsPkg {
             PackageOps::Utils(UtilsPkg::Gunzip),
             PackageOps::Utils(UtilsPkg::Hex),
             PackageOps::Utils(UtilsPkg::MD5),
+            PackageOps::Utils(UtilsPkg::To),
             PackageOps::Utils(UtilsPkg::ToASCII),
             PackageOps::Utils(UtilsPkg::ToDate),
-            PackageOps::Utils(UtilsPkg::ToF32),
             PackageOps::Utils(UtilsPkg::ToF64),
-            PackageOps::Utils(UtilsPkg::ToI8),
-            PackageOps::Utils(UtilsPkg::ToI16),
-            PackageOps::Utils(UtilsPkg::ToI32),
             PackageOps::Utils(UtilsPkg::ToI64),
             PackageOps::Utils(UtilsPkg::ToI128),
-            PackageOps::Utils(UtilsPkg::ToU8),
-            PackageOps::Utils(UtilsPkg::ToU16),
-            PackageOps::Utils(UtilsPkg::ToU32),
-            PackageOps::Utils(UtilsPkg::ToU64),
             PackageOps::Utils(UtilsPkg::ToU128),
         ]
     }
 
     pub fn get_testing_feature_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("level", NumberType(U16Kind)),
-            Parameter::new("item", StringType(256)),
+            Parameter::new("level", NumberType(I64Kind)),
+            Parameter::new("item", FixedSizeType(StringType.into(), 256)),
             Parameter::new("passed", BooleanType),
-            Parameter::new("result", StringType(256)),
+            Parameter::new("result", FixedSizeType(StringType.into(), 256)),
         ]
     }
 }
@@ -2767,19 +2926,12 @@ impl Package for UtilsPkg {
             UtilsPkg::Gunzip => "gunzip".into(),
             UtilsPkg::Hex => "hex".into(),
             UtilsPkg::MD5 => "md5".into(),
+            UtilsPkg::To => "to".into(),
             UtilsPkg::ToASCII => "to_ascii".into(),
             UtilsPkg::ToDate => "to_date".into(),
-            UtilsPkg::ToF32 => "to_f32".into(),
             UtilsPkg::ToF64 => "to_f64".into(),
-            UtilsPkg::ToI8 => "to_i8".into(),
-            UtilsPkg::ToI16 => "to_i16".into(),
-            UtilsPkg::ToI32 => "to_i32".into(),
             UtilsPkg::ToI64 => "to_i64".into(),
             UtilsPkg::ToI128 => "to_i128".into(),
-            UtilsPkg::ToU8 => "to_u8".into(),
-            UtilsPkg::ToU16 => "to_u16".into(),
-            UtilsPkg::ToU32 => "to_u32".into(),
-            UtilsPkg::ToU64 => "to_u64".into(),
             UtilsPkg::ToU128 => "to_u128".into(),
         }
     }
@@ -2796,19 +2948,12 @@ impl Package for UtilsPkg {
             UtilsPkg::Gunzip => "Decompresses bytes via gzip".into(),
             UtilsPkg::Hex => "Translates bytes into hexadecimal".into(),
             UtilsPkg::MD5 => "Creates a MD5 digest".into(),
+            UtilsPkg::To => "Converts a value to the desired type".into(),
             UtilsPkg::ToASCII => "Converts an integer to ASCII".into(),
             UtilsPkg::ToDate => "Converts a value to Date".into(),
-            UtilsPkg::ToF32 => "Converts a value to f32".into(),
             UtilsPkg::ToF64 => "Converts a value to f64".into(),
-            UtilsPkg::ToI8 => "Converts a value to i8".into(),
-            UtilsPkg::ToI16 => "Converts a value to i16".into(),
-            UtilsPkg::ToI32 => "Converts a value to i32".into(),
             UtilsPkg::ToI64 => "Converts a value to i64".into(),
             UtilsPkg::ToI128 => "Converts a value to i128".into(),
-            UtilsPkg::ToU8 => "Converts a value to u8".into(),
-            UtilsPkg::ToU16 => "Converts a value to u16".into(),
-            UtilsPkg::ToU32 => "Converts a value to u32".into(),
-            UtilsPkg::ToU64 => "Converts a value to u64".into(),
             UtilsPkg::ToU128 => "Converts a value to u128".into(),
         }
     }
@@ -2821,52 +2966,36 @@ impl Package for UtilsPkg {
             UtilsPkg::Gunzip => vec!["util::gunzip(util::gzip('Hello World'))".into()],
             UtilsPkg::Hex => vec!["util::hex('Hello World')".into()],
             UtilsPkg::MD5 => vec!["util::md5('Hello World')".into()],
+            UtilsPkg::To => vec!["util::to(1376438453123, Date)".into()],
             UtilsPkg::ToASCII => vec!["util::to_ascii(177)".into()],
             UtilsPkg::ToDate => vec!["util::to_date(177)".into()],
-            UtilsPkg::ToF32 => vec!["util::to_f32(4321)".into()],
             UtilsPkg::ToF64 => vec!["util::to_f64(4321)".into()],
-            UtilsPkg::ToI8 => vec!["util::to_i8(88)".into()],
-            UtilsPkg::ToI16 => vec!["util::to_i16(88)".into()],
-            UtilsPkg::ToI32 => vec!["util::to_i32(88)".into()],
             UtilsPkg::ToI64 => vec!["util::to_i64(88)".into()],
             UtilsPkg::ToI128 => vec!["util::to_i128(88)".into()],
-            UtilsPkg::ToU8 => vec!["util::to_u8(88)".into()],
-            UtilsPkg::ToU16 => vec!["util::to_u16(88)".into()],
-            UtilsPkg::ToU32 => vec!["util::to_u32(88)".into()],
-            UtilsPkg::ToU64 => vec!["util::to_u64(88)".into()],
             UtilsPkg::ToU128 => vec!["util::to_u128(88)".into()],
         }
     }
 
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
-            // single-parameter (u32)
-            UtilsPkg::ToASCII => vec![NumberType(U32Kind)],
+            UtilsPkg::To => vec![UnresolvedType, UnresolvedType],
+            UtilsPkg::ToASCII => vec![NumberType(I64Kind)],
             _ => vec![UnresolvedType],
         }
     }
 
     fn get_return_type(&self) -> DataType {
         match self {
-            // bytes
-            UtilsPkg::Gzip | UtilsPkg::Gunzip => BinaryType(0),
-            UtilsPkg::MD5 => BinaryType(16),
-            // date
-            UtilsPkg::ToDate => NumberType(DateKind),
-            UtilsPkg::ToF32 => NumberType(F32Kind),
+            UtilsPkg::Gzip | UtilsPkg::Gunzip => BinaryType,
+            UtilsPkg::MD5 => FixedSizeType(BinaryType.into(), 16),
+            UtilsPkg::ToDate => DateTimeType,
+            UtilsPkg::To => UnresolvedType,
             UtilsPkg::ToF64 => NumberType(F64Kind),
-            UtilsPkg::ToI8 => NumberType(I8Kind),
-            UtilsPkg::ToI16 => NumberType(I16Kind),
-            UtilsPkg::ToI32 => NumberType(I32Kind),
             UtilsPkg::ToI64 => NumberType(I64Kind),
             UtilsPkg::ToI128 => NumberType(I128Kind),
-            UtilsPkg::ToU8 => NumberType(U8Kind),
-            UtilsPkg::ToU16 => NumberType(U16Kind),
-            UtilsPkg::ToU32 => NumberType(U32Kind),
-            UtilsPkg::ToU64 => NumberType(U64Kind),
             UtilsPkg::ToU128 => NumberType(U128Kind),
             UtilsPkg::Base64 | UtilsPkg::Binary | UtilsPkg::ToASCII | UtilsPkg::Hex => {
-                StringType(0)
+                StringType
             }
         }
     }
@@ -2881,21 +3010,14 @@ impl Package for UtilsPkg {
             UtilsPkg::Binary => extract_value_fn1(ms, args, Self::do_util_binary),
             UtilsPkg::Gzip => extract_value_fn1(ms, args, Self::do_util_gzip),
             UtilsPkg::Gunzip => extract_value_fn1(ms, args, Self::do_util_gunzip),
-            UtilsPkg::MD5 => extract_value_fn1(ms, args, Self::do_util_md5),
-            UtilsPkg::ToASCII => extract_value_fn1(ms, args, Self::do_util_to_ascii),
             UtilsPkg::Hex => extract_value_fn1(ms, args, Self::do_util_to_hex),
+            UtilsPkg::MD5 => extract_value_fn1(ms, args, Self::do_util_md5),
+            UtilsPkg::To => extract_value_fn2(ms, args, Self::do_util_to_xxx),
+            UtilsPkg::ToASCII => extract_value_fn1(ms, args, Self::do_util_to_ascii),
             UtilsPkg::ToDate => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
-            UtilsPkg::ToF32 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
             UtilsPkg::ToF64 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
-            UtilsPkg::ToI8 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
-            UtilsPkg::ToI16 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
-            UtilsPkg::ToI32 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
             UtilsPkg::ToI64 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
             UtilsPkg::ToI128 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
-            UtilsPkg::ToU8 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
-            UtilsPkg::ToU16 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
-            UtilsPkg::ToU32 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
-            UtilsPkg::ToU64 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
             UtilsPkg::ToU128 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
         }
     }
@@ -2985,15 +3107,15 @@ impl Package for WwwPkg {
 
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
-            WwwPkg::Serve => vec![NumberType(U32Kind)],
-            WwwPkg::URLDecode | WwwPkg::URLEncode => vec![StringType(0)],
+            WwwPkg::Serve => vec![NumberType(I64Kind)],
+            WwwPkg::URLDecode | WwwPkg::URLEncode => vec![StringType],
         }
     }
 
     fn get_return_type(&self) -> DataType {
         match self {
             WwwPkg::Serve => BooleanType,
-            WwwPkg::URLDecode | WwwPkg::URLEncode => StringType(0),
+            WwwPkg::URLDecode | WwwPkg::URLEncode => StringType,
         }
     }
 
@@ -3144,7 +3266,7 @@ mod tests {
     mod cal_tests {
         use crate::numbers::Numbers::*;
         use crate::testdata::verify_exact_value_where;
-        use crate::typed_values::TypedValue::Number;
+        use crate::typed_values::TypedValue::{DateValue, Number};
 
         #[test]
         fn test_cal_now() {
@@ -3152,7 +3274,7 @@ mod tests {
                 r#"
                 cal::now()
             "#,
-                |n| matches!(n, Number(DateValue(..))),
+                |n| matches!(n, DateValue(..)),
             );
         }
 
@@ -3163,7 +3285,7 @@ mod tests {
                 use cal
                 now():::day_of()
             "#,
-                |n| matches!(n, Number(U32Value(..))),
+                |n| matches!(n, Number(I64Value(..))),
             );
         }
 
@@ -3174,7 +3296,7 @@ mod tests {
                 use cal
                 now():::hour24()
             "#,
-                |n| matches!(n, Number(U32Value(..))),
+                |n| matches!(n, Number(I64Value(..))),
             );
         }
 
@@ -3185,7 +3307,7 @@ mod tests {
                 use cal
                 now():::hour12()
             "#,
-                |n| matches!(n, Number(U32Value(..))),
+                |n| matches!(n, Number(I64Value(..))),
             );
         }
 
@@ -3196,7 +3318,7 @@ mod tests {
                 use cal
                 now():::minute_of()
             "#,
-                |n| matches!(n, Number(U32Value(..))),
+                |n| matches!(n, Number(I64Value(..))),
             );
         }
 
@@ -3207,7 +3329,7 @@ mod tests {
                 use cal
                 now():::month_of()
             "#,
-                |n| matches!(n, Number(U32Value(..))),
+                |n| matches!(n, Number(I64Value(..))),
             );
         }
 
@@ -3218,7 +3340,7 @@ mod tests {
                 use cal
                 now():::second_of()
             "#,
-                |n| matches!(n, Number(U32Value(..))),
+                |n| matches!(n, Number(I64Value(..))),
             );
         }
 
@@ -3229,7 +3351,7 @@ mod tests {
                 use cal
                 now():::year_of()
             "#,
-                |n| matches!(n, Number(I32Value(..))),
+                |n| matches!(n, Number(I64Value(..))),
             );
         }
 
@@ -3240,7 +3362,7 @@ mod tests {
                 use cal, durations
                 cal::minus(now(), 3:::days())
             "#,
-                |n| matches!(n, Number(DateValue(..))),
+                |n| matches!(n, DateValue(..)),
             );
         }
 
@@ -3251,7 +3373,7 @@ mod tests {
                 use cal, durations
                 cal::plus(now(), 30:::days())
             "#,
-                |n| matches!(n, Number(DateValue(..))),
+                |n| matches!(n, DateValue(..)),
             );
         }
     }
@@ -3347,7 +3469,7 @@ mod tests {
                 r#"
                 io::create_file("quote.json", { symbol: "TRX", exchange: "NYSE", last_sale: 45.32 })
             "#,
-                Number(U64Value(52)),
+                Number(I64Value(52)),
             );
 
             verify_exact_value(
@@ -3369,7 +3491,7 @@ mod tests {
                     last_sale: 45.32
                 })
             "#,
-                Number(U64Value(52)),
+                Number(I64Value(52)),
             );
 
             verify_exact_value(
@@ -3502,6 +3624,44 @@ mod tests {
             "#,
                 Number(F64Value(5.0)),
             )
+        }
+    }
+
+    /// Package "nsd" tests
+    #[cfg(test)]
+    mod nsd_tests {
+        use crate::testdata::verify_exact_value_where;
+        use crate::typed_values::TypedValue::TableValue;
+
+        #[test]
+        fn test_nsd_save_namespace() {
+            verify_exact_value_where(r#"
+                nsd::save("platform.nsd.ns_create", new Table(
+                    symbol: String(8),
+                    exchange: String(8),
+                    last_sale: f64
+                ))
+            "#, |df| matches!(df, TableValue(..)))
+        }
+
+        #[test]
+        fn test_nsd_save_and_load_namespace() {
+            verify_exact_value_where(r#"
+                let stocks =
+                    nsd::save("platform.nsd.ns_save_and_load", new Table(
+                        symbol: String(8),
+                        exchange: String(8),
+                        last_sale: f64
+                    ))
+
+                rows = [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
+                
+                rows ~> stocks
+
+                nsd::load("platform.nsd.ns_save_and_load")      
+            "#, |df| matches!(df, TableValue(..)))
         }
     }
 
@@ -4050,8 +4210,9 @@ mod tests {
     /// Package "testing" tests
     #[cfg(test)]
     mod testing_tests {
+        use crate::errors::Errors::Exact;
         use crate::testdata::{verify_exact_code, verify_exact_table, verify_exact_value};
-        use crate::typed_values::TypedValue::Boolean;
+        use crate::typed_values::TypedValue::{Boolean, ErrorValue};
 
         #[test]
         fn test_testing_feature() {
@@ -4237,7 +4398,9 @@ mod tests {
 
         #[test]
         fn test_testing_type_of_variable() {
-            verify_exact_string("testing::type_of(my_var)", "");
+            verify_exact_value(
+                "testing::type_of(my_var)",
+                ErrorValue(Exact("Type Mismatch: Mismatched number of arguments: 1 vs. 0".into())));
         }
 
         #[test]
@@ -4894,8 +5057,8 @@ mod tests {
                 )
                 .unwrap();
             let params = vec![
-                Parameter::with_default("symbol", StringType(3), StringValue("BIZ".into())),
-                Parameter::with_default("exchange", StringType(4), StringValue("NYSE".into())),
+                Parameter::with_default("symbol", FixedSizeType(StringType.into(), 3), StringValue("BIZ".into())),
+                Parameter::with_default("exchange", FixedSizeType(StringType.into(), 4), StringValue("NYSE".into())),
                 Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.66))),
             ];
             assert_eq!(
@@ -5092,7 +5255,15 @@ mod tests {
 
         #[test]
         fn test_util_md5_type() {
-            verify_data_type("util::md5(a)", BinaryType(16));
+            verify_data_type("util::md5(a)", FixedSizeType(BinaryType.into(), 16));
+        }
+
+        #[test]
+        fn test_util_to() {
+            verify_exact_code(r#"
+                use util
+                1376438453123:::to(Date)
+            "#, "2013-08-14T00:00:53.123Z")
         }
 
         #[test]
@@ -5112,9 +5283,6 @@ mod tests {
             interpreter.evaluate("use util").unwrap();
 
             // floating-point kinds
-            interpreter = verify_exact_value_whence(interpreter, "1015:::to_f32()", |n| {
-                n == Number(F32Value(1015.))
-            });
             interpreter = verify_exact_value_whence(interpreter, "7779311:::to_f64()", |n| {
                 n == Number(F64Value(7779311.))
             });
@@ -5127,63 +5295,22 @@ mod tests {
             interpreter = verify_exact_value_whence(interpreter, "123456789.42:::to_i64()", |n| {
                 n == Number(I64Value(123456789))
             });
-            interpreter = verify_exact_value_whence(interpreter, "-765.65:::to_i32()", |n| {
-                n == Number(I32Value(-765))
-            });
-            interpreter = verify_exact_value_whence(interpreter, "-567.311:::to_i16()", |n| {
-                n == Number(I16Value(-567))
-            });
-            interpreter = verify_exact_value_whence(interpreter, "-125.089:::to_i8()", |n| {
-                n == Number(I8Value(-125))
-            });
 
             // unsigned-integer kinds
             interpreter = verify_exact_value_whence(interpreter, "12789.43:::to_u128()", |n| {
                 n == Number(U128Value(12789))
             });
-            interpreter = verify_exact_value_whence(interpreter, "12.3:::to_u64()", |n| {
-                n == Number(U64Value(12))
-            });
-            interpreter = verify_exact_value_whence(interpreter, "765.65:::to_u32()", |n| {
-                n == Number(U32Value(765))
-            });
-            interpreter = verify_exact_value_whence(interpreter, "567.311:::to_u16()", |n| {
-                n == Number(U16Value(567))
-            });
-            interpreter = verify_exact_value_whence(interpreter, "125.089:::to_u8()", |n| {
-                n == Number(U8Value(125))
-            });
 
             // scope checks
             let mut interpreter = Interpreter::new();
 
-            // initially 'to_u8' should not be in scope
-            assert_eq!(interpreter.get("to_u8"), None);
-            assert_eq!(interpreter.get("to_u16"), None);
-            assert_eq!(interpreter.get("to_u32"), None);
-            assert_eq!(interpreter.get("to_u64"), None);
+            // initially 'to_u128' should not be in scope
             assert_eq!(interpreter.get("to_u128"), None);
 
             // import all conversion members
             interpreter.evaluate("use util").unwrap();
 
-            // after the import, 'to_u8' should be in scope
-            assert_eq!(
-                interpreter.get("to_u8"),
-                Some(PlatformOp(PackageOps::Utils(UtilsPkg::ToU8)))
-            );
-            assert_eq!(
-                interpreter.get("to_u16"),
-                Some(PlatformOp(PackageOps::Utils(UtilsPkg::ToU16)))
-            );
-            assert_eq!(
-                interpreter.get("to_u32"),
-                Some(PlatformOp(PackageOps::Utils(UtilsPkg::ToU32)))
-            );
-            assert_eq!(
-                interpreter.get("to_u64"),
-                Some(PlatformOp(PackageOps::Utils(UtilsPkg::ToU64)))
-            );
+            // after the import, 'to_u128' should be in scope
             assert_eq!(
                 interpreter.get("to_u128"),
                 Some(PlatformOp(PackageOps::Utils(UtilsPkg::ToU128)))
@@ -5256,82 +5383,49 @@ mod tests {
             let mut interpreter = Interpreter::new();
 
             // create the table
-            let result = interpreter
-                .evaluate(
-                    r#"
+            let result = interpreter.evaluate(r#"
                 stocks = ns("platform.www.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            "#,
-                )
-                .unwrap();
+            "#).unwrap();
             assert_eq!(result, Number(I64Value(0)));
 
             // set up a listener on port 8838
-            let result = interpreter
-                .evaluate(
-                    r#"
+            let result = interpreter.evaluate(r#"
                 www::serve(8838)
-            "#,
-                )
-                .unwrap();
+            "#).unwrap();
             assert_eq!(result, Boolean(true));
 
             // append a new row
-            let row_id = interpreter
-                .evaluate(
-                    r#"
+            let row_id = interpreter.evaluate(r#"
                 POST {
                     url: http://localhost:8838/platform/www/stocks/0
                     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
                 }
-            "#,
-                )
-                .unwrap();
+            "#).unwrap();
             assert!(matches!(row_id, Number(I64Value(..))));
 
             // fetch the previously created row
-            let row = interpreter
-                .evaluate(
-                    format!(
-                        r#"
+            let row = interpreter.evaluate(format!(r#"
                 GET http://localhost:8838/platform/www/stocks/{row_id}
-            "#
-                    )
-                    .as_str(),
-                )
-                .unwrap();
+            "#).as_str()).unwrap();
             assert_eq!(
                 row.to_json(),
                 json!({"exchange":"AMEX","symbol":"ABC","last_sale":11.77})
             );
 
             // replace the previously created row
-            let result = interpreter
-                .evaluate(
-                    format!(
-                        r#"
+            let result = interpreter.evaluate(format!(r#"
                 PUT {{
                     url: http://localhost:8838/platform/www/stocks/{row_id}
                     body: {{ symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }}
                 }}
-            "#
-                    )
-                    .as_str(),
-                )
-                .unwrap();
+            "#).as_str()).unwrap();
             assert_eq!(result, Number(I64Value(1)));
 
             // re-fetch the previously updated row
-            let row = interpreter
-                .evaluate(
-                    format!(
-                        r#"
+            let row = interpreter.evaluate(format!(r#"
                 GET http://localhost:8838/platform/www/stocks/{row_id}
-            "#
-                    )
-                    .as_str(),
-                )
-                .unwrap();
+            "#).as_str()).unwrap();
             assert_eq!(
                 row.to_json(),
                 json!({"symbol":"ABC","exchange":"AMEX","last_sale":11.79})

@@ -4,12 +4,14 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType;
-use crate::data_types::DataType::TupleType;
 use crate::data_types::DataType::{ArrayType, TableType, UnresolvedType};
+use crate::data_types::DataType::{FixedSizeType, TupleType};
 use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::Model;
 use crate::errors::throw;
 use crate::errors::Errors::{Exact, TypeMismatch, UnsupportedFeature};
 use crate::errors::TypeMismatchErrors::StructExpected;
+use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::I64Value;
 use crate::row_collection::RowCollection;
 use crate::structures::Structures::{Firm, Hard};
@@ -47,6 +49,8 @@ pub trait Sequence {
 
     fn push(&mut self, value: TypedValue) -> TypedValue;
 
+    fn sublist(&self, start: usize, end: usize) -> Self;
+    
     fn to_array(&self) -> Array;
 
     fn to_tuple(&self) -> Tuple;
@@ -113,8 +117,8 @@ impl Sequence for Sequences {
     fn get_type(&self) -> DataType {
         match self {
             Sequences::TheArray(array) => array.get_type(),
-            Sequences::TheDataframe(df) => TableType(df.get_parameters(), 0),
-            Sequences::TheRange(..) => ArrayType(0),
+            Sequences::TheDataframe(df) => TableType(df.get_parameters()),
+            Sequences::TheRange(..) => ArrayType,
             Sequences::TheTuple(tuple) => TupleType(tuple.iter().map(|v| v.get_type()).collect()),
         }
     }
@@ -167,6 +171,19 @@ impl Sequence for Sequences {
                 tuple.push(value);
                 Boolean(true)
             }
+        }
+    }
+
+    fn sublist(&self, start: usize, end: usize) -> Self {
+        match self {
+            Sequences::TheArray(array) => Sequences::TheArray(array.sublist(start, end)),
+            Sequences::TheDataframe(df) => Sequences::TheDataframe(df.sublist(start, end)), 
+            Sequences::TheRange(_, _, inclusive) => Sequences::TheRange(
+                Number(I64Value(start as i64)).into(), 
+                Number(I64Value(end as i64)).into(), 
+                *inclusive
+            ),
+            Sequences::TheTuple(tuple) => Sequences::TheTuple(tuple.clone()),
         }
     }
 
@@ -288,6 +305,10 @@ impl Array {
             .map(|i| i.clone())
             .collect::<Vec<_>>())
     }
+
+    pub fn sublist(&self, start: usize, end: usize) -> Self {
+        Array::from(self.the_array[start..end].to_vec())
+    }
 }
 
 impl Index<usize> for Array {
@@ -323,7 +344,7 @@ impl Sequence for Array {
 
     /// Returns the type
     fn get_type(&self) -> DataType {
-        ArrayType(self.the_array.len())
+        FixedSizeType(ArrayType.into(), self.the_array.len())
     }
 
     fn get_values(&self) -> Vec<TypedValue> {
@@ -341,6 +362,10 @@ impl Sequence for Array {
     fn push(&mut self, value: TypedValue) -> TypedValue {
         self.the_array.push(value);
         ArrayValue(self.clone())
+    }
+
+    fn sublist(&self, start: usize, end: usize) -> Self {
+        Self::from(self.the_array[start..end].to_vec())
     }
 
     fn to_array(&self) -> Array {
@@ -451,6 +476,10 @@ impl Sequence for Tuple {
     fn push(&mut self, value: TypedValue) -> TypedValue {
         self.the_tuple.push(value);
         TupleValue(self.the_tuple.clone())
+    }
+
+    fn sublist(&self, _start: usize, _end: usize) -> Self {
+        self.clone()
     }
 
     fn to_array(&self) -> Array {
@@ -578,7 +607,7 @@ mod tests {
     /// Unit array tests
     #[cfg(test)]
     mod array_tests {
-        use crate::data_types::DataType::{ArrayType, StringType, UnresolvedType};
+        use crate::data_types::DataType::{ArrayType, FixedSizeType, StringType, UnresolvedType};
         use crate::numbers::Numbers::I64Value;
         use crate::sequences::{Array, Sequence, Tuple};
         use crate::testdata::*;
@@ -616,7 +645,7 @@ mod tests {
         fn test_get_component_type() {
             let mut array = Array::new();
             array.push(StringValue("Hello".into()));
-            assert_eq!(array.get_component_type(), StringType(5));
+            assert_eq!(array.get_component_type(), FixedSizeType(StringType.into(), 5));
 
             array.push(Boolean(true));
             assert_eq!(array.get_component_type(), UnresolvedType);
@@ -625,7 +654,7 @@ mod tests {
             array.push(StringValue("Hello World".into()));
             assert_eq!(array.get_component_type(), UnresolvedType);
 
-            assert_eq!(array.get_type(), ArrayType(4));
+            assert_eq!(array.get_type(), FixedSizeType(ArrayType.into(), 4));
         }
 
         #[test]
@@ -764,9 +793,9 @@ mod tests {
     #[cfg(test)]
     mod tuple_tests {
         use crate::data_types::DataType;
-        use crate::data_types::DataType::TupleType;
+        use crate::data_types::DataType::{StringType, TupleType};
         use crate::number_kind::NumberKind;
-        use crate::numbers::Numbers::F32Value;
+        use crate::numbers::Numbers::F64Value;
         use crate::sequences::{Array, Sequence, Tuple};
         use crate::testdata::verify_exact_code;
         use crate::typed_values::TypedValue::{Number, StringValue};
@@ -805,9 +834,9 @@ mod tests {
         fn test_get_type() {
             let tuple = create_tuple();
             assert_eq!(tuple.get_type(), TupleType(vec![
-                DataType::StringType(3),
-                DataType::StringType(4),
-                DataType::NumberType(NumberKind::F32Kind)
+                DataType::FixedSizeType(StringType.into(), 3),
+                DataType::FixedSizeType(StringType.into(), 4),
+                DataType::NumberType(NumberKind::F64Kind)
             ]));
         }
 
@@ -834,7 +863,7 @@ mod tests {
         fn test_rev() {
             let tuple = create_tuple();
             assert_eq!(tuple.rev(), Tuple::new(vec![
-                Number(F32Value(23.66)),
+                Number(F64Value(23.66)),
                 StringValue("NYSE".into()),
                 StringValue("ABC".into()),
             ]));
@@ -846,7 +875,7 @@ mod tests {
             assert_eq!(tuple.to_array(), Array::from(vec![
                 StringValue("ABC".into()),
                 StringValue("NYSE".into()),
-                Number(F32Value(23.66)),
+                Number(F64Value(23.66)),
             ]));
         }
 
@@ -856,7 +885,7 @@ mod tests {
             assert_eq!(tuple.get_values(), vec![
                 StringValue("ABC".into()),
                 StringValue("NYSE".into()),
-                Number(F32Value(23.66)),
+                Number(F64Value(23.66)),
             ]);
         }
 
@@ -942,7 +971,7 @@ mod tests {
             Tuple::new(vec![
                 StringValue("ABC".into()),
                 StringValue("NYSE".into()),
-                Number(F32Value(23.66)),
+                Number(F64Value(23.66)),
             ])
         }
     }

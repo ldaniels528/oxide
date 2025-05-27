@@ -171,7 +171,7 @@ mod tests {
     use crate::byte_row_collection::ByteRowCollection;
     use crate::columns::Column;
     use crate::dataframe::Dataframe::Binary;
-    use crate::numbers::Numbers::U64Value;
+    use crate::numbers::Numbers::I64Value;
     use crate::row_collection::RowCollection;
     use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::Number;
@@ -206,7 +206,7 @@ mod tests {
     fn test_index_of() {
         let (brc, _) = create_data_set();
         let row = make_quote(4, "XYZ", "NYSE", 0.0289);
-        assert_eq!(brc.index_of(&row), Number(U64Value(4)));
+        assert_eq!(brc.index_of(&row), Number(I64Value(4)));
     }
 
     fn create_data_set() -> (ByteRowCollection, Vec<Column>) {

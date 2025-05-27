@@ -367,8 +367,8 @@ mod tests {
         let ns = Namespace::parse("dataframe.columns.stocks").unwrap();
         assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());
         assert_eq!(get_columns!(actor, ns).unwrap(), vec![
-            Column::new("symbol", StringType(8), Null, 9),
-            Column::new("exchange", StringType(8), Null, 26),
+            Column::new("symbol", FixedSizeType(StringType.into(), 8), Null, 9),
+            Column::new("exchange", FixedSizeType(StringType.into(), 8), Null, 26),
             Column::new("last_sale", NumberType(F64Kind), Null, 43),
         ]);
     }

@@ -4,7 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::columns::Column;
-use crate::data_types::DataType::{NumberType, StringType, StructureType, TableType};
+use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Disk;
 use crate::errors::Errors::{Exact, TypeMismatch};
@@ -17,9 +17,9 @@ use crate::interpreter::Interpreter;
 use crate::machine;
 use crate::machine::Machine;
 use crate::namespaces::Namespace;
-use crate::number_kind::NumberKind::{DateKind, U16Kind, U64Kind};
+use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers;
-use crate::numbers::Numbers::{DateValue, U16Value, U64Value};
+use crate::numbers::Numbers::I64Value;
 use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
@@ -27,7 +27,7 @@ use crate::row_metadata::RowMetadata;
 use crate::sequences::{Array, Sequence};
 use crate::structures::{Row, Structure};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, Function, Number, StringValue};
+use crate::typed_values::TypedValue::*;
 use actix::ActorTryFutureExt;
 use chrono::Local;
 use num_traits::ToPrimitive;
@@ -79,11 +79,11 @@ impl EventSourceRowCollection {
             namespace: ns.clone(),
             columns: Column::from_parameters(&columns),
             events: FileRowCollection::open_or_create(&events_ns, vec![
-                Parameter::new("row_id", NumberType(U64Kind)),
-                Parameter::new("column_id", NumberType(U16Kind)),
-                Parameter::new("action", StringType(2)),
-                Parameter::new("new_value", StringType(256)),
-                Parameter::new("created_time", NumberType(DateKind)),
+                Parameter::new("row_id", NumberType(I64Kind)),
+                Parameter::new("column_id", NumberType(I64Kind)),
+                Parameter::new("action", FixedSizeType(StringType.into(), 2)),
+                Parameter::new("new_value", FixedSizeType(StringType.into(), 256)),
+                Parameter::new("created_time", DateTimeType),
             ])?,
             state: FileRowCollection::open_or_create(ns, columns.clone())?,
         })
@@ -91,11 +91,11 @@ impl EventSourceRowCollection {
 
     fn make_field_action(id: usize, column_id: usize, action: &str, value: &TypedValue) -> Row {
         Row::new(id, vec![
-            Number(U64Value(id as u64)),
-            Number(U16Value(column_id as u16)),
+            Number(I64Value(id as i64)),
+            Number(I64Value(column_id as i64)),
             StringValue(action.to_string()),
             StringValue(value.to_code()),
-            Number(DateValue(Local::now().timestamp_millis())),
+            DateValue(Local::now().timestamp_millis()),
         ])
     }
 
@@ -402,7 +402,7 @@ impl TableFunction {
             fx: Function {
                 params,
                 body: Box::from(code),
-                returns: TableType(state.get_parameters(), 0),
+                returns: TableType(state.get_parameters()),
             },
             journal,
             state,
@@ -547,7 +547,7 @@ mod tests {
                 &make_quote_parameters(),
             ).unwrap();
 
-            // ensure row collection is completely empty
+            // ensure the row collection is completely empty
             jrc.events.resize(0).unwrap();
             jrc.state.resize(0).unwrap();
 
@@ -655,7 +655,7 @@ mod tests {
         use crate::journaling::{Journaling, TableFunction};
         use crate::machine::Machine;
         use crate::model_row_collection::ModelRowCollection;
-        use crate::number_kind::NumberKind::U64Kind;
+        use crate::number_kind::NumberKind::I64Kind;
         use crate::numbers::Numbers;
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::parameter::Parameter;
@@ -769,7 +769,7 @@ mod tests {
                 Model(ModelRowCollection::from_parameters(&params)),
                 Model(ModelRowCollection::from_parameters(&{
                     let mut new_params = params.clone();
-                    new_params.push(Parameter::new("rank", NumberType(U64Kind)));
+                    new_params.push(Parameter::new("rank", NumberType(I64Kind)));
                     new_params
                 })),
                 Machine::new_platform(),

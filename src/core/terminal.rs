@@ -7,7 +7,7 @@ use crate::compiler::Compiler;
 use crate::dataframe::Dataframe;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
-use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
+use crate::numbers::Numbers::{F64Value, I64Value};
 use crate::packages::OxidePkg;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
@@ -397,9 +397,9 @@ async fn setup_system_variables(mut state: TerminalState, args: Vec<String>) -> 
     // capture the terminal width and height
     if let Ok((width, height)) = terminal::size() {
         state.interpreter
-            .with_variable("__COLUMNS__", Number(U16Value(width))).await.unwrap();
+            .with_variable("__COLUMNS__", Number(I64Value(width as i64))).await.unwrap();
         state.interpreter
-            .with_variable("__HEIGHT__", Number(U16Value(height))).await.unwrap();
+            .with_variable("__HEIGHT__", Number(I64Value(height as i64))).await.unwrap();
     }
     state
 }

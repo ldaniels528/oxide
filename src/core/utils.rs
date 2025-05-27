@@ -4,7 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType::NumberType;
-use crate::errors::Errors::{SyntaxError, TypeMismatch};
+use crate::errors::Errors::{Exact, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, SyntaxErrors};
 use crate::expression::Expression;
@@ -15,9 +15,11 @@ use crate::numbers::Numbers;
 use crate::sequences::Sequences::{TheArray, TheRange};
 use crate::sequences::{range_to_vec, Array, Sequence};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, Boolean, Number, StringValue, TupleValue};
+use crate::typed_values::TypedValue::{ArrayValue, Boolean, Kind, Number, StringValue, TableValue, TupleValue};
 use chrono::TimeDelta;
 use num_traits::ToPrimitive;
+use crate::data_types::DataType;
+use crate::dataframe::Dataframe;
 
 pub fn compute_time_millis(dt: TimeDelta) -> f64 {
     match dt.num_nanoseconds() {
@@ -172,6 +174,20 @@ pub fn pull_string(value: &TypedValue) -> std::io::Result<String> {
     match value {
         StringValue(string) => Ok(string.clone()),
         x => throw(TypeMismatch(StringExpected(x.to_code())))
+    }
+}
+
+pub fn pull_table(value: &TypedValue) -> std::io::Result<Dataframe> {
+    match value {
+        TableValue(df) => Ok(df.clone()),
+        x => throw(TypeMismatch(TableExpected("Table".into(), x.to_code())))
+    }
+}
+
+pub fn pull_type(value: &TypedValue) -> std::io::Result<DataType> {
+    match value {
+        Kind(data_type) => Ok(data_type.clone()),
+        x => throw(Exact(format!("Expected type near {}", x.to_code())))
     }
 }
 

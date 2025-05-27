@@ -164,7 +164,7 @@ impl HashIndexConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_types::DataType::{NumberType, StringType};
+    use crate::data_types::DataType::{FixedSizeType, NumberType, StringType};
     use crate::expression::Expression::{ColonColon, FunctionCall, StructureExpression, Variable};
     use crate::namespaces::Namespace;
     use crate::number_kind::NumberKind::F64Kind;
@@ -176,8 +176,8 @@ mod tests {
     #[test]
     fn test_table_config_load_and_save() -> io::Result<()> {
         let cfg = ObjectConfig::build_table(vec![
-            Parameter::new("symbol", StringType(8)),
-            Parameter::new("exchange", StringType(8)),
+            Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+            Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
             Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
         ]);
         let ns = Namespace::parse("object_config.table_cfg.stocks")?;
@@ -187,8 +187,8 @@ mod tests {
         let cfg = ObjectConfig::load(&ns)?;
         assert_eq!(cfg, ObjectConfig::TableConfig {
             columns: vec![
-                Parameter::new("symbol", StringType(8)),
-                Parameter::new("exchange", StringType(8)),
+                Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                 Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
             ],
             indices: Vec::new(),
@@ -201,8 +201,8 @@ mod tests {
     fn test_table_fn_config_load_and_save() -> io::Result<()> {
         let cfg = ObjectConfig::build_table_fn(
             vec![
-                Parameter::new("symbol", StringType(8)),
-                Parameter::new("exchange", StringType(8)),
+                Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                 Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
             ],
             StructureExpression(vec![
@@ -224,8 +224,8 @@ mod tests {
         let cfg = ObjectConfig::load(&ns)?;
         assert_eq!(cfg, ObjectConfig::TableFnConfig {
             columns: vec![
-                Parameter::new("symbol", StringType(8)),
-                Parameter::new("exchange", StringType(8)),
+                Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
                 Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
             ],
             code: StructureExpression(vec![
