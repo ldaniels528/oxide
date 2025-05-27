@@ -348,7 +348,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-2
+4
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -360,7 +360,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 01:19:25 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 05:17:29 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -579,43 +579,43 @@ tools::reverse(range)</pre>
 <pre>use testing
 Feature "Matches function" {
     Scenario "Compare Array contents: Equal" {
-        assert(matches(
-            [ 1 "a" "b" "c" ],
-            [ 1 "a" "b" "c" ]
-        ))
+        assert(
+            [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+        )
     }
     Scenario "Compare Array contents: Not Equal" {
-        assert(!matches(
-            [ 1 "a" "b" "c" ],
-            [ 0 "x" "y" "z" ]
+        assert(!(
+            [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
         ))
     }
     Scenario "Compare JSON contents (in sequence)" {
-        assert(matches(
-                { first: "Tom" last: "Lane" },
-                { first: "Tom" last: "Lane" }))
+        assert(
+           { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+        )
     }
     Scenario "Compare JSON contents (out of sequence)" {
-        assert(matches(
-                { scores: [82 78 99], id: "A1537" },
-                { id: "A1537", scores: [82 78 99] }))
+        assert(
+           { scores: [82 78 99], id: "A1537" } 
+                       matches 
+           { id: "A1537", scores: [82 78 99] }
+        )
     }
 }</pre>
 <h5>results</h5>
 <pre>
-|--------------------------------------------------------------------------------------------------------------------------|
-| id | level | item                                                                                      | passed | result |
-|--------------------------------------------------------------------------------------------------------------------------|
-| 0  | 0     | Matches function                                                                          | true   | true   |
-| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |
-| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |
-| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |
-| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |
-| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |
-| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |
-| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |
-| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |
-|--------------------------------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------|
+| id | level | item                                                                                    | passed | result |
+|------------------------------------------------------------------------------------------------------------------------|
+| 0  | 0     | Matches function                                                                        | true   | true   |
+| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |
+| 2  | 2     | assert([1, "a", "b", "c"] matches [1, "a", "b", "c"])                                   | true   | true   |
+| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |
+| 4  | 2     | assert(!([1, "a", "b", "c"] matches [0, "x", "y", "z"]))                                | true   | true   |
+| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |
+| 6  | 2     | assert({first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"})               | true   | true   |
+| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |
+| 8  | 2     | assert({scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}) | true   | true   |
+|------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>▶️ Tuples</h4>
@@ -867,7 +867,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-6
+10
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -876,7 +876,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-18
+22
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -885,7 +885,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-19
+17
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -903,7 +903,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-26
+30
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -929,7 +929,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-27T01:19:26.315Z
+2025-05-27T05:17:30.179Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -1257,12 +1257,12 @@ include path_str</pre>
 | 19 | COMMAND_MODE               | unix2003                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 20 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/curl-sys-976ef1fd41b2ae67/out/build:/Users/ldaniels/GitHub/oxide/target/debug/build/libnghttp2-sys-03d0e22189823925/out/i/lib:/Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-b2743e594d963e4d/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib |
 | 21 | HOME                       | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 22 | IDEA_INITIAL_DIRECTORY     | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 23 | IJ_RESTARTER_LOG           | /Users/ldaniels/Library/Logs/JetBrains/IntelliJIdea2025.1/restarter.log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 24 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 25 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 26 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 27 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 22 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 23 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 24 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 25 | LaunchInstanceID           | BA12FBA4-2DD3-4D24-91D2-8D038ED4B2F9                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 26 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 27 | OXIDE_HOME                 | /Users/ldaniels/GitHub/oxide/oxide_db                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | 28 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:.                                                                                                                                  |
 | 29 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | 30 | RR_REAL_RUSTDOC            | /Users/ldaniels/.cargo/bin/rustdoc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -1277,15 +1277,16 @@ include path_str</pre>
 | 39 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | 40 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | 41 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 42 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 43 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.6To52j2ZMT/Listeners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 44 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 45 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 46 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 47 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 48 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.104316344.5C0B2A87-542B-4DF3-B0FD-53F35CC8C3D3                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 49 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 50 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 42 | SECURITYSESSIONID          | 186b1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 43 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 44 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.ueG9OnvHQk/Listeners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 45 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 46 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 47 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 48 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 49 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.104316344                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 50 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 51 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 |-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
@@ -1321,13 +1322,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|-------------------------------------------------------------------------------|
-| id | name    | module | signature        | description              | returns |
-|-------------------------------------------------------------------------------|
-| 0  | to_u128 | util   | util::to_u128(a) | Converts a value to u128 | u128    |
-| 1  | to_i64  | util   | util::to_i64(a)  | Converts a value to i64  | i64     |
-| 2  | to_i128 | util   | util::to_i128(a) | Converts a value to i128 | i128    |
-|-------------------------------------------------------------------------------|
+|---------------------------------------------------------------------------------------------------------------------------|
+| id | name    | module    | signature                  | description                                             | returns |
+|---------------------------------------------------------------------------------------------------------------------------|
+| 0  | seconds | durations | durations::seconds(n: i64) | Converts a number into the equivalent number of seconds | i64     |
+| 1  | minutes | durations | durations::minutes(n: i64) | Converts a number into the equivalent number of minutes | i64     |
+| 2  | millis  | durations | durations::millis(n: i64)  | Converts a number into the equivalent number of millis  | i64     |
+|---------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::home &#8212; Returns the Oxide home directory path</h4>
@@ -1335,7 +1336,7 @@ oxide::eval("a + b")</pre>
 <pre>oxide::home()</pre>
 <h5>results</h5>
 <pre>
-"/Users/ldaniels/oxide_db"
+"/Users/ldaniels/GitHub/oxide/oxide_db"
 </pre>
 <hr>
 <h4>📦 oxide::println &#8212; Print line function</h4>
@@ -1359,7 +1360,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-cbf2fbcb-a162-438c-8172-474fee595c6c
+a33a2436-e6a6-48dc-b411-cb4b3f6b017a
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1486,10 +1487,9 @@ where exchange is 'NYSE'"
 <h4>📦 testing::assert &#8212; Evaluates an assertion returning true or an error</h4>
 <h5>example1</h5>
 <pre>use testing
-assert(matches(
-   [ 1 "a" "b" "c" ],
-   [ 1 "a" "b" "c" ]
-))</pre>
+assert(
+   [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+)</pre>
 <h5>results</h5>
 <pre>
 true
@@ -1500,52 +1500,43 @@ true
 <pre>use testing
 feature("Matches function", {
     "Compare Array contents: Equal": ctx -> {
-        assert(matches(
-            [ 1 "a" "b" "c" ],
-            [ 1 "a" "b" "c" ]))
+        assert(
+            [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+        )
     },
     "Compare Array contents: Not Equal": ctx -> {
-        assert(!matches(
-            [ 1 "a" "b" "c" ],
-            [ 0 "x" "y" "z" ]))
+        assert(!(
+            [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
+        ))
     },
     "Compare JSON contents (in sequence)": ctx -> {
-        assert(matches(
-            { first: "Tom" last: "Lane" },
-            { first: "Tom" last: "Lane" }))
+        assert(
+            { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+        )
     },
     "Compare JSON contents (out of sequence)": ctx -> {
-        assert(matches(
-            { scores: [82 78 99], id: "A1537" },
-            { id: "A1537", scores: [82 78 99] }))
+        assert(
+            { scores: [82 78 99], id: "A1537" }
+                       matches 
+            { id: "A1537", scores: [82 78 99] }
+        )
     }
-                    })</pre>
+})</pre>
 <h5>results</h5>
 <pre>
-|--------------------------------------------------------------------------------------------------------------------------|
-| id | level | item                                                                                      | passed | result |
-|--------------------------------------------------------------------------------------------------------------------------|
-| 0  | 0     | Matches function                                                                          | true   | true   |
-| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |
-| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |
-| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |
-| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |
-| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |
-| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |
-| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |
-| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |
-|--------------------------------------------------------------------------------------------------------------------------|
-</pre>
-<hr>
-<h4>📦 testing::matches &#8212; Compares two values</h4>
-<h5>example1</h5>
-<pre>use testing::matches
-a = { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-b = { last: "Lane", first: "Tom", scores: [82, 78, 99] }
-matches(a, b)</pre>
-<h5>results</h5>
-<pre>
-true
+|------------------------------------------------------------------------------------------------------------------------|
+| id | level | item                                                                                    | passed | result |
+|------------------------------------------------------------------------------------------------------------------------|
+| 0  | 0     | Matches function                                                                        | true   | true   |
+| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |
+| 2  | 2     | assert([1, "a", "b", "c"] matches [1, "a", "b", "c"])                                   | true   | true   |
+| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |
+| 4  | 2     | assert(!([1, "a", "b", "c"] matches [0, "x", "y", "z"]))                                | true   | true   |
+| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |
+| 6  | 2     | assert({first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"})               | true   | true   |
+| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |
+| 8  | 2     | assert({scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}) | true   | true   |
+|------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 testing::type_of &#8212; Returns the type of a value</h4>
@@ -1683,9 +1674,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-27T01:19:26.686Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-27T01:19:26.687Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-27T01:19:26.688Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-27T05:17:30.541Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-27T05:17:30.542Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-27T05:17:30.542Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

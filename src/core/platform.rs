@@ -595,10 +595,6 @@ mod tests {
             Testing(TestingPkg::Feature).to_code(),
             "testing::feature(a: String, b: Struct)"
         );
-        assert_eq!(
-            Testing(TestingPkg::Matches).to_code(),
-            "testing::matches(a, b)"
-        );
         assert_eq!(Testing(TestingPkg::TypeOf).to_code(), "testing::type_of(a)");
         // tools
         assert_eq!(

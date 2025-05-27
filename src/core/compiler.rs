@@ -276,6 +276,11 @@ impl Compiler {
                 let (expr1, ts) = self.compile_next(&ts)?;
                 Ok((Some(Condition(In(expr0.into(), expr1.into()))), ts))
             }
+            // keyword operator "matches"
+            (Some(Atom { text, .. }), ts) if text == "matches" => {
+                let (expr1, ts) = self.compile_next(&ts)?;
+                Ok((Some(Condition(Matches(expr0.into(), expr1.into()))), ts))
+            }
             // keyword operator "is"
             (Some(Atom { text, .. }), ts) if text == "is" => {
                 let (expr1, ts) = self.compile_next(&ts)?;
@@ -3140,17 +3145,17 @@ mod tests {
 
         #[test]
         fn test_not_false() {
-            verify_build("!false", Condition(Not(FALSE.into())));
+            verify_build_with_decompile("!false", "!(false)", Condition(Not(FALSE.into())));
         }
 
         #[test]
         fn test_not_true() {
-            verify_build("!true", Condition(Not(TRUE.into())));
+            verify_build_with_decompile("!true", "!(true)", Condition(Not(TRUE.into())));
         }
 
         #[test]
         fn test_not_variable() {
-            verify_build("!x", Condition(Not(Variable("x".into()).into())));
+            verify_build_with_decompile("!x", "!(x)", Condition(Not(Variable("x".into()).into())));
         }
 
         #[test]

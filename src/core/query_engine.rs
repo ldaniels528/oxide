@@ -810,7 +810,7 @@ mod tests {
     use crate::numbers::Numbers::I64Value;
     use crate::testdata::*;
     use crate::typed_values::TypedValue::*;
-    
+
     #[test]
     fn test_table_create_ephemeral() {
         verify_exact_value(r#"

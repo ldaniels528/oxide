@@ -3,7 +3,9 @@
 //      Utility Functions
 ////////////////////////////////////////////////////////////////////
 
+use crate::data_types::DataType;
 use crate::data_types::DataType::NumberType;
+use crate::dataframe::Dataframe;
 use crate::errors::Errors::{Exact, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, SyntaxErrors};
@@ -18,8 +20,6 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{ArrayValue, Boolean, Kind, Number, StringValue, TableValue, TupleValue};
 use chrono::TimeDelta;
 use num_traits::ToPrimitive;
-use crate::data_types::DataType;
-use crate::dataframe::Dataframe;
 
 pub fn compute_time_millis(dt: TimeDelta) -> f64 {
     match dt.num_nanoseconds() {

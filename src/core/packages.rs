@@ -1935,7 +1935,6 @@ impl Package for StringsPkg {
 pub enum TestingPkg {
     Assert,
     Feature,
-    Matches,
     TypeOf,
 }
 
@@ -1995,14 +1994,6 @@ impl TestingPkg {
         ms.do_feature(&Box::from(title), &scenarios)
     }
 
-    fn do_testing_matches(
-        ms: Machine,
-        a: &TypedValue,
-        b: &TypedValue,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        Ok((ms, a.matches(b)))
-    }
-
     fn do_testing_type_of(ms: Machine, a: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
         Ok((ms, StringValue(a.get_type_name())))
     }
@@ -2011,7 +2002,6 @@ impl TestingPkg {
         vec![
             PackageOps::Testing(TestingPkg::Assert),
             PackageOps::Testing(TestingPkg::Feature),
-            PackageOps::Testing(TestingPkg::Matches),
             PackageOps::Testing(TestingPkg::TypeOf),
         ]
     }
@@ -2022,7 +2012,6 @@ impl Package for TestingPkg {
         match self {
             TestingPkg::Assert => "assert".into(),
             TestingPkg::Feature => "feature".into(),
-            TestingPkg::Matches => "matches".into(),
             TestingPkg::TypeOf => "type_of".into(),
         }
     }
@@ -2035,87 +2024,66 @@ impl Package for TestingPkg {
         match self {
             TestingPkg::Assert => "Evaluates an assertion returning true or an error".into(),
             TestingPkg::Feature => "Creates a new test feature".into(),
-            TestingPkg::Matches => "Compares two values".into(),
             TestingPkg::TypeOf => "Returns the type of a value".into(),
         }
     }
 
     fn get_examples(&self) -> Vec<String> {
         match self {
-            // testing
-            TestingPkg::Assert => vec![strip_margin(
-                r#"
+            TestingPkg::Assert => vec![
+                strip_margin(r#"
                     |use testing
-                    |assert(matches(
-                    |   [ 1 "a" "b" "c" ],
-                    |   [ 1 "a" "b" "c" ]
-                    |))
-                "#,
-                '|',
-            )],
-            TestingPkg::Feature => vec![strip_margin(
-                r#"
+                    |assert(
+                    |   [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+                    |)
+                "#, '|')
+            ],
+            TestingPkg::Feature => vec![
+                strip_margin(r#"
                     |use testing
                     |feature("Matches function", {
                     |    "Compare Array contents: Equal": ctx -> {
-                    |        assert(matches(
-                    |            [ 1 "a" "b" "c" ],
-                    |            [ 1 "a" "b" "c" ]))
+                    |        assert(
+                    |            [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+                    |        )
                     |    },
                     |    "Compare Array contents: Not Equal": ctx -> {
-                    |        assert(!matches(
-                    |            [ 1 "a" "b" "c" ],
-                    |            [ 0 "x" "y" "z" ]))
+                    |        assert(!(
+                    |            [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
+                    |        ))
                     |    },
                     |    "Compare JSON contents (in sequence)": ctx -> {
-                    |        assert(matches(
-                    |            { first: "Tom" last: "Lane" },
-                    |            { first: "Tom" last: "Lane" }))
+                    |        assert(
+                    |            { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+                    |        )
                     |    },
                     |    "Compare JSON contents (out of sequence)": ctx -> {
-                    |        assert(matches(
-                    |            { scores: [82 78 99], id: "A1537" },
-                    |            { id: "A1537", scores: [82 78 99] }))
+                    |        assert(
+                    |            { scores: [82 78 99], id: "A1537" }
+                    |                       matches 
+                    |            { id: "A1537", scores: [82 78 99] }
+                    |        )
                     |    }
-                    })"#,
-                '|',
-            )],
-            TestingPkg::Matches => vec![strip_margin(
-                r#"
-                    |use testing::matches
-                    |a = { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-                    |b = { last: "Lane", first: "Tom", scores: [82, 78, 99] }
-                    |matches(a, b)
-                "#,
-                '|',
-            )],
-            TestingPkg::TypeOf => vec!["testing::type_of([12, 76, 444])".into()],
+                    |})"#, '|')
+            ],
+            TestingPkg::TypeOf => vec![
+                "testing::type_of([12, 76, 444])".into()
+            ],
         }
     }
 
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
-            // single-parameter (boolean)
             TestingPkg::Assert => vec![BooleanType],
-            // single-parameter (dynamic)
-            TestingPkg::TypeOf => vec![UnresolvedType],
-            // two-parameter (lazy, lazy)
-            TestingPkg::Matches => {
-                vec![UnresolvedType, UnresolvedType]
-            }
-            // two-parameter (string, struct)
             TestingPkg::Feature => vec![StringType, StructureType(vec![])],
+            TestingPkg::TypeOf => vec![UnresolvedType],
         }
     }
 
     fn get_return_type(&self) -> DataType {
         match self {
-            TestingPkg::Matches => BooleanType,
-            // outcome
             TestingPkg::Assert => BooleanType,
-            // string
             TestingPkg::TypeOf => StringType,
-            // table
             TestingPkg::Feature => TableType(UtilsPkg::get_testing_feature_parameters()),
         }
     }
@@ -2128,7 +2096,6 @@ impl Package for TestingPkg {
         match self {
             TestingPkg::Assert => extract_value_fn1(ms, args, Self::do_testing_assert),
             TestingPkg::Feature => extract_value_fn2(ms, args, Self::do_testing_feature),
-            TestingPkg::Matches => extract_value_fn2(ms, args, Self::do_testing_matches),
             TestingPkg::TypeOf => extract_value_fn1(ms, args, Self::do_testing_type_of),
         }
     }
@@ -4212,7 +4179,7 @@ mod tests {
     mod testing_tests {
         use crate::errors::Errors::Exact;
         use crate::testdata::{verify_exact_code, verify_exact_table, verify_exact_value};
-        use crate::typed_values::TypedValue::{Boolean, ErrorValue};
+        use crate::typed_values::TypedValue::ErrorValue;
 
         #[test]
         fn test_testing_feature() {
@@ -4220,96 +4187,44 @@ mod tests {
             use testing
             feature("Matches function", {
                 "Compare Array contents: Equal": ctx -> {
-                    assert(matches(
-                        [ 1 "a" "b" "c" ],
-                        [ 1 "a" "b" "c" ]))
+                    assert(
+                        [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+                    )
                 },
                 "Compare Array contents: Not Equal": ctx -> {
-                    assert(!matches(
-                        [ 1 "a" "b" "c" ],
-                        [ 0 "x" "y" "z" ]))
+                    assert(!(
+                        [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
+                    ))
                 },
                 "Compare JSON contents (in sequence)": ctx -> {
-                    assert(matches(
-                        { first: "Tom" last: "Lane" },
-                        { first: "Tom" last: "Lane" }))
+                    assert(
+                        { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+                    )
                 },
                 "Compare JSON contents (out of sequence)": ctx -> {
-                    assert(matches(
-                        { scores: [82 78 99], id: "A1537" },
-                        { id: "A1537", scores: [82 78 99] }))
+                    assert(
+                        { scores: [82 78 99], id: "A1537" }
+                                matches
+                        { id: "A1537", scores: [82 78 99] }
+                    )
                 }
             })"#, vec![
-                "|--------------------------------------------------------------------------------------------------------------------------|",
-                "| id | level | item                                                                                      | passed | result |",
-                "|--------------------------------------------------------------------------------------------------------------------------|",
-                "| 0  | 0     | Matches function                                                                          | true   | true   |",
-                "| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |",
-                r#"| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |"#,
-                "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |",
-                r#"| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |"#,
-                "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |",
-                r#"| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |"#,
-                "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |",
-                r#"| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |"#,
-                "|--------------------------------------------------------------------------------------------------------------------------|"
+                "|------------------------------------------------------------------------------------------------------------------------|",
+                "| id | level | item                                                                                    | passed | result |",
+                "|------------------------------------------------------------------------------------------------------------------------|",
+                "| 0  | 0     | Matches function                                                                        | true   | true   |",
+                "| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |",
+                r#"| 2  | 2     | assert([1, "a", "b", "c"] matches [1, "a", "b", "c"])                                   | true   | true   |"#,
+                "| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |",
+                r#"| 4  | 2     | assert(!([1, "a", "b", "c"] matches [0, "x", "y", "z"]))                                | true   | true   |"#,
+                "| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |",
+                r#"| 6  | 2     | assert({first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"})               | true   | true   |"#,
+                "| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |",
+                r#"| 8  | 2     | assert({scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}) | true   | true   |"#,
+                "|------------------------------------------------------------------------------------------------------------------------|"
             ]);
         }
-
-        #[test]
-        fn test_testing_matches_exact() {
-            // test a perfect match
-            verify_exact_value(
-                r#"
-                a = { first: "Tom", last: "Lane", scores: [82, 78, 99] }
-                b = { first: "Tom", last: "Lane", scores: [82, 78, 99] }
-                testing::matches(a, b)
-            "#,
-                Boolean(true),
-            );
-        }
-
-        #[test]
-        fn test_testing_matches_unordered() {
-            // test an unordered match
-            verify_exact_value(
-                r#"
-                use testing::matches
-                a = { scores: [82, 78, 99], first: "Tom", last: "Lane" }
-                b = { last: "Lane", first: "Tom", scores: [82, 78, 99] }
-                matches(a, b)
-            "#,
-                Boolean(true),
-            );
-        }
-
-        #[test]
-        fn test_testing_matches_not_match_1() {
-            // test when things do not match 1
-            verify_exact_value(
-                r#"
-                use testing
-                a = { first: "Tom", last: "Lane" }
-                b = { first: "Jerry", last: "Lane" }
-                a:::matches(b)
-            "#,
-                Boolean(false),
-            );
-        }
-
-        #[test]
-        fn test_testing_matches_not_match_2() {
-            // test when things do not match 2
-            verify_exact_value(
-                r#"
-                a = { key: "123", values: [1, 74, 88] }
-                b = { key: "123", values: [1, 74, 88, 0] }
-                testing::matches(a, b)
-            "#,
-                Boolean(false),
-            );
-        }
-
+        
         #[test]
         fn test_testing_type_of_array_bool() {
             verify_exact_string("testing::type_of([true, false])", "Array(2)");
@@ -5432,75 +5347,40 @@ mod tests {
             );
 
             // update the previously created row
-            let result = interpreter
-                .evaluate(
-                    format!(
-                        r#"
+            let result = interpreter.evaluate(format!(r#"
                 PATCH {{
                     url: http://localhost:8838/platform/www/stocks/{row_id}
                     body: {{ last_sale: 11.81 }}
                 }}
-            "#
-                    )
-                    .as_str(),
-                )
-                .unwrap();
+            "#).as_str()).unwrap();
             assert_eq!(result, Number(I64Value(1)));
 
             // re-fetch the previously updated row
-            let row = interpreter
-                .evaluate(
-                    format!(
-                        r#"
+            let row = interpreter.evaluate(format!(r#"
                 GET http://localhost:8838/platform/www/stocks/{row_id}
-            "#
-                    )
-                    .as_str(),
-                )
-                .unwrap();
+            "#).as_str()).unwrap();
             assert_eq!(
                 row.to_json(),
                 json!({"last_sale":11.81,"symbol":"ABC","exchange":"AMEX"})
             );
 
             // fetch the headers for the previously updated row
-            let result = interpreter
-                .evaluate(
-                    format!(
-                        r#"
+            let result = interpreter.evaluate(format!(r#"
                 HEAD http://localhost:8838/platform/www/stocks/{row_id}
-            "#
-                    )
-                    .as_str(),
-                )
-                .unwrap();
+            "#).as_str()).unwrap();
             println!("HEAD: {}", result.to_string());
             assert!(matches!(result, Structured(Soft(..))));
 
             // delete the previously updated row
-            let result = interpreter
-                .evaluate(
-                    format!(
-                        r#"
+            let result = interpreter.evaluate(format!(r#"
                 DELETE http://localhost:8838/platform/www/stocks/{row_id}
-            "#
-                    )
-                    .as_str(),
-                )
-                .unwrap();
+            "#).as_str()).unwrap();
             assert_eq!(result, Number(I64Value(1)));
 
             // verify the deleted row is empty
-            let row = interpreter
-                .evaluate(
-                    format!(
-                        r#"
+            let row = interpreter.evaluate(format!(r#"
                 GET http://localhost:8838/platform/www/stocks/{row_id}
-            "#
-                    )
-                    .as_str(),
-                )
-                .unwrap();
+            "#).as_str()).unwrap();
             assert_eq!(row, Structured(Soft(SoftStructure::empty())));
         }
 
@@ -5509,11 +5389,9 @@ mod tests {
             let mut interpreter = Interpreter::new();
 
             // create the table
-            let result = interpreter
-                .evaluate(
-                    r#"
-                // setup a listener on port 8838
-                www::serve(8838)
+            let result = interpreter.evaluate(r#"
+                // setup a listener on port 8848
+                www::serve(8848)
 
                 // create the table
                 table(symbol: String(8), exchange: String(8), last_sale: f64)
@@ -5521,14 +5399,12 @@ mod tests {
 
                 use testing
                 row_id = POST {
-                    url: http://localhost:8838/platform/http_workflow/stocks/0
+                    url: http://localhost:8848/platform/http_workflow/stocks/0
                     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
                 }
-                assert(matches(row_id, 0))
-                GET http://localhost:8838/platform/http_workflow/stocks/0
-            "#,
-                )
-                .unwrap();
+                assert(row_id matches 0)
+                GET http://localhost:8848/platform/http_workflow/stocks/0
+            "#).unwrap();
             assert_eq!(
                 result.to_code(),
                 r#"{exchange: "AMEX", last_sale: 11.77, symbol: "ABC"}"#

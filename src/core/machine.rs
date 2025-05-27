@@ -7,6 +7,8 @@ use actix::fut::result;
 use actix_web::web::{scope, to};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
+use futures_util::SinkExt;
+use isahc::{Body, ReadResponseExt, Request, RequestExt, Response};
 use log::{error, info};
 use regex::Error;
 use serde::{Deserialize, Serialize};
@@ -20,8 +22,6 @@ use std::ops::{Deref, Neg};
 use std::path::Path;
 use std::process::Output;
 use std::{env, fs, thread};
-use futures_util::SinkExt;
-use isahc::{Body, ReadResponseExt, Request, RequestExt, Response};
 use tokio::runtime::Runtime;
 use tokio_tungstenite::tungstenite::http::Method;
 use uuid::Uuid;
@@ -332,28 +332,20 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         use crate::expression::Conditions::*;
         match condition {
-            And(a, b) =>
-                self.eval_inline_2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
+            And(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
             Contains(a, b) => self.do_contains(a, b),
-            Equal(a, b) =>
-                self.eval_inline_2(a, b, |aa, bb| Boolean(aa == bb)),
+            Equal(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa == bb)),
             False => Ok((self.to_owned(), Boolean(false))),
-            GreaterThan(a, b) =>
-                self.eval_inline_2(a, b, |aa, bb| Boolean(aa > bb)),
-            GreaterOrEqual(a, b) =>
-                self.eval_inline_2(a, b, |aa, bb| Boolean(aa >= bb)),
+            GreaterThan(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa > bb)),
+            GreaterOrEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa >= bb)),
             In(a, b) => self.do_in(a, b),
-            LessThan(a, b) =>
-                self.eval_inline_2(a, b, |aa, bb| Boolean(aa < bb)),
-            LessOrEqual(a, b) =>
-                self.eval_inline_2(a, b, |aa, bb| Boolean(aa <= bb)),
-            Like(text, pattern) =>
-                self.do_like(text, pattern),
+            LessThan(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa < bb)),
+            LessOrEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa <= bb)),
+            Like(text, pattern) => self.do_like(text, pattern),
+            Matches(src, pattern) => self.eval_inline_2(src, pattern, |aa, bb| aa.matches(&bb)), 
             Not(a) => self.eval_inline_1(a, |aa| !aa),
-            NotEqual(a, b) =>
-                self.eval_inline_2(a, b, |aa, bb| Boolean(aa != bb)),
-            Or(a, b) =>
-                self.eval_inline_2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
+            NotEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa != bb)),
+            Or(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
             True => Ok((self.to_owned(), Boolean(true))),
         }
     }
@@ -1036,6 +1028,14 @@ impl Machine {
             (a, b) =>
                 Ok((ms, ErrorValue(SyntaxError(SyntaxErrors::TypeIdentifierExpected(format!("{} like {}", a.to_code(), b.to_code()))))))
         }
+    }
+    
+    fn do_matches(
+        &self,
+        src: &Expression,
+        pattern: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        throw(NotImplemented(format!("{} matches {}", src, pattern)))
     }
 
     /// Evaluates a match expression

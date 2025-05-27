@@ -253,7 +253,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-1
+3
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -265,7 +265,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 01:19:24 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 05:17:28 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -484,43 +484,43 @@ tools::reverse(range)</pre>
 <pre>use testing
 Feature "Matches function" {
     Scenario "Compare Array contents: Equal" {
-        assert(matches(
-            [ 1 "a" "b" "c" ],
-            [ 1 "a" "b" "c" ]
-        ))
+        assert(
+            [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+        )
     }
     Scenario "Compare Array contents: Not Equal" {
-        assert(!matches(
-            [ 1 "a" "b" "c" ],
-            [ 0 "x" "y" "z" ]
+        assert(!(
+            [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
         ))
     }
     Scenario "Compare JSON contents (in sequence)" {
-        assert(matches(
-                { first: "Tom" last: "Lane" },
-                { first: "Tom" last: "Lane" }))
+        assert(
+           { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+        )
     }
     Scenario "Compare JSON contents (out of sequence)" {
-        assert(matches(
-                { scores: [82 78 99], id: "A1537" },
-                { id: "A1537", scores: [82 78 99] }))
+        assert(
+           { scores: [82 78 99], id: "A1537" } 
+                       matches 
+           { id: "A1537", scores: [82 78 99] }
+        )
     }
 }</pre>
 <h5>results</h5>
 <pre>
-|--------------------------------------------------------------------------------------------------------------------------|
-| id | level | item                                                                                      | passed | result |
-|--------------------------------------------------------------------------------------------------------------------------|
-| 0  | 0     | Matches function                                                                          | true   | true   |
-| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |
-| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |
-| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |
-| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |
-| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |
-| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |
-| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |
-| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |
-|--------------------------------------------------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------|
+| id | level | item                                                                                    | passed | result |
+|------------------------------------------------------------------------------------------------------------------------|
+| 0  | 0     | Matches function                                                                        | true   | true   |
+| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |
+| 2  | 2     | assert([1, "a", "b", "c"] matches [1, "a", "b", "c"])                                   | true   | true   |
+| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |
+| 4  | 2     | assert(!([1, "a", "b", "c"] matches [0, "x", "y", "z"]))                                | true   | true   |
+| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |
+| 6  | 2     | assert({first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"})               | true   | true   |
+| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |
+| 8  | 2     | assert({scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}) | true   | true   |
+|------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>▶️ Tuples</h4>

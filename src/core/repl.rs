@@ -412,6 +412,6 @@ mod tests {
         let row_id = last as usize;
         let row = frc.read_one(row_id).unwrap();
         assert!(row.is_some());
-        frc.resize(row_id);
+        frc.resize(row_id).unwrap();
     }
 }

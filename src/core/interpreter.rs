@@ -100,46 +100,46 @@ mod tests {
     }
 
     #[test]
-    fn test_feature_with_scenarios() {
+    fn test_feature_and_scenarios() {
         verify_exact_table(r#"
             use testing
             Feature "Matches function" {
                 Scenario "Compare Array contents: Equal" {
-                    assert(matches(
-                        [ 1 "a" "b" "c" ],
-                        [ 1 "a" "b" "c" ]
-                    ))
+                    assert(
+                        [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+                    )
                 }
                 Scenario "Compare Array contents: Not Equal" {
-                    assert(!matches(
-                        [ 1 "a" "b" "c" ],
-                        [ 0 "x" "y" "z" ]
+                    assert(!(
+                        [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
                     ))
                 }
                 Scenario "Compare JSON contents (in sequence)" {
-                    assert(matches(
-                            { first: "Tom" last: "Lane" },
-                            { first: "Tom" last: "Lane" }))
+                    assert(
+                        { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+                    )
                 }
                 Scenario "Compare JSON contents (out of sequence)" {
-                    assert(matches(
-                            { scores: [82 78 99], id: "A1537" },
-                            { id: "A1537", scores: [82 78 99] }))
+                    assert(
+                        { scores: [82 78 99], id: "A1537" }
+                                matches
+                        { id: "A1537", scores: [82 78 99] }
+                    )
                 }
             }"#, vec![
-            "|--------------------------------------------------------------------------------------------------------------------------|",
-            "| id | level | item                                                                                      | passed | result |",
-            "|--------------------------------------------------------------------------------------------------------------------------|",
-            "| 0  | 0     | Matches function                                                                          | true   | true   |",
-            "| 1  | 1     | Compare Array contents: Equal                                                             | true   | true   |",
-            r#"| 2  | 2     | assert(matches([1, "a", "b", "c"], [1, "a", "b", "c"]))                                   | true   | true   |"#,
-            "| 3  | 1     | Compare Array contents: Not Equal                                                         | true   | true   |",
-            r#"| 4  | 2     | assert(!matches([1, "a", "b", "c"], [0, "x", "y", "z"]))                                  | true   | true   |"#,
-            "| 5  | 1     | Compare JSON contents (in sequence)                                                       | true   | true   |",
-            r#"| 6  | 2     | assert(matches({first: "Tom", last: "Lane"}, {first: "Tom", last: "Lane"}))               | true   | true   |"#,
-            "| 7  | 1     | Compare JSON contents (out of sequence)                                                   | true   | true   |",
-            r#"| 8  | 2     | assert(matches({scores: [82, 78, 99], id: "A1537"}, {id: "A1537", scores: [82, 78, 99]})) | true   | true   |"#,
-            "|--------------------------------------------------------------------------------------------------------------------------|"
+              "|------------------------------------------------------------------------------------------------------------------------|",
+              "| id | level | item                                                                                    | passed | result |",
+              "|------------------------------------------------------------------------------------------------------------------------|",
+              "| 0  | 0     | Matches function                                                                        | true   | true   |",
+              "| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |", 
+            r#"| 2  | 2     | assert([1, "a", "b", "c"] matches [1, "a", "b", "c"])                                   | true   | true   |"#,
+              "| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |",
+            r#"| 4  | 2     | assert(!([1, "a", "b", "c"] matches [0, "x", "y", "z"]))                                | true   | true   |"#,
+              "| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |",
+            r#"| 6  | 2     | assert({first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"})               | true   | true   |"#,
+              "| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |",
+            r#"| 8  | 2     | assert({scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}) | true   | true   |"#,
+              "|------------------------------------------------------------------------------------------------------------------------|"
         ]);
     }
 
@@ -201,6 +201,42 @@ mod tests {
             verify_exact_value("'Hello' like 'H*o'", Boolean(true));
             verify_exact_value("'Hello' like 'H.ll.'", Boolean(true));
             verify_exact_value("'Hello' like 'H%ll%'", Boolean(false));
+        }
+
+        #[test]
+        fn test_matches_exact() {
+            verify_exact_value(r#"
+                a = { first: "Tom", last: "Lane", scores: [82, 78, 99] }
+                b = { first: "Tom", last: "Lane", scores: [82, 78, 99] }
+                a matches b
+            "#, Boolean(true));
+        }
+
+        #[test]
+        fn test_matches_unordered() {
+            verify_exact_value(r#"
+                a = { scores: [82, 78, 99], first: "Tom", last: "Lane" }
+                b = { last: "Lane", first: "Tom", scores: [82, 78, 99] }
+                a matches b
+            "#, Boolean(true));
+        }
+
+        #[test]
+        fn test_matches_not_match_1() {
+            verify_exact_value(r#"
+                a = { first: "Tom", last: "Lane" }
+                b = { first: "Jerry", last: "Lane" }
+                a matches b
+            "#, Boolean(false));
+        }
+
+        #[test]
+        fn test_matches_not_match_2() {
+            verify_exact_value(r#"
+                a = { key: "123", values: [1, 74, 88] }
+                b = { key: "123", values: [1, 74, 88, 0] }
+                a matches b
+            "#, Boolean(false));
         }
     }
 

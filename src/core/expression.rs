@@ -48,6 +48,7 @@ pub enum Conditions {
     LessOrEqual(Box<Expression>, Box<Expression>),
     LessThan(Box<Expression>, Box<Expression>),
     Like(Box<Expression>, Box<Expression>),
+    Matches(Box<Expression>, Box<Expression>),
     Not(Box<Expression>),
     NotEqual(Box<Expression>, Box<Expression>),
     Or(Box<Expression>, Box<Expression>),
@@ -493,7 +494,9 @@ impl Expression {
                 format!("{} <= {}", Self::decompile(a), Self::decompile(b)),
             Conditions::Like(a, b) =>
                 format!("{} like {}", Self::decompile(a), Self::decompile(b)),
-            Conditions::Not(a) => format!("!{}", Self::decompile(a)),
+            Conditions::Matches(a, b) =>
+                format!("{} matches {}", Self::decompile(a), Self::decompile(b)),
+            Conditions::Not(a) => format!("!({})", Self::decompile(a)),
             Conditions::NotEqual(a, b) =>
                 format!("{} != {}", Self::decompile(a), Self::decompile(b)),
             Conditions::Or(a, b) =>

@@ -420,26 +420,26 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |use testing
                 |Feature "Matches function" {
                 |    Scenario "Compare Array contents: Equal" {
-                |        assert(matches(
-                |            [ 1 "a" "b" "c" ],
-                |            [ 1 "a" "b" "c" ]
-                |        ))
+                |        assert(
+                |            [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+                |        )
                 |    }
                 |    Scenario "Compare Array contents: Not Equal" {
-                |        assert(!matches(
-                |            [ 1 "a" "b" "c" ],
-                |            [ 0 "x" "y" "z" ]
+                |        assert(!(
+                |            [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
                 |        ))
                 |    }
                 |    Scenario "Compare JSON contents (in sequence)" {
-                |        assert(matches(
-                |                { first: "Tom" last: "Lane" },
-                |                { first: "Tom" last: "Lane" }))
+                |        assert(
+                |           { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+                |        )
                 |    }
                 |    Scenario "Compare JSON contents (out of sequence)" {
-                |        assert(matches(
-                |                { scores: [82 78 99], id: "A1537" },
-                |                { id: "A1537", scores: [82 78 99] }))
+                |        assert(
+                |           { scores: [82 78 99], id: "A1537" } 
+                |                       matches 
+                |           { id: "A1537", scores: [82 78 99] }
+                |        )
                 |    }
                 |}"#, '|')],
         Expression::FnExpression { .. } => vec![
