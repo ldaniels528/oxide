@@ -9,8 +9,9 @@ use crate::dataframe::Dataframe;
 use crate::errors::Errors::{Exact, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, SyntaxErrors};
-use crate::expression::Expression;
-use crate::expression::Expression::{Literal, Variable};
+use crate::expression::Conditions::{AssumedBoolean, False, True};
+use crate::expression::Expression::{Condition, Literal, Variable};
+use crate::expression::{Conditions, Expression};
 use crate::machine::Machine;
 use crate::number_kind::NumberKind::F64Kind;
 use crate::numbers::Numbers;
@@ -137,6 +138,14 @@ where
         let n = pull_number(value0)?;
         let m = pull_number(value1)?;
         Ok((ms, Number(f(&n, &m))))
+    })
+}
+
+pub fn lift_condition(condition_expr: &Expression) -> std::io::Result<Conditions> {
+    Ok(match condition_expr {
+        Condition(condition) => condition.clone(),
+        Literal(Boolean(yes)) => if *yes { True } else { False },
+        expr => AssumedBoolean(expr.clone().into())
     })
 }
 

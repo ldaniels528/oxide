@@ -101,7 +101,7 @@ numbers:::reduce(0, (a, b) -> a + b)</pre>
 now():::day_of()</pre>
 <h5>results</h5>
 <pre>
-26
+27
 </pre>
 <hr>
 <h4>📦 cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -110,7 +110,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-10
+1
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -119,7 +119,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-22
+13
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -128,7 +128,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-17
+41
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -146,7 +146,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-28
+10
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -172,7 +172,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-27T05:17:28.993Z
+2025-05-27T20:41:10.889Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -565,13 +565,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|---------------------------------------------------------------------------------------------------|
-| id | name    | module | signature        | description                                  | returns |
-|---------------------------------------------------------------------------------------------------|
-| 0  | version | oxide  | oxide::version() | Returns the Oxide version                    | f64     |
-| 1  | uuid    | oxide  | oxide::uuid()    | Returns a random 128-bit UUID                | u128    |
-| 2  | reset   | oxide  | oxide::reset()   | Clears the scope of all user-defined objects | Boolean |
-|---------------------------------------------------------------------------------------------------|
+|-------------------------------------------------------------------------------|
+| id | name    | module | signature        | description              | returns |
+|-------------------------------------------------------------------------------|
+| 0  | to_u128 | util   | util::to_u128(a) | Converts a value to u128 | u128    |
+| 1  | to_i64  | util   | util::to_i64(a)  | Converts a value to i64  | i64     |
+| 2  | to_i128 | util   | util::to_i128(a) | Converts a value to i128 | i128    |
+|-------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::home &#8212; Returns the Oxide home directory path</h4>
@@ -603,7 +603,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-70d76c34-f253-4109-b3a1-ee07efabc901
+3330963f-e817-4c21-8aa9-eb719c4d051f
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -917,9 +917,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-27T05:17:29.357Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-27T05:17:29.358Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-27T05:17:29.359Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-27T20:41:11.265Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-27T20:41:11.266Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-27T20:41:11.266Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

@@ -39,6 +39,7 @@ pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Conditions {
     And(Box<Expression>, Box<Expression>),
+    AssumedBoolean(Box<Expression>),
     Contains(Box<Expression>, Box<Expression>),
     Equal(Box<Expression>, Box<Expression>),
     False,
@@ -322,6 +323,10 @@ pub enum Expression {
     VerticalBarArrow(Box<Expression>, Box<Expression>),
     VerticalBarDoubleArrow(Box<Expression>, Box<Expression>),
     Via(Box<Expression>),
+    When {
+        condition: Box<Expression>,
+        code: Box<Expression>,
+    },
     While {
         condition: Box<Expression>,
         code: Box<Expression>,
@@ -460,6 +465,8 @@ impl Expression {
             Expression::TypeDef(expr) => format!("typedef({})", expr.to_code()),
             Expression::Variable(name) => name.to_string(),
             Expression::Via(expr) => format!("via {}", Self::decompile(expr)),
+            Expression::When { condition, code } => 
+                format!("when {} {}", Self::decompile(condition), Self::decompile(code)),
             Expression::While { condition, code } =>
                 format!("while {} {}", Self::decompile(condition), Self::decompile(code)),
             Expression::Yield(expr) =>
@@ -477,6 +484,8 @@ impl Expression {
         match cond {
             Conditions::And(a, b) =>
                 format!("{} && {}", Self::decompile(a), Self::decompile(b)),
+            Conditions::AssumedBoolean(a) =>
+                format!("Boolean({})", Self::decompile(a)),
             Conditions::Contains(a, b) =>
                 format!("{} contains {}", Self::decompile(a), Self::decompile(b)),
             Conditions::Equal(a, b) =>
@@ -760,6 +769,7 @@ impl Expression {
             VerticalBarArrow(_, b) => Self::infer_with_hints(b, hints),
             VerticalBarDoubleArrow(_, b) => Self::infer_with_hints(b, hints),
             Via(..) => TableType(vec![]),
+            When { code, .. } => Self::infer_with_hints(code, hints),
             While { code, .. } => Self::infer_with_hints(code, hints),
             Yield(..) => ArrayType,
         }

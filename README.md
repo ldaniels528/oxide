@@ -348,7 +348,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-4
+8
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -360,7 +360,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 05:17:29 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 20:41:11 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -734,6 +734,46 @@ from stocks</pre>
 |------------------------------------|
 </pre>
 <hr>
+<h4>▶️ When statement</h4>
+<h5>example¹</h5>
+<pre>// Executes the block at the moment the condition becomes true.
+let (x, y) = (1, 0)
+when x == 0 {
+    x = x + 1
+    y = y + 1
+}
+x = x - 1
+x + y</pre>
+<h5>results</h5>
+<pre>
+2
+</pre>
+<h5>example²</h5>
+<pre>// The block will not be executed if the condition is already true.
+let (x, y) = (1, 0)
+when x == 0 || y == 0 {
+    x = x + 1
+    y = y + 1
+}
+x + y</pre>
+<h5>results</h5>
+<pre>
+1
+</pre>
+<h5>example³</h5>
+<pre>// The block will be executed after the second assignment.
+let (x, y) = (1, 0)
+when x == 0 || y == 0 {
+    x = x + 1
+    y = y + 1
+}
+let (x, y) = (2, 3)
+x + y</pre>
+<h5>results</h5>
+<pre>
+5
+</pre>
+<hr>
 <h4>▶️ While expression</h4>
 <h5>example¹</h5>
 <pre>let x = 0
@@ -858,7 +898,7 @@ numbers:::reduce(0, (a, b) -> a + b)</pre>
 now():::day_of()</pre>
 <h5>results</h5>
 <pre>
-26
+27
 </pre>
 <hr>
 <h4>📦 cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -867,7 +907,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-10
+1
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -876,7 +916,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-22
+13
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -885,7 +925,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-17
+41
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -903,7 +943,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-30
+12
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -929,7 +969,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-27T05:17:30.179Z
+2025-05-27T20:41:12.163Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -1322,13 +1362,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|---------------------------------------------------------------------------------------------------------------------------|
-| id | name    | module    | signature                  | description                                             | returns |
-|---------------------------------------------------------------------------------------------------------------------------|
-| 0  | seconds | durations | durations::seconds(n: i64) | Converts a number into the equivalent number of seconds | i64     |
-| 1  | minutes | durations | durations::minutes(n: i64) | Converts a number into the equivalent number of minutes | i64     |
-| 2  | millis  | durations | durations::millis(n: i64)  | Converts a number into the equivalent number of millis  | i64     |
-|---------------------------------------------------------------------------------------------------------------------------|
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name    | module  | signature                              | description                                       | returns                                                                    |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | type_of | testing | testing::type_of(a)                    | Returns the type of a value                       | String                                                                     |
+| 1  | feature | testing | testing::feature(a: String, b: Struct) | Creates a new test feature                        | Table(level: i64, item: String(256), passed: Boolean, result: String(256)) |
+| 2  | assert  | testing | testing::assert(b: Boolean)            | Evaluates an assertion returning true or an error | Boolean                                                                    |
+|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::home &#8212; Returns the Oxide home directory path</h4>
@@ -1360,7 +1400,7 @@ true
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-a33a2436-e6a6-48dc-b411-cb4b3f6b017a
+181d17c9-138a-4819-90e7-452944f99463
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -1674,9 +1714,9 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-27T05:17:30.541Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-27T05:17:30.542Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-27T05:17:30.542Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-05-27T20:41:12.547Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-05-27T20:41:12.548Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-05-27T20:41:12.549Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>

@@ -271,7 +271,7 @@ fn generate_run_tests(mut file: File) -> std::io::Result<File> {
     file.write(r#"
 #### Run the tests
 
-To run the tests (~ 820 tests at the time of writing):
+To run the tests (~ 840 tests at the time of writing):
 
 ```bash
 cargo test
@@ -699,7 +699,39 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |where symbol is "ABCQ"
                 |
                 |from stocks
-            "#, '|')],
+            "#, '|')
+        ],
+        Expression::When { .. } => vec![
+            strip_margin(r#"
+                |// Executes the block at the moment the condition becomes true.
+                |let (x, y) = (1, 0)
+                |when x == 0 {
+                |    x = x + 1
+                |    y = y + 1
+                |}
+                |x = x - 1
+                |x + y
+            "#, '|'),
+                        strip_margin(r#"
+                |// The block will not be executed if the condition is already true.
+                |let (x, y) = (1, 0)
+                |when x == 0 || y == 0 {
+                |    x = x + 1
+                |    y = y + 1
+                |}
+                |x + y
+            "#, '|'),
+            strip_margin(r#"
+                |// The block will be executed after the second assignment.
+                |let (x, y) = (1, 0)
+                |when x == 0 || y == 0 {
+                |    x = x + 1
+                |    y = y + 1
+                |}
+                |let (x, y) = (2, 3)
+                |x + y
+            "#, '|'),
+        ],
         Expression::While { .. } => vec![
             strip_margin(r#"
                 |let x = 0
@@ -762,6 +794,7 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Function Pipelines (destructuring)", VerticalBarDoubleArrow(null.clone(), null.clone())),
         ("Import/Use", Use(vec![])),
         ("Via Clause", Via(null.clone())),
+        ("When statement", When { condition: null.clone(), code: null.clone() }),
         ("While expression", While { condition: null.clone(), code: null.clone() }),
         ("Yield", Yield(null.clone())),
     ];

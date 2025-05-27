@@ -39,7 +39,7 @@ use crate::dataframe::Dataframe::{Disk, Model};
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, Errors, SyntaxErrors, TypeMismatchErrors};
-use crate::expression::Conditions::{False, In, True};
+use crate::expression::Conditions::{AssumedBoolean, False, In, True};
 use crate::expression::CreationEntity::{IndexEntity, TableEntity};
 use crate::expression::Expression::*;
 use crate::expression::MutateTarget::{IndexTarget, TableTarget};
@@ -64,8 +64,9 @@ use crate::table_renderer::TableRenderer;
 use crate::testdata::verify_exact_table_with;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use crate::utils::{pull_array, pull_bool, pull_name, pull_number, pull_variable, pull_vec};
+use crate::utils::{lift_condition, pull_array, pull_bool, pull_name, pull_number, pull_variable, pull_vec};
 use shared_lib::cnv_error;
+use crate::machine::Observations::VariableObservation;
 
 pub const ROW_ID: &str = "__row_id__";
 pub const FX_SELF: &str = "__self__";
@@ -73,19 +74,24 @@ pub const FX_SELF: &str = "__self__";
 /// Represents the state of the machine.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Machine {
-    stack: Vec<TypedValue>,
+    observations: Vec<Observations>,
     variables: HashMap<String, TypedValue>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum Observations {
+    VariableObservation { condition: Conditions, code: Expression },
 }
 
 impl Ord for Machine {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.stack.cmp(&other.stack)
+        self.observations.cmp(&other.observations)
     }
 }
 
 impl PartialOrd for Machine {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.stack.partial_cmp(&other.stack)
+        self.observations.partial_cmp(&other.observations)
     }
 }
 
@@ -97,10 +103,10 @@ impl Machine {
 
     /// (lowest-level constructor) creates a new state machine
     fn build(
-        stack: Vec<TypedValue>,
+        observations: Vec<Observations>,
         variables: HashMap<String, TypedValue>,
     ) -> Self {
-        Self { stack, variables }
+        Self { observations, variables }
     }
 
     /// creates a new completely empty state machine
@@ -120,7 +126,7 @@ impl Machine {
     /// and default imports and/or constants
     pub fn new_platform() -> Self {
         Self::new()
-            .with_variable("e", Number(F64Value(std::f64::consts::E)))
+            .with_variable("𝑒", Number(F64Value(std::f64::consts::E)))
             .with_variable("π", Number(F64Value(std::f64::consts::PI)))
             .with_variable("γ", Number(F64Value(0.577215664901532860606512090082402431_f64)))
             .with_variable("φ", Number(F64Value((1f64 + 5.0f64.sqrt()) / 2f64)))
@@ -216,6 +222,7 @@ impl Machine {
             VerticalBarArrow(a, b) => self.do_function_pipeline(a, b, false),
             VerticalBarDoubleArrow(a, b) => self.do_function_pipeline(a, b, true),
             Via(src) => query_engine::eval_table_or_view_query(self, src, &True, &Undefined),
+            When { condition, code } => self.eval_when_statement(condition, code),
             While { condition, code } => self.eval_while(condition, code),
             Yield(a) => self.do_yield(a),
         }
@@ -333,6 +340,7 @@ impl Machine {
         use crate::expression::Conditions::*;
         match condition {
             And(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
+            AssumedBoolean(a) => self.do_assume_boolean(a),
             Contains(a, b) => self.do_contains(a, b),
             Equal(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa == bb)),
             False => Ok((self.to_owned(), Boolean(false))),
@@ -347,6 +355,17 @@ impl Machine {
             NotEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa != bb)),
             Or(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
             True => Ok((self.to_owned(), Boolean(true))),
+        }
+    }
+
+    /// Requires the result to be [Boolean]
+    fn do_assume_boolean(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match self.evaluate(expr)? {
+            (machine, Boolean(b)) => Ok((machine, Boolean(b))),
+            _ => throw(Exact(format!("Expression must be a boolean: {}", expr.to_code())))
         }
     }
 
@@ -1222,27 +1241,37 @@ impl Machine {
             // [a, b, c, d] := [1, 2, 3, 4]
             ArrayExpression(variables) =>
                 match result {
-                    ArrayValue(array) =>
-                        ms.set_variables(
+                    ArrayValue(array) => {
+                        let (ms1, result1) = ms.set_variables(
                             Self::get_variables_names(&variables)?,
                             array.get_values(),
                             |v| ArrayValue(Array::from(v))
-                        ),
+                        )?;
+                        let (ms2, _) = ms1.eval_when_observations()?;
+                        Ok((ms2, result1))
+                    }
                     z => throw(Exact(format!("Expected an Array near {}", z.to_code())))
                 }
             // (a, b, c) := (3, 6, 9)
             TupleExpression(variables) =>
                 match result {
-                    TupleValue(values) =>
-                        ms.set_variables(
+                    TupleValue(values) => {
+                        let (ms1, result1) = ms.set_variables(
                             Self::get_variables_names(&variables)?,
-                            values, 
+                            values,
                             TupleValue
-                        ),
+                        )?;
+                        let (ms2, _) = ms1.eval_when_observations()?;
+                        Ok((ms2, result1))
+                    }
                     z => throw(Exact(format!("Expected a Tuple near {}", z.to_code())))
                 }
             // a := 7
-            Variable(name) => Ok((ms.set(name.as_str(), result.clone()), result)),
+            Variable(name) => {
+                let ms1 = ms.set(name.as_str(), result.clone());
+                let (ms2, _) = ms1.eval_when_observations()?;
+                Ok((ms2, result))
+            },
             z => throw(Exact(format!("Expected an Array, Tuple or variable near {}", z.to_code())))
         }
     }
@@ -1341,6 +1370,7 @@ impl Machine {
         Ok((self.clone(), Kind(DataType::decipher_type(expr)?)))
     }
 
+    /// Evaluates the `do..while` declaration
     fn eval_do_while(
         &self,
         condition: &Expression,
@@ -1362,7 +1392,44 @@ impl Machine {
         }
         Ok((ms, result))
     }
+    
+    /// Evaluates the `when` declaration
+    fn eval_when_statement(
+        &self,
+        condition: &Expression,
+        code: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let cond = lift_condition(condition)?;
+        let ms = self.with_observer_variable(cond, code.clone());
+        Ok((ms, Boolean(true)))
+    }
 
+    /// Evaluates the `when` observations (triggers) 
+    fn eval_when_observations(&self) -> std::io::Result<(Self, TypedValue)> {
+        let mut ms = self.clone(); 
+        for observation in &self.observations {
+            match observation {
+                VariableObservation { condition, code } => {
+                    match ms.is_true(condition).map(|(_, yes)| yes) {
+                        Ok(true) => {
+                            match ms.evaluate(code) {
+                                Ok((ms1, result)) => {
+                                    println!("Observation: {} -> {}", code, result);
+                                    ms = ms1;
+                                }
+                                Err(_) => {}
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(_) => {}
+                    }
+                }
+            }
+        }
+        Ok((ms, Undefined))       
+    }
+
+    /// Evaluates the `while` declaration
     fn eval_while(
         &self,
         condition: &Expression,
@@ -1383,7 +1450,8 @@ impl Machine {
         }
         Ok((machine, outcome))
     }
-    
+
+    /// Evaluates the `yield` declaration
     fn do_yield(
         &self,
         expr: &Expression,
@@ -1526,7 +1594,7 @@ impl Machine {
     pub fn set(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.to_owned();
         variables.insert(name.to_string(), value);
-        Self::build(self.stack.to_owned(), variables)
+        Self::build(self.observations.to_owned(), variables)
     }
 
     pub fn show(columns: &Vec<Column>, rows: &Vec<Row>) {
@@ -1551,6 +1619,16 @@ impl Machine {
         self.with_variable(name, Structured(Hard(structure)))
     }
 
+    pub fn with_observer_variable(
+        &self, 
+        condition: Conditions, 
+        code: Expression
+    ) -> Self {
+        let mut observations = self.observations.clone();
+        observations.push(VariableObservation { condition, code });
+        Self::build(observations, self.variables.clone())
+    }
+
     pub fn with_row(&self, columns: &Vec<Column>, row: &Row) -> Self {
         row.get_values().iter().zip(columns.iter())
             .fold(self.clone(), |ms, (v, c)| ms.with_variable(c.get_name(), v.to_owned()))
@@ -1566,7 +1644,7 @@ impl Machine {
     pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.to_owned();
         variables.insert(name.to_string(), value);
-        Self::build(self.stack.to_owned(), variables)
+        Self::build(self.observations.to_owned(), variables)
     }
 }
 

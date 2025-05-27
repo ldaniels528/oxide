@@ -253,7 +253,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-3
+7
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8833/platform/www/stocks/0</pre>
@@ -265,7 +265,7 @@ true
 <pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 05:17:28 GMT"}
+{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 20:41:10 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -637,6 +637,46 @@ from stocks</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+</pre>
+<hr>
+<h4>▶️ When statement</h4>
+<h5>example¹</h5>
+<pre>// Executes the block at the moment the condition becomes true.
+let (x, y) = (1, 0)
+when x == 0 {
+    x = x + 1
+    y = y + 1
+}
+x = x - 1
+x + y</pre>
+<h5>results</h5>
+<pre>
+2
+</pre>
+<h5>example²</h5>
+<pre>// The block will not be executed if the condition is already true.
+let (x, y) = (1, 0)
+when x == 0 || y == 0 {
+    x = x + 1
+    y = y + 1
+}
+x + y</pre>
+<h5>results</h5>
+<pre>
+1
+</pre>
+<h5>example³</h5>
+<pre>// The block will be executed after the second assignment.
+let (x, y) = (1, 0)
+when x == 0 || y == 0 {
+    x = x + 1
+    y = y + 1
+}
+let (x, y) = (2, 3)
+x + y</pre>
+<h5>results</h5>
+<pre>
+5
 </pre>
 <hr>
 <h4>▶️ While expression</h4>

@@ -312,7 +312,7 @@ impl Compiler {
         //println!("next_expression_prefix: ts {:?}", &ts);
         match ts.next() {
             // keyword or variable
-            (Some(Atom { .. }), _) => self.parse_keyword(ts.clone()),
+            (Some(Atom { .. }), _) => self.next_keyword(ts.clone()),
             // variables
             (Some(Backticks { text, .. }), ts) => Ok((Some(Variable(text)), ts)),
             // double- or single-quoted or URL strings
@@ -339,7 +339,7 @@ impl Compiler {
         //println!("next_expression_atom: ts {:?}", &ts);
         match ts.next() {
             // keyword or variable
-            (Some(Atom { .. }), _) => self.parse_keyword(ts.clone()),
+            (Some(Atom { .. }), _) => self.next_keyword(ts.clone()),
             // variables
             (Some(Backticks { text, .. }), ts) => Ok((Some(Variable(text)), ts)),
             // double- or single-quoted or URL strings
@@ -459,8 +459,8 @@ impl Compiler {
                 "append" => self.parse_keyword_append(nts),
                 "create" => self.parse_keyword_create(nts),
                 "delete" => self.parse_keyword_delete(nts),
-                "do" => self.parse_keyword_do_while(nts),
                 "DELETE" => self.parse_keyword_http(ts),
+                "do" => self.parse_keyword_do_while(nts),
                 "drop" => self.parse_mutate_target(nts, |m| DatabaseOp(Mutation(Drop(m)))),
                 "false" => Ok((FALSE, nts)),
                 "Feature" => self.parse_keyword_feature(nts),
@@ -505,6 +505,7 @@ impl Compiler {
                     "`from` is expected before `where`: from stocks where last_sale < 1.0".into(),
                     nts.current(),
                 )),
+                "when" => self.parse_keyword_when(nts),
                 "while" => self.parse_keyword_while(nts),
                 "yield" => self.parse_expression_1a(nts, Yield),
                 name => self.expect_function_call_or_variable(name, nts),
@@ -982,68 +983,6 @@ impl Compiler {
         match ts.next() {
             (Some(Atom { text: name, .. } | Backticks { text: name, .. }), ts) => Ok((f(name), ts)),
             (_, ts) => throw(ExactNear("Invalid identifier".into(), ts.current())),
-        }
-    }
-
-    /// Parses reserved words (i.e. keyword)
-    fn parse_keyword(&self, ts: TokenSlice) -> std::io::Result<(Option<Expression>, TokenSlice)> {
-        if let (Some(Atom { text, .. }), nts) = ts.next() {
-            let (expr, ts) = match text.as_str() {
-                "append" => self.parse_keyword_append(nts),
-                "create" => self.parse_keyword_create(nts),
-                "delete" => self.parse_keyword_delete(nts),
-                "DELETE" => self.parse_keyword_http(ts),
-                "do" => self.parse_keyword_do_while(nts),
-                "drop" => self.parse_mutate_target(nts, |m| DatabaseOp(Mutation(Drop(m)))),
-                "false" => Ok((FALSE, nts)),
-                "Feature" => self.parse_keyword_feature(nts),
-                "fn" => self.parse_keyword_fn(nts),
-                "for" => self.parse_keyword_for(nts),
-                "from" => {
-                    let (from, ts) = self.parse_expression_1a(nts, From)?;
-                    self.parse_queryable(from, ts)
-                }
-                "GET" => self.parse_keyword_http(ts),
-                "HEAD" => self.parse_keyword_http(ts),
-                "HTTP" => self.parse_keyword_http(nts),
-                "if" => self.parse_keyword_if(nts),
-                "include" => self.parse_expression_1a(nts, Include),
-                "let" => self.parse_keyword_let(nts),
-                "limit" => throw(ExactNear(
-                    "`from` is expected before `limit`: from stocks limit 5".into(),
-                    nts.current(),
-                )),
-                "mod" => self.parse_keyword_mod(nts),
-                "NaN" => Ok((Literal(Number(NaNValue)), nts)),
-                "new" => self.parse_expression_1a(nts, New),
-                "ns" => self.parse_expression_1a(nts, Ns),
-                "null" => Ok((NULL, nts)),
-                "overwrite" => self.parse_keyword_overwrite(nts),
-                "PATCH" => self.parse_keyword_http(ts),
-                "POST" => self.parse_keyword_http(ts),
-                "PUT" => self.parse_keyword_http(ts),
-                "Scenario" => return self.parse_keyword_scenario(nts),
-                "select" => self.parse_keyword_select(nts),
-                "Struct" => self.parse_keyword_struct(nts),
-                "table" => self.parse_keyword_table(nts),
-                "true" => Ok((TRUE, nts)),
-                "typedef" => self.parse_keyword_type_decl(nts),
-                "undefined" => Ok((UNDEFINED, nts)),
-                "undelete" => self.parse_keyword_undelete(nts),
-                "update" => self.parse_keyword_update(nts),
-                "use" => self.parse_keyword_use(nts),
-                "via" => self.parse_expression_1a(nts, Via),
-                "where" => throw(ExactNear(
-                    "`from` is expected before `where`: from stocks where last_sale < 1.0".into(),
-                    nts.current(),
-                )),
-                "while" => self.parse_keyword_while(nts),
-                "yield" => self.parse_expression_1a(nts, Yield),
-                name => self.expect_function_call_or_variable(name, nts),
-            }?;
-            Ok((Some(expr), ts))
-        } else {
-            throw(Exact("Unexpected end of input".into()))
         }
     }
 
@@ -1636,12 +1575,29 @@ impl Compiler {
         ))
     }
 
-    /// Builds a language model from a while expression
+    /// Builds a language model for a `when` expression
     /// #### Examples
-    /// x = 0
+    /// ```
+    /// let x = 1
+    /// when x <= 0 {
+    ///     x_boundary_hit()
+    /// }
+    /// x = x - 1
+    /// ```
+    fn parse_keyword_when(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        let (condition, ts) = self.compile_next(&ts)?;
+        let (code, ts) = self.compile_next(&ts)?;
+        Ok((When { condition: condition.into(), code: code.into() }, ts))
+    }
+
+    /// Builds a language model for a `while` expression
+    /// #### Examples
+    /// ```
+    /// let x = 0
     /// while (x < 5) {
     ///     yield x = x + 1
     /// }
+    /// ```
     fn parse_keyword_while(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (condition, ts) = self.compile_next(&ts)?;
         let (code, ts) = self.compile_next(&ts)?;
@@ -3464,6 +3420,24 @@ mod tests {
         }
 
         #[test]
+        fn test_when_statement() {
+            let model = Compiler::build(r#"when x == 0 hit_boundary()"#)
+                .unwrap();
+            assert_eq!(
+                model,
+                When {
+                    condition: Condition(Equal(
+                        Variable("x".into()).into(),
+                        Literal(Number(I64Value(0))).into()
+                    )).into(),
+                    code: FunctionCall {
+                        fx: Variable("hit_boundary".into()).into(),
+                        args: vec![]
+                    }.into(),
+                })
+        }
+
+        #[test]
         fn test_while_loop() {
             let model = Compiler::build(r#"while (x < 5) x = x + 1"#)
                 .unwrap();
@@ -3479,23 +3453,18 @@ mod tests {
                         Plus(
                             Variable("x".into()).into(),
                             Literal(Number(I64Value(1))).into()
-                        )
-                        .into(),
-                    )
-                    .into(),
+                        ).into(),
+                    ).into(),
                 });
         }
 
         #[test]
         fn test_while_loop_fix() {
-            let model = Compiler::build(
-                r#"
+            let model = Compiler::build(r#"
                 x = 0
                 while x < 7 x = x + 1
                 x
-            "#,
-            )
-            .unwrap();
+            "#).unwrap();
             assert_eq!(
                 model,
                 CodeBlock(vec![
@@ -3528,12 +3497,12 @@ mod tests {
     #[cfg(test)]
     mod precedence_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Expression::{Divide, Literal, Minus, Multiply, Plus};
+        use crate::expression::Expression::{ColonColon, Divide, Literal, Minus, Multiply, Plus, Variable, VerticalBarArrow};
         use crate::machine::Machine;
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::token_slice::TokenSlice;
         use crate::tokenizer;
-        use crate::typed_values::TypedValue::Number;
+        use crate::typed_values::TypedValue::{Number, StringValue};
 
         #[test]
         fn test_order_of_operations_1() {
@@ -3585,12 +3554,19 @@ mod tests {
 
         #[test]
         fn test_function_pipelining() {
-            let ts = TokenSlice::from_string("'Hello' |> str::reverse() |> util::md5");
+            let ts = TokenSlice::from_string("'Hello' |> str::reverse |> util::md5");
             let compiler = Compiler::new();
-
             let (model, _) = compiler.compile_with_precedence(ts).unwrap();
-            println!("code: {}", model.to_code());
-            println!("model: {:?}", model);
+            assert_eq!(
+                model,
+                VerticalBarArrow(
+                    VerticalBarArrow(
+                        Literal(StringValue("Hello".into())).into(), 
+                        ColonColon(Variable("str".into()).into(), Variable("reverse".into()).into()).into()
+                    ).into(), 
+                    ColonColon(Variable("util".into()).into(), Variable("md5".into()).into()).into()
+                )
+            )
         }
 
         #[test]
