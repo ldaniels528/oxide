@@ -1132,6 +1132,7 @@ pub enum OxidePkg {
     Help,
     History,
     Home,
+    Inspect,
     Println,
     Reset,
     UUID,
@@ -1246,6 +1247,28 @@ impl OxidePkg {
         }
     }
 
+    fn do_oxide_inspect(
+        ms: Machine,
+        source_code: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let code = Compiler::build(pull_string(source_code)?.as_str())?;
+        let ops = match code { 
+            CodeBlock(ops) => ops,
+            op => vec![op]
+        };
+        let mut mrc = ModelRowCollection::from_parameters(&OxidePkg::get_oxide_inspect_parameters());
+        for (row_id, expr) in ops.iter().enumerate() {
+            mrc.overwrite_row(row_id, Row::new(
+                row_id,
+                vec![
+                    StringValue(expr.to_code()),
+                    StringValue(format!("{:?}", expr)),
+                ],
+            ))?;
+        }
+        Ok((ms, TableValue(Model(mrc))))
+    }
+    
     fn do_oxide_version(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         Ok((ms, StringValue(VERSION.into())))
     }
@@ -1258,6 +1281,7 @@ impl OxidePkg {
             PackageOps::Oxide(OxidePkg::Help),
             PackageOps::Oxide(OxidePkg::History),
             PackageOps::Oxide(OxidePkg::Home),
+            PackageOps::Oxide(OxidePkg::Inspect),
             PackageOps::Oxide(OxidePkg::Println),
             PackageOps::Oxide(OxidePkg::Reset),
             PackageOps::Oxide(OxidePkg::UUID),
@@ -1287,6 +1311,13 @@ impl OxidePkg {
             Parameter::new("input", FixedSizeType(StringType.into(), 65536)),
         ]
     }
+    
+    pub fn get_oxide_inspect_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("code", FixedSizeType(StringType.into(), 8192)),
+            Parameter::new("model", FixedSizeType(StringType.into(), 8192)),
+        ]
+    }
 }
 
 impl Package for OxidePkg {
@@ -1298,6 +1329,7 @@ impl Package for OxidePkg {
             OxidePkg::Help => "help".into(),
             OxidePkg::History => "history".into(),
             OxidePkg::Home => "home".into(),
+            OxidePkg::Inspect => "inspect".into(),
             OxidePkg::Println => "println".into(),
             OxidePkg::Reset => "reset".into(),
             OxidePkg::UUID => "uuid".into(),
@@ -1322,6 +1354,7 @@ impl Package for OxidePkg {
                 "Returns all commands successfully executed during the session".into()
             }
             OxidePkg::Home => "Returns the Oxide home directory path".into(),
+            OxidePkg::Inspect => "Returns a table describing the structure of a model".into(),
             OxidePkg::Reset => "Clears the scope of all user-defined objects".into(),
             OxidePkg::UUID => "Returns a random 128-bit UUID".into(),
             OxidePkg::Version => "Returns the Oxide version".into(),
@@ -1338,7 +1371,6 @@ impl Package for OxidePkg {
                 '|',
             )],
             OxidePkg::Debug => vec![r#"oxide::debug("2 ** 4")"#.into()],
-            OxidePkg::Println => vec![r#"oxide::println("Hello World")"#.into()],
             OxidePkg::Eval => vec![strip_margin(
                 r#"
                     |a = 'Hello '
@@ -1350,6 +1382,15 @@ impl Package for OxidePkg {
             OxidePkg::Help => vec![r#"from oxide::help() limit 3"#.into()],
             OxidePkg::History => vec![],
             OxidePkg::Home => vec!["oxide::home()".into()],
+            OxidePkg::Inspect => vec![
+                strip_margin(r#"
+                    |oxide::inspect("{ x = 1 x = x + 1 }")
+                "#, '|'),
+                strip_margin(r#"
+                    |oxide::inspect("stock::is_this_you('ABC')")
+                "#, '|')
+            ],
+            OxidePkg::Println => vec![r#"oxide::println("Hello World")"#.into()],
             OxidePkg::Reset => vec!["oxide::reset()".into()],
             OxidePkg::UUID => vec!["oxide::uuid()".into()],
             OxidePkg::Version => vec!["oxide::version()".into()],
@@ -1358,16 +1399,17 @@ impl Package for OxidePkg {
 
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
+            OxidePkg::Compile
+            | OxidePkg::Debug
+            | OxidePkg::Eval
+            | OxidePkg::Inspect
+            | OxidePkg::Println => vec![StringType],
             OxidePkg::Home
             | OxidePkg::Reset
             | OxidePkg::Help
             | OxidePkg::History
             | OxidePkg::Version
             | OxidePkg::UUID => vec![],
-            // single-parameter (string)
-            OxidePkg::Println | OxidePkg::Compile | OxidePkg::Debug | OxidePkg::Eval => {
-                vec![StringType]
-            }
         }
     }
 
@@ -1378,6 +1420,7 @@ impl Package for OxidePkg {
             OxidePkg::Eval | OxidePkg::Home => StringType,
             OxidePkg::Help => TableType(OxidePkg::get_oxide_help_parameters()),
             OxidePkg::History => TableType(OxidePkg::get_oxide_history_parameters()),
+            OxidePkg::Inspect => TableType(OxidePkg::get_oxide_inspect_parameters()),
             OxidePkg::Println | OxidePkg::Reset => BooleanType,
             // f64
             OxidePkg::Version => NumberType(F64Kind),
@@ -1396,9 +1439,8 @@ impl Package for OxidePkg {
             OxidePkg::Eval => extract_value_fn1(ms, args, Self::do_oxide_eval),
             OxidePkg::Help => extract_value_fn0(ms, args, Self::do_oxide_help),
             OxidePkg::History => Self::do_oxide_history(ms, args),
-            OxidePkg::Home => {
-                extract_value_fn0(ms, args, |ms| Ok((ms, StringValue(Machine::oxide_home()))))
-            }
+            OxidePkg::Home => extract_value_fn0(ms, args, |ms| Ok((ms, StringValue(Machine::oxide_home())))),
+            OxidePkg::Inspect => extract_value_fn1(ms, args, Self::do_oxide_inspect),
             OxidePkg::Println => extract_value_fn1(ms, args, IoPkg::do_io_stdout),
             OxidePkg::Reset => {
                 extract_value_fn0(ms, args, |ms| Ok((Machine::new_platform(), Boolean(true))))
@@ -3699,9 +3741,7 @@ mod tests {
         use crate::errors::Errors::Exact;
         use crate::interpreter::Interpreter;
         use crate::platform::PackageOps;
-        use crate::testdata::{
-            verify_exact_value, verify_exact_value_where, verify_exact_value_with,
-        };
+        use crate::testdata::{verify_exact_table, verify_exact_value, verify_exact_value_where, verify_exact_value_with};
         use crate::typed_values::TypedValue::*;
         use PackageOps::*;
 
@@ -3787,6 +3827,20 @@ mod tests {
         #[test]
         fn test_oxide_home() {
             verify_exact_value("oxide::home()", StringValue(Machine::oxide_home()));
+        }
+
+        #[test]
+        fn test_oxide_inspect() {
+            verify_exact_table(r#"
+                oxide::inspect("{ x = 1 x = x + 1 }")
+            "#, vec![
+                  "|-------------------------------------------------------------------------------------------------|", 
+                  "| id | code      | model                                                                          |", 
+                  "|-------------------------------------------------------------------------------------------------|", 
+                r#"| 0  | x = 1     | SetVariables(Variable("x"), Literal(Number(I64Value(1))))                      |"#, 
+                r#"| 1  | x = x + 1 | SetVariables(Variable("x"), Plus(Variable("x"), Literal(Number(I64Value(1))))) |"#, 
+                  "|-------------------------------------------------------------------------------------------------|"
+            ])
         }
 
         #[test]
