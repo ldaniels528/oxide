@@ -17,6 +17,7 @@ pub enum CompileErrors {
     UnexpectedEOF,
     ExpectedHttpMethod,
     IllegalHttpMethod(String),
+    IllegalOperator(String),
 }
 
 impl Display for CompileErrors {
@@ -28,6 +29,8 @@ impl Display for CompileErrors {
                 "HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT".into(),
             CompileErrors::IllegalHttpMethod(method) =>
                 format!("Illegal HTTP method '{method}'"),
+            CompileErrors::IllegalOperator(symbol) =>
+                format!("Illegal operator '{symbol}'"),
         };
         write!(f, "Syntax error: {text}")
     }
@@ -192,7 +195,7 @@ impl Display for Errors {
                 format!("Cannot subtract {b} from {a}"),
             Errors::CompilerError(e, t) =>
                 format!("Compiler error: {e} near {} on line {} column {}",
-                        t.get_raw_value(), t.get_line_number(), t.get_column_number()),
+                        t.get(), t.get_line_number(), t.get_column_number()),
             Errors::Empty => String::from("General fault occurred"),
             Errors::Exact(message) => format!("{message}"),
             Errors::ExactNear(message, token) =>

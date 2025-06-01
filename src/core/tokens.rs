@@ -15,7 +15,7 @@ pub enum Token {
     Backticks { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     DoubleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
-    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize, precedence: usize, is_postfix: bool },
+    Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     SingleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     URL { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
 }
@@ -47,9 +47,7 @@ impl Token {
 
     /// creates a new operator token
     pub fn operator(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
-        let precedence = Self::determine_precedence(text.as_str());
-        let is_postfix = text == "¡" || text == "²" || text == "³";
-        Operator { text, start, end, line_number, column_number, precedence, is_postfix }
+        Operator { text, start, end, line_number, column_number }
     }
 
     /// creates a new single-quoted token
@@ -62,22 +60,12 @@ impl Token {
         URL { text, start, end, line_number, column_number }
     }
 
-    pub fn determine_precedence(symbol: impl Into<String>) -> usize {
-        match symbol.into().as_str() {
-            "¡" | "**" | "²" | "³" => 3,
-            "×" | "*" | "÷" | "/" | "%" | ">>" | "<<" => 2,
-            "+" | "-" | "|" | "&" | "^" => 1,
-            _ => 0,
-        }
-    }
-
     ////////////////////////////////////////////////////////////////
     // instance methods
     ////////////////////////////////////////////////////////////////
 
     pub fn contains(&self, text: &str) -> bool {
-        let contents = self.get_raw_value();
-        text == contents.as_str() || contents.contains(text)
+        text == self.get().as_str()
     }
 
     /// Returns the column number of the [Token]
@@ -107,7 +95,7 @@ impl Token {
     }
 
     /// Returns the "raw" value of the [Token]
-    pub fn get_raw_value(&self) -> String {
+    pub fn get(&self) -> String {
         (match self {
             Atom { text, .. }
             | Backticks { text, .. }
@@ -170,14 +158,6 @@ impl Token {
         }
     }
 
-    /// Indicates whether the token is an operator.
-    pub fn is_operator(&self) -> bool {
-        match self {
-            Operator { .. } => true,
-            _ => false
-        }
-    }
-
     pub fn is_type(&self, variant: &str) -> bool {
         match (self, variant) {
             (Atom { .. }, "Atom")
@@ -194,7 +174,7 @@ impl Token {
 
 impl Display for Token {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.get_raw_value())
+        write!(f, "{}", self.get())
     }
 }
 
@@ -223,11 +203,6 @@ mod tests {
     #[test]
     fn test_is_numeric() {
         assert!(Token::numeric("123".into(), 0, 3, 1, 2).is_numeric());
-    }
-
-    #[test]
-    fn test_is_operator() {
-        assert!(Token::operator(".".into(), 0, 3, 1, 2).is_operator());
     }
 
     #[test]

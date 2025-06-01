@@ -299,7 +299,6 @@ pub enum Expression {
     Modulo(Box<Expression>, Box<Expression>),
     Multiply(Box<Expression>, Box<Expression>),
     NamedValue(String, Box<Expression>),
-    NamedType(String, DataType),
     Neg(Box<Expression>),
     New(Box<Expression>),
     Ns(Box<Expression>),
@@ -416,8 +415,6 @@ impl Expression {
                 format!("{} % {}", Self::decompile(a), Self::decompile(b)),
             Expression::Multiply(a, b) =>
                 format!("{} * {}", Self::decompile(a), Self::decompile(b)),
-            Expression::NamedType(name, data_type) =>
-                format!("{}: {}", name, data_type.to_code()),
             Expression::NamedValue(name, expr) =>
                 format!("{}: {}", name, Self::decompile(expr)),
             Expression::Neg(a) => format!("-({})", Self::decompile(a)),
@@ -725,7 +722,6 @@ impl Expression {
             Module(..) => BooleanType,
             Modulo(a, b) => Self::infer_a_or_b(a, b, hints),
             Multiply(a, b) => Self::infer_a_or_b(a, b, hints),
-            NamedType(_, data_type) => data_type.clone(),
             NamedValue(_, e) => Self::infer_with_hints(e, hints),
             Neg(a) => Self::infer_with_hints(a, hints),
             New(a) => Self::infer_with_hints(a, hints),

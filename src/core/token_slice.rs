@@ -43,13 +43,13 @@ impl TokenSlice {
         let inputs = &self.tokens;
         let mut pos = self.pos;
         let mut tokens = Vec::new();
-        if inputs[pos as usize].get_raw_value() == start {
+        if inputs[pos as usize].get() == start {
             pos += 1;
-            while (pos < inputs.len() as isize) && inputs[pos as usize].get_raw_value() != end {
+            while (pos < inputs.len() as isize) && inputs[pos as usize].get() != end {
                 tokens.push(inputs[pos as usize].to_owned());
                 pos += 1;
                 match delim {
-                    Some(_delim) if pos < inputs.len() as isize && inputs[pos as usize].get_raw_value() == _delim => pos += 1,
+                    Some(_delim) if pos < inputs.len() as isize && inputs[pos as usize].get() == _delim => pos += 1,
                     _ => {}
                 }
             }
@@ -85,7 +85,7 @@ impl TokenSlice {
     pub fn expect(&self, term: &str) -> std::io::Result<Self> {
         if let (Some(tok), ts) = self.next() {
             if tok.contains(term) { Ok(ts) } else {
-                throw(ExactNear(format!("Expected '{}' but found '{}'", term, tok.get_raw_value()), tok))
+                throw(ExactNear(format!("Expected '{}' but found '{}'", term, tok.get()), tok))
             }
         } else {
             throw(Exact(format!("Expected '{}'", term)))
@@ -133,7 +133,7 @@ impl TokenSlice {
 
     pub fn is(&self, text: &str) -> bool {
         match self.get() {
-            Some(tok) => tok.get_raw_value() == text,
+            Some(tok) => tok.get() == text,
             None => false
         }
     }
@@ -158,7 +158,7 @@ impl TokenSlice {
             let p1 = self.pos as usize;
             let (t0, t1) = (tokens[p1 - 1].to_owned(), tokens[p1].to_owned());
             t0.get_line_number() == t1.get_line_number() &&
-                t0.get_column_number() + t0.get_raw_value().len() == t1.get_column_number()
+                t0.get_column_number() + t0.get().len() == t1.get_column_number()
         } else { false }
     }
 
@@ -227,7 +227,7 @@ impl TokenSlice {
 
 impl Display for TokenSlice {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.get().map(|t| t.get_raw_value()).unwrap_or("".into()))
+        write!(f, "{}", self.get().map(|t| t.get()).unwrap_or("".into()))
     }
 }
 
@@ -327,7 +327,7 @@ mod tests {
     fn test_is_previous_adjacent() {
         let ts = TokenSlice::from_string("students[3]");
         let (tok0, ts) = ts.next();
-        assert_eq!(tok0.map(|t| t.get_raw_value()), Some("students".to_string()));
+        assert_eq!(tok0.map(|t| t.get()), Some("students".to_string()));
         assert!(ts.is_previous_adjacent());
     }
 
@@ -335,7 +335,7 @@ mod tests {
     fn test_is_not_previous_adjacent() {
         let ts = TokenSlice::from_string("students [3]");
         let (tok0, ts) = ts.next();
-        assert_eq!(tok0.map(|t| t.get_raw_value()), Some("students".to_string()));
+        assert_eq!(tok0.map(|t| t.get()), Some("students".to_string()));
         assert!(!ts.is_previous_adjacent());
     }
 
@@ -343,7 +343,7 @@ mod tests {
     fn test_is_same_line_as_previous() {
         let ts = TokenSlice::from_string("students[3]");
         let (tok0, ts) = ts.next();
-        assert_eq!(tok0.map(|t| t.get_raw_value()), Some("students".to_string()));
+        assert_eq!(tok0.map(|t| t.get()), Some("students".to_string()));
         assert!(ts.is_same_line_as_previous());
     }
 
@@ -354,7 +354,7 @@ mod tests {
         [3]
         "#);
         let (tok0, ts) = ts.next();
-        assert_eq!(tok0.map(|t| t.get_raw_value()), Some("items".to_string()));
+        assert_eq!(tok0.map(|t| t.get()), Some("items".to_string()));
         assert!(!ts.is_same_line_as_previous());
     }
 

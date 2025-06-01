@@ -47,6 +47,7 @@ use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::expression::{Conditions, Expression, HttpMethodCalls, UseOps, UNDEFINED};
 use crate::expression::{DatabaseOps, Mutations, Queryables};
 use crate::file_row_collection::FileRowCollection;
+use crate::machine::Observations::VariableObservation;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
 use crate::numbers::Numbers::*;
@@ -66,7 +67,6 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use crate::utils::{lift_condition, pull_array, pull_bool, pull_name, pull_number, pull_variable, pull_vec};
 use shared_lib::cnv_error;
-use crate::machine::Observations::VariableObservation;
 
 pub const ROW_ID: &str = "__row_id__";
 pub const FX_SELF: &str = "__self__";
@@ -193,10 +193,6 @@ impl Machine {
             Module(name, ops) => self.do_structure_module(name, ops),
             Modulo(a, b) => self.eval_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) => self.eval_inline_2(a, b, |aa, bb| aa * bb),
-            NamedType(name, data_type) => {
-                let kind = Kind(data_type.clone());
-                Ok((self.with_variable(name, kind.clone()), kind))
-            }
             NamedValue(name, expr) => {
                 let (machine, tv) = self.evaluate(expr)?;
                 Ok((machine.with_variable(name, tv.clone()), tv))
@@ -289,19 +285,25 @@ impl Machine {
     }
 
     /// Executes a method call
-    /// e.g. "hello"::left(5)
+    /// #### Examples
+    /// ```
+    /// str::left("hello", 5)
+    /// ```
+    /// ```
+    /// stock::is_this_you('ABC')
+    /// ```
     fn do_colon_colon(
         &self,
-        object: &Expression,
+        container: &Expression,
         field: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         let ms = self.clone();
-        let var_name = pull_variable(object)?;
-        match ms.get(var_name.as_str()) {
-            None => throw(Exact(format!("Variable '{}' was not found", var_name))),
+        let container_name = pull_variable(container)?;
+        match ms.get(container_name.as_str()) {
+            None => throw(Exact(format!("Variable '{}' was not found", container_name))),
             Some(ErrorValue(err)) => Ok((ms, ErrorValue(err))),
             Some(Null) => throw(Exact(format!("Cannot evaluate {}::{}", Null, field.to_code()))),
-            Some(Structured(structure)) => self.do_extraction_structure(var_name.as_str(), Box::from(structure), field),
+            Some(Structured(structure)) => self.do_colon_colon_structure(&container_name, Box::from(structure), field),
             Some(Undefined) => throw(Exact(format!("Cannot evaluate {}::{}", Undefined, field.to_code()))),
             Some(z) => throw(Exact(format!("Illegal structure {}", z.to_code())))
         }
@@ -408,7 +410,7 @@ impl Machine {
         query_engine::eval_into_ns(&self, dest, src)
     }
 
-    /// Performs deconstruction of an [ArrayExpression], [Variable]
+    /// Performs destructure of an [ArrayExpression], [Variable]
     /// or [TupleExpression] for the purpose of variable assignment.
     /// #### Parameters
     /// - item: the variable(s) for which to deconstruct
@@ -425,7 +427,7 @@ impl Machine {
     /// ```
     /// for row in tools::to_table(['apple', 'berry', ...]) ...
     /// ```
-    fn do_deconstruction(
+    fn do_destructure(
         &self,
         item: &Expression,
         value: &TypedValue,
@@ -435,7 +437,7 @@ impl Machine {
                 let mut ms = self.clone();
                 let values = pull_vec(&value)?;
                 for (elem, value) in elems.iter().zip(values.iter()) {
-                    ms = ms.do_deconstruction(elem, value)?;
+                    ms = ms.do_destructure(elem, value)?;
                 }
                 Ok(ms)
             }
@@ -444,12 +446,13 @@ impl Machine {
         }
     }
 
-    fn do_extraction_structure(
+    fn do_colon_colon_structure(
         &self,
-        var_name: &str,
+        container_name: &str,
         structure: Box<dyn Structure>,
         field: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
+        println!("do_colon_colon_structure");
         let ms = self.clone();
         match field {
             // math::compute(5, 8)
@@ -459,16 +462,16 @@ impl Machine {
                 match var_expr.deref() {
                     Variable(name) => {
                         let (ms, value) = ms.evaluate(value_expr)?;
-                        Ok((ms.with_variable(var_name, Structured(structure.update_by_name(name, value))), Boolean(true)))
+                        Ok((ms.with_variable(container_name, Structured(structure.update_by_name(name, value))), Boolean(true)))
                     }
                     z => throw(Exact(format!("Illegal field '{}' for structure {}",
-                                             z.to_code(), var_name)))
+                                             z.to_code(), container_name)))
                 }
             }
             // stock::symbol
             Variable(name) => Ok((ms, structure.get(name))),
             z => throw(Exact(format!("Illegal field '{}' for structure {}",
-                                     z.to_code(), var_name)))
+                                     z.to_code(), container_name)))
         }
     }
 
@@ -625,7 +628,7 @@ impl Machine {
             // get the value at `index`
             let value = array.get_or_else(index, Undefined);
             // deconstruct the value (e.g. (a, b) ~> a = ?, b = ?)
-            ms = ms.do_deconstruction(item, &value)?;
+            ms = ms.do_destructure(item, &value)?;
             // evaluate the block - capture the results
             let (ms1, result1) = ms.evaluate(block)?;
             ms = ms1;
@@ -1250,8 +1253,25 @@ impl Machine {
                         let (ms2, _) = ms1.eval_when_observations()?;
                         Ok((ms2, result1))
                     }
-                    z => throw(Exact(format!("Expected an Array near {}", z.to_code())))
+                    z => throw(Exact(format!("Expected an Array near {}", z)))
                 }
+            // stock::last_sale = 24.11
+            ColonColon(container, variable) => {
+                let container_name = pull_variable(container.deref())?;
+                let variable_name = pull_variable(variable.deref())?;
+                match ms.get(container_name.as_str()) {
+                    None => throw(Exact(format!("Expected a variable near {}", container.to_code()))),
+                    Some(Structured(Hard(hs))) => {
+                        let hs = hs.with_variable(&variable_name, result.clone());
+                        Ok((ms.with_variable(&container_name, Structured(Hard(hs))), result))
+                    }
+                    Some(Structured(Soft(ss))) => {
+                        let ss = ss.with_variable(&variable_name, result.clone());
+                        Ok((ms.with_variable(&container_name, Structured(Soft(ss))), result))
+                    }
+                    Some(z) => throw(Exact(format!("Expected a structure near {}", z)))
+                }
+            }
             // (a, b, c) := (3, 6, 9)
             TupleExpression(variables) =>
                 match result {
@@ -1264,15 +1284,15 @@ impl Machine {
                         let (ms2, _) = ms1.eval_when_observations()?;
                         Ok((ms2, result1))
                     }
-                    z => throw(Exact(format!("Expected a Tuple near {}", z.to_code())))
+                    z => throw(Exact(format!("Expected a Tuple near {}", z)))
                 }
             // a := 7
             Variable(name) => {
                 let ms1 = ms.set(name.as_str(), result.clone());
                 let (ms2, _) = ms1.eval_when_observations()?;
                 Ok((ms2, result))
-            },
-            z => throw(Exact(format!("Expected an Array, Tuple or variable near {}", z.to_code())))
+            }
+            z => throw(Exact(format!("Expected an Array, Tuple or variable near {}", z)))
         }
     }
 
@@ -1784,20 +1804,6 @@ mod tests {
                 Boolean(true),
             ],
         ]);
-    }
-
-    #[ignore]
-    #[test]
-    fn test_precedence() {
-        // 2 + 4 * 3
-        let opcodes = vec![
-            Plus(Box::new(Literal(Number(I64Value(2)))),
-                 Box::new(Multiply(Box::new(Literal(Number(I64Value(4)))),
-                                   Box::new(Literal(Number(I64Value(3)))))))
-        ];
-
-        let (_ms, result) = Machine::empty().evaluate_scope(&opcodes).unwrap();
-        assert_eq!(result, Number(F64Value(14.)))
     }
 
     #[test]
@@ -2417,103 +2423,6 @@ mod tests {
                 make_quote(3, "GOTO", "OTC", 0.1428),
                 make_quote(4, "BOOM", "NYSE", 56.99),
             ])
-        }
-
-        #[ignore]
-        #[test]
-        fn test_select_from_namespace() {
-            // create a table with test data
-            let (_, phys_columns) =
-                create_dataframe("machine.select.stocks");
-
-            // execute the query
-            let machine = Machine::empty();
-            let (_, result) = machine.evaluate(&DatabaseOp(Queryable(Queryables::Select {
-                fields: vec![
-                    Variable("symbol".into()),
-                    Variable("exchange".into()),
-                    Variable("last_sale".into()),
-                ],
-                from: Some(Box::new(Ns(Box::new(Literal(StringValue("machine.select.stocks".into())))))),
-                condition: Some(GreaterThan(
-                    Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Number(F64Value(1.0)))),
-                )),
-                group_by: None,
-                having: None,
-                order_by: Some(vec![Variable("symbol".into())]),
-                limit: Some(Box::new(Literal(Number(I64Value(5))))),
-            }))).unwrap();
-            assert_eq!(result, TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
-                make_quote(0, "ABC", "AMEX", 11.77),
-                make_quote(2, "BIZ", "NYSE", 23.66),
-                make_quote(4, "BOOM", "NASDAQ", 56.87),
-            ]))));
-        }
-
-        #[ignore]
-        #[test]
-        fn test_select_from_variable() {
-            let (mrc, phys_columns) = create_memory_table();
-            let machine = Machine::empty()
-                .with_variable("stocks", TableValue(Model(mrc)));
-
-            // execute the code
-            let (_, result) = machine.evaluate(&DatabaseOp(Queryable(Queryables::Select {
-                fields: vec![
-                    Variable("symbol".into()),
-                    Variable("exchange".into()),
-                    Variable("last_sale".into()),
-                ],
-                from: Some(Box::new(Variable("stocks".into()))),
-                condition: Some(LessThan(
-                    Box::new(Variable("last_sale".into())),
-                    Box::new(Literal(Number(F64Value(1.0)))),
-                )),
-                group_by: None,
-                having: None,
-                order_by: Some(vec![Variable("symbol".into())]),
-                limit: Some(Box::new(Literal(Number(I64Value(5))))),
-            }))).unwrap();
-            assert_eq!(result, TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
-                make_quote(1, "UNO", "OTC", 0.2456),
-                make_quote(3, "GOTO", "OTC", 0.1428),
-            ]))));
-        }
-
-        #[ignore]
-        #[test]
-        fn test_update_rows_in_memory() {
-            // build the update model
-            let model = DatabaseOp(Mutation(Update {
-                path: Box::new(Variable("stocks".into())),
-                source: Box::new(Via(Box::new(StructureExpression(vec![
-                    ("exchange".into(), Literal(StringValue("OTC_BB".into()))),
-                ])))),
-                condition: Some(Equal(
-                    Box::new(Variable("exchange".into())),
-                    Box::new(Literal(StringValue("OTC".into()))),
-                )),
-                limit: Some(Box::new(Literal(Number(I64Value(5))))),
-            }));
-            assert_eq!(model.to_code(), r#"update stocks via {exchange: "OTC_BB"} where exchange == "OTC" limit 5"#);
-
-            // perform the update and verify
-            let (mrc, phys_columns) = create_memory_table();
-            let machine = Machine::empty().with_variable("stocks", TableValue(Model(mrc)));
-            let (_, result) = machine.evaluate(&model).unwrap();
-            assert_eq!(result, Number(I64Value(2)));
-
-            // retrieve and verify all rows
-            let model = From(Box::new(Variable("stocks".into())));
-            let (machine, _) = machine.evaluate(&model).unwrap();
-            assert_eq!(machine.get("stocks").unwrap(), TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
-                make_quote(0, "ABC", "AMEX", 11.77),
-                make_quote(1, "UNO", "OTC_BB", 0.2456),
-                make_quote(2, "BIZ", "NYSE", 23.66),
-                make_quote(3, "GOTO", "OTC_BB", 0.1428),
-                make_quote(4, "BOOM", "NASDAQ", 56.87),
-            ]))))
         }
 
         #[test]

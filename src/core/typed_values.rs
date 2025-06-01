@@ -156,11 +156,11 @@ impl TypedValue {
 
     pub fn from_token(token: &Token) -> std::io::Result<TypedValue> {
         match token {
-            Token::Atom { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get_raw_value()))),
-            Token::Backticks { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get_raw_value()))),
+            Token::Atom { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get()))),
+            Token::Backticks { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get()))),
             Token::DoubleQuoted { text, .. } => Ok(StringValue(text.to_string())),
             Token::Numeric { text, .. } => Self::from_numeric(text),
-            Token::Operator { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get_raw_value()))),
+            Token::Operator { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get()))),
             Token::SingleQuoted { text, .. } => Ok(StringValue(text.to_string())),
             Token::URL { text, .. } => Ok(StringValue(text.to_string())),
         }

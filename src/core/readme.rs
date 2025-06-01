@@ -340,14 +340,8 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
         Expression::CodeBlock(..) => vec![
             strip_margin(r#"
                 |result = {
-                |    (a, b, sum) = (0, 1, 0)
-                |    while sum < 10 {
-                |        sum = sum + (a + b)
-                |        t = b
-                |        b = a + b
-                |        a = t
-                |    }
-                |    sum
+                |    let (a, b) = (5, 9)
+                |    a + b
                 |}
                 |result
             "#, '|')],
@@ -449,9 +443,8 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::For { .. } => vec![
             strip_margin(r#"
-                |for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
-                |    oxide::println(row)
-                |}
+                |for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) 
+                |    yield row::value
             "#, '|')],
         Expression::From(..) => vec![
             strip_margin(r#"
@@ -517,10 +510,10 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |let code = 103
                 |match code [
-                |   n: 100 ~> "Accepted",
-                |   n: 101..104 ~> 'Escalated',
-                |   n: n > 0 && n < 100 ~> "Pending",
-                |   n ~> "Rejected: code {n}"
+                |   n: 100 => "Accepted",
+                |   n: 101..104 => 'Escalated',
+                |   n: n > 0 && n < 100 => "Pending",
+                |   n => "Rejected: code {n}"
                 |]
             "#, '|')
         ],
@@ -532,7 +525,6 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
         Expression::Multiply(..) => vec![
             "5 * 6".into()
         ],
-        Expression::NamedType(..) => vec![],
         Expression::NamedValue(..) => vec![
             "name: 'Tom'".into(),
             "from { name: 'Tom' }".into()
@@ -676,8 +668,8 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                |// arrays, tuples and structures can be deconstructed into arguments
                |
-               |fn add(a, b) => a + b
-               |fn inverse(a) => 1.0 / a
+               |fn add(a, b) -> a + b
+               |fn inverse(a) -> 1.0 / a
                |result = ((2, 3) |>> add) |> inverse
                |result
                "#, '|')
@@ -685,7 +677,6 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
         Expression::Via(..) => vec![
             strip_margin(r#"
                 |stocks = ns("readme.via.stocks")
-                |drop table stocks
                 |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
                 |
                 |rows = [
@@ -822,9 +813,21 @@ mod tests {
     use super::*;
     use std::fs::OpenOptions;
 
-    #[ignore]
     #[test]
     fn test_language_examples() {
+        for (name, examples) in create_language_examples() {
+            println!("[+] {}", name);
+
+            for example in examples {
+                println!("    {}", example);
+                generate_language_results(example.as_str()).unwrap();
+            }
+        }
+    }
+
+    #[ignore]
+    #[test]
+    fn test_language_example_generation() {
         let mut file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
             .open("../../language.md")
@@ -837,7 +840,7 @@ mod tests {
 
     #[ignore]
     #[test]
-    fn test_platform_examples() {
+    fn test_platform_example_generation() {
         let mut file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
             .open("../../platform.md")
@@ -866,8 +869,8 @@ mod tests {
 
     #[test]
     fn test_generate_docs() {
-        test_language_examples();
-        test_platform_examples();
+        test_language_example_generation();
+        test_platform_example_generation();
         test_generate_readme();
     }
 }

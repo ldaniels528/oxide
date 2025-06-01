@@ -6,8 +6,8 @@
 use crate::tokens::Token;
 
 /// Single-character operators
-const OPERATORS_1: [char; 39] = [
-    '!', '¡', '@', '#', '$', '%', '^', '&', '×', '*', '÷', '/', '+', '-', '=',
+const OPERATORS_1: [char; 38] = [
+    '!', '@', '#', '$', '%', '^', '&', '×', '*', '÷', '/', '+', '-', '=',
     '(', ')', '<', '>', '{', '}', '[', ']', ',', ';', '?', '\\', '|', '~',
     '⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹',
 ];
@@ -85,9 +85,6 @@ fn has_next(inputs: &Vec<char>, pos: &mut usize) -> bool {
     has_more(&inputs, pos)
 }
 
-fn is_operator(inputs: &Vec<char>, pos: usize) -> bool {
-    OPERATORS_1.contains(&inputs[pos])
-}
 
 fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
     let chars = &['\t', '\n', '\r', ' '];
@@ -117,7 +114,7 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
 fn next_atom_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_eligible_token(inputs, pos, Token::atom,
                         |inputs, pos| has_more(inputs, pos) &&
-                            !is_operator(inputs, *pos) &&
+                            !OPERATORS_1.contains(&inputs[*pos]) &&
                             (inputs[*pos].is_alphanumeric() || inputs[*pos] == '_'))
 }
 
@@ -355,6 +352,15 @@ mod tests {
     }
 
     #[test]
+    fn test_condition_not_equals() {
+        assert_eq!(parse_fully("100!=1000"), vec![
+            Token::Numeric { text: "100".into(), start: 0, end: 3, line_number: 1, column_number: 2 },
+            Token::Operator { text: "!=".into(), start: 3, end: 5, line_number: 1, column_number: 5 },
+            Token::Numeric { text: "1000".into(), start: 5, end: 9, line_number: 1, column_number: 7 }
+        ])
+    }
+
+    #[test]
     fn test_exponent_literals() {
         assert_eq!(parse_fully("x³ + 2y²"), vec![
             Token::atom("x".to_string(), 0, 1, 1, 2),
@@ -389,11 +395,20 @@ mod tests {
     }
 
     #[test]
-    fn test_range() {
+    fn test_range_exclusive() {
         assert_eq!(parse_fully("100..1000"), vec![
             Token::numeric("100".to_string(), 0, 3, 1, 2),
             Token::operator("..".to_string(), 3, 5, 1, 5),
             Token::numeric("1000".to_string(), 5, 9, 1, 7),
+        ])
+    }
+
+    #[test]
+    fn test_range_inclusive() {
+        assert_eq!(parse_fully("100..=1000"), vec![
+            Token::Numeric { text: "100".into(), start: 0, end: 3, line_number: 1, column_number: 2 },
+            Token::Operator { text: "..=".into(), start: 3, end: 6, line_number: 1, column_number: 5 },
+            Token::Numeric { text: "1000".into(), start: 6, end: 10, line_number: 1, column_number: 8 }
         ])
     }
 

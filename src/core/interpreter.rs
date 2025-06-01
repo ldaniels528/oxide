@@ -238,23 +238,21 @@ mod tests {
         #[test]
         fn test_for_each_array_in_an_array() {
             verify_exact_code(r#"
-                for [a, b, c] in [[1, 5, 7], [6, 11, 15], [17, 21, 27]] {
+                for [a, b, c] in [[1, 5, 7], [6, 11, 15], [17, 21, 27]] 
                    yield (b - a) * c
-                }
             "#, "[28, 75, 108]");
         }
 
         #[test]
         fn test_for_each_tuple_in_an_array() {
             verify_exact_code(r#"
-                for (a, b) in [(1, 5), (6, 11), (17, 21)] {
+                for (a, b) in [(1, 5), (6, 11), (17, 21)] 
                    yield a + b
-                }
             "#, "[6, 17, 38]");
         }
 
         #[test]
-        fn test_for_each_row_in_a_table() {
+        fn test_for_each_row_field_in_a_table() {
             verify_exact_code(r#"
                 for row in tools::to_table([
                     {symbol: "ABC", exchange: "NYSE", last_sale: 23.77},
@@ -262,6 +260,24 @@ mod tests {
                     {symbol: "GMO", exchange: "NASD", last_sale: 5.007}
                 ]) yield row::last_sale
             "#, r#"[23.77, 123.43, 5.007]"#);
+        }
+
+        #[test]
+        fn test_for_each_row_in_a_table() {
+            verify_exact_table(r#"
+                let results =
+                    for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime'])
+                        yield { fruit: row::value }
+                tools::to_table(results)
+            "#, vec![
+                "|------------|",
+                "| id | fruit |", 
+                "|------------|", 
+                "| 0  | apple |", 
+                "| 1  | berry |", 
+                "| 2  | kiwi  |", 
+                "| 3  | lime  |", 
+                "|------------|"]);
         }
 
         #[test]
@@ -311,10 +327,10 @@ mod tests {
             verify_exact_code(r#"
                 code = 100
                 match code [
-                   n: 100 ~> "Accepted",
-                   n: 101..=104 ~> 'Escalated',
-                   n: n > 0 && n < 100 ~> "Pending",
-                   n ~> "Rejected"
+                   n: 100 => "Accepted",
+                   n: 101..=104 => 'Escalated',
+                   n: n > 0 && n < 100 => "Pending",
+                   n => "Rejected"
                 ]
             "#, "\"Accepted\"");
         }
@@ -443,7 +459,7 @@ mod tests {
         fn test_new_function_lambda() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-                product = (a, b) -> a * b
+                let product = (a, b) -> a * b
             "#, "true");
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(2, 5)
@@ -454,7 +470,7 @@ mod tests {
         fn test_new_function_lambda_with_parameter_types() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-                product = (a: i64, b: i64) -> a * b
+                let product = (a: i64, b: i64) -> a * b
             "#, "true");
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(3, 3)
@@ -465,7 +481,7 @@ mod tests {
         fn test_new_function_named() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-                product(a, b) -> a * b
+                fn product(a, b) -> a * b
             "#, "true");
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(4, 5)
@@ -476,25 +492,24 @@ mod tests {
         fn test_new_function_named_with_parameter_types() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-                product(a: i64, b: i64) -> a * b
+                fn product(a: i64, b: i64) -> a * b
             "#, "true");
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(4, 9)
             "#, "36")
         }
         
-        #[ignore]
         #[test]
         fn test_new_function_named_with_parameter_types_and_return_type() {
-            let model =   Compiler::build(r#"
-                product(a: i64, b: i64): i64 -> a * b
+            let model = Compiler::build(r#"
+                fn product(a: i64, b: i64): i64 -> a * b
             "#).unwrap();
             println!("model {:?}", model);
             println!("model.to_code() {:?}", model.to_code());
 
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-                product(a: i64, b: i64): i64 -> a * b
+                fn product(a: i64, b: i64): i64 -> a * b
             "#, "true");
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(5, 6)
@@ -505,7 +520,7 @@ mod tests {
         fn test_transitional_function_lambda_with_parameter_types() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-                product = fn (a: i64, b: i64) -> a * b
+                let product = (a: i64, b: i64) -> a * b
             "#, "true");
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(3, 7)
@@ -516,7 +531,7 @@ mod tests {
         fn test_function_lambda() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-                product = fn (a, b) => a * b
+                let product = (a, b) -> a * b
             "#, "true");
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(2, 5)
@@ -527,7 +542,7 @@ mod tests {
         fn test_function_named() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-                fn product(a, b) => a * b
+                fn product(a, b) -> a * b
             "#, "true");
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(3, 7)
@@ -537,7 +552,7 @@ mod tests {
         #[test]
         fn test_function_recursion_1() {
             verify_exact_code(r#"
-                f = (n: i64) -> if(n <= 1) 1 else n * f(n - 1)
+                let f = (n: i64) -> if(n <= 1) 1 else n * f(n - 1)
                 f(5)
             "#, "120")
         }
@@ -545,7 +560,7 @@ mod tests {
         #[test]
         fn test_function_recursion_2() {
             verify_exact_code(r#"
-                f = n -> iff(n <= 1, 1, n * f(n - 1))
+                let f = n -> iff(n <= 1, 1, n * f(n - 1))
                 f(6)
             "#, "720")
         }
@@ -561,11 +576,11 @@ mod tests {
         fn test_functional_pipeline_2args() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-            fn add(a, b) => a + b
+            fn add(a, b) -> a + b
         "#, "true");
 
             interpreter = verify_exact_code_with(interpreter, r#"
-            fn inverse(a) => 1.0 / a
+            fn inverse(a) -> 1.0 / a
         "#, "true");
 
             interpreter = verify_exact_code_with(interpreter, r#"

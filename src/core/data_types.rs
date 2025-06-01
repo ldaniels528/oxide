@@ -312,6 +312,11 @@ impl DataType {
         }
     }
 
+    /// Indicates whether the given expression represents a known type
+    pub fn is_type(expr: &Expression) -> bool {
+        Self::decipher_type(expr).is_ok()
+    }
+
     /// Indicates whether the given name represents a known type
     pub fn is_type_name(name: &str) -> bool {
         decipher_model_variable(name).is_ok()
@@ -395,12 +400,14 @@ fn decipher_model(model: &Expression) -> std::io::Result<DataType> {
         // e.g. [String, String, f64]
         ArrayExpression(params) => decipher_model_array(params),
         // e.g. fn(a, b, c)
-        FnExpression { params, returns, .. } =>
+        FnExpression { params, body, returns } if body.is_none()=>
             Ok(FunctionType(params.clone(), returns.clone().into())),
         // e.g. String(80)
         FunctionCall { fx, args } => decipher_model_function_call(fx, args),
         // e.g. Structure(symbol: String, exchange: String, last_sale: f64)
         Literal(Structured(s)) => Ok(StructureType(s.get_parameters())),
+        // e.g. fn(a, b, c)
+        Literal(TypedValue::Kind(data_type)) => Ok(data_type.clone()),
         // e.g. (f64, f64, f64)
         TupleExpression(params) => decipher_model_tuple(params),
         // e.g. i64
@@ -438,22 +445,22 @@ fn decipher_model_function_call(
         }
     }
     fn expect_params(args: &Vec<Expression>, f: fn(Vec<Parameter>) -> DataType) -> std::io::Result<DataType> {
-        let mut params: Vec<Parameter> = vec![];
+        let mut all_params: Vec<Parameter> = vec![];
         for arg in args {
-            let param = match arg {
-                NamedType(name, data_type) => Parameter::new(name, data_type.clone()),
-                NamedValue(name, model) => Parameter::new(name, decipher_model(model)?),
+            match arg {
+                NamedValue(name, model) => 
+                    all_params.push(Parameter::new(name, decipher_model(model)?)),
+                Parameters(params) => all_params.extend(params.clone()),
                 SetVariables(var_expr, expr) =>
                     match var_expr.deref() {
-                        Variable(name) => Parameter::from_tuple(name, expr.to_pure()?),
+                        Variable(name) => all_params.push(Parameter::from_tuple(name, expr.to_pure()?)),
                         z => return throw(Exact(format!("Decomposition is not allowed near {}", z.to_code())))
                     }
-                Variable(name) => Parameter::add(name),
+                Variable(name) => all_params.push(Parameter::add(name)),
                 other => return throw(SyntaxError(SyntaxErrors::ParameterExpected(other.to_code())))
-            };
-            params.push(param);
+            }
         }
-        Ok(f(params))
+        Ok(f(all_params))
     }
 
     // decode the type

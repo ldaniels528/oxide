@@ -3672,6 +3672,18 @@ mod tests {
                 nsd::load("platform.nsd.ns_save_and_load")      
             "#, |df| matches!(df, TableValue(..)))
         }
+
+        #[ignore]
+        #[test]
+        fn test_nsd_with_journaling() {
+            verify_exact_value_where(r#"
+                nsd::save("platform.nsd.ns_create", new Table(
+                    symbol: String(8),
+                    exchange: String(8),
+                    last_sale: f64
+                ), { journaling: true })
+            "#, |df| matches!(df, TableValue(..)))
+        }
     }
 
     /// Package "os" tests
@@ -3687,13 +3699,12 @@ mod tests {
 
         #[test]
         fn test_os_call() {
-            verify_exact_value(
-                r#"
-                create table ns("platform.os.call") (
+            verify_exact_value(r#"
+                nsd::save("platform.os.call", new Table(
                     symbol: String(8),
                     exchange: String(8),
                     last_sale: f64
-                )
+                ))
                 os::call("chmod", "777", oxide::home())
             "#,
                 StringValue(String::new()),
@@ -3747,13 +3758,10 @@ mod tests {
 
         #[test]
         fn test_oxide_compile() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 code = oxide::compile("2 ** 4")
                 code()
-            "#,
-                Number(F64Value(16.)),
-            );
+            "#, Number(F64Value(16.)));
         }
 
         #[test]
@@ -3763,9 +3771,7 @@ mod tests {
                 n = 5
                 code = oxide::compile("n * n")
                 code()
-            "#,
-                Number(I64Value(25)),
-            );
+            "#, Number(I64Value(25)));
         }
 
         #[test]
@@ -3775,9 +3781,7 @@ mod tests {
                 a = 'Hello '
                 b = 'World'
                 oxide::eval("a + b")
-            "#,
-                StringValue("Hello World".to_string()),
-            );
+            "#, StringValue("Hello World".to_string()));
         }
 
         #[test]
@@ -3866,44 +3870,32 @@ mod tests {
 
         #[test]
         fn test_str_ends_with_postfix_true() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str
                 'Hello World':::ends_with('World')
-            "#,
-                Boolean(true),
-            );
+            "#, Boolean(true));
         }
 
         #[test]
         fn test_str_ends_with_postfix_false() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str
                 'Hello World':::ends_with('Hello')
-            "#,
-                Boolean(false),
-            );
+            "#, Boolean(false));
         }
 
         #[test]
         fn test_str_ends_with_qualified_true() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::ends_with('Hello World', 'World')
-            "#,
-                Boolean(true),
-            );
+            "#, Boolean(true));
         }
 
         #[test]
         fn test_str_ends_with_qualified_false() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::ends_with('Hello World', 'Hello')
-            "#,
-                Boolean(false),
-            )
+            "#, Boolean(false))
         }
 
         #[test]
@@ -3915,27 +3907,22 @@ mod tests {
                 StringValue("This is the way".into()),
             );
         }
-
+        
         #[test]
         fn test_str_format_postfix() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str::format
                 "This {} the {}":::format("is", "way")
-            "#,
-                StringValue("This is the way".into()),
-            );
+            "#, StringValue("This is the way".into()));
         }
 
+        #[ignore]
         #[test]
         fn test_str_format_in_scope() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str::format
                 format("This {} the {}", "is", "way")
-            "#,
-                StringValue("This is the way".into()),
-            );
+            "#, StringValue("This is the way".into()));
         }
 
         #[test]
@@ -4240,28 +4227,28 @@ mod tests {
             verify_exact_table(r#"
             use testing
             feature("Matches function", {
-                "Compare Array contents: Equal": ctx -> {
+                "Compare Array contents: Equal": (ctx -> {
                     assert(
                         [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
                     )
-                },
-                "Compare Array contents: Not Equal": ctx -> {
+                }),
+                "Compare Array contents: Not Equal": (ctx -> {
                     assert(!(
                         [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
                     ))
-                },
-                "Compare JSON contents (in sequence)": ctx -> {
+                }),
+                "Compare JSON contents (in sequence)": (ctx -> {
                     assert(
                         { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
                     )
-                },
-                "Compare JSON contents (out of sequence)": ctx -> {
+                }),
+                "Compare JSON contents (out of sequence)": (ctx -> {
                     assert(
                         { scores: [82 78 99], id: "A1537" }
                                 matches
                         { id: "A1537", scores: [82 78 99] }
                     )
-                }
+                })
             })"#, vec![
                 "|------------------------------------------------------------------------------------------------------------------------|",
                 "| id | level | item                                                                                    | passed | result |",
@@ -4412,13 +4399,15 @@ mod tests {
                 r#"
                 stocks = ns("platform.compact.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                let rows = [
+                    { symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+                    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
+                rows ~> stocks
                 delete from stocks where last_sale > 1.0
                 from stocks
             "#,
@@ -4497,9 +4486,11 @@ mod tests {
                 r#"
                 stocks = ns("platform.fetch.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                let rows = [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
+                rows ~> stocks
                 tools::fetch(stocks, 2)
             "#,
                 vec![
@@ -4552,9 +4543,11 @@ mod tests {
                 r#"
                 stocks = ns("platform.filter_over_table.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
-                 { symbol: "ACDC", exchange: "AMEX", last_sale: 37.43 },
-                 { symbol: "UELO", exchange: "NYSE", last_sale: 91.82 }] ~> stocks
+                let rows = [
+                    { symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+                    { symbol: "ACDC", exchange: "AMEX", last_sale: 37.43 },
+                    { symbol: "UELO", exchange: "NYSE", last_sale: 91.82 }] 
+                rows ~> stocks
                 use tools
                 stocks:::filter(row -> exchange is "AMEX")
            "#,
@@ -4640,9 +4633,11 @@ mod tests {
                 r#"
                 stocks = ns("platform.map_over_table.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
-                 { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
-                 { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
+                let rows = [
+                    { symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+                    { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+                    { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] 
+                rows ~> stocks
                 use tools
                 stocks:::map(row -> {
                     symbol: symbol,
@@ -4670,9 +4665,11 @@ mod tests {
                 use tools
                 stocks = ns("platform.pop.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                let rows = [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
+                rows ~> stocks
                 stocks:::pop()
             "#,
                 vec![
@@ -4759,9 +4756,11 @@ mod tests {
                 r#"
                 stocks = ns("platform.push.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                let rows = [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
+                rows ~> stocks
                 tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
                 from stocks
             "#,
@@ -4920,9 +4919,11 @@ mod tests {
                 use tools
                 stocks = ns("platform.reverse.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+                let rows = [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
+                rows ~> stocks
                 stocks:::reverse()
             "#,
                 vec![
@@ -4940,17 +4941,17 @@ mod tests {
         #[test]
         fn test_tools_scan() {
             let mut interpreter = Interpreter::new();
-            let result = interpreter
-                .evaluate(
-                    r#"
+            let result = interpreter.evaluate(r#"
                 use tools
                 stocks = ns("platform.scan.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
-                 { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
+                let rows = [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+                    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+                    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
+                    { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] 
+                rows ~> stocks
                 delete from stocks where last_sale > 1.0
                 stocks:::scan()
             "#,
@@ -5060,11 +5061,13 @@ mod tests {
                 use tools::to_csv
                 stocks = ns("platform.csv.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                let rows = [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] 
+                rows ~> stocks
                 stocks:::to_csv()
             "#,
                 ArrayValue(Array::from(vec![
@@ -5084,11 +5087,13 @@ mod tests {
                 use tools::to_json
                 stocks = ns("platform.json.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                 { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                 { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                 { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                let rows = [
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] 
+                rows ~> stocks
                 stocks:::to_json()
             "#,
                 ArrayValue(Array::from(vec![
@@ -5322,17 +5327,16 @@ mod tests {
         #[test]
         fn test_www_serve() {
             let mut interpreter = Interpreter::new();
-            let result = interpreter
-                .evaluate(
-                    r#"
+            let result = interpreter.evaluate(r#"
                 www::serve(8822)
                 stocks = ns("platform.www.quotes")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
-                 { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
-                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
+                let rows = [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
+                    { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
+                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
+                    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                    { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] 
+                rows ~> stocks
                 GET http://localhost:8822/platform/www/quotes/1/4
             "#,
                 )

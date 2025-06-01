@@ -825,17 +825,6 @@ mod tests {
     }
 
     #[test]
-    fn test_table_create_durable() {
-        verify_exact_value(r#"
-            create table ns("query_engine.create.stocks") (
-                symbol: String(8),
-                exchange: String(8),
-                last_sale: f64
-            )
-        "#, Boolean(true))
-    }
-
-    #[test]
     fn test_create_table_fn() {
         let mut interpreter = Interpreter::new();
         interpreter = verify_exact_value_with(interpreter, r#"

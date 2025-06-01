@@ -31,7 +31,7 @@ use std::slice::Iter;
 
 /// Represents a JSON-like data structure
 pub trait Structure {
-    /// Returns true, if the structure contains an attribute with the specified name
+    /// Returns true if the structure contains an attribute with the specified name
     fn contains(&self, name: &str) -> bool {
         self.to_name_values().iter()
             .find(|(k, _)| *k == *name)
@@ -905,6 +905,7 @@ mod tests {
     #[cfg(test)]
     mod common_tests {
         use crate::columns::Column;
+        use crate::compiler::Compiler;
         use crate::dataframe::Dataframe::Model;
         use crate::errors::Errors::Exact;
         use crate::interpreter::Interpreter;
@@ -936,11 +937,13 @@ mod tests {
             verify_exact_value(r#"
                 stocks = ns("interpreter.struct.stocks")
                 table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                let rows = [
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
                  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
                  { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                  { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+                 { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }]
+                rows ~> stocks
                 stocks[0]
         "#, Structured(Firm(Row::new(0, vec![
                 StringValue("ABC".into()),
@@ -999,8 +1002,8 @@ mod tests {
         fn test_hard_structure_field_assignment() {
             verify_exact_value(r#"
             stock = Struct(
-                symbol: String(8) = "ABC",
-                exchange: String(8) = "NYSE",
+                symbol: String = "ABC",
+                exchange: String = "NYSE",
                 last_sale: f64 = 23.67
             )
             stock::last_sale = 24.11
@@ -1010,17 +1013,27 @@ mod tests {
 
         #[test]
         fn test_hard_structure_module_method() {
-            verify_exact_value(r#"
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter,r#"
             stock = Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
             )
             mod stock {
-                fn is_this_you(symbol) => symbol is self::symbol
+                fn is_this_you(symbol) -> symbol is self::symbol
             }
-            stock::is_this_you('ABC')
-        "#, Boolean(true));
+            "#, "true");
+
+            // verify the positive case
+            interpreter = verify_exact_code_with(interpreter,r#"
+                stock::is_this_you('ABC')
+            "#, "true");
+
+            // verify the negative case
+            verify_exact_code_with(interpreter,r#"
+                stock::is_this_you('XYZ')
+            "#, "false");
         }
 
         #[test]
@@ -1092,30 +1105,50 @@ mod tests {
 
         #[test]
         fn test_soft_structure_method() {
-            verify_exact_code(r#"
-            stock = {
-                symbol:"ABC",
-                price:123.45,
-                last_sale: 23.67,
-                is_this_you: fn(symbol) => symbol == self::symbol
-            }
-            stock::is_this_you('ABC')
-        "#, "true");
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter,r#"
+                stock = {
+                    symbol:"ABC",
+                    price:123.45,
+                    last_sale: 23.67,
+                    is_this_you: (symbol -> symbol == self::symbol)
+                }
+            "#, "true");
+
+            // verify the positive case
+            interpreter = verify_exact_code_with(interpreter,r#"
+                stock::is_this_you('ABC')
+            "#, "true");
+
+            // verify the negative case
+            verify_exact_code_with(interpreter,r#"
+                stock::is_this_you('XYZ')
+            "#, "false");
         }
 
         #[test]
         fn test_soft_structure_module_method() {
-            verify_exact_code(r#"
-            stock = {
-                symbol: "ABC",
-                exchange: "NYSE",
-                last_sale: 23.67
-            }
-            mod stock {
-                fn is_this_you(symbol) => symbol == self::symbol
-            }
-            stock::is_this_you('ABC')
-        "#, "true");
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter,r#"
+                stock = {
+                    symbol: "ABC",
+                    exchange: "NYSE",
+                    last_sale: 23.67
+                }
+                mod stock {
+                    fn is_this_you(symbol) -> symbol == self::symbol
+                }
+            "#, "true");
+            
+            // verify the positive case
+            interpreter = verify_exact_code_with(interpreter,r#"
+                stock::is_this_you('ABC')
+            "#, "true");
+
+            // verify the negative case
+            verify_exact_code_with(interpreter,r#"
+                stock::is_this_you('XYZ')
+            "#, "false");
         }
 
         #[test]
@@ -1212,7 +1245,7 @@ mod tests {
         fn test_structure_module() {
             verify_exact_value(r#"
             mod abc {
-                fn hello(name) => str::format("hello {}", name)
+                fn hello(name) -> str::format("hello {}", name)
             }
             abc::hello('world')
         "#, StringValue("hello world".into()));
