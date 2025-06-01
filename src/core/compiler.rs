@@ -221,10 +221,15 @@ impl Compiler {
         }
 
         while let Some(op) = operators.pop() {
-            let b = output.pop().unwrap();
-            let a = output.pop().unwrap();
-            let result = apply_operator_binary(&op, b, a)?;
-            output.push(result);
+            match (output.pop(), output.pop()) {
+                (Some(b), Some(a)) => {
+                    let result = apply_operator_binary(&op, b, a)?;
+                    output.push(result);
+                }
+                (Some(a), _) => return throw(SyntaxError(IllegalExpression(a.to_code()))),
+                (_, Some(b)) => return throw(SyntaxError(IllegalExpression(b.to_code()))),
+                _ => return throw(ExactNear("Syntax error".into(), ts.current())),
+            }
         }
 
         match output.pop() {
@@ -1515,46 +1520,58 @@ fn apply_operator_binary(
     b: Expression,
     a: Expression
 ) -> std::io::Result<Expression> {
+    let (aa, bb) = (a.clone().into(), b.clone().into());
     match op.get().as_str() {
-        "&&" => Ok(Condition(Conditions::And(a.into(), b.into()))),
-        "==" => Ok(Condition(Conditions::Equal(a.into(), b.into()))),
-        ">=" => Ok(Condition(Conditions::GreaterOrEqual(a.into(), b.into()))),
-        ">" => Ok(Condition(Conditions::GreaterThan(a.into(), b.into()))),
-        "<=" => Ok(Condition(Conditions::LessOrEqual(a.into(), b.into()))),
-        "<" => Ok(Condition(Conditions::LessThan(a.into(), b.into()))),
-        "!=" => Ok(Condition(Conditions::NotEqual(a.into(), b.into()))),
-        "||" => Ok(Condition(Conditions::Or(a.into(), b.into()))),
+        "&" => Ok(BitwiseAnd(aa, bb)),
+        "|" => Ok(BitwiseOr(aa, bb)),
+        "<<" => Ok(BitwiseShiftLeft(aa, bb)),
+        ">>" => Ok(BitwiseShiftRight(aa, bb)),
+        "^" => Ok(BitwiseXor(aa, bb)),
+        "?" => Ok(Coalesce(aa, bb)),
         ":" => apply_colon(a, b),
-        "&" => Ok(BitwiseAnd(a.into(), b.into())),
-        "|" => Ok(BitwiseOr(a.into(), b.into())),
-        "<<" => Ok(BitwiseShiftLeft(a.into(), b.into())),
-        ">>" => Ok(BitwiseShiftRight(a.into(), b.into())),
-        "^" => Ok(BitwiseXor(a.into(), b.into())),
-        "?" => Ok(Coalesce(a.into(), b.into())),
-        "::" => Ok(ColonColon(a.into(), b.into())),
-        ":::" => Ok(ColonColonColon(a.into(), b.into())),
-        "<~" => Ok(CurvyArrowLeft(a.into(), b.into())),
-        "~>" => Ok(CurvyArrowRight(a.into(), b.into())),
-        "÷" | "/" => Ok(Divide(a.into(), b.into())),
+        "::" => Ok(ColonColon(aa, bb)),
+        ":::" => Ok(ColonColonColon(aa, bb)),
+        "&&" => Ok(Condition(Conditions::And(aa, bb))),
+        "contains" => Ok(Condition(Conditions::Contains(aa, bb))),
+        "==" => Ok(Condition(Conditions::Equal(aa, bb))),
+        "is" => Ok(Condition(Conditions::Equal(aa, bb))),
+        ">=" => Ok(Condition(Conditions::GreaterOrEqual(aa, bb))),
+        ">" => Ok(Condition(Conditions::GreaterThan(aa, bb))),
+        "in" => Ok(Condition(Conditions::In(aa, bb))),
+        "<=" => Ok(Condition(Conditions::LessOrEqual(aa, bb))),
+        "<" => Ok(Condition(Conditions::LessThan(aa, bb))),
+        "like" => Ok(Condition(Conditions::Like(aa, bb))),
+        "matches" => Ok(Condition(Conditions::Matches(aa, bb))),
+        "!=" => Ok(Condition(Conditions::NotEqual(aa, bb))),
+        "isnt" => Ok(Condition(Conditions::NotEqual(aa, bb))),
+        "||" => Ok(Condition(Conditions::Or(aa, bb))),
+        "<~" => Ok(CurvyArrowLeft(aa, bb)),
+        "~>" => Ok(CurvyArrowRight(aa, bb)),
+        "÷" | "/" => Ok(Divide(aa, bb)),
         "->" => apply_function(a, b),
-        "-" => Ok(Minus(a.into(), b.into())),
-        "%" => Ok(Modulo(a.into(), b.into())),
-        "×" | "*" => Ok(Multiply(a.into(), b.into())),
-        "+" => Ok(Plus(a.into(), b.into())),
-        "++" => Ok(PlusPlus(a.into(), b.into())),
-        "**" => Ok(Pow(a.into(), b.into())),
-        ".." => Ok(Range(Exclusive(a.into(), b.into()))),
-        "..=" => Ok(Range(Inclusive(a.into(), b.into()))),
-        "=" => Ok(SetVariables(a.into(), b.into())),
-        ":=" => Ok(SetVariablesExpr(a.into(), b.into())),
-        "|>" => Ok(VerticalBarArrow(a.into(), b.into())),
-        "|>>" => Ok(VerticalBarDoubleArrow(a.into(), b.into())),
-        "contains" => Ok(Condition(Conditions::Contains(a.into(), b.into()))),
-        "in" => Ok(Condition(Conditions::In(a.into(), b.into()))),
-        "is" => Ok(Condition(Conditions::Equal(a.into(), b.into()))),
-        "isnt" => Ok(Condition(Conditions::NotEqual(a.into(), b.into()))),
-        "like" => Ok(Condition(Conditions::Like(a.into(), b.into()))),
-        "matches" => Ok(Condition(Conditions::Matches(a.into(), b.into()))),
+        "-" => Ok(Minus(aa, bb)),
+        "%" => Ok(Modulo(aa, bb)),
+        "×" | "*" => Ok(Multiply(aa, bb)),
+        "+" => Ok(Plus(aa, bb)),
+        "++" => Ok(PlusPlus(aa, bb)),
+        "**" => Ok(Pow(aa, bb)),
+        ".." => Ok(Range(Exclusive(aa, bb))),
+        "..=" => Ok(Range(Inclusive(aa, bb))),
+        "=" => Ok(SetVariables(aa, bb)),
+        "&=" => Ok(SetVariables(aa.clone(), BitwiseAnd(aa, bb).into())),
+        "|=" => Ok(SetVariables(aa.clone(), BitwiseOr(aa, bb).into())),
+        "^=" => Ok(SetVariables(aa.clone(), BitwiseXor(aa, bb).into())),
+        "?=" => Ok(SetVariables(aa.clone(), Coalesce(aa, bb).into())),
+        "&&=" => Ok(SetVariables(aa.clone(), Condition(Conditions::And(aa, bb)).into())),
+        "||=" => Ok(SetVariables(aa.clone(), Condition(Conditions::Or(aa, bb)).into())),
+        "/=" => Ok(SetVariables(aa.clone(), Divide(aa, bb).into())),
+        "-=" => Ok(SetVariables(aa.clone(), Minus(aa, bb).into())),
+        "%=" => Ok(SetVariables(aa.clone(), Modulo(aa, bb).into())),
+        "*=" => Ok(SetVariables(aa.clone(), Multiply(aa, bb).into())),
+        "+=" => Ok(SetVariables(aa.clone(), Plus(aa, bb).into())),
+        ":=" => Ok(SetVariablesExpr(aa, bb)),
+        "|>" => Ok(VerticalBarArrow(aa, bb)),
+        "|>>" => Ok(VerticalBarDoubleArrow(aa, bb)),
         sym => throw(CompilerError(CompileErrors::IllegalOperator(sym.into()), op.clone())),
     }
 }
@@ -1602,22 +1619,23 @@ fn get_exponent_symbols() -> Vec<&'static str> {
     vec!["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"]
 }
 
-fn get_precedence(op: &Token) -> usize {
+fn get_precedence(op: &Token) -> i8 {
     match op.get().as_str() {
-        s if get_exponent_symbols().contains(&s) => 11,
+        s if get_exponent_symbols().contains(&s) => 12,
         "**" => 11,             // Exponentiation
         "*" | "/" => 10,        // Multiplication / Division
-        "+" | "-" => 9,        // Addition / Subtraction
-        "<<" | ">>" => 8,      // Bitwise Shift Left/Right
-        "&" | "&&" => 7,       // Bitwise/Logical AND
-        "^" | "|" | "||" => 6, // Bitwise XOR, Bitwise/Logical OR
+        "+" | "-" => 9,         // Addition / Subtraction
+        "<<" | ">>" => 8,       // Bitwise Shift Left/Right
+        "&" | "&&" => 7,        // Bitwise/Logical AND
+        "^" | "|" | "||" => 6,  // Bitwise XOR, Bitwise/Logical OR
         ".." | "..=" => 5,
         "::" | ":::" => 4,
         ":" => 3,
         "==" | "!=" | "<" | "<=" | ">" | ">=" => 2,
         "contains" | "in" | "is" | "isnt" | "like" | "matches" => 2,
-        "->" | "=>" | "~>" | "<~" | "|>" => 1,
-        _ => 0, // Unknown or lowest
+        "->" | "=>" | "~>" | "<~" | "~>>" | "<<~" | "|>" | "|>>" => 1,
+        "=" | ":=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" => 0,
+        _ => -1, // Unknown or lowest
     }
 }
 

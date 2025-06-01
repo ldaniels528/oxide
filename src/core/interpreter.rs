@@ -63,7 +63,9 @@ impl Interpreter {
 /// Unit tests
 #[cfg(test)]
 mod tests {
+    use crate::interpreter::Interpreter;
     use crate::numbers::Numbers::*;
+    use crate::testdata::verify_exact_code_with;
     use crate::typed_values::TypedValue::*;
 
     /// Assignment tests
@@ -568,28 +570,38 @@ mod tests {
         #[test]
         fn test_functional_pipeline_1arg() {
             verify_exact_code(r#"
-            "Hello" |> tools::reverse
-        "#, "\"olleH\"");
+                "Hello" |> tools::reverse
+            "#, "\"olleH\"");
         }
 
         #[test]
         fn test_functional_pipeline_2args() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-            fn add(a, b) -> a + b
-        "#, "true");
+                fn add(a, b) -> a + b
+            "#, "true");
 
             interpreter = verify_exact_code_with(interpreter, r#"
-            fn inverse(a) -> 1.0 / a
-        "#, "true");
+                fn inverse(a) -> 1.0 / a
+            "#, "true");
 
             interpreter = verify_exact_code_with(interpreter, r#"
-            (2, 3) |>> add 
-        "#, "5");
+                (2, 3) |>> add 
+            "#, "5");
 
             verify_exact_code_with(interpreter, r#"
-            ((2, 3) |>> add) |> inverse
-        "#, "0.2");
+                (2, 3) |>> add |> inverse
+            "#, "0.2");
         }
+    }
+
+    #[test]
+    fn test_function_pipeline_with_filter_map() {
+        let mut interpreter = Interpreter::new();
+        interpreter = verify_exact_code_with(interpreter, r#"
+            use arrays
+            let arr = [1, 2, 3, 4]
+            arr:::filter(x -> (x % 2) == 0):::map(x -> x * 10)
+        "#, "[20, 40]");
     }
 }

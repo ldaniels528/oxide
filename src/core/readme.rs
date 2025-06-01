@@ -104,7 +104,7 @@ cal::plus(now(), 30:::days())
 ```oxide
 use arrays
 let arr = [1, 2, 3, 4]
-(arr:::filter(x -> (x % 2) == 0)):::map(x -> x * 10)
+arr:::filter(x -> (x % 2) == 0):::map(x -> x * 10)
 ```
 
 ---
@@ -670,7 +670,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                |
                |fn add(a, b) -> a + b
                |fn inverse(a) -> 1.0 / a
-               |result = ((2, 3) |>> add) |> inverse
+               |result = (2, 3) |>> add |> inverse
                |result
                "#, '|')
         ],

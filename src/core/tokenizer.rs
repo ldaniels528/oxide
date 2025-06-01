@@ -13,16 +13,16 @@ const OPERATORS_1: [char; 38] = [
 ];
 
 /// Dual-character operators
-const OPERATORS_2: [&str; 26] = [
+const OPERATORS_2: [&str; 27] = [
     "++", "&&", "**", "||", "::", "..", "==", ">>", "<<", "|>",
     "->", "<-", ">=", "<=", "=>",
-    "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=",
+    "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=", "?=",
     "~>", "<~",
 ];
 
 /// Triple-character operators
-const OPERATORS_3: [&str; 5] = [
-    ":::", "..=", "~>>", "<<~", "|>>"
+const OPERATORS_3: [&str; 7] = [
+    ":::", "..=", "&&=", "||=", "~>>", "<<~", "|>>"
 ];
 
 /// Pseudo-numerical prefixes
