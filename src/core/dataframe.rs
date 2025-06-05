@@ -5,6 +5,7 @@
 
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
+use crate::data_types::DataType;
 use crate::dataframe::Dataframe::Model;
 use crate::expression::{Conditions, Expression};
 use crate::field::FieldMetadata;
@@ -22,12 +23,12 @@ use crate::row_metadata::RowMetadata;
 use crate::sequences::Sequence;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::Number;
+use crate::typed_values::TypedValue::{Number, StringValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-/// DataFrame is a logical representation of table
+/// DataFrame is a logical representation of a table
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Dataframe {
     Binary(ByteRowCollection),
@@ -47,6 +48,50 @@ impl Dataframe {
         config.save(&ns)?;
         let file = Arc::new(FileRowCollection::table_file_create(ns)?);
         Ok(Self::Disk(FileRowCollection::new(columns, file, path.as_str())))
+    }
+
+    /// Creates a dataframe from a grid of raw text values
+    /// ```
+    /// |--------------------------------------|
+    /// | symbol | exchange | last_sale | rank |
+    /// |--------------------------------------|
+    /// | BOOM   | NYSE     | 113.76    | 1    |
+    /// | ABC    | AMEX     | 24.98     | 2    |
+    /// | JET    | NASDAQ   | 64.24     | 3    |
+    /// |--------------------------------------|
+    /// ```
+    pub fn from_cells(cells: &Vec<Vec<String>>) -> Self {
+        let (params, body) = Self::get_parameters_and_values(cells);
+        let mut rows = vec![];
+        for (id, items) in body.iter().enumerate() {
+            let row = Row::new(id, items.to_owned());
+            rows.push(row)
+        }
+        Model(ModelRowCollection::from_parameters_and_rows(&params, &rows))
+    }
+
+    fn get_parameters_and_values(cells: &Vec<Vec<String>>) -> (Vec<Parameter>, Vec<Vec<TypedValue>>) {
+        /// Detects the type of the given column
+        fn detect_type(rows: &Vec<Vec<TypedValue>>, column_index: usize) -> DataType {
+            let mut types = vec![];
+            for row in rows { types.push(row[column_index].get_type()); }
+            DataType::best_fit(types)
+        }
+
+        // interpret the cells as a table
+        let header = cells[0].clone();
+        let body = cells[1..].iter()
+            .map(|row| row.iter()
+                .map(|text| match TypedValue::wrap_value(text) {
+                    Ok(value) => value,
+                    Err(_) => StringValue(text.into())
+                }).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let params = header.iter().enumerate()
+            .map(|(n, name)| Parameter::new(name, detect_type(&body, n)))
+            .collect::<Vec<_>>();
+
+        (params, body)
     }
 
     /// deletes rows from the table based on a condition
@@ -360,17 +405,19 @@ impl RowCollection for Dataframe {
 #[cfg(test)]
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
-    use crate::data_types::DataType::{NumberType, StringType};
+    use crate::data_types::DataType::{FixedSizeType, NumberType, StringType};
     use crate::dataframe::Dataframe;
     use crate::dataframe::Dataframe::Model;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::number_kind::NumberKind::F64Kind;
-    use crate::numbers::Numbers::F64Value;
+    use crate::number_kind::NumberKind::{F64Kind, I64Kind};
+    use crate::numbers::Numbers::{F64Value, I64Value};
     use crate::parameter::Parameter;
     use crate::row_collection::RowCollection;
     use crate::structures::Row;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote, make_quote_columns};
+    use crate::tokenizer;
+    use crate::tokens::Token;
     use crate::typed_values::TypedValue::{Null, Number, StringValue};
 
     #[test]
@@ -404,6 +451,53 @@ mod tests {
             Parameter::new("exchange", StringType),
             Parameter::new("last_sale", NumberType(F64Kind)),
             Parameter::new("beta", NumberType(F64Kind))
+        ])
+    }
+
+    #[test]
+    fn test_get_parameters_and_values() {
+        let tokens = tokenizer::parse_fully(r#"
+            |--------------------------------------|
+            | symbol | exchange | last_sale | rank |
+            |--------------------------------------|
+            | BOOM   | NYSE     | 113.76    | 1    |
+            | ABC    | AMEX     | 24.98     | 2    |
+            | JET    | NASDAQ   | 64.24     | 3    |
+            |--------------------------------------|
+        "#);
+        assert_eq!(tokens.len(), 1);
+        let cells = match tokens[0].clone() {
+            Token::DataframeLiteral { cells, .. } => cells,
+            _ => vec![]
+        };
+
+        assert_eq!(cells.len(), 4);
+        let (params, data) = Dataframe::get_parameters_and_values(&cells);
+        assert_eq!(params, vec![
+            Parameter::new("symbol", FixedSizeType(StringType.into(), 4)),
+            Parameter::new("exchange", FixedSizeType(StringType.into(), 6)),
+            Parameter::new("last_sale", NumberType(F64Kind)),
+            Parameter::new("rank", NumberType(I64Kind))
+        ]);
+        assert_eq!(data, vec![
+            vec![
+                StringValue("BOOM".into()),
+                StringValue("NYSE".into()),
+                Number(F64Value(113.76)),
+                Number(I64Value(1))
+            ],
+            vec![
+                StringValue("ABC".into()),
+                StringValue("AMEX".into()),
+                Number(F64Value(24.98)),
+                Number(I64Value(2))
+            ],
+            vec![
+                StringValue("JET".into()),
+                StringValue("NASDAQ".into()),
+                Number(F64Value(64.24)),
+                Number(I64Value(3))
+            ]
         ])
     }
 

@@ -101,7 +101,7 @@ numbers:::reduce(0, (a, b) -> a + b)</pre>
 now():::day_of()</pre>
 <h5>results</h5>
 <pre>
-27
+5
 </pre>
 <hr>
 <h4>📦 cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
@@ -110,7 +110,7 @@ now():::day_of()</pre>
 now():::hour12()</pre>
 <h5>results</h5>
 <pre>
-1
+3
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
@@ -119,7 +119,7 @@ now():::hour12()</pre>
 now():::hour24()</pre>
 <h5>results</h5>
 <pre>
-13
+15
 </pre>
 <hr>
 <h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
@@ -128,7 +128,7 @@ now():::hour24()</pre>
 now():::minute_of()</pre>
 <h5>results</h5>
 <pre>
-41
+6
 </pre>
 <hr>
 <h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
@@ -137,7 +137,7 @@ now():::minute_of()</pre>
 now():::month_of()</pre>
 <h5>results</h5>
 <pre>
-5
+6
 </pre>
 <hr>
 <h4>📦 cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
@@ -146,7 +146,7 @@ now():::month_of()</pre>
 now():::second_of()</pre>
 <h5>results</h5>
 <pre>
-10
+0
 </pre>
 <hr>
 <h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
@@ -172,7 +172,7 @@ cal::minus(now(), 3:::days())</pre>
 <pre>cal::now()</pre>
 <h5>results</h5>
 <pre>
-2025-05-27T20:41:10.889Z
+2025-06-05T22:06:00.597Z
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
@@ -340,9 +340,56 @@ true
 5
 </pre>
 <hr>
+<h4>📦 nsd::create_event_src &#8212; Creates a journaled event-source</h4>
+<h5>example1</h5>
+<pre>nsd::create_event_src(
+   "examples.event_src.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)</pre>
+<h5>results</h5>
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+|------------------------------------|
+</pre>
+<hr>
+<h4>📦 nsd::create_fn &#8212; Creates a journaled table function</h4>
+<h5>example1</h5>
+<pre>nsd::create_fn(
+   "examples.table_fn.stocks",
+   (symbol: String(8), exchange: String(8), last_sale: f64) -> {
+       symbol: symbol,
+       exchange: exchange,
+       last_sale: last_sale * 2.0,
+       event_time: cal::now()
+   })</pre>
+<h5>results</h5>
+<pre>
+|-------------------------------------------------|
+| id | symbol | exchange | last_sale | event_time |
+|-------------------------------------------------|
+|-------------------------------------------------|
+</pre>
+<hr>
+<h4>📦 nsd::drop &#8212; Deletes a dataframe from a namespace</h4>
+<h5>example1</h5>
+<pre>nsd::save('packages.remove.stocks', Table::new(
+    symbol: String(8),
+    exchange: String(8),
+    last_sale: f64
+))
+
+nsd::drop('packages.remove.stocks')
+nsd::exists('packages.remove.stocks')</pre>
+<h5>results</h5>
+<pre>
+false
+</pre>
+<hr>
 <h4>📦 nsd::exists &#8212; Returns true if the source path exists</h4>
 <h5>example1</h5>
-<pre>nsd::save('packages.exists.stocks', new Table(
+<pre>nsd::save('packages.exists.stocks', Table::new(
    symbol: String(8),
    exchange: String(8),
    last_sale: f64
@@ -361,10 +408,37 @@ true
 false
 </pre>
 <hr>
+<h4>📦 nsd::journal &#8212; Retrieves the journal for an event-source or table function</h4>
+<h5>example1</h5>
+<pre>use nsd
+nsd::drop("examples.journal.stocks");
+stocks = nsd::create_fn(
+   "examples.journal.stocks",
+   (symbol: String(8), exchange: String(8), last_sale: f64) -> {
+       symbol: symbol,
+       exchange: exchange,
+       last_sale: last_sale * 2.0,
+       ingest_time: cal::now()
+   });
+[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+ { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+ { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+stocks:::journal()</pre>
+<h5>results</h5>
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 0  | ABC    | AMEX     | 12.49     |
+| 1  | BOOM   | NYSE     | 56.88     |
+| 2  | JET    | NASDAQ   | 32.12     |
+|------------------------------------|
+</pre>
+<hr>
 <h4>📦 nsd::load &#8212; Loads a dataframe from a namespace</h4>
 <h5>example1</h5>
 <pre>let stocks =
-   nsd::save('packages.save_load.stocks', new Table(
+   nsd::save('packages.save_load.stocks', Table::new(
        symbol: String(8),
        exchange: String(8),
        last_sale: f64
@@ -389,25 +463,31 @@ nsd::load('packages.save_load.stocks')</pre>
 |------------------------------------|
 </pre>
 <hr>
-<h4>📦 nsd::remove &#8212; Deletes a dataframe from a namespace</h4>
+<h4>📦 nsd::replay &#8212; Reconstructs the state of a journaled table</h4>
 <h5>example1</h5>
-<pre>nsd::save('packages.remove.stocks', new Table(
-    symbol: String(8),
-    exchange: String(8),
-    last_sale: f64
-))
-
-nsd::remove('packages.remove.stocks')
-nsd::exists('packages.remove.stocks')</pre>
+<pre>use nsd
+nsd::drop("examples.replay.stocks");
+stocks = nsd::create_fn(
+   "examples.replay.stocks",
+   (symbol: String(8), exchange: String(8), last_sale: f64) -> {
+       symbol: symbol,
+       exchange: exchange,
+       last_sale: last_sale * 2.0,
+       rank: __row_id__ + 1
+   });
+[{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+ { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+ { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+stocks:::replay()</pre>
 <h5>results</h5>
 <pre>
-false
+3
 </pre>
 <hr>
 <h4>📦 nsd::save &#8212; Creates a new dataframe</h4>
 <h5>example1</h5>
 <pre>let stocks =
-   nsd::save('packages.save.stocks', new Table(
+   nsd::save('packages.save.stocks', Table::new(
        symbol: String(8),
        exchange: String(8),
        last_sale: f64
@@ -433,10 +513,9 @@ stocks</pre>
 <hr>
 <h4>📦 os::call &#8212; Invokes an operating system application</h4>
 <h5>example1</h5>
-<pre>create table ns("examples.os.call") (
-    symbol: String(8),
-    exchange: String(8),
-    last_sale: f64
+<pre>stocks = nsd::save(
+   "examples.os.call",
+    Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
 )
 os::call("chmod", "777", oxide::home())</pre>
 <h5>results</h5>
@@ -456,7 +535,7 @@ true
 <h5>example1</h5>
 <pre>use str
 cur_dir = os::current_dir()
-prefix = iff(cur_dir:::ends_with("core"), "../..", ".")
+prefix = if(cur_dir:::ends_with("core"), "../..", ".")
 path_str = prefix + "/demoes/language/include_file.oxide"
 include path_str</pre>
 <h5>results</h5>
@@ -503,33 +582,30 @@ include path_str</pre>
 | 22 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | 23 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | 24 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 25 | LaunchInstanceID           | BA12FBA4-2DD3-4D24-91D2-8D038ED4B2F9                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 26 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 27 | OXIDE_HOME                 | /Users/ldaniels/GitHub/oxide/oxide_db                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 28 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:.                                                                                                                                  |
-| 29 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 30 | RR_REAL_RUSTDOC            | /Users/ldaniels/.cargo/bin/rustdoc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 31 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 32 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 33 | RUSTDOC                    | /Users/ldaniels/Library/Application Support/JetBrains/IntelliJIdea2025.1/plugins/intellij-rust/bin/mac/aarch64/intellij-rust-native-helper                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| 34 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 35 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 36 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 37 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 38 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 39 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 40 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 41 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 42 | SECURITYSESSIONID          | 186b1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 43 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 44 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.ueG9OnvHQk/Listeners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 45 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 46 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 47 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 48 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 49 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.104316344                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 50 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 51 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 25 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 26 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:.                                                                                                                                  |
+| 27 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 28 | RR_REAL_RUSTDOC            | /Users/ldaniels/.cargo/bin/rustdoc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 29 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| 30 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 31 | RUSTDOC                    | /Users/ldaniels/Library/Application Support/JetBrains/IntelliJIdea2025.1/plugins/intellij-rust/bin/mac/aarch64/intellij-rust-native-helper                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 32 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 33 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 34 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 35 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 36 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 37 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 38 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 39 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 40 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 41 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.lSmiPPAhaN/Listeners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 42 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 43 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| 44 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 45 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 46 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.104316344                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 47 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 48 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 |-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
@@ -565,13 +641,13 @@ oxide::eval("a + b")</pre>
 <pre>from oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|-------------------------------------------------------------------------------|
-| id | name    | module | signature        | description              | returns |
-|-------------------------------------------------------------------------------|
-| 0  | to_u128 | util   | util::to_u128(a) | Converts a value to u128 | u128    |
-| 1  | to_i64  | util   | util::to_i64(a)  | Converts a value to i64  | i64     |
-| 2  | to_i128 | util   | util::to_i128(a) | Converts a value to i128 | i128    |
-|-------------------------------------------------------------------------------|
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | name        | module | signature         | description                                     | returns                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | env         | os     | os::env()         | Returns a table of the OS environment variables | Table(key: String(256), value: String(8192)) |
+| 1  | current_dir | os     | os::current_dir() | Returns the current directory                   | String                                       |
+| 2  | clear       | os     | os::clear()       | Clears the terminal/screen                      | Boolean                                      |
+|------------------------------------------------------------------------------------------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 oxide::home &#8212; Returns the Oxide home directory path</h4>
@@ -579,7 +655,40 @@ oxide::eval("a + b")</pre>
 <pre>oxide::home()</pre>
 <h5>results</h5>
 <pre>
-"/Users/ldaniels/GitHub/oxide/oxide_db"
+"/Users/ldaniels/oxide_db"
+</pre>
+<hr>
+<h4>📦 oxide::inspect &#8212; Returns a table describing the structure of a model</h4>
+<h5>example1</h5>
+<pre>oxide::inspect("{ x = 1 x = x + 1 }")</pre>
+<h5>results</h5>
+<pre>
+|-------------------------------------------------------------------------------------------------|
+| id | code      | model                                                                          |
+|-------------------------------------------------------------------------------------------------|
+| 0  | x = 1     | SetVariables(Variable("x"), Literal(Number(I64Value(1))))                      |
+| 1  | x = x + 1 | SetVariables(Variable("x"), Plus(Variable("x"), Literal(Number(I64Value(1))))) |
+|-------------------------------------------------------------------------------------------------|
+</pre>
+<hr>
+<h4>📦 oxide::inspect &#8212; Returns a table describing the structure of a model</h4>
+<h5>example2</h5>
+<pre>oxide::inspect("stock::is_this_you('ABC')")</pre>
+<h5>results</h5>
+<pre>
+|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | code                      | model                                                                                                            |
+|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | stock::is_this_you("ABC") | ColonColon(Variable("stock"), FunctionCall { fx: Variable("is_this_you"), args: [Literal(StringValue("ABC"))] }) |
+|---------------------------------------------------------------------------------------------------------------------------------------------------|
+</pre>
+<hr>
+<h4>📦 oxide::printf &#8212; C-style "printf" function</h4>
+<h5>example1</h5>
+<pre>oxide::printf("Hello %s", "World")</pre>
+<h5>results</h5>
+<pre>
+true
 </pre>
 <hr>
 <h4>📦 oxide::println &#8212; Print line function</h4>
@@ -598,12 +707,20 @@ true
 true
 </pre>
 <hr>
+<h4>📦 oxide::sprintf &#8212; C-style "sprintf" function</h4>
+<h5>example1</h5>
+<pre>oxide::sprintf("Hello %s", "World")</pre>
+<h5>results</h5>
+<pre>
+"Hello World"
+</pre>
+<hr>
 <h4>📦 oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
 <h5>example1</h5>
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-3330963f-e817-4c21-8aa9-eb719c4d051f
+7d3668e7-5c25-4f33-8bea-7ad824bbf886
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -611,7 +728,7 @@ true
 <pre>oxide::version()</pre>
 <h5>results</h5>
 <pre>
-"0.40"
+"0.41"
 </pre>
 <hr>
 <h4>📦 str::ends_with &#8212; Returns true if string `a` ends with string `b`</h4>
@@ -727,73 +844,12 @@ where exchange is 'NYSE'"
 "125.75"
 </pre>
 <hr>
-<h4>📦 testing::assert &#8212; Evaluates an assertion returning true or an error</h4>
-<h5>example1</h5>
-<pre>use testing
-assert(
-   [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
-)</pre>
-<h5>results</h5>
-<pre>
-true
-</pre>
-<hr>
-<h4>📦 testing::feature &#8212; Creates a new test feature</h4>
-<h5>example1</h5>
-<pre>use testing
-feature("Matches function", {
-    "Compare Array contents: Equal": ctx -> {
-        assert(
-            [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
-        )
-    },
-    "Compare Array contents: Not Equal": ctx -> {
-        assert(!(
-            [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
-        ))
-    },
-    "Compare JSON contents (in sequence)": ctx -> {
-        assert(
-            { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
-        )
-    },
-    "Compare JSON contents (out of sequence)": ctx -> {
-        assert(
-            { scores: [82 78 99], id: "A1537" }
-                       matches 
-            { id: "A1537", scores: [82 78 99] }
-        )
-    }
-})</pre>
-<h5>results</h5>
-<pre>
-|------------------------------------------------------------------------------------------------------------------------|
-| id | level | item                                                                                    | passed | result |
-|------------------------------------------------------------------------------------------------------------------------|
-| 0  | 0     | Matches function                                                                        | true   | true   |
-| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |
-| 2  | 2     | assert([1, "a", "b", "c"] matches [1, "a", "b", "c"])                                   | true   | true   |
-| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |
-| 4  | 2     | assert(!([1, "a", "b", "c"] matches [0, "x", "y", "z"]))                                | true   | true   |
-| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |
-| 6  | 2     | assert({first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"})               | true   | true   |
-| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |
-| 8  | 2     | assert({scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}) | true   | true   |
-|------------------------------------------------------------------------------------------------------------------------|
-</pre>
-<hr>
-<h4>📦 testing::type_of &#8212; Returns the type of a value</h4>
-<h5>example1</h5>
-<pre>testing::type_of([12, 76, 444])</pre>
-<h5>results</h5>
-<pre>
-"Array(3)"
-</pre>
-<hr>
 <h4>📦 tools::compact &#8212; Shrinks a table by removing deleted rows</h4>
 <h5>example1</h5>
-<pre>stocks = ns("examples.compact.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+<pre>stocks = nsd::save(
+   "examples.compact.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
  { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
@@ -832,10 +888,35 @@ from stocks</pre>
 |----------------------------------------------------------|
 </pre>
 <hr>
+<h4>📦 tools::describe &#8212; Describes a table or structure</h4>
+<h5>example2</h5>
+<pre>stocks =
+    |--------------------------------------|
+    | symbol | exchange | last_sale | rank |
+    |--------------------------------------|
+    | BOOM   | NYSE     | 113.76    | 1    |
+    | ABC    | AMEX     | 24.98     | 2    |
+    | JET    | NASDAQ   | 64.24     | 3    |
+    |--------------------------------------|
+tools::describe(stocks)</pre>
+<h5>results</h5>
+<pre>
+|----------------------------------------------------------|
+| id | name      | type      | default_value | is_nullable |
+|----------------------------------------------------------|
+| 0  | symbol    | String(4) | null          | true        |
+| 1  | exchange  | String(6) | null          | true        |
+| 2  | last_sale | f64       | null          | true        |
+| 3  | rank      | i64       | null          | true        |
+|----------------------------------------------------------|
+</pre>
+<hr>
 <h4>📦 tools::fetch &#8212; Retrieves a raw structure from a table</h4>
 <h5>example1</h5>
-<pre>stocks = ns("examples.fetch.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+<pre>stocks = nsd::save(
+   "examples.fetch.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
@@ -857,38 +938,12 @@ tools::fetch(stocks, 2)</pre>
 [2, 4, 6, 8, 10]
 </pre>
 <hr>
-<h4>📦 tools::journal &#8212; Retrieves the journal for an event-source or table function</h4>
-<h5>example1</h5>
-<pre>use tools
-stocks = ns("examples.journal.stocks")
-drop table stocks
-create table stocks fn(
-   symbol: String(8), exchange: String(8), last_sale: f64
-) => {
-    symbol: symbol,
-    exchange: exchange,
-    last_sale: last_sale,
-    ingest_time: cal::now()
-}
-[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
- { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
- { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-stocks:::journal()</pre>
-<h5>results</h5>
-<pre>
-|------------------------------------|
-| id | symbol | exchange | last_sale |
-|------------------------------------|
-| 0  | ABC    | AMEX     | 12.49     |
-| 1  | BOOM   | NYSE     | 56.88     |
-| 2  | JET    | NASDAQ   | 32.12     |
-|------------------------------------|
-</pre>
-<hr>
 <h4>📦 tools::len &#8212; Returns the length of a table</h4>
 <h5>example1</h5>
-<pre>stocks = ns("examples.table_len.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+<pre>stocks = nsd::save(
+   "examples.table_len.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
  { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
  { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
@@ -900,13 +955,15 @@ tools::len(stocks)</pre>
 <hr>
 <h4>📦 tools::map &#8212; Transform a collection based on a function</h4>
 <h5>example1</h5>
-<pre>stocks = ns("examples.map_over_table.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+<pre>stocks = nsd::save(
+   "examples.map_over_table.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
  { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
  { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
 use tools
-stocks:::map(fn(row) => {
+stocks:::map(row -> {
     symbol: symbol,
     exchange: exchange,
     last_sale: last_sale,
@@ -917,17 +974,19 @@ stocks:::map(fn(row) => {
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-05-27T20:41:11.265Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-05-27T20:41:11.266Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-05-27T20:41:11.266Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-06-05T22:06:01.072Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-06-05T22:06:01.073Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-06-05T22:06:01.074Z |
 |---------------------------------------------------------------|
 </pre>
 <hr>
 <h4>📦 tools::pop &#8212; Removes and returns a value or object from a Sequence</h4>
 <h5>example1</h5>
 <pre>use tools
-stocks = ns("examples.tools_pop.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+stocks = nsd::save(
+   "examples.tools_pop.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
@@ -944,8 +1003,10 @@ stocks:::pop()</pre>
 <h4>📦 tools::push &#8212; Appends a value or object to a Sequence</h4>
 <h5>example1</h5>
 <pre>use tools
-stocks = ns("examples.push.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+stocks = nsd::save(
+   "examples.tools_push.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
@@ -953,36 +1014,14 @@ stocks:::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
 stocks</pre>
 <h5>results</h5>
 <pre>
-|-------------------------------|
-| symbol | exchange | last_sale |
-|-------------------------------|
-| ABC    | AMEX     | 12.49     |
-| BOOM   | NYSE     | 56.88     |
-| JET    | NASDAQ   | 32.12     |
-| XYZ    | NASDAQ   | 24.78     |
-|-------------------------------|
-</pre>
-<hr>
-<h4>📦 tools::replay &#8212; Reconstructs the state of a journaled table</h4>
-<h5>example1</h5>
-<pre>use tools
-stocks = ns("examples.table_fn.stocks")
-drop table stocks
-create table stocks fn(
-   symbol: String(8), exchange: String(8), last_sale: f64
-) => {
-    symbol: symbol,
-    exchange: exchange,
-    last_sale: last_sale * 2.0,
-    rank: __row_id__ + 1
-}
-[{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
- { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
- { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-stocks:::replay()</pre>
-<h5>results</h5>
-<pre>
-3
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 0  | ABC    | AMEX     | 12.49     |
+| 1  | BOOM   | NYSE     | 56.88     |
+| 2  | JET    | NASDAQ   | 32.12     |
+| 3  | XYZ    | NASDAQ   | 24.78     |
+|------------------------------------|
 </pre>
 <hr>
 <h4>📦 tools::reverse &#8212; Returns a reverse copy of a table, string or array</h4>
@@ -1014,8 +1053,10 @@ to_table(reverse(
 <h4>📦 tools::scan &#8212; Returns existence metadata for a table</h4>
 <h5>example1</h5>
 <pre>use tools
-stocks = ns("examples.scan.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+stocks = nsd::save(
+   "examples.scan.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
  { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
@@ -1047,8 +1088,10 @@ stocks:::scan()</pre>
 <h4>📦 tools::to_csv &#8212; Converts a collection to CSV format</h4>
 <h5>example1</h5>
 <pre>use tools::to_csv
-stocks = ns("examples.csv.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+stocks = nsd::save(
+   "examples.csv.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
  { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
@@ -1063,8 +1106,10 @@ stocks:::to_csv()</pre>
 <h4>📦 tools::to_json &#8212; Converts a collection to JSON format</h4>
 <h5>example1</h5>
 <pre>use tools::to_json
-stocks = ns("examples.json.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+stocks = nsd::save(
+   "examples.json.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
  { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
@@ -1213,15 +1258,17 @@ b10a8db164e0754105b7a99be72e3fe5
 <hr>
 <h4>📦 www::serve &#8212; Starts a local HTTP service</h4>
 <h5>example1</h5>
-<pre>www::serve(8822)
-stocks = ns("examples.www.quotes")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+<pre>www::serve(8787)
+stocks = nsd::save(
+   "examples.www.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
  { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
  { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
-GET http://localhost:8822/examples/www/quotes/1/4</pre>
+GET http://localhost:8787/examples/www/quotes/1/4</pre>
 <h5>results</h5>
 <pre>
 [{"exchange":"NYSE","last_sale":56.88,"symbol":"BOX"}, {"exchange":"NASDAQ","last_sale":32.12,"symbol":"JET"}, {"exchange":"AMEX","last_sale":12.49,"symbol":"ABC"}]

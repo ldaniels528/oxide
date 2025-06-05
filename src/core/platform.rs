@@ -39,9 +39,9 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::ops::Deref;
 
-pub const MAJOR_VERSION: u8 = 0;
+pub const MAJOR_VERSION: u8 = 1;
 pub const MINOR_VERSION: u8 = 40;
-pub const VERSION: &str = "0.40";
+pub const VERSION: &str = "0.41";
 
 /// Represents an Oxide Platform Package
 pub trait Package {
@@ -70,7 +70,6 @@ pub enum PackageOps {
     Oxide(OxidePkg),
     Os(OsPkg),
     Strings(StringsPkg),
-    Testing(TestingPkg),
     Tools(ToolsPkg),
     Utils(UtilsPkg),
     Www(WwwPkg),
@@ -115,7 +114,6 @@ impl PackageOps {
         contents.extend(OsPkg::get_contents());
         contents.extend(OxidePkg::get_contents());
         contents.extend(StringsPkg::get_contents());
-        contents.extend(TestingPkg::get_contents());
         contents.extend(ToolsPkg::get_contents());
         contents.extend(UtilsPkg::get_contents());
         contents.extend(WwwPkg::get_contents());
@@ -141,7 +139,6 @@ impl PackageOps {
             PackageOps::Os(pkg) => Box::new(pkg.clone()),
             PackageOps::Oxide(pkg) => Box::new(pkg.clone()),
             PackageOps::Strings(pkg) => Box::new(pkg.clone()),
-            PackageOps::Testing(pkg) => Box::new(pkg.clone()),
             PackageOps::Tools(pkg) => Box::new(pkg.clone()),
             PackageOps::Utils(pkg) => Box::new(pkg.clone()),
             PackageOps::Www(pkg) => Box::new(pkg.clone()),
@@ -437,7 +434,6 @@ mod tests {
                 Oxide(op) => format!("Oxide(OxidePkg::{:?})", op),
                 Os(op) => format!("Os(OsPkg::{:?})", op),
                 Strings(op) => format!("Strings(StringsPkg::{:?})", op),
-                Testing(op) => format!("Testing(TestingPkg::{:?})", op),
                 Tools(op) => format!("Tools(ToolsPkg::{:?})", op),
                 Utils(op) => format!("Utils(UtilsPkg::{:?})", op),
                 Www(op) => format!("Www(WwwPkg::{:?})", op),
@@ -586,16 +582,6 @@ mod tests {
             "str::substring(s: String, m: i64, n: i64)"
         );
         assert_eq!(Strings(StringsPkg::ToString).to_code(), "str::to_string(a)");
-        // testing
-        assert_eq!(
-            Testing(TestingPkg::Assert).to_code(),
-            "testing::assert(b: Boolean)"
-        );
-        assert_eq!(
-            Testing(TestingPkg::Feature).to_code(),
-            "testing::feature(a: String, b: Struct)"
-        );
-        assert_eq!(Testing(TestingPkg::TypeOf).to_code(), "testing::type_of(a)");
         // tools
         assert_eq!(
             Tools(ToolsPkg::Compact).to_code(),
@@ -611,14 +597,14 @@ mod tests {
         );
         assert_eq!(Tools(ToolsPkg::Filter).to_code(), "tools::filter(a, b)");
         assert_eq!(
-            Tools(ToolsPkg::Journal).to_code(),
-            "tools::journal(t: Table)"
+            Nsd(NsdPkg::Journal).to_code(),
+            "nsd::journal(t: Table)"
         );
         assert_eq!(Tools(ToolsPkg::Len).to_code(), "tools::len(t: Table)");
         assert_eq!(Tools(ToolsPkg::Map).to_code(), "tools::map(a, b)");
         assert_eq!(Tools(ToolsPkg::Pop).to_code(), "tools::pop(t: Table)");
         assert_eq!(Tools(ToolsPkg::Push).to_code(), "tools::push(a, b)");
-        assert_eq!(Tools(ToolsPkg::Replay).to_code(), "tools::replay(t: Table)");
+        assert_eq!(Nsd(NsdPkg::Replay).to_code(), "nsd::replay(t: Table)");
         assert_eq!(
             Tools(ToolsPkg::Reverse).to_code(),
             "tools::reverse(t: Table)"

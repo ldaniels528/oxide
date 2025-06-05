@@ -200,7 +200,7 @@ pub fn pull_type(value: &TypedValue) -> std::io::Result<DataType> {
     }
 }
 
-pub fn pull_variable(expr: &Expression) -> std::io::Result<String> {
+pub fn pull_variable_name(expr: &Expression) -> std::io::Result<String> {
     match expr {
         Variable(name) => Ok(name.clone()),
         z => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(z.to_code())))

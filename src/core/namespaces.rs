@@ -112,6 +112,12 @@ impl Namespace {
                     .map(|tf| Dataframe::TableFn(Box::new(tf)))
         }
     }
+    
+    pub fn with_events_name(&self) -> Self {
+        let mut events_ns = self.clone();
+        events_ns.name = format!("{}.events", self.name);
+        events_ns 
+    }
 }
 
 impl Display for Namespace {

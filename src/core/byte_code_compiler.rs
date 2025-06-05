@@ -344,7 +344,7 @@ impl ByteCodeCompiler {
         let param_type = self.next_parameter_type();
         let default_value = self.next_value()
             .unwrap_or_else(|err| ErrorValue(Exact(err.to_string())));
-        Parameter::with_default(name, param_type, default_value)
+        Parameter::new_with_default(name, param_type, default_value)
     }
 
     pub fn next_parameters(&mut self) -> Vec<Parameter> {

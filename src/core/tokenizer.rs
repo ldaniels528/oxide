@@ -4,6 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::tokens::Token;
+use crate::tokens::Token::DataframeLiteral;
 
 /// Single-character operators
 const OPERATORS_1: [char; 38] = [
@@ -13,16 +14,17 @@ const OPERATORS_1: [char; 38] = [
 ];
 
 /// Dual-character operators
-const OPERATORS_2: [&str; 27] = [
+const OPERATORS_2: [&str; 28] = [
     "++", "&&", "**", "||", "::", "..", "==", ">>", "<<", "|>",
     "->", "<-", ">=", "<=", "=>",
-    "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=", "?=",
+    "+=", "-=", "*=", "/=", "%=", "&=", "^=", "!=", ":=", "?=", "!?",
     "~>", "<~",
 ];
 
 /// Triple-character operators
-const OPERATORS_3: [&str; 7] = [
-    ":::", "..=", "&&=", "||=", "~>>", "<<~", "|>>"
+const OPERATORS_3: [&str; 9] = [
+    "~>>", "<<~", "|>>", ":::", 
+    "..=", "&&=", "||=", "<<=", ">>=",
 ];
 
 /// Pseudo-numerical prefixes
@@ -94,6 +96,7 @@ fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
 fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
         skip_comments,
+        next_dataframe_literal_token,
         next_compound_3_operator_token,
         next_compound_2_operator_token,
         next_operator_token,
@@ -135,6 +138,61 @@ fn next_eligible_token(inputs: &Vec<char>,
 
 fn next_backticks_quoted_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_quoted_string_token(inputs, pos, Token::backticks, '`')
+}
+
+/// Parses a dataframe-literal
+/// ```
+/// |--------------------------------------|
+/// | symbol | exchange | last_sale | rank |
+/// |--------------------------------------|
+/// | BOOM   | NYSE     | 113.76    | 1    |
+/// | ABC    | AMEX     | 24.98     | 2    |
+/// | JET    | NASDAQ   | 64.24     | 3    |
+/// |--------------------------------------|
+/// ```
+fn next_dataframe_literal_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    /// Checks if the current line is a dataframe-literal header line
+    fn is_header_line(inputs: &Vec<char>, pos: &mut usize) -> bool {
+        is_valid_line(inputs, pos) && *pos + 1 < inputs.len() && inputs[*pos + 1] == '-'
+    }
+
+    /// Checks if the current line is a dataframe-literal data line
+    fn is_valid_line(inputs: &Vec<char>, pos: &mut usize) -> bool {
+        has_more(inputs, pos) && inputs[*pos] == '|'
+    }
+    
+    fn create_cells(lines: Vec<String>) -> Vec<Vec<String>> {
+        let mut cells = vec![];
+        for line in lines.iter().filter(|s| !s.starts_with("|-")) {
+            let items = line.split('|').map(|s| s.trim().to_string()).collect::<Vec<_>>();
+            let row = items[1..items.len() - 1].to_vec();
+            cells.push(row);       
+        }
+        cells
+    }
+    
+    // is this a dataframe-literal?
+    if is_header_line(inputs, pos) {
+        let start = *pos;
+        let mut lines = vec![];
+
+        // capture the all lines
+        while is_valid_line(inputs, pos) {
+            let current = *pos;
+            // find the end of the line
+            while has_more(inputs, pos) && inputs[*pos] != '\n' { *pos += 1; }
+            // capture the line
+            let line = String::from_iter(inputs[current..*pos].iter());
+            lines.push(line);
+            // skip the whitespace
+            while is_whitespace(inputs, pos) { *pos += 1; }
+        }
+        let end = *pos;
+        let (line_number, column_number) = determine_code_position(&inputs, start);
+        let cells = create_cells(lines);
+        return Some(DataframeLiteral { cells, start, end, line_number, column_number })
+    }
+    None
 }
 
 fn next_double_quoted_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
@@ -358,6 +416,33 @@ mod tests {
             Token::Operator { text: "!=".into(), start: 3, end: 5, line_number: 1, column_number: 5 },
             Token::Numeric { text: "1000".into(), start: 5, end: 9, line_number: 1, column_number: 7 }
         ])
+    }
+
+    #[test]
+    fn test_dataframe_literal() {
+        let tokens = parse_fully(r#"
+        |--------------------------------------|
+        | symbol | exchange | last_sale | rank |
+        |--------------------------------------|
+        | BOOM   | NYSE     | 113.76    | 1    |
+        | ABC    | AMEX     | 24.98     | 2    |
+        | JET    | NASDAQ   | 64.24     | 3    |
+        |--------------------------------------|
+        "#);
+        assert_eq!(tokens, vec![
+            DataframeLiteral {
+                cells: vec![
+                    vec!["symbol".into(), "exchange".into(), "last_sale".into(), "rank".into()],
+                    vec!["BOOM".into(), "NYSE".into(), "113.76".into(), "1".into()],
+                    vec!["ABC".into(), "AMEX".into(), "24.98".into(), "2".into()],
+                    vec!["JET".into(), "NASDAQ".into(), "64.24".into(), "3".into()]
+                ],
+                start: 9,
+                end: 352,
+                line_number: 2,
+                column_number: 10
+            }]
+        )
     }
 
     #[test]

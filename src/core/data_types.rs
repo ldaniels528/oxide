@@ -11,7 +11,7 @@ use crate::errors::Errors::{Exact, InstantiationError, SyntaxError, TypeMismatch
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, UnrecognizedTypeName};
 use crate::errors::{throw, Errors, SyntaxErrors};
 use crate::expression::Expression::*;
-use crate::expression::{Expression, UNDEFINED};
+use crate::expression::Expression;
 use crate::field::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind;
@@ -29,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
 use uuid::Uuid;
+use crate::compiler;
 
 const PTR_LEN: usize = 8;
 
@@ -188,8 +189,8 @@ impl DataType {
 
     pub fn get_type_names() -> Vec<String> {
         vec![
-            "Array", "ASCII", "Binary", "Boolean", "Date", "Enum", "Error", "Fn",
-            "String", "Struct", "Table", //, "RowId",
+            "Array", "Binary", "Boolean", "Date", "Error",
+            "Enum", "Fn", "String", "Struct", "Table", "Tuple",
             "f64", "i64", "i128", "u128", "UUID",
         ].iter().map(|s| s.to_string()).collect()
     }
@@ -260,35 +261,10 @@ impl DataType {
     }
 
     pub fn instantiate(&self) -> std::io::Result<TypedValue> {
-        use crate::typed_values::TypedValue::*;
         match self {
-            ArrayType => Ok(ArrayValue(Array::new())),
-            BinaryType => Ok(Binary(vec![])),
-            BooleanType => Ok(Boolean(false)),
-            DateTimeType => Ok(DateValue(Local::now().timestamp_millis())),
-            EnumType(_) => throw(InstantiationError(self.clone())),
-            ErrorType => throw(InstantiationError(self.clone())),
-            FixedSizeType(data_type, _) => data_type.instantiate(),
-            FunctionType(params, kind) =>
-                Ok(Function {
-                    params: params.clone(),
-                    body: Box::new(UNDEFINED),
-                    returns: kind.deref().clone(),
-                }),
-            NumberType(kind) => Ok(Number(kind.get_default_value())),
             PlatformOpsType(_) => throw(InstantiationError(self.clone())),
-            StringType => Ok(StringValue(String::new())),
-            StructureType(params) =>
-                Ok(Structured(Hard(HardStructure::from_parameters(params.to_vec())))),
-            TableType(params) =>
-                Ok(TableValue(Model(ModelRowCollection::from_parameters(params)))),
-            TupleType(types) => {
-                let mut values = vec![];
-                for a_type in types { values.push(a_type.get_default_value()) }
-                Ok(TupleValue(values))
-            }
             UnresolvedType => throw(InstantiationError(self.clone())),
-            UUIDType => Ok(UUIDValue(Uuid::new_v4().as_u128()))
+            other => Ok(other.get_default_value())
         }
     }
 
@@ -399,12 +375,9 @@ fn decipher_model(model: &Expression) -> std::io::Result<DataType> {
     match model {
         // e.g. [String, String, f64]
         ArrayExpression(params) => decipher_model_array(params),
-        // e.g. fn(a, b, c)
-        FnExpression { params, body, returns } if body.is_none()=>
-            Ok(FunctionType(params.clone(), returns.clone().into())),
         // e.g. String(80)
         FunctionCall { fx, args } => decipher_model_function_call(fx, args),
-        // e.g. Structure(symbol: String, exchange: String, last_sale: f64)
+        // e.g. Struct(symbol: String, exchange: String, last_sale: f64)
         Literal(Structured(s)) => Ok(StructureType(s.get_parameters())),
         // e.g. fn(a, b, c)
         Literal(TypedValue::Kind(data_type)) => Ok(data_type.clone()),
@@ -438,29 +411,16 @@ fn decipher_model_function_call(
             other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
         }
     }
-    fn expect_type(args: &Vec<Expression>, f: fn(DataType) -> DataType) -> std::io::Result<DataType> {
-        match args.as_slice() {
-            [item] => Ok(f(decipher_model(item)?)),
-            other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
+    fn expect_types(args: &Vec<Expression>, f: fn(Vec<DataType>) -> DataType) -> std::io::Result<DataType> {
+        let mut data_types = vec![];
+        for arg in args {
+            data_types.push(decipher_model(arg)?);
         }
+        Ok(f(data_types))
     }
     fn expect_params(args: &Vec<Expression>, f: fn(Vec<Parameter>) -> DataType) -> std::io::Result<DataType> {
-        let mut all_params: Vec<Parameter> = vec![];
-        for arg in args {
-            match arg {
-                NamedValue(name, model) => 
-                    all_params.push(Parameter::new(name, decipher_model(model)?)),
-                Parameters(params) => all_params.extend(params.clone()),
-                SetVariables(var_expr, expr) =>
-                    match var_expr.deref() {
-                        Variable(name) => all_params.push(Parameter::from_tuple(name, expr.to_pure()?)),
-                        z => return throw(Exact(format!("Decomposition is not allowed near {}", z.to_code())))
-                    }
-                Variable(name) => all_params.push(Parameter::add(name)),
-                other => return throw(SyntaxError(SyntaxErrors::ParameterExpected(other.to_code())))
-            }
-        }
-        Ok(f(all_params))
+        let params = compiler::convert_to_parameters(args.to_vec())?;
+        Ok(f(params))
     }
 
     // decode the type
@@ -474,6 +434,7 @@ fn decipher_model_function_call(
                 "String" => expect_size(args, StringType),
                 "Struct" => expect_params(args, |params| StructureType(params)),
                 "Table" => expect_params(args, |params| TableType(params)),
+                "Tuple" => expect_types(args, |types| TupleType(types)),
                 type_name if args.is_empty() => decipher_model_variable(type_name),
                 type_name => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(type_name.into())))
             }
@@ -602,10 +563,10 @@ mod tests {
             verify_type_construction(
                 "Enum(AMEX = 1, NASDAQ = 2, NYSE = 3, OTCBB = 4)",
                 EnumType(vec![
-                    Parameter::with_default("AMEX", NumberType(I64Kind), Number(I64Value(1))),
-                    Parameter::with_default("NASDAQ", NumberType(I64Kind), Number(I64Value(2))),
-                    Parameter::with_default("NYSE", NumberType(I64Kind), Number(I64Value(3))),
-                    Parameter::with_default("OTCBB", NumberType(I64Kind), Number(I64Value(4))),
+                    Parameter::new_with_default("AMEX", NumberType(I64Kind), Number(I64Value(1))),
+                    Parameter::new_with_default("NASDAQ", NumberType(I64Kind), Number(I64Value(2))),
+                    Parameter::new_with_default("NYSE", NumberType(I64Kind), Number(I64Value(3))),
+                    Parameter::new_with_default("OTCBB", NumberType(I64Kind), Number(I64Value(4))),
                 ]));
         }
 
@@ -754,53 +715,137 @@ mod tests {
     /// Instantiation tests
     #[cfg(test)]
     mod instantiation_tests {
+        use crate::compiler::Compiler;
+        use crate::data_types::DataType::{FixedSizeType, NumberType, StringType};
         use crate::dataframe::Dataframe::Model;
+        use crate::errors::Errors;
         use crate::model_row_collection::ModelRowCollection;
+        use crate::number_kind::NumberKind::F64Kind;
         use crate::numbers::Numbers::*;
+        use crate::parameter::Parameter;
+        use crate::sequences::Array;
+        use crate::structures::HardStructure;
+        use crate::structures::Structures::Hard;
         use crate::testdata::{make_quote_columns, verify_exact_value, verify_exact_value_where};
         use crate::typed_values::TypedValue;
-        use crate::typed_values::TypedValue::{DateValue, Number, StringValue, TableValue};
+        use crate::typed_values::TypedValue::{ArrayValue, Binary, Boolean, DateValue, ErrorValue, Number, StringValue, Structured, TableValue, TupleValue};
+
+        #[test]
+        fn test_array() {
+            verify_exact_value(r#"
+                Array::new()
+            "#, ArrayValue(Array::new()));
+        }
+
+        #[test]
+        fn test_binary() {
+            verify_exact_value(r#"
+                Binary::new()
+            "#, Binary(vec![]));
+        }
+        
+        #[test]
+        fn test_boolean() {
+            verify_exact_value(r#"
+                Boolean::new()
+            "#, Boolean(false));
+        }
 
         #[test]
         fn test_date() {
             verify_exact_value_where(r#"
-                new Date()
+                Date::new()
             "#, |v| matches!(v, DateValue(..)));
+        }
+
+        #[test]
+        fn test_enum() {
+            verify_exact_value(r#"
+                Enum::new(AMEX, NYSE, NASDAQ, OTCBB)
+            "#, Number(I64Value(0)));
+        }
+
+        #[test]
+        fn test_error() {
+            verify_exact_value(r#"
+                Error::new()
+            "#, ErrorValue(Errors::Empty));
         }
 
         #[test]
         fn test_f64() {
             verify_exact_value(r#"
-                new f64()
+                f64::new()
             "#, Number(F64Value(0.)));
         }
 
         #[test]
         fn test_i64() {
             verify_exact_value(r#"
-                new i64()
+                i64::new()
             "#, Number(I64Value(0)));
         }
 
         #[test]
         fn test_string() {
             verify_exact_value(r#"
-                new String(80)
+                String::new(80)
             "#, StringValue(String::new()));
+        }
+
+        #[test]
+        fn test_struct() {
+           let model = Compiler::build(r#"
+                Struct::new(
+                    symbol: String(8) = "ABC",
+                    exchange: String(8) = "AMEX",
+                    last_sale: f64 = 6.7123
+                )
+            "#);
+
+            verify_exact_value(r#"
+                Struct::new(
+                    symbol: String(8) = "ABC", 
+                    exchange: String(8) = "AMEX", 
+                    last_sale: f64 = 6.7123
+                )
+            "#, Structured(Hard(HardStructure::new(
+                vec![
+                    Parameter::new_with_default("symbol", FixedSizeType(StringType.into(), 8), StringValue("ABC".into())),
+                    Parameter::new_with_default("exchange", FixedSizeType(StringType.into(), 8), StringValue("AMEX".into())),
+                    Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(6.7123))),
+                ],
+                vec![
+                    StringValue("ABC".into()),
+                    StringValue("AMEX".into()),
+                    Number(F64Value(6.7123))
+                ]))));
         }
 
         #[test]
         fn test_table() {
             verify_exact_value(r#"
-                new Table(symbol: String(8), exchange: String(8), last_sale: f64)
+                Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
             "#, TableValue(Model(ModelRowCollection::new(make_quote_columns()))));
+        }
+
+        #[test]
+        fn test_tuple() {
+            verify_exact_value(r#"
+                Tuple::new(String(8), String(8), f64)
+            "#, TupleValue(vec![
+                StringValue("".into()),
+                StringValue("".into()),
+                Number(F64Value(0.0))
+            ]));
         }
 
         #[test]
         fn test_uuid() {
             verify_exact_value_where(r#"
-                new UUID()
+                UUID::new()
             "#, |v| matches!(v, TypedValue::UUIDValue(..)));
         }
     }
+    
 }

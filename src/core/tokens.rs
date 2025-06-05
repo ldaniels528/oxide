@@ -13,6 +13,7 @@ use crate::tokens::Token::*;
 pub enum Token {
     Atom { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Backticks { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
+    DataframeLiteral { cells: Vec<Vec<String>>, start: usize, end: usize, line_number: usize, column_number: usize },
     DoubleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
@@ -63,16 +64,13 @@ impl Token {
     ////////////////////////////////////////////////////////////////
     // instance methods
     ////////////////////////////////////////////////////////////////
-
-    pub fn contains(&self, text: &str) -> bool {
-        text == self.get().as_str()
-    }
-
+    
     /// Returns the column number of the [Token]
     pub fn get_column_number(&self) -> usize {
         match self {
             Atom { column_number, .. }
             | Backticks { column_number, .. }
+            | DataframeLiteral { column_number, .. }
             | DoubleQuoted { column_number, .. }
             | Numeric { column_number, .. }
             | Operator { column_number, .. }
@@ -86,6 +84,7 @@ impl Token {
         match self {
             Atom { line_number, .. }
             | Backticks { line_number, .. }
+            | DataframeLiteral { line_number, .. }
             | DoubleQuoted { line_number, .. }
             | Numeric { line_number, .. }
             | Operator { line_number, .. }
@@ -96,15 +95,27 @@ impl Token {
 
     /// Returns the "raw" value of the [Token]
     pub fn get(&self) -> String {
-        (match self {
+        match self.clone() {
             Atom { text, .. }
             | Backticks { text, .. }
             | DoubleQuoted { text, .. }
             | Numeric { text, .. }
             | Operator { text, .. }
             | SingleQuoted { text, .. }
-            | URL { text, .. } => text
-        }).to_string()
+            | URL { text, .. } => text,
+            DataframeLiteral { cells, .. } => { 
+                let mut lines: Vec<String> = vec![];
+                for row in cells {
+                    let line = row.join("|");
+                    lines.push(line);
+                }
+                lines.join("\n")
+            }
+        }
+    }
+
+    pub fn is(&self, text: &str) -> bool {
+        text == self.get().as_str()
     }
 
     /// Indicates whether the token is alphanumeric.

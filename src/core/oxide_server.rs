@@ -32,7 +32,6 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
 use serde_json::{json, Value};
-use shared_lib::{RemoteCallRequest, RemoteCallResponse};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{stdout, Write};
@@ -43,6 +42,49 @@ use tokio::runtime::Runtime;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct RemoteCallRequest {
+    code: String,
+}
+
+impl RemoteCallRequest {
+    pub fn new(code: String) -> Self {
+        RemoteCallRequest { code }
+    }
+
+    pub fn get_code(&self) -> &String { &self.code }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct RemoteCallResponse {
+    result: Value,
+    message: Option<String>,
+}
+
+impl RemoteCallResponse {
+    pub fn from_string(json_string: &str) -> std::io::Result<RemoteCallResponse> {
+        serde_json::from_str(json_string).map_err(|e| cnv_error!(e))
+    }
+
+    pub fn fail(message: String) -> Self {
+        RemoteCallResponse {
+            result: Value::Null,
+            message: Some(message),
+        }
+    }
+
+    pub fn success(value: Value) -> Self {
+        RemoteCallResponse {
+            result: value,
+            message: None,
+        }
+    }
+
+    pub fn get_message(&self) -> Option<String> { self.message.to_owned() }
+
+    pub fn get_result(&self) -> Value { self.result.to_owned() }
+}
 
 #[macro_export]
 macro_rules! web_routes {

@@ -163,15 +163,15 @@ mod tests {
 
         let mut wsc = OxideWebSocketClient::connect("0.0.0.0", port, "/ws").await.unwrap();
         let value = wsc.evaluate(r#"
-            stocks := ns("ws.script.stocks")
-            table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-            append stocks from [
-                { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
-                { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }
-            ]
+            stocks := nsd::save(
+                "ws.script.stocks",
+                Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+            )
+            [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
+             { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+             { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+             { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+             { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
             from stocks
         "#).await.unwrap();
         show_value(value.clone());

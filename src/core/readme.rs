@@ -3,7 +3,6 @@
 // Oxide README.md Generation
 ////////////////////////////////////////////////////////////////////
 
-use crate::data_types::DataType;
 use crate::expression::Expression::{DoWhile, While};
 use crate::expression::Queryables::Where;
 use crate::expression::Ranges::Exclusive;
@@ -14,7 +13,7 @@ use crate::row_collection::RowCollection;
 use crate::structures::Structure;
 use crate::table_renderer::TableRenderer;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{NamespaceValue, Structured, TableValue};
+use crate::typed_values::TypedValue::{Structured, TableValue};
 use crate::utils::{strip_margin, superscript};
 use log::__private_api::Value;
 use shared_lib::cnv_error;
@@ -31,9 +30,17 @@ fn generate_readme(file: File) -> std::io::Result<File> {
     // println!("generate run tests...");
     // let mut file = generate_run_tests(file)?;
 
+    println!("generate operators...");    
+    let operators_header = strip_margin(r#"
+        |<a name="operators"></a>
+        |### 🧮 Binary Operators Reference
+    "#, '|');
+    writeln!(file, "{operators_header}")?;
+    let mut file = generate_operators(file)?;
+
     println!("generate language examples...");
     let lang_header = strip_margin(r#"
-        |<a name="examples"></a>
+        |<a name="core_examples"></a>
         |### 📖 Core Language Examples
     "#, '|');
     writeln!(file, "{lang_header}")?;
@@ -53,7 +60,7 @@ fn generate_readme(file: File) -> std::io::Result<File> {
 }
 
 fn generate_title(mut file: File) -> std::io::Result<File> {
-    file.write(r#"
+    file.write(r##"
 🧪 Oxide — A Lightweight, Modern Language for Data, APIs & Automation
 ========================================================================
 
@@ -61,6 +68,18 @@ fn generate_title(mut file: File) -> std::io::Result<File> {
 
 ---
 
+## Table of Contents
+* <a href="#why_choose_it">Why Choose Oxide?</a>
+* <a href="#what_can_you_do">What Can You Do with Oxide?</a>
+* <a href="#who_is_it_for">Who Is Oxide For?</a>
+* <a href="#getting_started">Getting Started</a>
+* <a href="#operators">Operators</a>
+* <a href="#core_examples">Core/Language examples</a>
+* <a href="#platform_examples">Platform examples</a>
+
+---
+
+<a name="why_choose_it"></a>
 ## 🚀 Why Choose Oxide?
 
 ## ✅ **Clean, Functional Syntax**
@@ -80,6 +99,7 @@ Inspired by functional programming, Oxide is readable, predictable, and powerful
 
 ---
 
+<a name="what_can_you_do"></a>
 ## 🧰 What Can You Do with Oxide?
 
 ### 🌍 Call APIs and Handle Responses
@@ -109,6 +129,7 @@ arr:::filter(x -> (x % 2) == 0):::map(x -> x * 10)
 
 ---
 
+<a name="who_is_it_for"></a>
 ## 👥 Who Is Oxide For?
 
 - **Data Engineers & Analysts** — quick scripting for time and table-based operations.
@@ -118,6 +139,7 @@ arr:::filter(x -> (x % 2) == 0):::map(x -> x * 10)
 
 ---
 
+<a name="getting_started"></a>
 ## 🛠️ Getting Started
 
 ### 🔧 Build the REPL & Server
@@ -139,13 +161,111 @@ cargo test
 
 ---
 
-## 📦 Core Modules & Platform
+## 📦 Core language & Platform
 
 The remainder of this document showcases categorized usage examples across Oxide's standard modules including:
 
-- `arrays`, `cal`, `durations`, `io`, `math`, `os`, `oxide`, `str`, `tools`, `util`, `www`, and `testing`.
+- `arrays`, `cal`, `durations`, `io`, `math`, `os`, `oxide`, `str`, `tools`, `util`, and `www`.
 
 To improve navigation, consider splitting the examples into separate markdown files or auto-generating docs from code annotations using a tool like `mdBook`, `Docusaurus`, or a custom Rust doc generator.
+"##.as_bytes())?;
+    Ok(file)
+}
+
+fn generate_operators(mut file: File) -> std::io::Result<File> {
+    file.write(r#"
+Oxide provides a rich set of binary operators for arithmetic, logic, assignment, comparison, bitwise manipulation, and expressive data flow. This document summarizes the available operators and their intended semantics.
+
+---
+
+## 🔢 Arithmetic Operators
+
+| Operator    | Meaning           |
+|-------------|-------------------|
+| `+`         | Addition          |
+| `++`        | Concatenation or Join |
+| `-`         | Subtraction       |
+| `*`, `×`    | Multiplication    |
+| `/`, `÷`    | Division          |
+| `%`         | Modulo            |
+| `**`        | Power (Exponentiation) |
+
+---
+
+## 🧠 Assignment Operators
+
+| Operator    | Meaning                      |
+|-------------|------------------------------|
+| `=`         | Assign variable              |
+| `+=`        | Add and assign               |
+| `-=`        | Subtract and assign          |
+| `*=`        | Multiply and assign          |
+| `/=`        | Divide and assign            |
+| `%=`        | Modulo and assign            |
+| `&=`        | Bitwise AND and assign       |
+| `⎜=`        | Bitwise OR and assign        |
+| `^=`        | Bitwise XOR and assign       |
+| `?=`        | Coalesce and assign          |
+| `&&=`       | Logical AND and assign       |
+| `⎜⎜=`       | Logical OR and assign        |
+| `:=`        | Declare and assign expression |
+
+---
+
+## 🧮 Bitwise Operators
+
+| Operator    | Meaning              |
+|------------|----------------------|
+| `&`         | Bitwise AND          |
+| `⎜`         | Bitwise OR           |
+| `^`         | Bitwise XOR          |
+| `<<`        | Shift Left           |
+| `>>`        | Shift Right          |
+
+---
+
+## 🔍 Comparison and Logical Operators
+
+| Operator      | Meaning                     |
+|---------------|-----------------------------|
+| `==`, `is`     | Equal                       |
+| `!=`, `isnt`   | Not Equal                   |
+| `>`            | Greater Than                |
+| `>=`           | Greater Than or Equal       |
+| `<`            | Less Than                   |
+| `<=`           | Less Than or Equal          |
+| `in`           | Value is in Range or Set    |
+| `like`         | SQL-style pattern match     |
+| `matches`      | Regular Expression match    |
+| `&&`           | Logical AND                 |
+| `⎜⎜`           | Logical OR                  |
+| `?`            | Null⎜Undefined Coalescing   |
+
+---
+
+## 🧪 Special Operators
+
+| Operator     | Meaning / Use Case               |
+|--------------|----------------------------------|
+| `:`           | Alias (value name alias)        |
+| `::`          | Namespacing or qualified access |
+| `:::`         | Extended namespacing or chaining |
+| `<~`          | Curvy arrow (left)              |
+| `~>`          | Curvy arrow (right)             |
+| `->`          | Function application            |
+| `..`          | Exclusive Range (`a..b`)        |
+| `..=`         | Inclusive Range (`a..=b`)       |
+
+---
+
+## 🔀 Data Flow & Piping
+
+| Operator     | Meaning / Use Case                 |
+|--------------|------------------------------------|
+| `⎜>`          | Pipe Forward (`val |> fn`)        |
+| `⎜>>`         | Double Pipe Forward (custom logic)|
+
+---
 "#.as_bytes())?;
     Ok(file)
 }
@@ -237,10 +357,6 @@ fn generate_language_results(example: &str) -> std::io::Result<Vec<String>> {
 
 fn generate_example_results(example: &str) -> std::io::Result<Vec<String>> {
     match Interpreter::new().evaluate(example)? {
-        NamespaceValue(ns) => {
-            let df = ns.load_table()?;
-            Ok(TableRenderer::from_dataframe(&df))
-        }
         Structured(s) => {
             Ok(vec![
                 format!(r#"
@@ -331,12 +447,83 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |arrays::reverse([1, 4, 2, 8, 5, 7])
             "#, '|')
         ],
+        Expression::ArrowCurvyLeft(..) => vec![
+            strip_margin(r#"
+                |stocks = nsd::save(
+                |   "expressions.read_next_row.stocks",
+                |   Table::new(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date))
+                |)
+                |rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
+                |rows ~> stocks
+                |// read the last row
+                |last_row <~ stocks
+                |last_row
+            "#, '|')
+        ],
+        Expression::ArrowCurvyRight(..) => vec![
+            strip_margin(r#"
+                |stocks = nsd::save(
+                |   "expressions.into.stocks",
+                |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                |)
+                |rows = [
+                |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+                |]
+                |rows ~> stocks
+            "#, '|')
+        ],
+        Expression::ArrowFat(..) => vec![],
+        Expression::ArrowSkinnyLeft(..) => vec![],
+        Expression::ArrowSkinnyRight(..) => vec![],
+        Expression::ArrowVerticalBar(..) => vec![],
+        Expression::ArrowVerticalBar2x(..) => vec![
+            strip_margin(r#"
+               |use tools::reverse
+               |result = 'Hello' |> reverse
+               |result
+               "#, '|'),
+            strip_margin(r#"
+               |// arrays, tuples and structures can be deconstructed into arguments
+               |
+               |fn add(a, b) -> a + b
+               |fn inverse(a) -> 1.0 / a
+               |result = (2, 3) |>> add |> inverse
+               |result
+               "#, '|')
+        ],
+        Expression::Assert { .. } => vec![
+            strip_margin(r#"
+                    |assert(
+                    |   [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+                    |)
+                "#, '|')
+        ],
         Expression::BitwiseAnd(..) => vec!["0b1111 & 0b0101".into()],
         Expression::BitwiseOr(..) => vec!["0b1010 | 0b0101".into()],
         Expression::BitwiseShiftLeft(..) => vec!["20 << 3".into()],
         Expression::BitwiseShiftRight(..) => vec!["20 >> 3".into()],
         Expression::BitwiseXor(..) => vec!["0b1111 ^ 0b0101".into()],
-        Expression::Coalesce(..) => vec![],
+        Expression::Coalesce(..) => vec![
+            strip_margin(r#"
+                |"Hello" ? "it was null or undefined"
+            "#, '|'),
+            strip_margin(r#"
+                |null ? "it was null or undefined"
+            "#, '|'),
+            strip_margin(r#"
+                |undefined ? "it was null or undefined"
+            "#, '|'),
+        ],
+        Expression::CoalesceErr(..) => vec![
+            strip_margin(r#"
+                |"No problem" !? "An error occurred"
+            "#, '|'),
+            strip_margin(r#"
+                |(throw "Boom!") !? "An error occurred"
+            "#, '|')
+        ],
         Expression::CodeBlock(..) => vec![
             strip_margin(r#"
                 |result = {
@@ -344,7 +531,8 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |    a + b
                 |}
                 |result
-            "#, '|')],
+            "#, '|')
+        ],
         Expression::ColonColon(..) => vec![
             strip_margin(r#"
                 |tools::to_table([
@@ -370,27 +558,6 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                     |x contains 7
                 "#, '|'),
         ],
-        Expression::CurvyArrowLeft(..) => vec![
-            strip_margin(r#"
-                |stocks = ns("expressions.read_next_row.stocks")
-                |table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
-                |rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
-                |rows ~> stocks
-                |// read the last row
-                |last_row <~ stocks
-                |last_row
-            "#, '|')],
-        Expression::CurvyArrowRight(..) => vec![
-            strip_margin(r#"
-                |stocks = ns("expressions.into.stocks")
-                |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |rows = [
-                |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-                |]
-                |rows ~> stocks
-            "#, '|')],
         Expression::DatabaseOp(..) => vec![],
         Expression::Divide(..) => vec![
             "20.0 / 3".into(),
@@ -411,7 +578,6 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::Feature { .. } => vec![
             strip_margin(r#"
-                |use testing
                 |Feature "Matches function" {
                 |    Scenario "Compare Array contents: Equal" {
                 |        assert(
@@ -436,7 +602,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |        )
                 |    }
                 |}"#, '|')],
-        Expression::FnExpression { .. } => vec![
+        Expression::ArrowSkinnyRight(..) => vec![
             strip_margin(r#"
                 |product = (a, b) -> a * b
                 |product(2, 5)
@@ -458,34 +624,36 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
         Expression::FunctionCall { .. } => vec![],
         Expression::HTTP(..) => vec![
             strip_margin(r#"
-                    |stocks = ns("readme.www.stocks")
-                    |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                    |www::serve(8833)
+                    |stocks = nsd::save(
+                    |   "readme.www.stocks",
+                    |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                    |)
+                    |www::serve(8855)
                     "#, '|'),
             strip_margin(r#"
                     |POST {
-                    |    url: http://localhost:8833/platform/www/stocks/0
+                    |    url: http://localhost:8855/platform/www/stocks/0
                     |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
                     |}
                     "#, '|'),
-            "GET http://localhost:8833/platform/www/stocks/0".into(),
-            "HEAD http://localhost:8833/platform/www/stocks/0".into(),
+            "GET http://localhost:8855/platform/www/stocks/0".into(),
+            "HEAD http://localhost:8855/platform/www/stocks/0".into(),
             strip_margin(r#"
                     |PUT {
-                    |    url: http://localhost:8833/platform/www/stocks/0
+                    |    url: http://localhost:8855/platform/www/stocks/0
                     |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }
                     |}
                     "#, '|'),
-            "GET http://localhost:8833/platform/www/stocks/0".into(),
+            "GET http://localhost:8855/platform/www/stocks/0".into(),
             strip_margin(r#"
                     |PATCH {
-                    |    url: http://localhost:8833/platform/www/stocks/0
+                    |    url: http://localhost:8855/platform/www/stocks/0
                     |    body: { last_sale: 11.81 }
                     |}
                     "#, '|'),
-            "GET http://localhost:8833/platform/www/stocks/0".into(),
-            "DELETE http://localhost:8833/platform/www/stocks/0".into(),
-            "GET http://localhost:8833/platform/www/stocks/0".into(),
+            "GET http://localhost:8855/platform/www/stocks/0".into(),
+            "DELETE http://localhost:8855/platform/www/stocks/0".into(),
+            "GET http://localhost:8855/platform/www/stocks/0".into(),
         ],
         Expression::If { .. } => vec![
             strip_margin(r#"
@@ -497,25 +665,57 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                     |else "No"
                     "#, '|'),
             strip_margin(r#"
-                    |// Oxide also provides iff - a ternary-operator-like if function
+                    |// Oxide also provides if - a ternary-operator-like if function
                     |
-                    |fact = n -> iff(n <= 1, 1, n * fact(n - 1))
+                    |fact = n -> if(n <= 1, 1, n * fact(n - 1))
                     |fact(6)
                     "#, '|'),
         ],
         Expression::Include(..) => vec![],
-        Expression::KeyValue(..) => vec![],
+        Expression::Infix(..) => vec![
+            strip_margin(r#"
+                |let stock = { symbol: "TED", exchange: "AMEX", last_sale: 13.37 }
+                |stock.last_sale
+            "#, '|'),
+        ],
         Expression::Literal(..) => vec![],
         Expression::MatchExpression(..) => vec![
             strip_margin(r#"
-                |let code = 103
-                |match code [
-                |   n: 100 => "Accepted",
-                |   n: 101..104 => 'Escalated',
-                |   n: n > 0 && n < 100 => "Pending",
-                |   n => "Rejected: code {n}"
-                |]
-            "#, '|')
+                |let code = 100
+                |match code {
+                |   100 => "Accepted"
+                |   n when n in 101..=104 => "Escalated"
+                |   n when n < 100 => "Pending"
+                |   n => "Rejected"
+                |}
+            "#, '|'),
+            strip_margin(r#"
+                |let code = 101
+                |match code {
+                |   100 => "Accepted"
+                |   n when n in 101..=104 => "Escalated"
+                |   n when n < 100 => "Pending"
+                |   n => "Rejected"
+                |}
+            "#, '|'),
+            strip_margin(r#"
+                |let code = 99
+                |match code {
+                |   100 => "Accepted"
+                |   n when n in 101..=104 => "Escalated"
+                |   n when n < 100 => "Pending"
+                |   n => "Rejected"
+                |}
+            "#, '|'),
+            strip_margin(r#"
+                |let code = 110
+                |match code {
+                |   100 => "Accepted"
+                |   n when n in 101..=104 => "Escalated"
+                |   n when n < 100 => "Pending"
+                |   n => "Rejected"
+                |}
+            "#, '|'),
         ],
         Expression::Minus(..) => vec![
             "188 - 36".into(),
@@ -534,11 +734,8 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |let i = 75
                 |let j = -i
                 |j
-            "#, '|')],
-        Expression::New(..) => vec![
-            "new Table(symbol: String(8), exchange: String(8), last_sale: f64)".into()
+            "#, '|')
         ],
-        Expression::Ns(..) => vec![],
         Expression::Parameters(..) => vec![],
         Expression::Plus(..) => vec![
             "5 + 6".into()
@@ -580,6 +777,11 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
             "#, '|'),
         ],
         Expression::StructureExpression(..) => vec![],
+        Expression::Throw(..) => vec![
+            strip_margin(r#"
+                |throw("this is an error")
+            "#, '|'),
+        ],
         Expression::TupleExpression(..) => vec![
             strip_margin(r#"
                 |// Tuples may be destructured to assign multiple variables
@@ -641,6 +843,9 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |LabelString
             "#, '|')
         ],
+        Expression::TypeOf(..) => vec![
+            "type_of([12, 76, 444])".into()
+        ],
         Expression::Use(..) => vec![
             strip_margin(r#"
                 |use tools
@@ -658,27 +863,12 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |c > b
             "#, '|')
         ],
-        Expression::VerticalBarArrow(..) => vec![],
-        Expression::VerticalBarDoubleArrow(..) => vec![
-            strip_margin(r#"
-               |use tools::reverse
-               |result = 'Hello' |> reverse
-               |result
-               "#, '|'),
-            strip_margin(r#"
-               |// arrays, tuples and structures can be deconstructed into arguments
-               |
-               |fn add(a, b) -> a + b
-               |fn inverse(a) -> 1.0 / a
-               |result = (2, 3) |>> add |> inverse
-               |result
-               "#, '|')
-        ],
         Expression::Via(..) => vec![
             strip_margin(r#"
-                |stocks = ns("readme.via.stocks")
-                |table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-                |
+                |stocks = nsd::save(
+                |   "readme.via.stocks",
+                |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                |)
                 |rows = [
                 |   { symbol: "ABCQ", exchange: "AMEX", last_sale: 12.49 },
                 |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -692,21 +882,21 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |from stocks
             "#, '|')
         ],
-        Expression::When { .. } => vec![
+        Expression::WhenEver { .. } => vec![
             strip_margin(r#"
                 |// Executes the block at the moment the condition becomes true.
                 |let (x, y) = (1, 0)
-                |when x == 0 {
+                |whenever x == 0 {
                 |    x = x + 1
                 |    y = y + 1
                 |}
                 |x = x - 1
                 |x + y
             "#, '|'),
-                        strip_margin(r#"
+            strip_margin(r#"
                 |// The block will not be executed if the condition is already true.
                 |let (x, y) = (1, 0)
-                |when x == 0 || y == 0 {
+                |whenever x == 0 || y == 0 {
                 |    x = x + 1
                 |    y = y + 1
                 |}
@@ -715,7 +905,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |// The block will be executed after the second assignment.
                 |let (x, y) = (1, 0)
-                |when x == 0 || y == 0 {
+                |whenever x == 0 || y == 0 {
                 |    x = x + 1
                 |    y = y + 1
                 |}
@@ -751,41 +941,43 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Bitwise Shift-Left", BitwiseShiftLeft(null.clone(), null.clone())),
         ("Bitwise Shift-Right", BitwiseShiftRight(null.clone(), null.clone())),
         ("Bitwise XOR", BitwiseXor(null.clone(), null.clone())),
+        ("Coalesce", Coalesce(null.clone(), null.clone())),
+        ("Coalesce Error", CoalesceErr(null.clone(), null.clone())),
         ("Code Block", CodeBlock(vec![])),
         ("Method Call", ColonColon(null.clone(), null.clone())),
         ("Implicit Method Call", ColonColonColon(null.clone(), null.clone())),
         ("Conditionals", Condition(Conditions::True)),
-        ("Curvy-Arrow Left", CurvyArrowLeft(null.clone(), null.clone())),
-        ("Curvy-Arrow Right", CurvyArrowRight(null.clone(), null.clone())),
+        ("Curvy-Arrow Left", ArrowCurvyLeft(null.clone(), null.clone())),
+        ("Curvy-Arrow Right", ArrowCurvyRight(null.clone(), null.clone())),
         ("SQL", DatabaseOp(DatabaseOps::Queryable(Where { from: null.clone(), condition: Conditions::True }))),
         ("Mathematics: division", Divide(null.clone(), null.clone())),
         ("Do-While expression", DoWhile { condition: null.clone(), code: null.clone() }),
         ("Arrays: Indexing", ElementAt(null.clone(), null.clone())),
         ("Testing", Feature { title: null.clone(), scenarios: vec![] }),
-        ("Functions", FnExpression { params: vec![], body: None, returns: DataType::BooleanType }),
         ("Function-Call", FunctionCall { fx: null.clone(), args: vec![] }),
         ("Iteration", For { construct: null.clone(), op: null.clone() }),
         ("Query", From(null.clone())),
         ("HTTP", HTTP(HttpMethodCalls::GET(null.clone()))),
         ("IF expression", If { condition: null.clone(), a: null.clone(), b: None }),
         ("Includes", Include(null.clone())),
-        //("Match expression", MatchExpression(null.clone(), vec![])),
+        ("Infix", Infix(null.clone(), null.clone())),
+        ("Match expression", MatchExpression(null.clone(), vec![])),
         ("Mathematics: subtraction", Minus(null.clone(), null.clone())),
         ("Mathematics: multiplication", Multiply(null.clone(), null.clone())),
         ("Negative", Neg(null.clone())),
         ("Mathematics: addition", Plus(null.clone(), null.clone())),
-        ("New Instances", New(null.clone())),
         ("Ranges", Range(Exclusive(null.clone(), null.clone()))),
         ("Assignment (statement)", SetVariables(null.clone(), null.clone())),
         ("Assignment (expression)", SetVariablesExpr(null.clone(), null.clone())),
         ("Structures", StructureExpression(vec![])),
+        ("Throw", Throw(null.clone())),
         ("Tuples", TupleExpression(vec![])),
         ("Type Definitions", TypeDef(null.clone())),
-        ("Function Pipelines", VerticalBarArrow(null.clone(), null.clone())),
-        ("Function Pipelines (destructuring)", VerticalBarDoubleArrow(null.clone(), null.clone())),
+        ("Function Pipelines", ArrowVerticalBar(null.clone(), null.clone())),
+        ("Function Pipelines (destructuring)", ArrowVerticalBar2x(null.clone(), null.clone())),
         ("Import/Use", Use(vec![])),
         ("Via Clause", Via(null.clone())),
-        ("When statement", When { condition: null.clone(), code: null.clone() }),
+        ("When statement", WhenEver { condition: null.clone(), code: null.clone() }),
         ("While expression", While { condition: null.clone(), code: null.clone() }),
         ("Yield", Yield(null.clone())),
     ];
@@ -817,17 +1009,30 @@ mod tests {
     fn test_language_examples() {
         for (name, examples) in create_language_examples() {
             println!("[+] {}", name);
-
             for example in examples {
                 println!("    {}", example);
                 generate_language_results(example.as_str()).unwrap();
             }
         }
     }
+    
+    #[test]
+    fn test_platform_examples() {
+        for op in PackageOps::get_contents() {
+            println!("[+] {}::{}", op.get_package_name(), op.get_name());
+            
+            for (n, example) in op.get_examples().iter().enumerate() {
+                if !example.is_empty() {
+                    let lines = generate_example_results(example).unwrap();
+                    println!("    [{}/{}]", n + 1, lines.len());
+                }
+            }
+        }
+    }
 
     #[ignore]
     #[test]
-    fn test_language_example_generation() {
+    fn test_generate_language_examples() {
         let mut file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
             .open("../../language.md")
@@ -840,7 +1045,7 @@ mod tests {
 
     #[ignore]
     #[test]
-    fn test_platform_example_generation() {
+    fn test_generate_platform_examples() {
         let mut file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
             .open("../../platform.md")
@@ -867,10 +1072,11 @@ mod tests {
         }
     }
 
+    #[ignore]
     #[test]
     fn test_generate_docs() {
-        test_language_example_generation();
-        test_platform_example_generation();
+        test_generate_language_examples();
+        test_generate_platform_examples();
         test_generate_readme();
     }
 }

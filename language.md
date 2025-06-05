@@ -125,22 +125,50 @@ a + b + c</pre>
 10
 </pre>
 <hr>
+<h4>▶️ Coalesce</h4>
+<h5>example¹</h5>
+<pre>"Hello" ? "it was null or undefined"</pre>
+<h5>results</h5>
+<pre>
+"Hello"
+</pre>
+<h5>example²</h5>
+<pre>null ? "it was null or undefined"</pre>
+<h5>results</h5>
+<pre>
+"it was null or undefined"
+</pre>
+<h5>example³</h5>
+<pre>undefined ? "it was null or undefined"</pre>
+<h5>results</h5>
+<pre>
+"it was null or undefined"
+</pre>
+<hr>
+<h4>▶️ Coalesce Error</h4>
+<h5>example¹</h5>
+<pre>"No problem" !? "An error occurred"</pre>
+<h5>results</h5>
+<pre>
+"No problem"
+</pre>
+<h5>example²</h5>
+<pre>(throw "Boom!") !? "An error occurred"</pre>
+<h5>results</h5>
+<pre>
+"An error occurred"
+</pre>
+<hr>
 <h4>▶️ Code Block</h4>
 <h5>example¹</h5>
 <pre>result = {
-    (a, b, sum) = (0, 1, 0)
-    while sum < 10 {
-        sum = sum + (a + b)
-        t = b
-        b = a + b
-        a = t
-    }
-    sum
+    let (a, b) = (5, 9)
+    a + b
 }
 result</pre>
 <h5>results</h5>
 <pre>
-11
+14
 </pre>
 <hr>
 <h4>▶️ Conditionals</h4>
@@ -168,8 +196,10 @@ true
 <hr>
 <h4>▶️ Curvy-Arrow Left</h4>
 <h5>example¹</h5>
-<pre>stocks = ns("expressions.read_next_row.stocks")
-table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date)) ~> stocks
+<pre>stocks = nsd::save(
+   "expressions.read_next_row.stocks",
+   Table::new(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date))
+)
 rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
 rows ~> stocks
 // read the last row
@@ -182,8 +212,10 @@ last_row</pre>
 <hr>
 <h4>▶️ Curvy-Arrow Right</h4>
 <h5>example¹</h5>
-<pre>stocks = ns("expressions.into.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+<pre>stocks = nsd::save(
+   "expressions.into.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 rows = [
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -219,57 +251,50 @@ result</pre>
 <h5>example²</h5>
 <pre>// arrays, tuples and structures can be deconstructed into arguments
 
-fn add(a, b) => a + b
-fn inverse(a) => 1.0 / a
-result = ((2, 3) |>> add) |> inverse
+fn add(a, b) -> a + b
+fn inverse(a) -> 1.0 / a
+result = (2, 3) |>> add |> inverse
 result</pre>
 <h5>results</h5>
 <pre>
 0.2
 </pre>
 <hr>
-<h4>▶️ Functions</h4>
-<h5>example¹</h5>
-<pre>product = (a, b) -> a * b
-product(2, 5)</pre>
-<h5>results</h5>
-<pre>
-10
-</pre>
-<hr>
 <h4>▶️ HTTP</h4>
 <h5>example¹</h5>
-<pre>stocks = ns("readme.www.stocks")
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-www::serve(8833)</pre>
+<pre>stocks = nsd::save(
+   "readme.www.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
+www::serve(8855)</pre>
 <h5>results</h5>
 <pre>
 true
 </pre>
 <h5>example²</h5>
 <pre>POST {
-    url: http://localhost:8833/platform/www/stocks/0
+    url: http://localhost:8855/platform/www/stocks/0
     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
 }</pre>
 <h5>results</h5>
 <pre>
-7
+2
 </pre>
 <h5>example³</h5>
-<pre>GET http://localhost:8833/platform/www/stocks/0</pre>
+<pre>GET http://localhost:8855/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
 {}
 </pre>
 <h5>example⁴</h5>
-<pre>HEAD http://localhost:8833/platform/www/stocks/0</pre>
+<pre>HEAD http://localhost:8855/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Tue, 27 May 2025 20:41:10 GMT"}
+{content-length: "81", content-type: "application/json", date: "Thu, 05 Jun 2025 22:06:00 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
-    url: http://localhost:8833/platform/www/stocks/0
+    url: http://localhost:8855/platform/www/stocks/0
     body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }
 }</pre>
 <h5>results</h5>
@@ -277,14 +302,14 @@ true
 1
 </pre>
 <h5>example⁶</h5>
-<pre>GET http://localhost:8833/platform/www/stocks/0</pre>
+<pre>GET http://localhost:8855/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
 {exchange: "AMEX", last_sale: 11.79, symbol: "ABC"}
 </pre>
 <h5>example⁷</h5>
 <pre>PATCH {
-    url: http://localhost:8833/platform/www/stocks/0
+    url: http://localhost:8855/platform/www/stocks/0
     body: { last_sale: 11.81 }
 }</pre>
 <h5>results</h5>
@@ -292,19 +317,19 @@ true
 1
 </pre>
 <h5>example⁸</h5>
-<pre>GET http://localhost:8833/platform/www/stocks/0</pre>
+<pre>GET http://localhost:8855/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
 {exchange: "AMEX", last_sale: 11.81, symbol: "ABC"}
 </pre>
 <h5>example⁹</h5>
-<pre>DELETE http://localhost:8833/platform/www/stocks/0</pre>
+<pre>DELETE http://localhost:8855/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
 1
 </pre>
 <h5>example¹⁰</h5>
-<pre>GET http://localhost:8833/platform/www/stocks/0</pre>
+<pre>GET http://localhost:8855/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
 {}
@@ -323,9 +348,9 @@ else "No"</pre>
 "Maybe"
 </pre>
 <h5>example²</h5>
-<pre>// Oxide also provides iff - a ternary-operator-like if function
+<pre>// Oxide also provides if - a ternary-operator-like if function
 
-fact = n -> iff(n <= 1, 1, n * fact(n - 1))
+fact = n -> if(n <= 1, 1, n * fact(n - 1))
 fact(6)</pre>
 <h5>results</h5>
 <pre>
@@ -361,14 +386,72 @@ stocks</pre>
 |------------------------------------|
 </pre>
 <hr>
+<h4>▶️ Infix</h4>
+<h5>example¹</h5>
+<pre>let stock = { symbol: "TED", exchange: "AMEX", last_sale: 13.37 }
+stock.last_sale</pre>
+<h5>results</h5>
+<pre>
+13.37
+</pre>
+<hr>
 <h4>▶️ Iteration</h4>
 <h5>example¹</h5>
-<pre>for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) {
-    oxide::println(row)
+<pre>for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) 
+    yield row::value</pre>
+<h5>results</h5>
+<pre>
+["apple", "berry", "kiwi", "lime"]
+</pre>
+<hr>
+<h4>▶️ Match expression</h4>
+<h5>example¹</h5>
+<pre>let code = 100
+match code {
+   100 => "Accepted"
+   n when n in 101..=104 => "Escalated"
+   n when n < 100 => "Pending"
+   n => "Rejected"
 }</pre>
 <h5>results</h5>
 <pre>
-true
+"Accepted"
+</pre>
+<h5>example²</h5>
+<pre>let code = 101
+match code {
+   100 => "Accepted"
+   n when n in 101..=104 => "Escalated"
+   n when n < 100 => "Pending"
+   n => "Rejected"
+}</pre>
+<h5>results</h5>
+<pre>
+"Escalated"
+</pre>
+<h5>example³</h5>
+<pre>let code = 99
+match code {
+   100 => "Accepted"
+   n when n in 101..=104 => "Escalated"
+   n when n < 100 => "Pending"
+   n => "Rejected"
+}</pre>
+<h5>results</h5>
+<pre>
+"Pending"
+</pre>
+<h5>example⁴</h5>
+<pre>let code = 110
+match code {
+   100 => "Accepted"
+   n when n in 101..=104 => "Escalated"
+   n when n < 100 => "Pending"
+   n => "Rejected"
+}</pre>
+<h5>results</h5>
+<pre>
+"Rejected"
 </pre>
 <hr>
 <h4>▶️ Mathematics: addition</h4>
@@ -430,17 +513,6 @@ j</pre>
 -75
 </pre>
 <hr>
-<h4>▶️ New Instances</h4>
-<h5>example¹</h5>
-<pre>new Table(symbol: String(8), exchange: String(8), last_sale: f64)</pre>
-<h5>results</h5>
-<pre>
-|------------------------------------|
-| id | symbol | exchange | last_sale |
-|------------------------------------|
-|------------------------------------|
-</pre>
-<hr>
 <h4>▶️ Query</h4>
 <h5>example¹</h5>
 <pre>stocks = tools::to_table([
@@ -481,8 +553,7 @@ tools::reverse(range)</pre>
 <hr>
 <h4>▶️ Testing</h4>
 <h5>example¹</h5>
-<pre>use testing
-Feature "Matches function" {
+<pre>Feature "Matches function" {
     Scenario "Compare Array contents: Equal" {
         assert(
             [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
@@ -513,14 +584,22 @@ Feature "Matches function" {
 |------------------------------------------------------------------------------------------------------------------------|
 | 0  | 0     | Matches function                                                                        | true   | true   |
 | 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |
-| 2  | 2     | assert([1, "a", "b", "c"] matches [1, "a", "b", "c"])                                   | true   | true   |
+| 2  | 2     | assert [1, "a", "b", "c"] matches [1, "a", "b", "c"]                                    | true   | true   |
 | 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |
-| 4  | 2     | assert(!([1, "a", "b", "c"] matches [0, "x", "y", "z"]))                                | true   | true   |
+| 4  | 2     | assert !([1, "a", "b", "c"] matches [0, "x", "y", "z"])                                 | true   | true   |
 | 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |
-| 6  | 2     | assert({first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"})               | true   | true   |
+| 6  | 2     | assert {first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"}                | true   | true   |
 | 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |
-| 8  | 2     | assert({scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}) | true   | true   |
+| 8  | 2     | assert {scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}  | true   | true   |
 |------------------------------------------------------------------------------------------------------------------------|
+</pre>
+<hr>
+<h4>▶️ Throw</h4>
+<h5>example¹</h5>
+<pre>throw("this is an error")</pre>
+<h5>results</h5>
+<pre>
+this is an error
 </pre>
 <hr>
 <h4>▶️ Tuples</h4>
@@ -613,10 +692,10 @@ String(80)
 <hr>
 <h4>▶️ Via Clause</h4>
 <h5>example¹</h5>
-<pre>stocks = ns("readme.via.stocks")
-drop table stocks
-table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
-
+<pre>stocks = nsd::save(
+   "readme.via.stocks",
+   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+)
 rows = [
    { symbol: "ABCQ", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
@@ -643,7 +722,7 @@ from stocks</pre>
 <h5>example¹</h5>
 <pre>// Executes the block at the moment the condition becomes true.
 let (x, y) = (1, 0)
-when x == 0 {
+whenever x == 0 {
     x = x + 1
     y = y + 1
 }
@@ -656,7 +735,7 @@ x + y</pre>
 <h5>example²</h5>
 <pre>// The block will not be executed if the condition is already true.
 let (x, y) = (1, 0)
-when x == 0 || y == 0 {
+whenever x == 0 || y == 0 {
     x = x + 1
     y = y + 1
 }
@@ -668,7 +747,7 @@ x + y</pre>
 <h5>example³</h5>
 <pre>// The block will be executed after the second assignment.
 let (x, y) = (1, 0)
-when x == 0 || y == 0 {
+whenever x == 0 || y == 0 {
     x = x + 1
     y = y + 1
 }

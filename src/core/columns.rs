@@ -89,7 +89,7 @@ impl Column {
     }
 
     pub fn to_parameter(&self) -> Parameter {
-        Parameter::with_default(
+        Parameter::new_with_default(
             self.get_name(),
             self.get_data_type().clone(),
             self.get_default_value().clone())
@@ -125,7 +125,7 @@ mod tests {
 
     #[test]
     fn test_from_column() {
-        let params = Parameter::with_default("exchange", FixedSizeType(StringType.into(), 10), StringValue("N/A".into()));
+        let params = Parameter::new_with_default("exchange", FixedSizeType(StringType.into(), 10), StringValue("N/A".into()));
         let column = Column::from_parameter(&params, 0);
         assert_eq!(column.name, "exchange");
         assert_eq!(column.data_type, FixedSizeType(StringType.into(), 10));

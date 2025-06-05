@@ -74,7 +74,6 @@ pub enum TypedValue {
     ErrorValue(Errors),
     Function { params: Vec<Parameter>, body: Box<Expression>, returns: DataType },
     Kind(DataType),
-    NamespaceValue(Namespace),
     Null,
     Number(Numbers),
     PlatformOp(PackageOps),
@@ -124,7 +123,7 @@ impl TypedValue {
                 HardStructure::from_parameters(args.iter()
                     .map(|(name, value)| {
                         let tv = TypedValue::from_json(value);
-                        Parameter::with_default(name, tv.get_type().clone(), tv)
+                        Parameter::new_with_default(name, tv.get_type().clone(), tv)
                     }).collect::<Vec<_>>())
             ))
         }
@@ -158,6 +157,7 @@ impl TypedValue {
         match token {
             Token::Atom { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get()))),
             Token::Backticks { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get()))),
+            Token::DataframeLiteral { cells, .. } => Ok(TableValue(Dataframe::from_cells(cells))),
             Token::DoubleQuoted { text, .. } => Ok(StringValue(text.to_string())),
             Token::Numeric { text, .. } => Self::from_numeric(text),
             Token::Operator { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get()))),
@@ -184,11 +184,6 @@ impl TypedValue {
     pub fn normalize(&self) -> TypedValue {
         match self.clone() {
             ArrayValue(array) => Sequenced(Sequences::TheArray(array)),
-            NamespaceValue(ns) => 
-                match FileRowCollection::open(&ns) {
-                    Ok(frc) => TableValue(Disk(frc)),
-                    Err(_) => NamespaceValue(ns)
-                }
             Structured(s) => Structured(s),
             TableValue(df) => TableValue(df),
             TupleValue(tuple) => Sequenced(Sequences::TheTuple(tuple)),
@@ -251,7 +246,7 @@ impl TypedValue {
 
     pub fn coalesce(&self, other: TypedValue) -> TypedValue {
         match self {
-            ErrorValue(..) | Null | Undefined => other,
+            Null | Undefined => other,
             _ => self.clone()
         }
     }
@@ -280,6 +275,9 @@ impl TypedValue {
                 match dest_type {
                     ArrayType => match value {
                         ArrayValue(array) => ArrayValue(array.to_owned()),
+                        StringValue(s) => ArrayValue(Array::from(
+                            s.chars().map(|c| StringValue(c.to_string())).collect::<Vec<_>>()
+                        )),
                         Structured(s) => ArrayValue(s.to_array()),
                         TableValue(df) => ArrayValue(df.to_array()),
                         TupleValue(items) => ArrayValue(Array::from(items.to_owned())),
@@ -397,7 +395,6 @@ impl TypedValue {
                         },
                         code.to_code()),
             TypedValue::Kind(data_type) => data_type.to_code(),
-            TypedValue::NamespaceValue(ns) => ns.get_full_name(),
             TypedValue::Null => "null".into(),
             TypedValue::Number(number) => number.unwrap_value(),
             TypedValue::PlatformOp(pf) => pf.to_code(),
@@ -443,8 +440,6 @@ impl TypedValue {
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
             DateValue(dt) => ByteCodeCompiler::encode_u8x_n(dt.to_be_bytes().to_vec()),
             ErrorValue(err) => ByteCodeCompiler::encode_string(err.to_string().as_str()),
-            NamespaceValue(ns) =>
-                ByteCodeCompiler::encode_string(ns.get_full_name().as_str()),
             Number(number) => number.encode(),
             PlatformOp(pf) => pf.encode().unwrap_or(vec![]),
             StringValue(string) => ByteCodeCompiler::encode_string(string),
@@ -473,7 +468,6 @@ impl TypedValue {
             Function { params, returns, .. } =>
                 FunctionType(params.clone(), Box::from(returns.clone())),
             Kind(data_type) => data_type.clone(),
-            NamespaceValue(..) => TableType(Vec::new()),
             Null | Undefined => UnresolvedType,
             Number(n) => NumberType(n.kind()),
             PlatformOp(op) => op.get_type(),
@@ -499,7 +493,7 @@ impl TypedValue {
     }
 
     pub fn is_ok(&self) -> bool {
-        matches!(self, Boolean(true) | Number(..) | NamespaceValue(..) | TableValue(..))
+        matches!(self, Boolean(true) | Number(..) | TableValue(..))
     }
 
     pub fn is_true(&self) -> bool {
@@ -579,7 +573,6 @@ impl TypedValue {
     pub fn to_dataframe(&self) -> std::io::Result<Dataframe> {
         match self {
             ArrayValue(items) => self.convert_array_to_table(&items.get_values()),
-            NamespaceValue(ns) => ns.load_table(),
             Structured(s) => Ok(s.to_dataframe()),
             TableValue(df) => Ok(df.to_owned()),
             z => throw(TypeMismatch(TypeMismatchErrors::TableExpected(z.to_code(), z.to_code())))
@@ -628,7 +621,6 @@ impl TypedValue {
                 serde_json::json!({ "params": my_params, "code": code.to_code(), "returns": returns.to_type_declaration() })
             }
             TypedValue::Kind(data_type) => serde_json::json!(data_type.to_code()),
-            TypedValue::NamespaceValue(ns) => serde_json::json!(ns.get_full_name()),
             TypedValue::Null => serde_json::Value::Null,
             TypedValue::Number(nv) => nv.to_json(),
             TypedValue::PlatformOp(nf) => serde_json::json!(nf),
@@ -661,7 +653,6 @@ impl TypedValue {
     pub fn to_sequence(&self) -> std::io::Result<Sequences> {
         match self {
             ArrayValue(array) => Ok(Sequences::TheArray(array.clone())),
-            NamespaceValue(ns) => Ok(Sequences::TheDataframe(Disk(FileRowCollection::open(ns)?))),
             StringValue(s) => Ok(Sequences::TheArray(Array::from(s.chars()
                 .map(|c| StringValue(c.to_string()))
                 .collect::<Vec<_>>()
@@ -776,12 +767,6 @@ impl TypedValue {
             ErrorValue(err) => return throw(err.to_owned()),
             Function { .. } => vec![],
             Kind(data_type) => return throw(Exact(format!("{} cannot be converted to Binary", data_type.to_code()))),
-            NamespaceValue(ns) => {
-                let mut f = File::open(ns.get_table_file_path())?;
-                let mut buffer = Vec::new();
-                f.read_to_end(&mut buffer)?;
-                buffer
-            }
             Null => vec![],
             Number(_) => vec![],
             PlatformOp(_) => vec![],
@@ -827,7 +812,6 @@ impl TypedValue {
                         },
                         code.to_code()),
             TypedValue::Kind(data_type) => data_type.to_code(),
-            TypedValue::NamespaceValue(ns) => ns.get_full_name(),
             TypedValue::Null => "null".into(),
             TypedValue::Number(number) => number.unwrap_value(),
             TypedValue::PlatformOp(nf) => nf.to_code(),
@@ -1069,7 +1053,6 @@ impl Neg for TypedValue {
             ErrorValue(msg) => ErrorValue(msg),
             Function { .. } => error("Function".into()),
             Kind(data_type) => error(data_type.to_code()),
-            NamespaceValue(ns) => error(format!("ns({})", ns.get_full_name())),
             Null => Null,
             Number(nv) => Number(nv.neg()),
             PlatformOp(..) => error("PlatformFunction".into()),
@@ -1235,8 +1218,8 @@ mod core_tests {
     #[test]
     fn test_from_json() {
         let structure = HardStructure::from_parameters(vec![
-            Parameter::with_default("name", FixedSizeType(StringType.into(), 4), StringValue("John".into())),
-            Parameter::with_default("age", NumberType(I64Kind), Number(I64Value(40)))
+            Parameter::new_with_default("name", FixedSizeType(StringType.into(), 4), StringValue("John".into())),
+            Parameter::new_with_default("age", NumberType(I64Kind), Number(I64Value(40)))
         ]);
         let js_value0: Value = serde_json::from_str(r##"{"name":"John","age":40}"##).unwrap();
         let js_value1: Value = serde_json::from_str(structure.to_string().as_str()).unwrap();
@@ -1456,9 +1439,9 @@ mod conversion_tests {
     #[test]
     fn test_array_to_table() {
         let params = vec![
-            Parameter::with_default("symbol", FixedSizeType(StringType.into(), 3), StringValue("BIZ".into())),
-            Parameter::with_default("exchange", FixedSizeType(StringType.into(), 4), StringValue("NYSE".into())),
-            Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.66))),
+            Parameter::new_with_default("symbol", FixedSizeType(StringType.into(), 3), StringValue("BIZ".into())),
+            Parameter::new_with_default("exchange", FixedSizeType(StringType.into(), 4), StringValue("NYSE".into())),
+            Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.66))),
         ];
         let array = ArrayValue(Array::from(vec![
             Structured(Hard(HardStructure::new(params.clone(), vec![
@@ -1519,6 +1502,11 @@ mod conversion_tests {
     }
 
     #[test]
+    fn test_string_to_binary() {
+        verify(StringValue("Hello there".into()), BinaryType, Binary(b"Hello there".into()));
+    }
+
+    #[test]
     fn test_string_to_error() {
         verify(StringValue("This is an error".into()),
                ErrorType, ErrorValue(Exact("This is an error".into())));
@@ -1535,6 +1523,17 @@ mod conversion_tests {
         verify(Number(U128Value(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128)),
                UUIDType, UUIDValue(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128));
     }
+
+    #[test]
+    fn test_uuid_to_binary() {
+        verify(UUIDValue(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128),
+               BinaryType,
+               Binary(vec![
+                   0xfe, 0xed, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xaf, 
+                   0xfa, 0xde, 0xca, 0xfe, 0xba, 0xbe, 0xfa, 0xce
+               ]));
+    }
+
 
     #[test]
     fn test_uuid_to_u128() {

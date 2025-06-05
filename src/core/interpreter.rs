@@ -63,9 +63,7 @@ impl Interpreter {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::interpreter::Interpreter;
     use crate::numbers::Numbers::*;
-    use crate::testdata::verify_exact_code_with;
     use crate::typed_values::TypedValue::*;
 
     /// Assignment tests
@@ -226,10 +224,54 @@ mod tests {
     /// Control-Flow tests
     #[cfg(test)]
     mod control_flow_tests {
+        use crate::errors::Errors;
         use crate::interpreter::Interpreter;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
+        
+        #[test]
+        fn test_coalesce_not_null_or_undefined() {
+            verify_exact_code(r#"
+                "Hello" ? "it was null or undefined"
+            "#, "\"Hello\"");
+        }
 
+        #[test]
+        fn test_coalesce_null() {
+            verify_exact_code(r#"
+                null ? "it was null or undefined"
+            "#, "\"it was null or undefined\"");
+        }
+
+        #[test]
+        fn test_coalesce_undefined() {
+            verify_exact_code(r#"
+                undefined ? "it was null or undefined"
+            "#, "\"it was null or undefined\"");
+        }
+
+        // Error::new('Boom!')
+        #[test]
+        fn test_coalesce_error() {
+            verify_exact_code(r#"
+                (Error::new()) !? "An error occurred"
+            "#, "\"An error occurred\"");
+        }
+
+        #[test]
+        fn test_coalesce_thrown_error() {
+            verify_exact_code(r#"
+                (throw "Boom!") !? "An error occurred"
+            "#, "\"An error occurred\"");
+        }
+
+        #[test]
+        fn test_coalesce_no_thrown_error() {
+            verify_exact_code(r#"
+                "No problem" !? "An error occurred"
+            "#, "\"No problem\"");
+        }
+        
         #[test]
         fn test_for_each_item_in_an_array() {
             verify_exact_code(r#"
@@ -316,25 +358,63 @@ mod tests {
         }
 
         #[test]
-        fn test_if_function() {
+        fn test_ternary_if_function() {
             verify_exact_code(r#"
                 x = 4
-                iff(x > 5, "Yes", iff(x < 5, "Maybe", "No"))
+                if(x > 5, "Yes", if(x < 5, "Maybe", "No"))
             "#, "\"Maybe\"");
         }
-
-        #[ignore]
+        
         #[test]
-        fn test_match() {
+        fn test_match_case_1() {
             verify_exact_code(r#"
-                code = 100
-                match code [
-                   n: 100 => "Accepted",
-                   n: 101..=104 => 'Escalated',
-                   n: n > 0 && n < 100 => "Pending",
+                let code = 100
+                match code {
+                   100 => "Accepted"
+                   n when n in 101..=104 => "Escalated"
+                   n when n < 100 => "Pending"
                    n => "Rejected"
-                ]
+                }
             "#, "\"Accepted\"");
+        }
+
+        #[test]
+        fn test_match_case_2() {
+            verify_exact_code(r#"
+                let code = 102
+                match code {
+                   100 => "Accepted"
+                   n when n in 101..=104 => "Escalated"
+                   n when n < 100 => "Pending"
+                   n => "Rejected"
+                }
+            "#, "\"Escalated\"");
+        }
+
+        #[test]
+        fn test_match_case_3() {
+            verify_exact_code(r#"
+                let code = 42
+                match code {
+                   100 => "Accepted"
+                   n when n in 101..=104 => "Escalated"
+                   n when n < 100 => "Pending"
+                   n => "Rejected"
+                }
+            "#, "\"Pending\"");
+        }
+
+        #[test]
+        fn test_match_case_4() {
+            verify_exact_code(r#"
+                let code = 110
+                match code {
+                   100 => "Accepted"
+                   n when n in 101..=104 => "Escalated"
+                   n when n < 100 => "Pending"
+                   n => "Rejected"
+                }
+            "#, "\"Rejected\"");
         }
 
         #[test]
@@ -356,6 +436,13 @@ mod tests {
                 while (i < 5) yield (i := i + 1) * 3
             "#, "[3, 6, 9, 12, 15]");
         }
+
+        #[test]
+        fn test_throw_error() {
+            verify_exact_value(r#"
+                throw("Boom!")
+            "#, ErrorValue(Errors::Exact("Boom!".into())));
+        }
     }
 
     /// Declarative tests
@@ -364,9 +451,28 @@ mod tests {
         use crate::testdata::{verify_exact_code, verify_exact_table};
 
         #[test]
+        fn test_dataframe_literal() {
+            verify_exact_table(r#"
+                |--------------------------------------|
+                | symbol | exchange | last_sale | rank |
+                |--------------------------------------|
+                | BOOM   | NYSE     | 113.76    | 1    |
+                | ABC    | AMEX     | 24.98     | 2    |
+                | JET    | NASDAQ   | 64.24     | 3    |
+                |--------------------------------------|
+            "#, vec![
+                "|-------------------------------------------|", 
+                "| id | symbol | exchange | last_sale | rank |", 
+                "|-------------------------------------------|", 
+                "| 0  | BOOM   | NYSE     | 113.76    | 1    |", 
+                "| 1  | ABC    | AMEX     | 24.98     | 2    |", 
+                "| 2  | JET    | NASDAQ   | 64.24     | 3    |", 
+                "|-------------------------------------------|"]);
+        }
+
+        #[test]
         fn test_feature_and_scenarios() {
             verify_exact_table(r#"
-            use testing
             Feature "Matches function" {
                 Scenario "Compare Array contents: Equal" {
                     assert(
@@ -391,28 +497,27 @@ mod tests {
                     )
                 }
             }"#, vec![
-                "|------------------------------------------------------------------------------------------------------------------------|",
-                "| id | level | item                                                                                    | passed | result |",
-                "|------------------------------------------------------------------------------------------------------------------------|",
-                "| 0  | 0     | Matches function                                                                        | true   | true   |",
-                "| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |",
-                r#"| 2  | 2     | assert([1, "a", "b", "c"] matches [1, "a", "b", "c"])                                   | true   | true   |"#,
-                "| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |",
-                r#"| 4  | 2     | assert(!([1, "a", "b", "c"] matches [0, "x", "y", "z"]))                                | true   | true   |"#,
-                "| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |",
-                r#"| 6  | 2     | assert({first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"})               | true   | true   |"#,
-                "| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |",
-                r#"| 8  | 2     | assert({scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}) | true   | true   |"#,
-                "|------------------------------------------------------------------------------------------------------------------------|"
-            ]);
+                r#"|------------------------------------------------------------------------------------------------------------------------|"#, 
+                r#"| id | level | item                                                                                    | passed | result |"#, 
+                r#"|------------------------------------------------------------------------------------------------------------------------|"#, 
+                r#"| 0  | 0     | Matches function                                                                        | true   | true   |"#, 
+                r#"| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |"#, 
+                r#"| 2  | 2     | assert [1, "a", "b", "c"] matches [1, "a", "b", "c"]                                    | true   | true   |"#, 
+                r#"| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |"#, 
+                r#"| 4  | 2     | assert !([1, "a", "b", "c"] matches [0, "x", "y", "z"])                                 | true   | true   |"#, 
+                r#"| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |"#, 
+                r#"| 6  | 2     | assert {first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"}                | true   | true   |"#, 
+                r#"| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |"#, 
+                r#"| 8  | 2     | assert {scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}  | true   | true   |"#, 
+                r#"|------------------------------------------------------------------------------------------------------------------------|"#]);
         }
 
         #[test]
-        fn test_when_is_triggered() {
+        fn test_whenever_is_triggered() {
             verify_exact_code(r#"
                 // Executes the block at the moment the condition becomes true.
                 let (x, y) = (1, 0)
-                when x == 0 {
+                whenever x == 0 {
                     x = x + 1
                     y = y + 1
                 }
@@ -422,11 +527,11 @@ mod tests {
         }
 
         #[test]
-        fn test_when_is_not_triggered_initially() {
+        fn test_whenever_is_not_triggered_initially() {
             verify_exact_code(r#"
                 // The block will be executed after the second assignment.
                 let (x, y) = (1, 0)
-                when x == 0 || y == 0 {
+                whenever x == 0 || y == 0 {
                     x = x + 1
                     y = y + 1
                 }
@@ -436,11 +541,11 @@ mod tests {
         }
 
         #[test]
-        fn test_when_is_not_triggered() {
+        fn test_whenever_is_not_triggered() {
             verify_exact_code(r#"
                 // The block will not be executed if the condition is already true.
                 let (x, y) = (1, 0)
-                when x == 0 || y == 0 {
+                whenever x == 0 || y == 0 {
                     x = x + 1
                     y = y + 1
                 }
@@ -452,13 +557,12 @@ mod tests {
     /// Function tests
     #[cfg(test)]
     mod function_tests {
-        use crate::compiler::Compiler;
         use crate::interpreter::Interpreter;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
         #[test]
-        fn test_new_function_lambda() {
+        fn test_function_lambda_with_inferred_types() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
                 let product = (a, b) -> a * b
@@ -469,7 +573,7 @@ mod tests {
         }
 
         #[test]
-        fn test_new_function_lambda_with_parameter_types() {
+        fn test_function_lambda_with_parameter_types() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
                 let product = (a: i64, b: i64) -> a * b
@@ -480,7 +584,18 @@ mod tests {
         }
 
         #[test]
-        fn test_new_function_named() {
+        fn test_function_lambda_with_parameter_types_and_return_type() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                let product = (a: i64, b: i64): i64 -> a * b
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                product(3, 9)
+            "#, "27")
+        }
+
+        #[test]
+        fn test_function_named_with_inferred_types() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
                 fn product(a, b) -> a * b
@@ -491,7 +606,7 @@ mod tests {
         }
 
         #[test]
-        fn test_new_function_named_with_parameter_types() {
+        fn test_function_named_with_parameter_types() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
                 fn product(a: i64, b: i64) -> a * b
@@ -500,15 +615,9 @@ mod tests {
                 product(4, 9)
             "#, "36")
         }
-        
-        #[test]
-        fn test_new_function_named_with_parameter_types_and_return_type() {
-            let model = Compiler::build(r#"
-                fn product(a: i64, b: i64): i64 -> a * b
-            "#).unwrap();
-            println!("model {:?}", model);
-            println!("model.to_code() {:?}", model.to_code());
 
+        #[test]
+        fn test_function_named_with_parameter_types_and_return_type() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
                 fn product(a: i64, b: i64): i64 -> a * b
@@ -516,39 +625,6 @@ mod tests {
             interpreter = verify_exact_code_with(interpreter, r#"
                 product(5, 6)
             "#, "30")
-        }
-
-        #[test]
-        fn test_transitional_function_lambda_with_parameter_types() {
-            let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_code_with(interpreter, r#"
-                let product = (a: i64, b: i64) -> a * b
-            "#, "true");
-            interpreter = verify_exact_code_with(interpreter, r#"
-                product(3, 7)
-            "#, "21")
-        }
-
-        #[test]
-        fn test_function_lambda() {
-            let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_code_with(interpreter, r#"
-                let product = (a, b) -> a * b
-            "#, "true");
-            interpreter = verify_exact_code_with(interpreter, r#"
-                product(2, 5)
-            "#, "10")
-        }
-
-        #[test]
-        fn test_function_named() {
-            let mut interpreter = Interpreter::new();
-            interpreter = verify_exact_code_with(interpreter, r#"
-                fn product(a, b) -> a * b
-            "#, "true");
-            interpreter = verify_exact_code_with(interpreter, r#"
-                product(3, 7)
-            "#, "21")
         }
 
         #[test]
@@ -562,7 +638,7 @@ mod tests {
         #[test]
         fn test_function_recursion_2() {
             verify_exact_code(r#"
-                let f = n -> iff(n <= 1, 1, n * f(n - 1))
+                let f = n -> if(n <= 1, 1, n * f(n - 1))
                 f(6)
             "#, "720")
         }
@@ -593,15 +669,170 @@ mod tests {
                 (2, 3) |>> add |> inverse
             "#, "0.2");
         }
+
+        #[test]
+        fn test_function_pipeline_with_filter_map() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                use arrays
+                let arr = [1, 2, 3, 4]
+                arr:::filter(x -> (x % 2) == 0):::map(x -> x * 10)
+            "#, "[20, 40]");
+        }
     }
 
-    #[test]
-    fn test_function_pipeline_with_filter_map() {
-        let mut interpreter = Interpreter::new();
-        interpreter = verify_exact_code_with(interpreter, r#"
-            use arrays
-            let arr = [1, 2, 3, 4]
-            arr:::filter(x -> (x % 2) == 0):::map(x -> x * 10)
-        "#, "[20, 40]");
+    /// Package "infix" tests
+    #[cfg(test)]
+    mod infix_tests {
+        use crate::interpreter::Interpreter;
+        use crate::testdata::{verify_exact_code, verify_exact_code_with};
+
+        #[test]
+        fn test_infix_field_access() {
+            verify_exact_code(r#"
+                let stock = { symbol: "TED", exchange: "AMEX", last_sale: 13.37 }
+                stock.last_sale
+            "#, "13.37");
+        }
+
+        #[test]
+        fn test_infix_field_assignment() {
+            verify_exact_code(r#"
+                let stock = { symbol: "RLPH", exchange: "NYSE", last_sale: 13.37 }
+                stock.last_sale = 35.78
+                stock.last_sale
+            "#, "35.78");
+        }
+
+        #[test]
+        fn test_infix_function_call() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter,r#"
+            stock = Struct::new(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )
+            mod stock {
+                fn contains_symbol(symbol) -> symbol is self::symbol
+            }
+            "#, "true");
+
+            // verify the positive case
+            interpreter = verify_exact_code_with(interpreter,r#"
+                stock.contains_symbol("ABC")
+            "#, "true");
+
+            // verify the negative case
+            verify_exact_code_with(interpreter,r#"
+                stock.contains_symbol("XYZ")
+            "#, "false");
+        }
+    }
+
+    /// Package "testing" tests
+    #[cfg(test)]
+    mod type_of_tests {
+        use crate::errors::Errors::Exact;
+        use crate::testdata::{verify_exact_code, verify_exact_value};
+        use crate::typed_values::TypedValue::ErrorValue;
+
+        #[test]
+        fn test_type_of_array_bool() {
+            verify_exact_code("type_of([true, false])", r#"Array(2)"#);
+        }
+
+        #[test]
+        fn test_type_of_array_i64() {
+            verify_exact_code("type_of([12, 76, 444])", "Array(3)");
+        }
+
+        #[test]
+        fn test_type_of_array_str() {
+            verify_exact_code("type_of(['ciao', 'hello', 'world'])", "Array(3)");
+        }
+
+        #[test]
+        fn test_type_of_array_f64() {
+            verify_exact_code("type_of([12, 'hello', 76.78])", "Array(3)");
+        }
+
+        #[test]
+        fn test_type_of_bool() {
+            verify_exact_code("type_of(false)", "Boolean");
+            verify_exact_code("type_of(true)", "Boolean");
+        }
+
+        #[test]
+        fn test_type_of_date() {
+            verify_exact_code("type_of(cal::now())", "Date");
+        }
+
+        #[test]
+        fn test_type_of_fn() {
+            verify_exact_code("type_of((a, b) -> a + b)", "fn(a, b)");
+        }
+
+        #[test]
+        fn test_type_of_i64() {
+            verify_exact_code("type_of(1234)", "i64");
+        }
+
+        #[test]
+        fn test_type_of_f64() {
+            verify_exact_code("type_of(12.394)", "f64");
+        }
+
+        #[test]
+        fn test_type_of_string() {
+            verify_exact_code("type_of('1234')", "String(4)");
+            verify_exact_code(r#"type_of("abcde")"#, "String(5)");
+        }
+
+        #[test]
+        fn test_type_of_structure_hard() {
+            verify_exact_code(
+                r#"type_of(Struct(symbol: String(3) = "ABC"))"#,
+                r#"Struct(symbol: String(3) = "ABC")"#,
+            );
+        }
+
+        #[test]
+        fn test_type_of_structure_soft() {
+            verify_exact_code(
+                r#"type_of({symbol:"ABC"})"#,
+                r#"Struct(symbol: String(3) = "ABC")"#,
+            );
+        }
+
+        #[test]
+        fn test_type_of_table() {
+            verify_exact_code(
+                r#"type_of(Table::new(symbol: String(8), exchange: String(8), last_sale: f64))"#,
+                "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
+            );
+        }
+
+        #[test]
+        fn test_type_of_uuid() {
+            verify_exact_code("type_of(oxide::uuid())", "UUID");
+        }
+
+        #[test]
+        fn test_type_of_variable() {
+            verify_exact_value(
+                "type_of(my_var)",
+                ErrorValue(Exact("Variable 'my_var' not found".into())));
+        }
+
+        #[test]
+        fn test_type_of_null() {
+            verify_exact_code("type_of(null)", "");
+        }
+
+        #[test]
+        fn test_type_of_undefined() {
+            verify_exact_code("type_of(undefined)", "");
+        }
     }
 }

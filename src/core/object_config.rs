@@ -178,7 +178,7 @@ mod tests {
         let cfg = ObjectConfig::build_table(vec![
             Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
             Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
-            Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
+            Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
         ]);
         let ns = Namespace::parse("object_config.table_cfg.stocks")?;
         cfg.save(&ns)?;
@@ -189,7 +189,7 @@ mod tests {
             columns: vec![
                 Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
                 Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
-                Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
+                Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
             ],
             indices: Vec::new(),
             partitions: Vec::new(),
@@ -203,7 +203,7 @@ mod tests {
             vec![
                 Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
                 Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
-                Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
+                Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
             ],
             StructureExpression(vec![
                 ("symbol".to_string(), Variable("symbol".into())),
@@ -226,7 +226,7 @@ mod tests {
             columns: vec![
                 Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
                 Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
-                Parameter::with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
+                Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
             ],
             code: StructureExpression(vec![
                 ("symbol".to_string(), Variable("symbol".into())),

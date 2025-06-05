@@ -37,7 +37,7 @@ impl Parameter {
     }
 
     pub fn from_column(column: &Column) -> Self {
-        Parameter::with_default(
+        Parameter::new_with_default(
             column.get_name(),
             column.get_data_type().clone(),
             column.get_default_value())
@@ -48,7 +48,7 @@ impl Parameter {
     }
 
     pub fn from_tuple(name: impl Into<String>, value: TypedValue) -> Self {
-        Self::with_default(name.into(), value.get_type(), value)
+        Self::new_with_default(name.into(), value.get_type(), value)
     }
 
     pub fn merge_parameters(
@@ -78,7 +78,13 @@ impl Parameter {
     }
 
     pub fn new(name: impl Into<String>, param_type: DataType) -> Self {
-        Self::with_default(name, param_type, Null)
+        Self::new_with_default(name, param_type, Null)
+    }
+
+    pub fn new_with_default(name: impl Into<String>,
+                            param_type: DataType,
+                            default_value: TypedValue) -> Self {
+        Parameter { name: name.into(), data_type: param_type, default_value }
     }
 
     pub fn render(parameters: &Vec<Parameter>) -> String {
@@ -89,12 +95,6 @@ impl Parameter {
         parameters.iter().map(|p| f(p))
             .collect::<Vec<String>>()
             .join(", ")
-    }
-
-    pub fn with_default(name: impl Into<String>,
-                        param_type: DataType,
-                        default_value: TypedValue) -> Self {
-        Parameter { name: name.into(), data_type: param_type, default_value }
     }
 
     ////////////////////////////////////////////////////////////////////
@@ -142,6 +142,12 @@ impl Parameter {
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::json!(&self)
     }
+
+    pub fn with_default(&self, default_value: TypedValue) -> Self {
+        let mut param = self.clone();
+        param.default_value = default_value;
+        param
+    }
 }
 
 // Unit tests
@@ -170,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_to_code() {
-        let param = Parameter::with_default("symbol", FixedSizeType(StringType.into(), 8), StringValue("N/A".into()));
+        let param = Parameter::new_with_default("symbol", FixedSizeType(StringType.into(), 8), StringValue("N/A".into()));
         assert_eq!(param.to_code(), r#"symbol: String(8) = "N/A""#)
     }
 

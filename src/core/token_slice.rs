@@ -57,10 +57,6 @@ impl TokenSlice {
         (tokens, self.copy(pos))
     }
 
-    pub fn contains(&self, text: &str) -> bool {
-        self.current().contains(text)
-    }
-
     /// Creates a new Token Slice via a vector of tokens.
     pub fn copy(&self, pos: isize) -> Self {
         Self { tokens: self.tokens.to_owned(), pos }
@@ -84,23 +80,12 @@ impl TokenSlice {
 
     pub fn expect(&self, term: &str) -> std::io::Result<Self> {
         if let (Some(tok), ts) = self.next() {
-            if tok.contains(term) { Ok(ts) } else {
+            if tok.is(term) { Ok(ts) } else {
                 throw(ExactNear(format!("Expected '{}' but found '{}'", term, tok.get()), tok))
             }
         } else {
             throw(Exact(format!("Expected '{}'", term)))
         }
-    }
-
-    pub fn fold<A>(&self, init: A, f: fn(&A, &TokenSlice) -> (A, TokenSlice)) -> A {
-        let mut result = init;
-        let mut a_ts = self.to_owned();
-        while a_ts.has_more() {
-            let (result1, ts1) = f(&result, &a_ts);
-            result = result1;
-            a_ts = ts1;
-        }
-        result
     }
 
     /// Returns the option of a Token at the current position within the slice.
@@ -117,12 +102,6 @@ impl TokenSlice {
     /// Indicates whether at least one more token remains before the end of the slice.
     pub fn has_more(&self) -> bool {
         self.has_next() || (self.get_position() < self.len() as isize)
-    }
-
-    /// Indicates whether at least one more token remains before the end of the slice.
-    pub fn has_additional(&self) -> bool {
-        self.has_next() || (!self.is_empty() && self.get_position() == 0
-            && (self.get_position() < self.len() as isize))
     }
 
     /// Indicates whether there is another token after the current token
@@ -144,31 +123,26 @@ impl TokenSlice {
         self.tokens.is_empty()
     }
 
-    pub fn is_next(&self, f: fn(Token) -> bool) -> bool {
-        self.next().0.map_or(false, |t| f(t))
-    }
-
-    pub fn is_previous(&self, f: fn(Token) -> bool) -> bool {
-        self.previous().0.map_or(false, |t| f(t))
+    /// Provides a method of comparing the previous [Token] to the current [Token]
+    pub fn is_previous(&self, f: fn(Token, Token) -> bool) -> bool {
+        if self.pos > 0 {
+            let tokens = &self.tokens;
+            let p1 = self.pos as usize;
+            let p0 = p1 - 1;
+            let (t0, t1) = (tokens[p0].to_owned(), tokens[p1].to_owned());
+            f(t0, t1)
+        } else { false }
     }
 
     pub fn is_previous_adjacent(&self) -> bool {
-        if self.pos > 0 {
-            let tokens = &self.tokens;
-            let p1 = self.pos as usize;
-            let (t0, t1) = (tokens[p1 - 1].to_owned(), tokens[p1].to_owned());
+        self.is_previous(|t0, t1| {
             t0.get_line_number() == t1.get_line_number() &&
                 t0.get_column_number() + t0.get().len() == t1.get_column_number()
-        } else { false }
+        })
     }
 
-    pub fn is_same_line_as_previous(&self) -> bool {
-        if self.pos > 0 {
-            let p1 = self.pos as usize;
-            let p0 = p1 - 1;
-            let tokens = &self.tokens;
-            tokens[p0].get_line_number() == tokens[p1].get_line_number()
-        } else { false }
+    pub fn is_previous_on_same_line(&self) -> bool {
+        self.is_previous(|t0, t1| t0.get_line_number() == t1.get_line_number())
     }
 
     pub fn len(&self) -> usize { self.tokens.len() }
@@ -180,12 +154,6 @@ impl TokenSlice {
             return (Some(self[n as usize].to_owned()), self.copy(n + 1));
         }
         (None, self.to_owned())
-    }
-
-    pub fn peek(&self) -> Option<&Token> {
-        if self.pos >= 0 && self.pos < self.tokens.len() as isize {
-            Some(&self.tokens[self.pos as usize])
-        } else { None }
     }
 
     /// Returns the option of a Token at the previous position within the slice.
@@ -211,18 +179,6 @@ impl TokenSlice {
     pub fn skip(&self) -> Self { self.next().1 }
 
     pub fn tail(&self) -> Self { Self::new(self.tokens[(self.pos + 1) as usize..self.len()].to_vec()) }
-
-    pub fn while_do<A>(
-        &self,
-        cond: fn(&TokenSlice) -> bool,
-        f: fn(TokenSlice
-        ) -> std::io::Result<TokenSlice>) -> std::io::Result<TokenSlice> {
-        let mut a_ts = self.to_owned();
-        while cond(&a_ts) {
-            a_ts = f(a_ts)?
-        }
-        Ok(a_ts)
-    }
 }
 
 impl Display for TokenSlice {
@@ -344,7 +300,7 @@ mod tests {
         let ts = TokenSlice::from_string("students[3]");
         let (tok0, ts) = ts.next();
         assert_eq!(tok0.map(|t| t.get()), Some("students".to_string()));
-        assert!(ts.is_same_line_as_previous());
+        assert!(ts.is_previous_on_same_line());
     }
 
     #[test]
@@ -355,7 +311,7 @@ mod tests {
         "#);
         let (tok0, ts) = ts.next();
         assert_eq!(tok0.map(|t| t.get()), Some("items".to_string()));
-        assert!(!ts.is_same_line_as_previous());
+        assert!(!ts.is_previous_on_same_line());
     }
 
     #[test]

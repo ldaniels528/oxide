@@ -74,7 +74,7 @@ impl EventSourceRowCollection {
         ns: &Namespace,
         columns: &Vec<Parameter>,
     ) -> std::io::Result<Self> {
-        let events_ns = Namespace::new(ns.database.clone(), ns.schema.clone(), format!("{}_events", ns.name));
+        let events_ns = ns.with_events_name();
         Ok(Self {
             namespace: ns.clone(),
             columns: Column::from_parameters(&columns),
@@ -538,7 +538,7 @@ mod tests {
 
         #[test]
         fn test_events_crud() {
-            // 1. create an event sourced table:
+            // 1. create an event-sourced table:
             //  table stocks (symbol: String(8), exchange: String(8), last_sale: Date):::{
             //      journaling: true
             //  }

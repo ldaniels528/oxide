@@ -333,7 +333,7 @@ impl HardStructure {
             // otherwise, create a new structure
             None => {
                 let mut fields = self.fields.clone();
-                fields.push(Parameter::with_default(name, value.get_type(), value.to_owned()));
+                fields.push(Parameter::new_with_default(name, value.get_type(), value.to_owned()));
                 let mut values = self.values.clone();
                 values.push(value);
                 HardStructure::from_parameters_and_values(fields, values)
@@ -498,7 +498,7 @@ impl Structure for SoftStructure {
 
     fn get_parameters(&self) -> Vec<Parameter> {
         self.tuples.iter()
-            .map(|(f, v)| Parameter::with_default(f, v.get_type(), v.to_owned()))
+            .map(|(f, v)| Parameter::new_with_default(f, v.get_type(), v.to_owned()))
             .collect()
     }
 
@@ -851,7 +851,7 @@ impl Structure for Row {
 
     fn get_parameters(&self) -> Vec<Parameter> {
         self.to_name_values().iter()
-            .map(|(k, v)| Parameter::with_default(k, v.get_type(), v.to_owned()))
+            .map(|(k, v)| Parameter::new_with_default(k, v.get_type(), v.to_owned()))
             .collect()
     }
 
@@ -935,8 +935,10 @@ mod tests {
         #[test]
         fn test_firm_structure_from_table() {
             verify_exact_value(r#"
-                stocks = ns("interpreter.struct.stocks")
-                table(symbol: String(8), exchange: String(8), last_sale: f64) ~> stocks
+                stocks = nsd::save(
+                    "interpreter.struct.stocks",
+                    Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                )
                 let rows = [
                  { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
                  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -956,7 +958,7 @@ mod tests {
         fn test_hard_structure() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-            Struct(symbol: String(8), exchange: String(8), last_sale: f64)
+            Struct::new(symbol: String(8), exchange: String(8), last_sale: f64)
         "#).unwrap();
             assert_eq!(result, Structured(Hard(
                 HardStructure::new(make_quote_parameters(), vec![
@@ -969,7 +971,7 @@ mod tests {
         fn test_hard_structure_with_default_values() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-            Struct(
+            Struct::new(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -989,7 +991,7 @@ mod tests {
         #[test]
         fn test_hard_structure_field() {
             verify_exact_value(r#"
-            stock = Struct(
+            stock = Struct::new(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -1001,7 +1003,7 @@ mod tests {
         #[test]
         fn test_hard_structure_field_assignment() {
             verify_exact_value(r#"
-            stock = Struct(
+            stock = Struct::new(
                 symbol: String = "ABC",
                 exchange: String = "NYSE",
                 last_sale: f64 = 23.67
@@ -1015,7 +1017,7 @@ mod tests {
         fn test_hard_structure_module_method() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter,r#"
-            stock = Struct(
+            stock = Struct::new(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -1040,7 +1042,7 @@ mod tests {
         fn test_hard_structure_import() {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-            stock = Struct(
+            stock = Struct::new(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
@@ -1567,7 +1569,7 @@ mod tests {
             // build the expected structure
             let expected_columns: Vec<Column> = {
                 let mut my_params = make_quote_parameters();
-                my_params.push(Parameter::with_default(new_name, new_value.get_type(), new_value));
+                my_params.push(Parameter::new_with_default(new_name, new_value.get_type(), new_value));
                 Column::from_parameters(&my_params)
             };
             let expected = HardStructure::from_columns_and_values(expected_columns, vec![
