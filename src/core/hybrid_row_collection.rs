@@ -131,7 +131,7 @@ impl RowCollection for HybridRowCollection {
         }
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         if id < self.dividing_line {
             self.brc.read_field(id, column_id)
         } else {

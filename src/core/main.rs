@@ -60,6 +60,7 @@ mod tokens;
 mod typed_values;
 mod utils;
 mod websockets;
+mod embedded_table_file_row_collection;
 
 const LOCAL_HOST: &str = "0.0.0.0";
 

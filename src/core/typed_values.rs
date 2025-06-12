@@ -68,7 +68,7 @@ const UUID_FORMAT: &str =
 #[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     ArrayValue(Array),
-    Binary(Vec<u8>),
+    BinaryValue(Vec<u8>),
     Boolean(bool),
     DateValue(i64),
     ErrorValue(Errors),
@@ -135,10 +135,21 @@ impl TypedValue {
         let number: String = text.chars()
             .filter(|c| *c != '_' && *c != ',')
             .collect();
+        
+        fn convert_lex_num(num_str: &str, radix: u32) -> std::io::Result<TypedValue> {
+            let number = u128::from_str_radix(&num_str[2..], radix)
+                .map_err(|e| cnv_error!(e))?;
+            let result = match number { 
+                n if n <= i64::MAX as u128 => I64Value(n as i64),
+                n => U128Value(n)
+            };
+            Ok(Number(result))
+        }
+        
         match number.trim() {
-            s if s.starts_with("0b") => Ok(Number(I64Value(i64::from_str_radix(&s[2..], 2).map_err(|e| cnv_error!(e))?))),
-            s if s.starts_with("0o") => Ok(Number(I64Value(i64::from_str_radix(&s[2..], 8).map_err(|e| cnv_error!(e))?))),
-            s if s.starts_with("0x") => Ok(Number(I64Value(i64::from_str_radix(&s[2..], 16).map_err(|e| cnv_error!(e))?))),
+            s if s.starts_with("0b") => convert_lex_num(s, 2),
+            s if s.starts_with("0o") => convert_lex_num(s, 8),
+            s if s.starts_with("0x") => convert_lex_num(s, 16),
             s if int_regex.is_match(s) => Ok(Number(I64Value(s.parse().map_err(|e| cnv_error!(e))?))),
             s if decimal_regex.is_match(s) => Ok(Number(F64Value(s.parse().map_err(|e| cnv_error!(e))?))),
             s => Ok(StringValue(s.to_string()))
@@ -151,19 +162,6 @@ impl TypedValue {
 
     pub fn from_results(result: std::io::Result<(Machine, TypedValue)>) -> (Machine, TypedValue) {
         result.unwrap_or_else(|err| (Machine::empty(), ErrorValue(Exact(err.to_string()))))
-    }
-
-    pub fn from_token(token: &Token) -> std::io::Result<TypedValue> {
-        match token {
-            Token::Atom { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get()))),
-            Token::Backticks { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get()))),
-            Token::DataframeLiteral { cells, .. } => Ok(TableValue(Dataframe::from_cells(cells))),
-            Token::DoubleQuoted { text, .. } => Ok(StringValue(text.to_string())),
-            Token::Numeric { text, .. } => Self::from_numeric(text),
-            Token::Operator { .. } => throw(SyntaxError(SyntaxErrors::LiteralExpected(token.get()))),
-            Token::SingleQuoted { text, .. } => Ok(StringValue(text.to_string())),
-            Token::URL { text, .. } => Ok(StringValue(text.to_string())),
-        }
     }
 
     pub fn is_numeric_value(value: &str) -> std::io::Result<bool> {
@@ -287,11 +285,11 @@ impl TypedValue {
                         _ => Undefined,
                     }
                     BinaryType => match value {
-                        Binary(bytes) => Binary(bytes.to_owned()),
-                        Number(number) => Binary(number.encode()),
-                        StringValue(s) => Binary(s.as_bytes().to_owned()),
-                        TableValue(df) => Binary(df.to_bytes()?),
-                        UUIDValue(uuid) => Binary(uuid.to_be_bytes().to_vec()),
+                        BinaryValue(bytes) => BinaryValue(bytes.to_owned()),
+                        Number(number) => BinaryValue(number.encode()),
+                        StringValue(s) => BinaryValue(s.as_bytes().to_owned()),
+                        TableValue(df) => BinaryValue(df.to_bytes()?),
+                        UUIDValue(uuid) => BinaryValue(uuid.to_be_bytes().to_vec()),
                         _ => Undefined
                     },
                     BooleanType => match value {
@@ -366,7 +364,7 @@ impl TypedValue {
                     }
                     DataType::UnresolvedType => value.clone(),
                     DataType::UUIDType => match value {
-                        Binary(bytes) => UUIDValue(Uuid::from_slice(&bytes).map_err(|e| cnv_error!(e))?.as_u128()),
+                        BinaryValue(bytes) => UUIDValue(Uuid::from_slice(&bytes).map_err(|e| cnv_error!(e))?.as_u128()),
                         Number(number) => UUIDValue(number.to_u128()),
                         StringValue(text) => UUIDValue(Uuid::parse_str(text.as_str()).map_err(|e| cnv_error!(e))?.as_u128()),
                         UUIDValue(uuid) => UUIDValue(*uuid),
@@ -374,44 +372,6 @@ impl TypedValue {
                     }
                 }
         })
-    }
-
-    pub fn display_value(&self) -> String {
-        match self {
-            TypedValue::ArrayValue(av) => {
-                let values = av.iter().map(|v| v.display_value()).collect::<Vec<_>>();
-                format!("[{}]", values.join(", "))
-            }
-            TypedValue::Binary(bytes) => hex::encode(bytes),
-            TypedValue::Boolean(b) => (if *b { "true" } else { "false" }).into(),
-            TypedValue::DateValue(dt) => Self::millis_to_iso_date(*dt).unwrap_or_else(|| dt.to_string()),
-            TypedValue::ErrorValue(message) => message.to_string(),
-            TypedValue::Function { params, body: code, returns } =>
-                format!("(fn({}){} => {})",
-                        params.iter().map(|c| c.to_code()).collect::<Vec<_>>().join(", "),
-                        match returns.to_code().as_str() {
-                            "" => "".to_string(),
-                            s => format!(": {}", s),
-                        },
-                        code.to_code()),
-            TypedValue::Kind(data_type) => data_type.to_code(),
-            TypedValue::Null => "null".into(),
-            TypedValue::Number(number) => number.unwrap_value(),
-            TypedValue::PlatformOp(pf) => pf.to_code(),
-            TypedValue::Sequenced(seq) => seq.unwrap_value(),
-            TypedValue::StringValue(string) => format!("\"{}\"", string),
-            TypedValue::Structured(structure) => structure.to_json().to_string(),
-            TypedValue::TableValue(df) => {
-                let params = df.get_parameters();
-                serde_json::json!(df.iter().map(|r| r.to_hash_json_value(&params))
-                    .collect::<Vec<_>>()).to_string()
-            }
-            TypedValue::TupleValue(items) =>
-                format!("({})", items.iter().map(|i| i.display_value())
-                    .collect::<Vec<_>>().join(", ")),
-            TypedValue::Undefined => "undefined".into(),
-            TypedValue::UUIDValue(uuid) => Self::u128_to_uuid(*uuid),
-        }
     }
 
     fn u128_to_uuid(uuid: u128) -> String {
@@ -436,7 +396,7 @@ impl TypedValue {
                 for item in items.iter() { bytes.extend(item.encode()); }
                 bytes
             }
-            Binary(bytes) => ByteCodeCompiler::encode_u8x_n(bytes.to_vec()),
+            BinaryValue(bytes) => ByteCodeCompiler::encode_u8x_n(bytes.to_vec()),
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
             DateValue(dt) => ByteCodeCompiler::encode_u8x_n(dt.to_be_bytes().to_vec()),
             ErrorValue(err) => ByteCodeCompiler::encode_string(err.to_string().as_str()),
@@ -461,7 +421,7 @@ impl TypedValue {
     pub fn get_type(&self) -> DataType {
         match self {
             ArrayValue(a) => FixedSizeType(ArrayType.into(), a.len()),
-            Binary(bytes) => FixedSizeType(BinaryType.into(), bytes.len()),
+            BinaryValue(bytes) => FixedSizeType(BinaryType.into(), bytes.len()),
             Boolean(..) => BooleanType,
             DateValue(..) => DateTimeType,
             ErrorValue(..) => ErrorType,
@@ -514,7 +474,7 @@ impl TypedValue {
     pub fn sublist(&self, start: usize, end: usize) -> Self {
         match self {
             ArrayValue(array) => ArrayValue(array.sublist(start, end)),
-            Binary(bytes) => Binary(bytes[start..end].to_vec()),
+            BinaryValue(bytes) => BinaryValue(bytes[start..end].to_vec()),
             Sequenced(s) => Sequenced(s.sublist(start, end)),
             StringValue(s) => StringValue(s[start..end].to_string()),
             TableValue(df) => TableValue(df.sublist(start, end)),
@@ -545,7 +505,7 @@ impl TypedValue {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
-            TypedValue::Binary(bytes) => bytes.to_vec(),
+            TypedValue::BinaryValue(bytes) => bytes.to_vec(),
             TypedValue::StringValue(s) => s.bytes().collect(),
             TypedValue::UUIDValue(uuid) => u128::to_be_bytes(*uuid).to_vec(),
             z => z.encode()
@@ -575,7 +535,7 @@ impl TypedValue {
             ArrayValue(items) => self.convert_array_to_table(&items.get_values()),
             Structured(s) => Ok(s.to_dataframe()),
             TableValue(df) => Ok(df.to_owned()),
-            z => throw(TypeMismatch(TypeMismatchErrors::TableExpected(z.to_code(), z.to_code())))
+            z => throw(TypeMismatch(TypeMismatchErrors::TableExpected(z.to_code())))
         }
     }
 
@@ -611,7 +571,7 @@ impl TypedValue {
             TypedValue::ArrayValue(items) => serde_json::json!(items.iter()
                     .map(|v|v.to_json())
                     .collect::<Vec<_>>()),
-            TypedValue::Binary(bytes) => serde_json::json!(bytes),
+            TypedValue::BinaryValue(bytes) => serde_json::json!(bytes),
             TypedValue::Boolean(b) => serde_json::json!(b),
             TypedValue::DateValue(dt) => serde_json::json!(Self::millis_to_iso_date(*dt).unwrap_or_else(|| dt.to_string())),
             TypedValue::ErrorValue(message) => serde_json::json!(message),
@@ -761,7 +721,7 @@ impl TypedValue {
     fn unwrap_as_bytes(&self, max_len: usize) -> std::io::Result<Vec<u8>> {
         let bytes = match self {
             ArrayValue(_) => vec![],
-            Binary(bytes) => bytes.clone(),
+            BinaryValue(bytes) => bytes.clone(),
             Boolean(b) => vec![if *b { 1u8 } else { 0u8 }],
             DateValue(dt) => i64::from(*dt).to_be_bytes().to_vec(),
             ErrorValue(err) => return throw(err.to_owned()),
@@ -794,12 +754,22 @@ impl TypedValue {
     }
 
     pub fn unwrap_value(&self) -> String {
+        fn quoted(items: &Vec<TypedValue>) -> Vec<String> {
+            items.iter()
+                .map(|value| match value {
+                    StringValue(s) => format!(r#""{s}""#),
+                    //UUIDValue(n) => format!(r#""{}""#, TypedValue::u128_to_uuid(*n)),
+                    v => v.unwrap_value()
+                })
+                .collect::<Vec<_>>()
+        }
+        
         match self {
-            TypedValue::ArrayValue(av) => {
-                let values = av.iter().map(|v| v.unwrap_value()).collect::<Vec<_>>();
-                format!("[{}]", values.join(", "))
-            }
-            TypedValue::Binary(bytes) => hex::encode(bytes),
+            TypedValue::ArrayValue(array) => 
+                format!("[{}]", quoted(&array.get_values()).join(", ")),
+            TypedValue::BinaryValue(bytes) =>
+                format!("0v{}", bytes.iter().map(|b| format!("{:02x}", b))
+                    .collect::<Vec<_>>().join("")),
             TypedValue::Boolean(b) => (if *b { "true" } else { "false" }).into(),
             TypedValue::DateValue(dt) => Self::millis_to_iso_date(*dt).unwrap_or_else(|| dt.to_string()),
             TypedValue::ErrorValue(message) => message.to_string(),
@@ -823,9 +793,7 @@ impl TypedValue {
                 serde_json::json!(rcv.iter().map(|r| r.to_hash_json_value(&params))
                     .collect::<Vec<_>>()).to_string()
             }
-            TypedValue::TupleValue(items) =>
-                format!("({})", items.iter().map(|i| i.to_code())
-                    .collect::<Vec<_>>().join(", ")),
+            TypedValue::TupleValue(items) => format!("({})", quoted(items).join(", ")),
             TypedValue::Undefined => "undefined".into(),
             TypedValue::UUIDValue(uuid) => Self::u128_to_uuid(*uuid),
         }
@@ -1047,7 +1015,7 @@ impl Neg for TypedValue {
         let error: fn(String) -> TypedValue = |s| ErrorValue(TypeMismatch(CannotBeNegated(s)));
         match self {
             ArrayValue(v) => ArrayValue(v.map(|tv| tv.to_owned().neg())),
-            Binary(..) => error("Binary".into()),
+            BinaryValue(..) => error("Binary".into()),
             Boolean(n) => Boolean(!n),
             DateValue(dt) => Number(I64Value(dt.neg())),
             ErrorValue(msg) => ErrorValue(msg),
@@ -1107,7 +1075,7 @@ impl PartialOrd for TypedValue {
     fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
         match (&self, &rhs) {
             (ArrayValue(a), ArrayValue(b)) => a.partial_cmp(b),
-            (Binary(a), Binary(b)) => a.partial_cmp(b),
+            (BinaryValue(a), BinaryValue(b)) => a.partial_cmp(b),
             (Boolean(a), Boolean(b)) => a.partial_cmp(b),
             (Number(a), Number(b)) => a.partial_cmp(b),
             (StringValue(a), StringValue(b)) => a.partial_cmp(b),
@@ -1503,7 +1471,7 @@ mod conversion_tests {
 
     #[test]
     fn test_string_to_binary() {
-        verify(StringValue("Hello there".into()), BinaryType, Binary(b"Hello there".into()));
+        verify(StringValue("Hello there".into()), BinaryType, BinaryValue(b"Hello there".into()));
     }
 
     #[test]
@@ -1528,7 +1496,7 @@ mod conversion_tests {
     fn test_uuid_to_binary() {
         verify(UUIDValue(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128),
                BinaryType,
-               Binary(vec![
+               BinaryValue(vec![
                    0xfe, 0xed, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xaf, 
                    0xfa, 0xde, 0xca, 0xfe, 0xba, 0xbe, 0xfa, 0xce
                ]));
@@ -1552,4 +1520,97 @@ mod conversion_tests {
     }
 }
 
+/// unwrapping tests
+#[cfg(test)]
+mod unwrapping_tests {
+    use crate::data_types::DataType::*;
+    use crate::errors::Errors::Exact;
+    use crate::number_kind::NumberKind::*;
+    use crate::numbers::Numbers::*;
+    use crate::parameter::Parameter;
+    use crate::sequences::Array;
+    use crate::structures::HardStructure;
+    use crate::structures::Structures::Hard;
+    use crate::typed_values::TypedValue;
+    use crate::typed_values::TypedValue::*;
 
+    #[test]
+    fn test_array_strings() {
+        let array = ArrayValue(Array::from(vec![
+            StringValue("123".into()), StringValue("abc".into()),
+            StringValue("xyz".into()), StringValue("897".into()),
+        ]));
+        verify(array, r#"["123", "abc", "xyz", "897"]"#)
+    }
+
+    #[test]
+    fn test_array_structure() {
+        let params = vec![
+            Parameter::new_with_default("symbol", FixedSizeType(StringType.into(), 3), StringValue("BIZ".into())),
+            Parameter::new_with_default("exchange", FixedSizeType(StringType.into(), 4), StringValue("NYSE".into())),
+            Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.66))),
+        ];
+        let array = ArrayValue(Array::from(vec![
+            Structured(Hard(HardStructure::new(params.clone(), vec![
+                StringValue("BIZ".into()), StringValue("NYSE".into()), Number(F64Value(23.66))
+            ]))),
+            Structured(Hard(HardStructure::new(params.clone(), vec![
+                StringValue("DMX".into()), StringValue("OTC_BB".into()), Number(F64Value(1.17))
+            ])))
+        ]));
+        verify_diff(
+            array,
+            r#"[{"exchange":"NYSE","last_sale":23.66,"symbol":"BIZ"}, {"exchange":"NYSE","last_sale":23.66,"symbol":"BIZ"}]"#,
+            r#"[Struct(symbol: String(3) = "BIZ", exchange: String(4) = "NYSE", last_sale: f64 = 23.66), Struct(symbol: String(3) = "DMX", exchange: String(4) = "OTC_BB", last_sale: f64 = 1.17)]"#)
+    }
+
+    #[test]
+    fn test_binary() {
+        verify(BinaryValue(vec![
+            0xde, 0xad, 0xbe, 0xef, 0xfa, 0xce
+        ]), "0vdeadbeefface");
+    }
+
+    #[test]
+    fn test_boolean() {
+        verify(Boolean(true), "true");
+        verify(Boolean(false), "false");
+    }
+
+    #[test]
+    fn test_date() {
+        verify(DateValue(17453558321123), "2523-01-30T18:38:41.123Z");
+    }
+
+    #[test]
+    fn test_error() {
+        verify(ErrorValue(Exact("This is an error".into())), "This is an error");
+    }
+
+    #[test]
+    fn test_tuple() {
+        let tuple = TupleValue(vec![
+            DateValue(17453558321123),
+            StringValue("hello".into()), 
+            UUIDValue(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128)
+        ]);
+        verify(tuple, r#"(2523-01-30T18:38:41.123Z, "hello", feeddead-beef-deaf-fade-cafebabeface)"#)
+    }
+
+    #[test]
+    fn test_uuid() {
+        verify(
+            UUIDValue(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128),
+            "feeddead-beef-deaf-fade-cafebabeface")
+    }
+
+    fn verify(value: TypedValue, text: &str) {
+        assert_eq!(value.unwrap_value(), text);
+        assert_eq!(value.to_code(), text);
+    }
+
+    fn verify_diff(value: TypedValue, unwrap_text: &str, code_text: &str) {
+        assert_eq!(value.unwrap_value(), unwrap_text);
+        assert_eq!(value.to_code(), code_text);
+    }
+}

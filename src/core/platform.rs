@@ -40,8 +40,8 @@ use std::io::{Read, Write};
 use std::ops::Deref;
 
 pub const MAJOR_VERSION: u8 = 1;
-pub const MINOR_VERSION: u8 = 40;
-pub const VERSION: &str = "0.41";
+pub const MINOR_VERSION: u8 = 44;
+pub const VERSION: &str = "0.44";
 
 /// Represents an Oxide Platform Package
 pub trait Package {

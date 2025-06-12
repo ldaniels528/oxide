@@ -5,6 +5,7 @@
 
 use crate::tokens::Token;
 use crate::tokens::Token::DataframeLiteral;
+use regex::Regex;
 
 /// Single-character operators
 const OPERATORS_1: [char; 38] = [
@@ -28,7 +29,7 @@ const OPERATORS_3: [&str; 9] = [
 ];
 
 /// Pseudo-numerical prefixes
-const PSEUDO_NUMERICAL: [&str; 3] = ["0x", "0b", "0o"];
+const PSEUDO_NUMERICAL: [&str; 4] = ["0x", "0v", "0b", "0o"];
 
 type NewToken = fn(String, usize, usize, usize, usize) -> Token;
 
@@ -96,6 +97,7 @@ fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
 fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
         skip_comments,
+        next_date_literal_token,
         next_dataframe_literal_token,
         next_compound_3_operator_token,
         next_compound_2_operator_token,
@@ -195,6 +197,21 @@ fn next_dataframe_literal_token(inputs: &Vec<char>, pos: &mut usize) -> Option<T
     None
 }
 
+fn next_date_literal_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    let start = *pos;
+    if start + 24 <= inputs.len() {
+        let date = &inputs[*pos..(*pos + 24)];
+        let iso_pattern = r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z";
+        let re = Regex::new(iso_pattern).unwrap();
+        let date_str: String = date.iter().collect();
+        if re.is_match(date_str.as_str()) {
+            *pos += date.len();
+            return generate_token(inputs, start, *pos, Token::date_literal)
+        }
+    }
+    None
+}
+
 fn next_double_quoted_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_quoted_string_token(inputs, pos, Token::double_quoted, '"')
 }
@@ -214,13 +231,19 @@ fn next_glyph_token(inputs: &Vec<char>,
 
 fn next_pseudo_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     /// Parses the alphanumeric digits
-    fn parse_digits(inputs: &Vec<char>, start: usize, pos: &mut usize, is_digit: fn(char) -> bool) -> Option<Token> {
+    fn parse_digits(
+        inputs: &Vec<char>,
+        start: usize,
+        pos: &mut usize,
+        generator: NewToken,
+        is_digit: fn(char) -> bool
+    ) -> Option<Token> {
         while has_more(inputs, pos) && is_digit(inputs[*pos]) { *pos += 1 }
         let end = *pos;
-        generate_token(&inputs, start, end, Token::numeric)
+        generate_token(&inputs, start, end, generator)
     }
 
-    // can start with '0x', '0b' or '0o'
+    // can start with '0x', '0b', '0o' or '0v'
     let symbol_len = 2;
     let start = *pos;
     let limit = start + symbol_len;
@@ -228,9 +251,10 @@ fn next_pseudo_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Toke
         .any(|pn| is_same(&inputs[start..limit], pn)) {
         *pos += symbol_len;
         match String::from_iter(&inputs[start..limit]).as_str() {
-            "0b" => parse_digits(inputs, start, pos, |c| "01_".contains(c)),
-            "0o" => parse_digits(inputs, start, pos, |c| "01234567_".contains(c)),
-            "0x" => parse_digits(inputs, start, pos, |c| "0123456789_ABCDEFabcdef".contains(c)),
+            "0b" => parse_digits(inputs, start, pos, Token::numeric, |c| "01_".contains(c)),
+            "0o" => parse_digits(inputs, start, pos, Token::numeric, |c| "01234567_".contains(c)),
+            "0v" => parse_digits(inputs, start, pos, Token::binary_literal, |c| "0123456789_ABCDEFabcdef".contains(c)),
+            "0x" => parse_digits(inputs, start, pos, Token::numeric, |c| "0123456789_ABCDEFabcdef".contains(c)),
             _ => None
         }
     } else { None }
@@ -380,9 +404,29 @@ fn skip_comments(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
 // Unit tests
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::tokens::Token::DateLiteral;
     use std::vec;
 
-    use super::*;
+    #[test]
+    fn test_binary_literal() {
+        assert_eq!(parse_fully("0vfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce ca"), vec![
+            Token::BinaryLiteral {
+                text: "0vfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce".into(),
+                start: 0,
+                end: 49,
+                line_number: 1,
+                column_number: 2
+            },
+            Token::Atom {
+                text: "ca".into(),
+                start: 50,
+                end: 52,
+                line_number: 1,
+                column_number: 52
+            }
+        ])
+    }
 
     #[test]
     fn test_compound_operators() {
@@ -415,6 +459,20 @@ mod tests {
             Token::Numeric { text: "100".into(), start: 0, end: 3, line_number: 1, column_number: 2 },
             Token::Operator { text: "!=".into(), start: 3, end: 5, line_number: 1, column_number: 5 },
             Token::Numeric { text: "1000".into(), start: 5, end: 9, line_number: 1, column_number: 7 }
+        ])
+    }
+
+    #[test]
+    fn test_date_literal() {
+        let tokens = parse_fully("2025-01-13T03:25:47.350Z");
+        assert_eq!(tokens, vec![
+            DateLiteral { 
+                text: "2025-01-13T03:25:47.350Z".into(), 
+                start: 0, 
+                end: 24, 
+                line_number: 1, 
+                column_number: 2 
+            }
         ])
     }
 

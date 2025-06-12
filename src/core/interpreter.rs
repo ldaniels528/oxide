@@ -228,7 +228,7 @@ mod tests {
         use crate::interpreter::Interpreter;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
-        
+
         #[test]
         fn test_coalesce_not_null_or_undefined() {
             verify_exact_code(r#"
@@ -449,26 +449,6 @@ mod tests {
     #[cfg(test)]
     mod declarative_tests {
         use crate::testdata::{verify_exact_code, verify_exact_table};
-
-        #[test]
-        fn test_dataframe_literal() {
-            verify_exact_table(r#"
-                |--------------------------------------|
-                | symbol | exchange | last_sale | rank |
-                |--------------------------------------|
-                | BOOM   | NYSE     | 113.76    | 1    |
-                | ABC    | AMEX     | 24.98     | 2    |
-                | JET    | NASDAQ   | 64.24     | 3    |
-                |--------------------------------------|
-            "#, vec![
-                "|-------------------------------------------|", 
-                "| id | symbol | exchange | last_sale | rank |", 
-                "|-------------------------------------------|", 
-                "| 0  | BOOM   | NYSE     | 113.76    | 1    |", 
-                "| 1  | ABC    | AMEX     | 24.98     | 2    |", 
-                "| 2  | JET    | NASDAQ   | 64.24     | 3    |", 
-                "|-------------------------------------------|"]);
-        }
 
         #[test]
         fn test_feature_and_scenarios() {

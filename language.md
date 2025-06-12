@@ -9,7 +9,7 @@
 "Tom"
 </pre>
 <h5>example²</h5>
-<pre>from { name: 'Tom' }</pre>
+<pre>tools::to_table({ name: 'Tom' })</pre>
 <h5>results</h5>
 <pre>
 |-----------|
@@ -278,7 +278,7 @@ true
 }</pre>
 <h5>results</h5>
 <pre>
-2
+4
 </pre>
 <h5>example³</h5>
 <pre>GET http://localhost:8855/platform/www/stocks/0</pre>
@@ -290,7 +290,7 @@ true
 <pre>HEAD http://localhost:8855/platform/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "81", content-type: "application/json", date: "Thu, 05 Jun 2025 22:06:00 GMT"}
+{content-length: "81", content-type: "application/json", date: "Thu, 12 Jun 2025 04:05:45 GMT"}
 </pre>
 <h5>example⁵</h5>
 <pre>PUT {
@@ -513,24 +513,6 @@ j</pre>
 -75
 </pre>
 <hr>
-<h4>▶️ Query</h4>
-<h5>example¹</h5>
-<pre>stocks = tools::to_table([
-   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-   { symbol: "GRU", exchange: "NYSE", last_sale: 56.88 },
-   { symbol: "APK", exchange: "NASDAQ", last_sale: 32.12 }
-])
-from stocks where last_sale > 20.0</pre>
-<h5>results</h5>
-<pre>
-|------------------------------------|
-| id | symbol | exchange | last_sale |
-|------------------------------------|
-| 1  | GRU    | NYSE     | 56.88     |
-| 2  | APK    | NASDAQ   | 32.12     |
-|------------------------------------|
-</pre>
-<hr>
 <h4>▶️ Ranges</h4>
 <h5>example¹</h5>
 <pre>// Ranges may be exclusive
@@ -688,34 +670,6 @@ LabelString</pre>
 <h5>results</h5>
 <pre>
 String(80)
-</pre>
-<hr>
-<h4>▶️ Via Clause</h4>
-<h5>example¹</h5>
-<pre>stocks = nsd::save(
-   "readme.via.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
-)
-rows = [
-   { symbol: "ABCQ", exchange: "AMEX", last_sale: 12.49 },
-   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-]
-rows ~> stocks
-
-overwrite stocks via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
-where symbol is "ABCQ"
-
-from stocks</pre>
-<h5>results</h5>
-<pre>
-|------------------------------------|
-| id | symbol | exchange | last_sale |
-|------------------------------------|
-| 0  | ABC    | NYSE     | 0.2308    |
-| 1  | BOOM   | NYSE     | 56.88     |
-| 2  | JET    | NASDAQ   | 32.12     |
-|------------------------------------|
 </pre>
 <hr>
 <h4>▶️ When statement</h4>

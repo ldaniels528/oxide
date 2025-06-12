@@ -208,7 +208,9 @@ impl BLOBCellMetadata {
 #[cfg(test)]
 mod tests {
     use crate::blobs::BLOBStore;
+    use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
+    use crate::testdata::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::StringValue;
 
@@ -219,23 +221,52 @@ mod tests {
         let bs = BLOBStore::open(&ns).unwrap();
 
         // insert a new blob
-        let key = bs.insert(StringValue("Hello World".into())).unwrap();
-        println!("key0: {:?}", key);
+        let key0 = bs.insert(StringValue("Hello World".into())).unwrap();
+        println!("key0: {:?}", key0);
 
         // read back the value by the key
-        let (key1, value) = bs.read::<TypedValue>(key.offset).unwrap();
+        let (key1, value1) = bs.read::<TypedValue>(key0.offset).unwrap();
         println!("key1: {:?}", key1);
-        println!("value1: {:?}", value);
-        assert_eq!(value, StringValue("Hello World".into()));
+        println!("value1: {:?}", value1);
+        assert_eq!(value1, StringValue("Hello World".into()));
 
         // next, update the value
-        let key2 = bs.update(key1.offset, StringValue("Goodbye World".into())).unwrap();
+        let key2 = bs.update(key1.offset, StringValue("The little brown fox ran down the road".into())).unwrap();
         println!("key2: {:?}", key2);
 
         // read back the value by the key
         let (key3, value) = bs.read::<TypedValue>(key2.offset).unwrap();
         println!("key3: {:?}", key3);
         println!("value3: {:?}", value);
-        assert_eq!(value, StringValue("Goodbye World".into()));
+        assert_eq!(value, StringValue("The little brown fox ran down the road".into()));
+    }
+
+    #[test]
+    fn test_table_crud() {
+        // create a new blob store
+        let ns = Namespace::new("blobs", "crud", "tables");
+        let bs = BLOBStore::open(&ns).unwrap();
+
+        // create a table
+        let mrc = ModelRowCollection::from_columns_and_rows(&make_quote_columns(), &vec![
+            make_quote(0, "ABC", "AMEX", 12.33),
+        ]);
+
+        // insert a new blob
+        let key0 = bs.insert(mrc).unwrap();
+        println!("key0: {:?}", key0);
+        
+        // create a table
+        let mrc = ModelRowCollection::from_columns_and_rows(&make_quote_columns(), &vec![
+            make_quote(0, "ABC", "AMEX", 12.33),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 9.775),
+            make_quote(3, "GOTO", "OTC", 0.1442),
+            make_quote(4, "XYZ", "NYSE", 0.0289),
+        ]);
+
+        // insert a new blob
+        let key1 = bs.insert(mrc).unwrap();
+        println!("key1: {:?}", key1);
     }
 }

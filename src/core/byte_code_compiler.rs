@@ -606,9 +606,8 @@ impl Index<usize> for ByteCodeCompiler {
 mod tests {
     use super::*;
     use crate::dataframe::Dataframe::Model;
-    use crate::expression::Conditions::{Equal, GreaterThan, LessOrEqual};
-    use crate::expression::Expression::{Condition, DatabaseOp, If, Literal, Multiply, Plus, StructureExpression, Variable, Via};
-    use crate::expression::{DatabaseOps, Mutations, Queryables};
+    use crate::expression::Conditions::{GreaterThan, LessOrEqual};
+    use crate::expression::Expression::{Condition, If, Literal, Multiply, Plus, StructureExpression, Variable};
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::{F64Value, I64Value};
     use crate::testdata::{make_quote, make_quote_columns};
@@ -646,14 +645,14 @@ mod tests {
 
     #[test]
     fn test_expression_delete() {
-        let model = DatabaseOp(DatabaseOps::Mutation(Mutations::Delete {
-            path: Box::new(Variable("stocks".into())),
+        let model = Expression::Delete {
+            from: Box::new(Variable("stocks".into())),
             condition: Some(LessOrEqual(
                 Box::new(Variable("last_sale".into())),
                 Box::new(Literal(Number(F64Value(1.0)))),
             )),
             limit: Some(Box::new(Literal(Number(I64Value(100))))),
-        }));
+        };
         let byte_code = ByteCodeCompiler::encode(&model).unwrap();
         let actual = ByteCodeCompiler::decode(&byte_code);
         assert_eq!(actual, model);
@@ -680,43 +679,6 @@ mod tests {
         let model = Plus(Box::new(Literal(Number(I64Value(2)))),
                          Box::new(Multiply(Box::new(Literal(Number(I64Value(4)))),
                                            Box::new(Literal(Number(I64Value(3)))))));
-        let byte_code = ByteCodeCompiler::encode(&model).unwrap();
-        let actual = ByteCodeCompiler::decode(&byte_code);
-        assert_eq!(actual, model);
-    }
-
-    #[test]
-    fn test_select() {
-        let model = DatabaseOp(DatabaseOps::Queryable(Queryables::Select {
-            fields: vec![Variable("symbol".into()), Variable("exchange".into()), Variable("last_sale".into())],
-            from: Some(Box::new(Variable("stocks".into()))),
-            condition: Some(LessOrEqual(
-                Box::new(Variable("last_sale".into())),
-                Box::new(Literal(Number(F64Value(1.0)))),
-            )),
-            group_by: None,
-            having: None,
-            order_by: Some(vec![Variable("symbol".into())]),
-            limit: Some(Box::new(Literal(Number(I64Value(5))))),
-        }));
-        let byte_code = ByteCodeCompiler::encode(&model).unwrap();
-        let actual = ByteCodeCompiler::decode(&byte_code);
-        assert_eq!(actual, model);
-    }
-
-    #[test]
-    fn test_update() {
-        let model = DatabaseOp(DatabaseOps::Mutation(Mutations::Update {
-            path: Box::new(Variable("stocks".into())),
-            source: Box::new(Via(Box::new(StructureExpression(vec![
-                ("last_sale".into(), Literal(Number(F64Value(0.1111)))),
-            ])))),
-            condition: Some(Equal(
-                Box::new(Variable("exchange".into())),
-                Box::new(Literal(StringValue("NYSE".into()))),
-            )),
-            limit: Some(Box::new(Literal(Number(I64Value(10))))),
-        }));
         let byte_code = ByteCodeCompiler::encode(&model).unwrap();
         let actual = ByteCodeCompiler::decode(&byte_code);
         assert_eq!(actual, model);

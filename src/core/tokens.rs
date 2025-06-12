@@ -12,8 +12,10 @@ use crate::tokens::Token::*;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Token {
     Atom { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
+    BinaryLiteral { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Backticks { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     DataframeLiteral { cells: Vec<Vec<String>>, start: usize, end: usize, line_number: usize, column_number: usize },
+    DateLiteral { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     DoubleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
@@ -31,9 +33,19 @@ impl Token {
         Atom { text, start, end, line_number, column_number }
     }
 
+    /// creates a new binary literal token
+    pub fn binary_literal(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
+        BinaryLiteral { text, start, end, line_number, column_number }
+    }
+    
     /// creates a new backticks-quoted token
     pub fn backticks(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
         Backticks { text, start, end, line_number, column_number }
+    }
+
+    /// creates a new date-literal token
+    pub fn date_literal(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
+        DateLiteral { text, start, end, line_number, column_number }
     }
 
     /// creates a new double-quoted token
@@ -70,7 +82,9 @@ impl Token {
         match self {
             Atom { column_number, .. }
             | Backticks { column_number, .. }
+            | BinaryLiteral { column_number, .. }
             | DataframeLiteral { column_number, .. }
+            | DateLiteral { column_number, .. }
             | DoubleQuoted { column_number, .. }
             | Numeric { column_number, .. }
             | Operator { column_number, .. }
@@ -84,7 +98,9 @@ impl Token {
         match self {
             Atom { line_number, .. }
             | Backticks { line_number, .. }
+            | BinaryLiteral { line_number, .. }
             | DataframeLiteral { line_number, .. }
+            | DateLiteral { line_number, .. }
             | DoubleQuoted { line_number, .. }
             | Numeric { line_number, .. }
             | Operator { line_number, .. }
@@ -98,7 +114,9 @@ impl Token {
         match self.clone() {
             Atom { text, .. }
             | Backticks { text, .. }
+            | BinaryLiteral { text, .. }
             | DoubleQuoted { text, .. }
+            | DateLiteral { text, .. }
             | Numeric { text, .. }
             | Operator { text, .. }
             | SingleQuoted { text, .. }

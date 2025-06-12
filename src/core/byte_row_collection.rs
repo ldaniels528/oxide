@@ -6,6 +6,7 @@
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
 use crate::field::FieldMetadata;
+use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;
@@ -35,6 +36,12 @@ impl ByteRowCollection {
         Self::from_bytes(columns, row_bytes)
     }
 
+    /// Decodes a byte vector into a [ByteRowCollection]
+    pub fn decode_with_params(params: &Vec<Parameter>, bytes: Vec<u8>) -> Self {
+        let columns = Column::from_parameters(params);
+        Self::decode(columns, bytes)
+    }
+
     /// Creates a new [ByteRowCollection] from the specified rows
     pub fn from_rows(columns: Vec<Column>, rows: Vec<Row>) -> Self {
         let mut encoded_rows = Vec::new();
@@ -54,7 +61,21 @@ impl ByteRowCollection {
 
     /// Creates a new [ByteRowCollection] from the specified row data
     pub fn new(columns: Vec<Column>, capacity: usize) -> Self {
-        Self::from_bytes(columns, Vec::new())
+        Self::from_bytes(columns, vec![])
+    }
+    
+    /// Resizes the internal vector to prevent overflow
+    fn ensure_size(&mut self, id: usize) {
+        // resize the rows to prevent overflow
+        if self.row_data.len() <= id {
+            self.row_data.resize(id + 1, vec![0u8; self.record_size]);
+        }
+    }
+    
+    fn update_watermark(&mut self, id: usize) {
+        if self.watermark <= id {
+            self.watermark = id + 1;
+        }
     }
 }
 
@@ -80,6 +101,7 @@ impl RowCollection for ByteRowCollection {
         column_id: usize,
         new_value: TypedValue,
     ) -> std::io::Result<i64> {
+        self.ensure_size(id);
         let column = &self.columns[column_id];
         let offset = self.convert_rowid_to_offset(id) + column.get_offset() as u64;
         let buffer = column.get_data_type().encode_field(
@@ -92,6 +114,7 @@ impl RowCollection for ByteRowCollection {
         let end = start + buffer.len();
         encoded_row[start..end].copy_from_slice(buffer.as_slice());
         self.row_data[id] = encoded_row;
+        self.update_watermark(id);
         Ok(1)
     }
 
@@ -101,34 +124,34 @@ impl RowCollection for ByteRowCollection {
         column_id: usize,
         metadata: FieldMetadata,
     ) -> std::io::Result<i64> {
+        self.ensure_size(id);
         let column = &self.columns[column_id];
         self.row_data[id][column.get_offset()] = metadata.encode();
+        self.update_watermark(id);
         Ok(1)
     }
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
-        // resize the rows to prevent overflow
-        if self.row_data.len() <= id {
-            self.row_data.resize(id + 1, Vec::new());
-        }
-
-        // set the block, update the watermark
+        self.ensure_size(id);
         self.row_data[id] = ByteCodeCompiler::encode_row(&row, &self.columns);
-        if self.watermark <= id {
-            self.watermark = id + 1;
-        }
+        self.update_watermark(id);
         Ok(1)
     }
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<i64> {
+        self.ensure_size(id);
         self.row_data[id][0] = metadata.encode();
+        self.update_watermark(id);
         Ok(1)
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
+        if id >= self.row_data.len() {
+            return Ok(Undefined)
+        }
         let column = &self.columns[column_id];
         let buffer = self.row_data[id][column.get_offset()..(column.get_offset() + column.get_fixed_size())].to_vec();
-        column.get_data_type().decode_field_value(&buffer, 0)
+        Ok(column.get_data_type().decode_field_value(&buffer, 0))
     }
 
     fn read_field_metadata(
@@ -136,6 +159,9 @@ impl RowCollection for ByteRowCollection {
         id: usize,
         column_id: usize,
     ) -> std::io::Result<FieldMetadata> {
+        if id >= self.row_data.len() {
+            return Ok(FieldMetadata::new(false))
+        }
         let column = &self.columns[column_id];
         let code = self.row_data[id][column.get_offset()];
         let meta = FieldMetadata::decode(code);

@@ -241,7 +241,7 @@ impl RowCollection for EventSourceRowCollection {
         self.state.overwrite_row_metadata(id, metadata)
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         self.state.read_field(id, column_id)
     }
 
@@ -499,7 +499,7 @@ impl RowCollection for TableFunction {
         self.state.overwrite_row_metadata(id, metadata)
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         self.state.read_field(id, column_id)
     }
 

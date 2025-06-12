@@ -135,11 +135,10 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for OxideWebSocketSer
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataframe::Dataframe::Model;
-    use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::I64Value;
+    use crate::table_renderer::TableRenderer;
     use crate::terminal;
-    use crate::testdata::{make_quote, make_quote_columns, start_test_server};
+    use crate::testdata::start_test_server;
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::{Number, TableValue};
     use crate::websockets::OxideWebSocketClient;
@@ -150,7 +149,7 @@ mod tests {
         start_test_server(port);
 
         let mut wsc = OxideWebSocketClient::connect("0.0.0.0", port, "/ws").await.unwrap();
-        wsc.evaluate("a := [0, 1, 3, 5]").await.unwrap();
+        wsc.evaluate("let a = [0, 1, 3, 5]").await.unwrap();
         let value = wsc.evaluate("a[2]").await.unwrap();
         show_value(value.clone());
         assert_eq!(value, Number(I64Value(3)))
@@ -163,7 +162,7 @@ mod tests {
 
         let mut wsc = OxideWebSocketClient::connect("0.0.0.0", port, "/ws").await.unwrap();
         let value = wsc.evaluate(r#"
-            stocks := nsd::save(
+            let stocks = nsd::save(
                 "ws.script.stocks",
                 Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
             )
@@ -172,18 +171,26 @@ mod tests {
              { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
              { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
              { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-            from stocks
+            stocks
         "#).await.unwrap();
         show_value(value.clone());
-        assert_eq!(value, TableValue(Model(ModelRowCollection::from_columns_and_rows(
-            &make_quote_columns(), &vec![
-                make_quote(0, "ABC", "AMEX", 11.77),
-                make_quote(1, "UNO", "OTC", 0.2456),
-                make_quote(2, "BIZ", "NYSE", 23.66),
-                make_quote(3, "GOTO", "OTC", 0.1428),
-                make_quote(4, "BOOM", "NASDAQ", 0.0872)
-            ]
-        ))))
+        let lines = match value {
+            TableValue(df) => {
+                TableRenderer::from_dataframe(&df)
+            }
+            _ =>  vec![]
+        };
+        
+        assert_eq!(lines, vec![
+            "|-------------------------------|", 
+            "| symbol | exchange | last_sale |", 
+            "|-------------------------------|", 
+            "| ABC    | AMEX     | 11.77     |", 
+            "| UNO    | OTC      | 0.2456    |", 
+            "| BIZ    | NYSE     | 23.66     |", 
+            "| GOTO   | OTC      | 0.1428    |", 
+            "| BOOM   | NASDAQ   | 0.0872    |", 
+            "|-------------------------------|"])
     }
 
     fn show_value(value: TypedValue) {

@@ -144,6 +144,7 @@ pub enum Structures {
     Firm(Row, Vec<Parameter>),
     Hard(HardStructure),
     Soft(SoftStructure),
+    //Rigid(Dataframe),
 }
 
 impl Structures {

@@ -44,20 +44,35 @@ impl ModelRowCollection {
     }
 
     /// Creates a new [ModelRowCollection] from abstract columns
-    pub fn from_parameters(parameters: &Vec<Parameter>) -> ModelRowCollection {
-        ModelRowCollection::with_rows(Column::from_parameters(parameters), Vec::new())
+    pub fn from_bytes(params: &Vec<Parameter>, bytes: Vec<u8>) -> Self {
+        let columns = Column::from_parameters(params);
+        // let record_size = Row::compute_record_size(&columns);
+        // let row_bytes = bytes.chunks(record_size)
+        //     .map(|chunk| chunk.to_vec())
+        //     .collect();
+        // let rows = ByteCodeCompiler::decode_rows(&columns, row_bytes);
+        // let rows_and_meta = rows.iter()
+        //     .map(|row| (row.clone(), RowMetadata::new(true)))
+        //     .collect();
+        // Self::with_rows(columns, rows_and_meta)
+        Self::with_rows(columns, vec![])
     }
 
     /// Creates a new [ModelRowCollection] prefilled with the given rows.
-    pub fn from_columns_and_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> ModelRowCollection {
+    pub fn from_columns_and_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> Self {
         let row_data = rows.iter()
             .map(|r| (r.to_owned(), RowMetadata::new(true)))
             .collect();
         Self::with_rows(columns.to_owned(), row_data)
     }
 
+    /// Creates a new [ModelRowCollection] from abstract columns
+    pub fn from_parameters(parameters: &Vec<Parameter>) -> Self {
+        ModelRowCollection::with_rows(Column::from_parameters(parameters), Vec::new())
+    }
+
     /// Creates a new [ModelRowCollection] prefilled with the given rows.
-    pub fn from_parameters_and_rows(parameters: &Vec<Parameter>, rows: &Vec<Row>) -> ModelRowCollection {
+    pub fn from_parameters_and_rows(parameters: &Vec<Parameter>, rows: &Vec<Row>) -> Self {
         let row_data = rows.iter()
             .map(|r| (r.to_owned(), RowMetadata::new(true)))
             .collect();
@@ -178,8 +193,8 @@ impl RowCollection for ModelRowCollection {
         Ok(1)
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
-        self.row_data[id].0.get_values()[column_id].to_owned()
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
+        Ok(self.row_data[id].0.get_values()[column_id].to_owned())
     }
 
     fn read_field_metadata(

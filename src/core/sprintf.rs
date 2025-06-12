@@ -3,9 +3,9 @@
 // Sprintf class
 ////////////////////////////////////////////////////////////////////
 
-use std::fmt::Write;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Number, StringValue};
+use std::fmt::Write;
 
 #[derive(Debug)]
 pub struct StringPrinter;
@@ -197,8 +197,8 @@ impl StringPrinter {
 /// inference unit tests
 #[cfg(test)]
 mod tests {
-    use crate::numbers::Numbers::{F64Value, I64Value};
     use super::*;
+    use crate::numbers::Numbers::{F64Value, I64Value};
 
     #[test]
     fn test_float_precision() {
