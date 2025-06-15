@@ -3,10 +3,9 @@
 // Oxide README.md Generation
 ////////////////////////////////////////////////////////////////////
 
-use crate::expression::Expression::{DoWhile, While};
-use crate::expression::Queryables::Where;
+use crate::expression::Expression::*;
 use crate::expression::Ranges::Exclusive;
-use crate::expression::{Conditions, DatabaseOps, Expression, HttpMethodCalls};
+use crate::expression::{Conditions, Expression, HttpMethodCalls};
 use crate::interpreter::Interpreter;
 use crate::platform::{Package, PackageOps};
 use crate::row_collection::RowCollection;
@@ -372,7 +371,7 @@ fn generate_example_results(example: &str) -> std::io::Result<Vec<String>> {
         }
         other => {
             //println!("readme: other {:?}", other);
-            Ok(vec![other.display_value()])
+            Ok(vec![other.unwrap_value()])
         }
     }
 }
@@ -422,7 +421,7 @@ server response:
     Ok(file)
 }
 
-pub fn get_language_examples(model: &Expression) -> Vec<String> {
+fn get_language_examples(model: &Expression) -> Vec<String> {
     match model {
         Expression::ArrayExpression(..) => vec![
             strip_margin(r#"
@@ -460,6 +459,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |last_row
             "#, '|')
         ],
+        Expression::ArrowCurvyLeft2x(..) => vec![],
         Expression::ArrowCurvyRight(..) => vec![
             strip_margin(r#"
                 |stocks = nsd::save(
@@ -474,6 +474,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |rows ~> stocks
             "#, '|')
         ],
+        Expression::ArrowCurvyRight2x(..) => vec![],
         Expression::ArrowFat(..) => vec![],
         Expression::ArrowSkinnyLeft(..) => vec![],
         Expression::ArrowSkinnyRight(..) => vec![],
@@ -558,7 +559,6 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                     |x contains 7
                 "#, '|'),
         ],
-        Expression::DatabaseOp(..) => vec![],
         Expression::Divide(..) => vec![
             "20.0 / 3".into(),
         ],
@@ -606,21 +606,14 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |product = (a, b) -> a * b
                 |product(2, 5)
-            "#, '|')],
+            "#, '|')
+        ],
         Expression::For { .. } => vec![
             strip_margin(r#"
                 |for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) 
                 |    yield row::value
-            "#, '|')],
-        Expression::From(..) => vec![
-            strip_margin(r#"
-                |stocks = tools::to_table([
-                |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                |   { symbol: "GRU", exchange: "NYSE", last_sale: 56.88 },
-                |   { symbol: "APK", exchange: "NASDAQ", last_sale: 32.12 }
-                |])
-                |from stocks where last_sale > 20.0
-            "#, '|')],
+            "#, '|')
+        ],
         Expression::FunctionCall { .. } => vec![],
         Expression::HTTP(..) => vec![
             strip_margin(r#"
@@ -632,28 +625,28 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                     "#, '|'),
             strip_margin(r#"
                     |POST {
-                    |    url: http://localhost:8855/platform/www/stocks/0
+                    |    url: http://localhost:8855/readme/www/stocks/0
                     |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
                     |}
                     "#, '|'),
-            "GET http://localhost:8855/platform/www/stocks/0".into(),
-            "HEAD http://localhost:8855/platform/www/stocks/0".into(),
+            "GET http://localhost:8855/readme/www/stocks/0".into(),
+            "HEAD http://localhost:8855/readme/www/stocks/0".into(),
             strip_margin(r#"
                     |PUT {
-                    |    url: http://localhost:8855/platform/www/stocks/0
+                    |    url: http://localhost:8855/readme/www/stocks/0
                     |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }
                     |}
                     "#, '|'),
-            "GET http://localhost:8855/platform/www/stocks/0".into(),
+            "GET http://localhost:8855/readme/www/stocks/0".into(),
             strip_margin(r#"
                     |PATCH {
-                    |    url: http://localhost:8855/platform/www/stocks/0
+                    |    url: http://localhost:8855/readme/www/stocks/0
                     |    body: { last_sale: 11.81 }
                     |}
                     "#, '|'),
-            "GET http://localhost:8855/platform/www/stocks/0".into(),
-            "DELETE http://localhost:8855/platform/www/stocks/0".into(),
-            "GET http://localhost:8855/platform/www/stocks/0".into(),
+            "GET http://localhost:8855/readme/www/stocks/0".into(),
+            "DELETE http://localhost:8855/readme/www/stocks/0".into(),
+            "GET http://localhost:8855/readme/www/stocks/0".into(),
         ],
         Expression::If { .. } => vec![
             strip_margin(r#"
@@ -727,7 +720,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::NamedValue(..) => vec![
             "name: 'Tom'".into(),
-            "from { name: 'Tom' }".into()
+            "tools::to_table({ name: 'Tom' })".into()
         ],
         Expression::Neg(..) => vec![
             strip_margin(r#"
@@ -758,6 +751,7 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |tools::reverse(range)
             "#, '|')
         ],
+        Expression::Referenced(..) => vec![],
         Expression::Return(..) => vec![],
         Expression::Scenario { .. } => vec![],
         Expression::SetVariables(..) => vec![
@@ -863,25 +857,6 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 |c > b
             "#, '|')
         ],
-        Expression::Via(..) => vec![
-            strip_margin(r#"
-                |stocks = nsd::save(
-                |   "readme.via.stocks",
-                |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
-                |)
-                |rows = [
-                |   { symbol: "ABCQ", exchange: "AMEX", last_sale: 12.49 },
-                |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-                |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-                |]
-                |rows ~> stocks
-                |
-                |overwrite stocks via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
-                |where symbol is "ABCQ"
-                |
-                |from stocks
-            "#, '|')
-        ],
         Expression::WhenEver { .. } => vec![
             strip_margin(r#"
                 |// Executes the block at the moment the condition becomes true.
@@ -927,6 +902,17 @@ pub fn get_language_examples(model: &Expression) -> Vec<String> {
                 for(i = 0, i < 5, i = i + 1) yield i * 2
             "#, '|')
         ],
+        ////////////////////////////////////////////////////////////////////
+        // SQL models
+        ////////////////////////////////////////////////////////////////////
+        Delete { .. } => vec![],
+        Undelete { .. } => vec![],
+        GroupBy { .. } => vec![],
+        Having { ..} => vec![],
+        Limit { ..} => vec![],
+        OrderBy { .. } => vec![],
+        Select { .. } => vec![],
+        Where { .. } => vec![],
     }
 }
 
@@ -949,14 +935,13 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Conditionals", Condition(Conditions::True)),
         ("Curvy-Arrow Left", ArrowCurvyLeft(null.clone(), null.clone())),
         ("Curvy-Arrow Right", ArrowCurvyRight(null.clone(), null.clone())),
-        ("SQL", DatabaseOp(DatabaseOps::Queryable(Where { from: null.clone(), condition: Conditions::True }))),
+        ("SQL", Where { from: null.clone(), condition: Conditions::True }),
         ("Mathematics: division", Divide(null.clone(), null.clone())),
         ("Do-While expression", DoWhile { condition: null.clone(), code: null.clone() }),
         ("Arrays: Indexing", ElementAt(null.clone(), null.clone())),
         ("Testing", Feature { title: null.clone(), scenarios: vec![] }),
         ("Function-Call", FunctionCall { fx: null.clone(), args: vec![] }),
         ("Iteration", For { construct: null.clone(), op: null.clone() }),
-        ("Query", From(null.clone())),
         ("HTTP", HTTP(HttpMethodCalls::GET(null.clone()))),
         ("IF expression", If { condition: null.clone(), a: null.clone(), b: None }),
         ("Includes", Include(null.clone())),
@@ -976,7 +961,6 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Function Pipelines", ArrowVerticalBar(null.clone(), null.clone())),
         ("Function Pipelines (destructuring)", ArrowVerticalBar2x(null.clone(), null.clone())),
         ("Import/Use", Use(vec![])),
-        ("Via Clause", Via(null.clone())),
         ("When statement", WhenEver { condition: null.clone(), code: null.clone() }),
         ("While expression", While { condition: null.clone(), code: null.clone() }),
         ("Yield", Yield(null.clone())),
@@ -1003,6 +987,7 @@ fn print_text_block(mut file: File, lines: Vec<String>) -> std::io::Result<File>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
     use std::fs::OpenOptions;
 
     #[test]
@@ -1023,8 +1008,14 @@ mod tests {
             
             for (n, example) in op.get_examples().iter().enumerate() {
                 if !example.is_empty() {
+                    let example_lines = example.split("\n")
+                        .collect::<Vec<_>>()
+                        .iter()
+                        .map(|s| format!("    [~] {}", s))
+                        .join("\n");
+                    println!("{}", example_lines);
                     let lines = generate_example_results(example).unwrap();
-                    println!("    [{}/{}]", n + 1, lines.len());
+                    println!("    [*] Completed");
                 }
             }
         }

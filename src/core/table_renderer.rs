@@ -222,7 +222,7 @@ mod tests {
 
     fn create_collection() -> (ByteRowCollection, Vec<Column>) {
         let phys_columns = make_quote_columns();
-        let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
+        let brc = ByteRowCollection::from_columns_and_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "NASDAQ", 0.2456),
             make_quote(2, "BIZ", "NYSE", 23.66),

@@ -6,6 +6,7 @@
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
+use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
@@ -30,7 +31,7 @@ use crate::structures::Structures::{Hard, Soft};
 use crate::structures::{Row, Structure};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use crate::utils::{extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0, extract_value_fn1, extract_value_fn2, extract_value_fn3, pull_array, pull_string, strip_margin, superscript};
+use crate::utils::{extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0, extract_value_fn1, extract_value_fn2, extract_value_fn3, pull_array, pull_number, pull_string, strip_margin, superscript};
 use crate::{machine, oxide_server};
 use chrono::{Datelike, Local, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
@@ -200,7 +201,7 @@ impl Package for ArraysPkg {
                     |    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
                     |]
                     |stocks:::push({ symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
-                    |from stocks
+                    |tools::to_table(stocks)
                 "#, '|')
             ],
             ArraysPkg::Reduce => vec![
@@ -966,7 +967,9 @@ pub enum NsdPkg {
     Journal,
     Load,
     Replay,
+    Resize,
     Save,
+    Truncate
 }
 
 impl NsdPkg {
@@ -1117,14 +1120,63 @@ impl NsdPkg {
     /// let stocks = nsd::load("packages.loading.stocks")
     /// nsd::replay(stocks)
     /// ``` 
-    fn do_nsd_replay(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
-        match value.to_dataframe()? {
+    fn do_nsd_replay(ms: Machine, table: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        match table.to_dataframe()? {
             EventSource(mut df) => Ok((ms, df.replay()?)),
             TableFn(mut df) => Ok((ms, df.replay()?)),
             _ => throw(TypeMismatch(UnsupportedType(
                 TableType(vec![]),
-                value.get_type(),
+                table.get_type(),
             ))),
+        }
+    }
+
+    /// Changes the size of a dataframe 
+    /// #### Examples
+    /// ```
+    /// nsd::resize("packages.examples.stocks", 100)
+    /// ``` 
+    fn do_nsd_resize(
+        ms: Machine,
+        namespace_or_df: &TypedValue,
+        new_size: &TypedValue
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        /// Resizes the [Dataframe]
+        fn resize_table(
+            ms: Machine,
+            mut df: Dataframe,
+            new_size: &TypedValue,
+        ) -> std::io::Result<(Machine, TypedValue)>{
+            let size = pull_number(new_size)?;
+            Ok((ms, Boolean(df.resize(size.to_usize())?)))
+        }
+
+        // process either a namespace or dataframe
+        match namespace_or_df.clone() {
+            TableValue(mut df) => resize_table(ms, df, new_size),
+            StringValue(..) =>
+                match Self::do_nsd_load(ms, namespace_or_df)? {
+                    (ms, TableValue(mut df)) => resize_table(ms, df, new_size),
+                    (_, other) => throw(TypeMismatch(TableExpected(other.to_code())))
+                }
+            other => throw(TypeMismatch(TableExpected(other.to_code())))
+        }
+    }
+
+    /// Truncate a dataframe; deleting all rows and reducing its size to zero.
+    /// #### Examples
+    /// ```
+    /// nsd::truncate("packages.examples.stocks")
+    /// ```
+    fn do_nsd_truncate(
+        ms: Machine,
+        namespace: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match Self::do_nsd_load(ms, namespace)? {
+            (ms, TableValue(mut df)) => {
+                Ok((ms, Boolean(df.resize(0)?)))
+            }
+            (_, other) => throw(TypeMismatch(TableExpected(other.to_code())))
         }
     }
 
@@ -1139,7 +1191,8 @@ impl NsdPkg {
             TableValue(mrc) => {
                 let ns = Namespace::parse(path.as_str())?;
                 let params = mrc.get_parameters();
-                let frc = FileRowCollection::create_table(&ns, &params)?;
+                let mut frc = FileRowCollection::create_table(&ns, &params)?;
+                frc.append_rows(mrc.get_rows())?;
                 Ok((ms, TableValue(Disk(frc))))
             }
             x => throw(Exact(format!("Expected type near {}", x.to_code())))
@@ -1155,7 +1208,9 @@ impl NsdPkg {
             PackageOps::Nsd(NsdPkg::Journal),
             PackageOps::Nsd(NsdPkg::Load),
             PackageOps::Nsd(NsdPkg::Replay),
+            PackageOps::Nsd(NsdPkg::Resize),
             PackageOps::Nsd(NsdPkg::Save),
+            PackageOps::Nsd(NsdPkg::Truncate),
         ]
     }
 }
@@ -1171,7 +1226,9 @@ impl Package for NsdPkg {
             NsdPkg::Journal => "journal".into(),
             NsdPkg::Load => "load".into(),
             NsdPkg::Replay => "replay".into(),
+            NsdPkg::Resize => "resize".into(),
             NsdPkg::Save => "save".into(),
+            NsdPkg::Truncate => "truncate".into(),
         }
     }
 
@@ -1189,7 +1246,9 @@ impl Package for NsdPkg {
             NsdPkg::Journal => "Retrieves the journal for an event-source or table function".into(),
             NsdPkg::Load => "Loads a dataframe from a namespace".into(),
             NsdPkg::Replay => "Reconstructs the state of a journaled table".into(),
+            NsdPkg::Resize => "Changes the size of a dataframe".into(),
             NsdPkg::Save => "Creates a new dataframe".into(),
+            NsdPkg::Truncate => "Truncate a dataframe; deleting all rows and reducing its size to zero".into(),
         }
     }
 
@@ -1296,6 +1355,22 @@ impl Package for NsdPkg {
                     |stocks:::replay()
                 "#, '|')
             ],
+            NsdPkg::Resize => vec![
+                strip_margin(r#"
+                    |use nsd
+                    |let stocks =
+                    |   nsd::save('packages.resize.stocks', Table::new(
+                    |       symbol: String(8),
+                    |       exchange: String(8),
+                    |       last_sale: f64
+                    |   ))
+                    |[{ symbol: "TCO", exchange: "NYSE", last_sale: 38.53 },
+                    | { symbol: "SHMN", exchange: "NYSE", last_sale: 6.57 },
+                    | { symbol: "HMU", exchange: "NASDAQ", last_sale: 27.12 }] ~> stocks
+                    |'packages.resize.stocks':::resize(1)
+                    |stocks
+                "#, '|')                
+            ],
             NsdPkg::Save => vec![
                 strip_margin(r#"
                     |let stocks =
@@ -1304,16 +1379,13 @@ impl Package for NsdPkg {
                     |       exchange: String(8),
                     |       last_sale: f64
                     |   ))
-                    |
-                    |let rows = 
-                    |   [{ symbol: "TCO", exchange: "NYSE", last_sale: 38.53 },
-                    |    { symbol: "SHMN", exchange: "NYSE", last_sale: 6.57 },
-                    |    { symbol: "HMU", exchange: "NASDAQ", last_sale: 27.12 }] 
-                    |
-                    |rows ~> stocks
+                    |[{ symbol: "TCO", exchange: "NYSE", last_sale: 38.53 },
+                    | { symbol: "SHMN", exchange: "NYSE", last_sale: 6.57 },
+                    | { symbol: "HMU", exchange: "NASDAQ", last_sale: 27.12 }] ~> stocks
                     |stocks
                     |"#, '|')
             ],
+            NsdPkg::Truncate => vec![],
         }
     }
 
@@ -1335,10 +1407,15 @@ impl Package for NsdPkg {
             // (String)
             NsdPkg::Exists
             | NsdPkg::Load
-            | NsdPkg::Drop => vec![StringType],
+            | NsdPkg::Drop
+            | NsdPkg::Truncate => vec![StringType],
             // (Table)
             NsdPkg::Journal
             | NsdPkg::Replay => vec![TableType(vec![])],
+            // (Table, i64)
+            | NsdPkg::Resize => vec![
+                StringType, NumberType(I64Kind)
+            ],
         }
     }
 
@@ -1352,7 +1429,9 @@ impl Package for NsdPkg {
             NsdPkg::CreateIndex
             | NsdPkg::Drop
             | NsdPkg::Exists
-            | NsdPkg::Replay => BooleanType,
+            | NsdPkg::Replay
+            | NsdPkg::Resize
+            | NsdPkg::Truncate => BooleanType,
         }
     }
 
@@ -1366,7 +1445,9 @@ impl Package for NsdPkg {
             NsdPkg::Journal => extract_value_fn1(ms, args, Self::do_nsd_journal),
             NsdPkg::Load => extract_value_fn1(ms, args, Self::do_nsd_load),
             NsdPkg::Replay => extract_value_fn1(ms, args, Self::do_nsd_replay),
+            NsdPkg::Resize => extract_value_fn2(ms, args, Self::do_nsd_resize),
             NsdPkg::Save => extract_value_fn2(ms, args, Self::do_nsd_save),
+            NsdPkg::Truncate => extract_value_fn1(ms, args, Self::do_nsd_truncate),
         }
     }
 }
@@ -1528,6 +1609,22 @@ impl OxidePkg {
         let result = StringPrinter::format(&format, args).map_err(|e| cnv_error!(e))?;
         Ok((ms, StringValue(result)))
     }
+
+    fn do_oxide_uuid(
+        ms: Machine,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let result = match args.as_slice() {
+            [BinaryValue(bytes)] => 
+                Uuid::from_slice(bytes.as_slice()).map_err(|e| cnv_error!(e))?.as_u128(),
+            [Number(U128Value(n))] => *n,
+            [StringValue(s)] => Uuid::parse_str(s).map_err(|e| cnv_error!(e))?.as_u128(),
+            [_other] => return throw(Exact("String or u128 value expected".into())),
+            [] => Uuid::new_v4().as_u128(),
+            _ => return throw(TypeMismatch(ArgumentsMismatched(0, args.len()))),
+        };
+        Ok((ms, TypedValue::UUIDValue(result)))
+    }
     
     fn do_oxide_version(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         Ok((ms, StringValue(VERSION.into())))
@@ -1645,7 +1742,7 @@ impl Package for OxidePkg {
                 "#,
                 '|',
             )],
-            OxidePkg::Help => vec![r#"from oxide::help() limit 3"#.into()],
+            OxidePkg::Help => vec![r#"oxide::help() limit 3"#.into()],
             OxidePkg::History => vec![],
             OxidePkg::Home => vec!["oxide::home()".into()],
             OxidePkg::Inspect => vec![
@@ -1719,7 +1816,7 @@ impl Package for OxidePkg {
             OxidePkg::Println => extract_value_fn1(ms, args, IoPkg::do_io_stdout),
             OxidePkg::Reset => extract_value_fn0(ms, args, |ms| Ok((Machine::new_platform(), Boolean(true)))),
             OxidePkg::Sprintf => Self::do_oxide_sprintf(ms, args),
-            OxidePkg::UUID => UtilsPkg::do_util_uuid(ms, args),
+            OxidePkg::UUID => Self::do_oxide_uuid(ms, args),
             OxidePkg::Version => extract_value_fn0(ms, args, Self::do_oxide_version),
         }
     }
@@ -2167,7 +2264,7 @@ impl Package for StringsPkg {
                     |str::strip_margin("
                     ||Code example:
                     ||
-                    ||from stocks
+                    ||stocks
                     ||where exchange is 'NYSE'
                     |", '|')"#,
                 '|',
@@ -2369,7 +2466,7 @@ impl ToolsPkg {
     ) -> std::io::Result<(Machine, TypedValue)> {
         match value.to_sequence()? {
             TheDataframe(mut df) => df
-                .pop_row(df.get_parameters())
+                .pop_row()
                 .to_dataframe()
                 .map(|df| (ms, TableValue(df))),
             TheArray(..) => ArraysPkg::do_arrays_pop(ms, value),
@@ -2532,6 +2629,32 @@ impl ToolsPkg {
             Parameter::new("is_nullable", BooleanType),
         ]
     }
+
+    pub fn invoke(
+        name: &str,
+        ms: Machine,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let pkg_op = match name {
+            "compact" => ToolsPkg::Compact,
+            "describe" => ToolsPkg::Describe,
+            "fetch" => ToolsPkg::Fetch,
+            "filter" => ToolsPkg::Filter,
+            "len" => ToolsPkg::Len,
+            "map" => ToolsPkg::Map,
+            "pop" => ToolsPkg::Pop,
+            "push" => ToolsPkg::Push,
+            "reverse" => ToolsPkg::Reverse,
+            "row_id" => ToolsPkg::RowId,
+            "scan" => ToolsPkg::Scan,
+            "to_array" => ToolsPkg::ToArray,
+            "to_csv" => ToolsPkg::ToCSV,
+            "to_json" => ToolsPkg::ToJSON,
+            "to_table" => ToolsPkg::ToTable,
+            other => return throw(Exact(format!("Function {} not found", other)))
+        };
+        pkg_op.evaluate(ms, args)
+    }
 }
 
 impl Package for ToolsPkg {
@@ -2594,8 +2717,8 @@ impl Package for ToolsPkg {
                     | { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
                     | { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
                     | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-                    |delete from stocks where last_sale > 1.0
-                    |from stocks
+                    |delete stocks where last_sale > 1.0
+                    |stocks
                 "#, '|')
             ],
             ToolsPkg::Describe => vec![
@@ -2717,7 +2840,7 @@ impl Package for ToolsPkg {
                     | { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
                     | { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
                     | { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
-                    |delete from stocks where last_sale > 1.0
+                    |delete stocks where last_sale > 1.0
                     |stocks:::scan()
                 "#,
                 '|',
@@ -2878,7 +3001,7 @@ impl UtilsPkg {
         use flate2::Compression;
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(a.to_bytes().as_slice())?;
-        Ok((ms, Binary(encoder.finish()?.to_vec())))
+        Ok((ms, BinaryValue(encoder.finish()?.to_vec())))
     }
 
     fn do_util_gunzip(ms: Machine, a: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
@@ -2887,7 +3010,7 @@ impl UtilsPkg {
         let mut decoder = GzDecoder::new(bytes.as_slice());
         let mut output = Vec::new();
         decoder.read_to_end(&mut output)?;
-        Ok((ms, Binary(output)))
+        Ok((ms, BinaryValue(output)))
     }
 
     fn do_util_numeric_conv(
@@ -2908,7 +3031,7 @@ impl UtilsPkg {
 
     fn do_util_md5(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
         match md5::compute(value.to_bytes()) {
-            md5::Digest(bytes) => Ok((ms, Binary(bytes.to_vec()))),
+            md5::Digest(bytes) => Ok((ms, BinaryValue(bytes.to_vec()))),
         }
     }
 
@@ -2921,16 +3044,6 @@ impl UtilsPkg {
             ms,
             StringValue(format!("{}", StringValue(hex::encode(value.to_bytes())))),
         ))
-    }
-
-    pub(crate) fn do_util_uuid(
-        ms: Machine,
-        args: Vec<TypedValue>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        match args.is_empty() {
-            false => throw(TypeMismatch(ArgumentsMismatched(0, args.len()))),
-            true => Ok((ms, TypedValue::UUIDValue(Uuid::new_v4().as_u128()))),
-        }
     }
     
     fn do_util_to_xxx(
@@ -3147,7 +3260,7 @@ impl Package for WwwPkg {
                     | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
                     | { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                     | { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
-                    |GET http://localhost:8787/examples/www/quotes/1/4
+                    |GET http://localhost:8787/examples/www/stocks/1/4
                 "#,
                 '|',
             )],
@@ -3339,7 +3452,7 @@ mod tests {
             verify_exact_value_where(
                 r#"
                 use cal
-                now():::day_of()
+                now():::day_of
             "#,
                 |n| matches!(n, Number(I64Value(..))),
             );
@@ -3350,7 +3463,7 @@ mod tests {
             verify_exact_value_where(
                 r#"
                 use cal
-                now():::hour24()
+                now():::hour24
             "#,
                 |n| matches!(n, Number(I64Value(..))),
             );
@@ -3361,7 +3474,7 @@ mod tests {
             verify_exact_value_where(
                 r#"
                 use cal
-                now():::hour12()
+                now():::hour12
             "#,
                 |n| matches!(n, Number(I64Value(..))),
             );
@@ -3372,7 +3485,7 @@ mod tests {
             verify_exact_value_where(
                 r#"
                 use cal
-                now():::minute_of()
+                now():::minute_of
             "#,
                 |n| matches!(n, Number(I64Value(..))),
             );
@@ -3383,7 +3496,7 @@ mod tests {
             verify_exact_value_where(
                 r#"
                 use cal
-                now():::month_of()
+                now():::month_of
             "#,
                 |n| matches!(n, Number(I64Value(..))),
             );
@@ -3394,7 +3507,7 @@ mod tests {
             verify_exact_value_where(
                 r#"
                 use cal
-                now():::second_of()
+                now():::second_of
             "#,
                 |n| matches!(n, Number(I64Value(..))),
             );
@@ -3405,7 +3518,7 @@ mod tests {
             verify_exact_value_where(
                 r#"
                 use cal
-                now():::year_of()
+                now():::year_of
             "#,
                 |n| matches!(n, Number(I64Value(..))),
             );
@@ -3416,7 +3529,7 @@ mod tests {
             verify_exact_value_where(
                 r#"
                 use cal, durations
-                cal::minus(now(), 3:::days())
+                cal::minus(now(), 3:::days)
             "#,
                 |n| matches!(n, DateValue(..)),
             );
@@ -3427,7 +3540,7 @@ mod tests {
             verify_exact_value_where(
                 r#"
                 use cal, durations
-                cal::plus(now(), 30:::days())
+                cal::plus(now(), 30:::days)
             "#,
                 |n| matches!(n, DateValue(..)),
             );
@@ -3448,7 +3561,7 @@ mod tests {
             verify_exact_value(
                 r#"
                 use durations
-                3:::days()
+                3:::days
             "#,
                 Number(I64Value(3 * DAYS)),
             );
@@ -3459,7 +3572,7 @@ mod tests {
             verify_exact_value(
                 r#"
                 use durations
-                8:::hours()
+                8:::hours
             "#,
                 Number(I64Value(8 * HOURS)),
             );
@@ -3470,7 +3583,7 @@ mod tests {
             verify_exact_value(
                 r#"
                 use durations
-                0.5:::hours()
+                0.5:::hours
             "#,
                 Number(F64Value(30.0 * MINUTES.to_f64().unwrap())),
             );
@@ -3481,7 +3594,7 @@ mod tests {
             verify_exact_value(
                 r#"
                 use durations
-                1000:::millis()
+                1000:::millis
             "#,
                 Number(I64Value(1 * SECONDS)),
             );
@@ -3492,7 +3605,7 @@ mod tests {
             verify_exact_value(
                 r#"
                 use durations
-                30:::minutes()
+                30:::minutes
             "#,
                 Number(I64Value(30 * MINUTES)),
             );
@@ -3503,7 +3616,7 @@ mod tests {
             verify_exact_value(
                 r#"
                 use durations
-                20:::seconds()
+                20:::seconds
             "#,
                 Number(I64Value(20 * SECONDS)),
             );
@@ -3569,7 +3682,7 @@ mod tests {
                 file = "temp_secret.txt"
                 file:::create_file(md5("**keep**this**secret**"))
                 file:::read_text_file()
-            "#, StringValue("47338bd5f35bbb239092c36e30775b4a".into()))
+            "#, StringValue("0v47338bd5f35bbb239092c36e30775b4a".into()))
         }
 
         #[test]
@@ -3677,7 +3790,7 @@ mod tests {
         use crate::dataframe::Dataframe::Disk;
         use crate::interpreter::Interpreter;
         use crate::numbers::Numbers::I64Value;
-        use crate::testdata::{verify_exact_table_with, verify_exact_value_whence, verify_exact_value_where, verify_exact_value_with};
+        use crate::testdata::{verify_exact_code_with, verify_exact_table_with, verify_exact_value_whence, verify_exact_value_where, verify_exact_value_with};
         use crate::typed_values::TypedValue::{Boolean, Number, TableValue};
 
         #[test]
@@ -3704,7 +3817,7 @@ mod tests {
                  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
             "#, Number(I64Value(3)));
 
-            interpreter = verify_exact_table_with(interpreter, "from stocks", vec![
+            interpreter = verify_exact_table_with(interpreter, "stocks", vec![
                 "|------------------------------------|", 
                 "| id | symbol | exchange | last_sale |", 
                 "|------------------------------------|", 
@@ -3738,23 +3851,23 @@ mod tests {
             "#, Boolean(false));
 
             interpreter = verify_exact_value_with(interpreter, r#"
-            stocks = nsd::create_fn(
-                "packages.table_fn.stocks",
-                (symbol: String(8), exchange: String(8), last_sale: f64) -> {
-                    symbol: symbol,
-                    exchange: exchange,
-                    last_sale: last_sale * 2.0,
-                    rank: __row_id__ + 1
-                })
+                stocks = nsd::create_fn(
+                    "packages.table_fn.stocks",
+                    (symbol: String(8), exchange: String(8), last_sale: f64) -> {
+                        symbol: symbol,
+                        exchange: exchange,
+                        last_sale: last_sale * 2.0,
+                        rank: __row_id__ + 1
+                    })
             "#, Boolean(true));
 
             interpreter = verify_exact_value_with(interpreter, r#"
-            [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-             { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-             { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-        "#, Number(I64Value(3)));
+                [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                 { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+            "#, Number(I64Value(3)));
 
-            interpreter = verify_exact_table_with(interpreter, "from stocks", vec![
+            interpreter = verify_exact_table_with(interpreter, "stocks", vec![
                 "|-------------------------------------------|",
                 "| id | symbol | exchange | last_sale | rank |",
                 "|-------------------------------------------|",
@@ -3773,6 +3886,58 @@ mod tests {
                 "| 0  | BOOM   | NYSE     | 56.88     |", 
                 "| 1  | ABC    | AMEX     | 12.49     |", 
                 "| 2  | JET    | NASDAQ   | 32.12     |", 
+                "|------------------------------------|"]);
+        }
+
+        #[test]
+        fn test_nsd_resize() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_table_with(interpreter,r#"
+                let stocks =
+                   nsd::save('packages.resize.stocks', Table::new(
+                       symbol: String(8),
+                       exchange: String(8),
+                       last_sale: f64
+                   ))
+                [{ symbol: "TCO", exchange: "NYSE", last_sale: 38.53 },
+                 { symbol: "SHMN", exchange: "NYSE", last_sale: 6.57 },
+                 { symbol: "HMU", exchange: "NASDAQ", last_sale: 27.12 }] ~> stocks
+                stocks
+            "#, vec![
+                "|------------------------------------|", 
+                "| id | symbol | exchange | last_sale |", 
+                "|------------------------------------|", 
+                "| 0  | TCO    | NYSE     | 38.53     |", 
+                "| 1  | SHMN   | NYSE     | 6.57      |", 
+                "| 2  | HMU    | NASDAQ   | 27.12     |", 
+                "|------------------------------------|"]);
+
+            interpreter = verify_exact_code_with(interpreter,r#"
+                nsd::resize('packages.resize.stocks', 2)
+            "#, "true");
+
+            interpreter = verify_exact_table_with(interpreter, r#"
+                stocks
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | TCO    | NYSE     | 38.53     |",
+                "| 1  | SHMN   | NYSE     | 6.57      |",
+                "|------------------------------------|"]);
+
+            interpreter = verify_exact_code_with(interpreter,r#"
+                use nsd
+                stocks:::resize(1)
+            "#, "true");
+
+            verify_exact_table_with(interpreter, r#"                
+                stocks
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | TCO    | NYSE     | 38.53     |",
                 "|------------------------------------|"]);
         }
 
@@ -3797,11 +3962,9 @@ mod tests {
                         last_sale: f64
                     ))
 
-                rows = [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+                [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                  { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
-                
-                rows ~> stocks
+                 { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
 
                 nsd::load("platform.nsd.ns_save_and_load")      
             "#, |df| matches!(df, TableValue(..)))
@@ -3887,8 +4050,7 @@ mod tests {
 
         #[test]
         fn test_oxide_compile_closure() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 n = 5
                 code = oxide::compile("n * n")
                 code()
@@ -3897,8 +4059,7 @@ mod tests {
 
         #[test]
         fn test_oxide_eval_closure() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 a = 'Hello '
                 b = 'World'
                 oxide::eval("a + b")
@@ -3932,9 +4093,8 @@ mod tests {
             // fully-qualified
             verify_exact_value_where("oxide::help()", |v| matches!(v, TableValue(..)));
 
-            // postfix
-            verify_exact_value_where(
-                r#"
+            // imported
+            verify_exact_value_where(r#"
                 use oxide
                 help()
             "#,
@@ -3957,7 +4117,7 @@ mod tests {
         #[test]
         fn test_oxide_inspect() {
             verify_exact_table(r#"
-                oxide::inspect("{ x = 1 x = x + 1 }")
+                oxide::inspect("{ x = 1; x = x + 1 }")
             "#, vec![
                   "|-------------------------------------------------------------------------------------------------|", 
                   "| id | code      | model                                                                          |", 
@@ -3981,6 +4141,34 @@ mod tests {
         #[test]
         fn test_oxide_sprintf() {
             verify_exact_value(r#"oxide::sprintf("Hello %s", "World")"#, StringValue("Hello World".into()));
+        }
+
+        #[test]
+        fn test_oxide_uuid() {
+            verify_exact_value_where(
+                r#"oxide::uuid()"#,
+                |v| matches!(v, UUIDValue(..)))
+        }
+        
+        #[test]
+        fn test_oxide_uuid_from_binary() {
+            verify_exact_value(
+                r#"oxide::uuid(0vfeeddeadbeefdeaffadecafebabeface)"#,
+                UUIDValue(0xfeeddead_beef_deaf_fade_cafebabeface))
+        }
+
+        #[test]
+        fn test_oxide_uuid_from_string() {
+            verify_exact_value(
+                r#"oxide::uuid("feeddead-beef-deaf-fade-cafebabeface")"#,
+                UUIDValue(0xfeeddead_beef_deaf_fade_cafebabeface))
+        }
+        
+        #[test]
+        fn test_oxide_uuid_from_u128() {
+            verify_exact_value(
+                r#"oxide::uuid(0xfeeddead_beef_deaf_fade_cafebabeface)"#,
+                UUIDValue(0xfeeddead_beef_deaf_fade_cafebabeface))
         }
 
         #[test]
@@ -4031,8 +4219,7 @@ mod tests {
 
         #[test]
         fn test_str_format_qualified() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::format("This {} the {}", "is", "way")
             "#,
                 StringValue("This is the way".into()),
@@ -4058,8 +4245,7 @@ mod tests {
 
         #[test]
         fn test_str_index_of_qualified() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::index_of('The little brown fox', 'brown')
             "#,
                 Number(I64Value(11)),
@@ -4068,8 +4254,7 @@ mod tests {
 
         #[test]
         fn test_str_index_of_postfix() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str
                 'The little brown fox':::index_of('brown')
             "#,
@@ -4079,8 +4264,7 @@ mod tests {
 
         #[test]
         fn test_str_join() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::join(['1', 5, 9, '13'], ', ')
             "#,
                 StringValue("1, 5, 9, 13".into()),
@@ -4089,8 +4273,7 @@ mod tests {
 
         #[test]
         fn test_str_left_qualified_positive() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::left('Hello World', 5)
             "#,
                 StringValue("Hello".into()),
@@ -4099,8 +4282,7 @@ mod tests {
 
         #[test]
         fn test_str_left_qualified_negative() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::left('Hello World', -5)
             "#,
                 StringValue("World".into()),
@@ -4109,8 +4291,7 @@ mod tests {
 
         #[test]
         fn test_str_left_postfix_valid() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str, util
                 'Hello World':::left(5)
             "#,
@@ -4121,8 +4302,7 @@ mod tests {
         #[test]
         fn test_str_left_postfix_invalid() {
             // postfix - invalid case
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str, util
                 12345:::left(5)
             "#,
@@ -4133,8 +4313,7 @@ mod tests {
         #[test]
         fn test_str_left_in_scope() {
             // attempt a non-import function from the same package
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 left('Hello World', 5)
             "#,
                 |v| matches!(v, ErrorValue(..)),
@@ -4143,8 +4322,7 @@ mod tests {
 
         #[test]
         fn test_str_len_qualified() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::len('The little brown fox')
             "#,
                 Number(I64Value(20)),
@@ -4153,8 +4331,7 @@ mod tests {
 
         #[test]
         fn test_str_len_postfix() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str
                 'The little brown fox':::len()
             "#,
@@ -4164,8 +4341,7 @@ mod tests {
 
         #[test]
         fn test_str_right_qualified_string_positive() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::right('Hello World', 5)
             "#,
                 StringValue("World".into()),
@@ -4174,8 +4350,7 @@ mod tests {
 
         #[test]
         fn test_str_right_qualified_string_negative() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::right('Hello World', -5)
             "#,
                 StringValue("Hello".into()),
@@ -4184,8 +4359,7 @@ mod tests {
 
         #[test]
         fn test_str_right_qualified_not_string_is_undefined() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::right(7779311, 5)
             "#,
                 ErrorValue(Exact(
@@ -4196,8 +4370,7 @@ mod tests {
 
         #[test]
         fn test_str_right_postfix_string_negative() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str, util
                 'Hello World':::right(-5)
             "#,
@@ -4207,8 +4380,7 @@ mod tests {
 
         #[test]
         fn test_str_split_qualified() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::split('Hello,there World', ' ,')
             "#,
                 ArrayValue(Array::from(vec![
@@ -4221,8 +4393,7 @@ mod tests {
 
         #[test]
         fn test_str_split_postfix() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str
                 'Hello World':::split(' ')
             "#,
@@ -4236,8 +4407,7 @@ mod tests {
         #[test]
         fn test_str_split_in_scope() {
             // in-scope
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str
                 split('Hello,there World;Yeah!', ' ,;')
             "#,
@@ -4252,8 +4422,7 @@ mod tests {
 
         #[test]
         fn test_str_starts_with_postfix_true() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use str
                 'Hello World':::starts_with('Hello')
             "#,
@@ -4263,8 +4432,7 @@ mod tests {
 
         #[test]
         fn test_str_starts_with_qualified_true() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::starts_with('Hello World', 'Hello')
             "#,
                 Boolean(true),
@@ -4273,8 +4441,7 @@ mod tests {
 
         #[test]
         fn test_str_starts_with_qualified_false() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::starts_with('Hello World', 'World')
             "#,
                 Boolean(false),
@@ -4284,25 +4451,22 @@ mod tests {
         #[test]
         fn test_str_strip_margin() {
             verify_exact_value(
-                strip_margin(
-                    r#"
+                strip_margin(r#"
                 |str::strip_margin("
                 ||Code example:
                 ||
-                ||from stocks
-                ||where exchange is 'NYSE'
+                ||stocks where exchange is 'NYSE'
                 |", '|')"#,
                     '|')
                 .as_str(),
-                StringValue("\nCode example:\n\nfrom stocks\nwhere exchange is 'NYSE'".into()),
+                StringValue("\nCode example:\n\nstocks where exchange is 'NYSE'".into()),
             )
         }
 
         #[test]
         fn test_str_substring_defined() {
             // fully-qualified
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::substring('Hello World', 0, 5)
             "#,
                 StringValue("Hello".into()),
@@ -4312,8 +4476,7 @@ mod tests {
         #[test]
         fn test_str_substring_undefined() {
             // fully-qualified (negative case)
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 str::substring(8888, 0, 5)
             "#,
                 Undefined,
@@ -4379,8 +4542,8 @@ mod tests {
                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
                 rows ~> stocks
-                delete from stocks where last_sale > 1.0
-                from stocks
+                delete stocks where last_sale > 1.0
+                stocks
             "#,
                 vec![
                     "|------------------------------------|",
@@ -4398,7 +4561,7 @@ mod tests {
                 r#"
                 use tools
                 stocks:::compact()
-                from stocks
+                stocks
             "#,
                 vec![
                     "|------------------------------------|",
@@ -4676,7 +4839,7 @@ mod tests {
                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
                 ]
                 stocks = tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
-                from stocks
+                stocks
             "#,
                 vec![
                     "|------------------------------------|",
@@ -4704,7 +4867,7 @@ mod tests {
                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
                 rows ~> stocks
                 tools::push(stocks, { symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
-                from stocks
+                stocks
             "#,
                 vec![
                     "|------------------------------------|",
@@ -4729,7 +4892,7 @@ mod tests {
                     ("JET", "NASDAQ", 32.12)
                 ]
                 stocks = tools::push(stocks, ("DEX", "OTC_BB", 0.0086))
-                from tools::to_table(stocks)
+                tools::to_table(stocks)
             "#,
                 vec![
                     r#"|--------------------------------|"#,
@@ -4769,7 +4932,7 @@ mod tests {
             interpreter = verify_exact_table_with(interpreter, r#"
                 use tools
                 stocks:::replay()
-                from stocks
+                stocks
             "#, vec![
                 "|-------------------------------------------|",
                 "| id | symbol | exchange | last_sale | rank |",
@@ -4881,7 +5044,7 @@ mod tests {
                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
                     { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] 
                 rows ~> stocks
-                delete from stocks where last_sale > 1.0
+                delete stocks where last_sale > 1.0
                 stocks:::scan()
             "#,
                 )
@@ -5136,7 +5299,7 @@ mod tests {
             verify_exact_value(r#"
                 compressed = util::gzip('Hello World')
                 util::gunzip(compressed)
-            "#, Binary(b"Hello World".to_vec()))
+            "#, BinaryValue(b"Hello World".to_vec()))
         }
 
         #[test]
@@ -5151,7 +5314,7 @@ mod tests {
         fn test_util_md5() {
             verify_exact_code(
                 "util::md5('Hello World')",
-                "b10a8db164e0754105b7a99be72e3fe5",
+                "0vb10a8db164e0754105b7a99be72e3fe5",
             )
         }
 
@@ -5181,7 +5344,7 @@ mod tests {
             verify_exact_code(r#"
                 use util
                 "Hello there":::to(Binary())
-            "#, "48656c6c6f207468657265")
+            "#, "0v48656c6c6f207468657265")
         }
 
         #[test]

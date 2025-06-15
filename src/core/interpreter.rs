@@ -228,7 +228,7 @@ mod tests {
         use crate::interpreter::Interpreter;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
-        
+
         #[test]
         fn test_coalesce_not_null_or_undefined() {
             verify_exact_code(r#"
@@ -451,26 +451,6 @@ mod tests {
         use crate::testdata::{verify_exact_code, verify_exact_table};
 
         #[test]
-        fn test_dataframe_literal() {
-            verify_exact_table(r#"
-                |--------------------------------------|
-                | symbol | exchange | last_sale | rank |
-                |--------------------------------------|
-                | BOOM   | NYSE     | 113.76    | 1    |
-                | ABC    | AMEX     | 24.98     | 2    |
-                | JET    | NASDAQ   | 64.24     | 3    |
-                |--------------------------------------|
-            "#, vec![
-                "|-------------------------------------------|", 
-                "| id | symbol | exchange | last_sale | rank |", 
-                "|-------------------------------------------|", 
-                "| 0  | BOOM   | NYSE     | 113.76    | 1    |", 
-                "| 1  | ABC    | AMEX     | 24.98     | 2    |", 
-                "| 2  | JET    | NASDAQ   | 64.24     | 3    |", 
-                "|-------------------------------------------|"]);
-        }
-
-        #[test]
         fn test_feature_and_scenarios() {
             verify_exact_table(r#"
             Feature "Matches function" {
@@ -644,14 +624,14 @@ mod tests {
         }
 
         #[test]
-        fn test_functional_pipeline_1arg() {
+        fn test_functional_pipeline() {
             verify_exact_code(r#"
                 "Hello" |> tools::reverse
             "#, "\"olleH\"");
         }
 
         #[test]
-        fn test_functional_pipeline_2args() {
+        fn test_functional_pipeline_with_destructure() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
                 fn add(a, b) -> a + b
@@ -671,13 +651,34 @@ mod tests {
         }
 
         #[test]
-        fn test_function_pipeline_with_filter_map() {
+        fn test_functional_sugar_with_filter_map() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
                 use arrays
                 let arr = [1, 2, 3, 4]
-                arr:::filter(x -> (x % 2) == 0):::map(x -> x * 10)
+                arr
+                    :::filter(x -> (x % 2) == 0)
+                    :::map(x -> x * 10)
             "#, "[20, 40]");
+        }
+
+        #[test]
+        fn test_functional_sugar() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                let kb = n -> n * 1024
+                let mb = n -> kb(n) * 1024
+                let gb = n -> mb(n) * 1024
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                3.2:::kb
+            "#, "3276.8");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                3.2:::mb
+            "#, "3355443.2");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                3.2:::gb
+            "#, "3435973836.8");
         }
     }
 

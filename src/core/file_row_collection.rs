@@ -6,7 +6,9 @@
 use crate::blobs::{BLOBCellMetadata, BLOBStore};
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
-use crate::data_types::DataType::NumberType;
+use crate::data_types::DataType;
+use crate::data_types::DataType::{NumberType, TableType};
+use crate::dataframe::Dataframe;
 use crate::errors::Errors::Exact;
 use crate::errors::{throw, Errors};
 use crate::field;
@@ -22,7 +24,7 @@ use crate::row_collection::{RowCollection, RowEncoding};
 use crate::row_metadata::RowMetadata;
 use crate::structures::{Row, Structure};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Boolean, ErrorValue, Number};
+use crate::typed_values::TypedValue::{Boolean, ErrorValue, Number, TableValue};
 use log::error;
 use serde::de::Error;
 use serde::ser::SerializeStruct;
@@ -31,9 +33,12 @@ use std::cmp::Ordering;
 use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::fs::{File, OpenOptions};
+use std::ops::Deref;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
+use crate::blob_file_row_collection::BLOBFileRowCollection;
+use crate::dataframe::Dataframe::Blob;
 
 /// File-based RowCollection implementation
 #[derive(Clone)]
@@ -51,7 +56,7 @@ impl FileRowCollection {
         path: &str,
     ) -> std::io::Result<Self> {
         let full_blob_path = format!("{}.blob", path);
-        let blobs = BLOBStore::open_file(full_blob_path.as_str(), true).unwrap();
+        let blobs = BLOBStore::open_file(full_blob_path.as_str(), true)?;
         Ok(Self {
             record_size: Row::compute_record_size(&columns),
             columns,
@@ -133,6 +138,29 @@ impl FileRowCollection {
         }
     }
 
+    fn decode_cell(
+        &self,
+        column: &Column,
+        fmd: &FieldMetadata,
+        buffer: &Vec<u8>,
+        is_field_only: bool,
+    ) -> std::io::Result<TypedValue> {
+        let data_type = column.get_data_type();
+        let value = match fmd {
+            f if f.is_external => {
+                let offset = NumberType(I64Kind).decode_field_value(&buffer, column.get_offset()).to_u64();
+                let metadata = self.blobs.read_metadata(offset)?;
+                match data_type {
+                    TableType(params) => TableValue(Blob(self.blobs.read_blob_table_at(offset, params)?)),
+                    _ => self.blobs.read_value(&metadata)?
+                }
+            }
+            _ if is_field_only => data_type.decode_field_value(&buffer, 0),
+            _ => data_type.decode_field_value(&buffer, column.get_offset()),
+        };
+        Ok(value)
+    }
+
     /// convenience function to create, read or write a table file
     pub(crate) fn table_file_create(ns: &Namespace) -> std::io::Result<File> {
         fs::create_dir_all(ns.get_root_path())?;
@@ -169,7 +197,7 @@ impl PartialOrd for FileRowCollection {
 
 impl Debug for FileRowCollection {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "FileRowCollection({})", self.record_size)
+        write!(f, "FileRowCollection({})", Column::render(self.get_columns()))
     }
 }
 
@@ -261,14 +289,13 @@ impl RowCollection for FileRowCollection {
         self.write_at(row_offset, &[metadata.encode()].to_vec())
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         let column = &self.columns[column_id];
         let row_offset = self.convert_rowid_to_offset(id);
         let cell_offset = row_offset + column.get_offset() as u64;
-        match self.read_at(cell_offset, column.get_fixed_size()) {
-            Ok(buffer) => column.get_data_type().decode_field_value(&buffer, 0),
-            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
-        }
+        let buffer = self.read_at(cell_offset, column.get_fixed_size())?;
+        let fmd = FieldMetadata::decode(buffer[0]);
+        self.decode_cell(column, &fmd, &buffer, true)
     }
 
     fn read_field_metadata(
@@ -289,25 +316,19 @@ impl RowCollection for FileRowCollection {
         let buffer = self.read_at(row_offset, self.record_size)?;
         let columns = &self.columns;
 
-        // if the buffer is empty, just return an empty row
+        // if the buffer is empty, return an empty row
         if buffer.len() == 0 {
             return Ok((Row::create(0, columns), RowMetadata::new(false)));
         }
         let rmd = RowMetadata::from_bytes(&buffer, 0);
-        let id = ByteCodeCompiler::decode_row_id(&buffer, 1);
-        let values = columns.iter().map(|column| {
+        let row_id = ByteCodeCompiler::decode_row_id(&buffer, 1);
+        let mut values = vec![];
+        for column in columns {
             let fmd = FieldMetadata::decode(buffer[column.get_offset()]);
-            if fmd.is_external {
-                let offset = NumberType(I64Kind).decode_field_value(&buffer, column.get_offset()).to_u64();
-                let (_, value) = self.blobs.read(offset)
-                    .unwrap_or_else(|err| (BLOBCellMetadata::new(0, 0, 0), ErrorValue(Errors::Exact(err.to_string()))));
-                value
-            } else {
-                let data_type = column.get_data_type();
-                data_type.decode_field_value(&buffer, column.get_offset())
-            }
-        }).collect();
-        Ok((Row::new(id, values), rmd))
+            let value = self.decode_cell(column, &fmd, &buffer, false)?;
+            values.push(value)
+        }
+        Ok((Row::new(row_id, values), rmd))
     }
 
     fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {

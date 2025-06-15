@@ -13,6 +13,7 @@ use shared_lib::cnv_error;
 use std::env;
 use std::string::ToString;
 
+mod blob_file_row_collection;
 mod blobs;
 mod byte_code_compiler;
 mod byte_row_collection;

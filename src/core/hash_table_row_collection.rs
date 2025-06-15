@@ -245,7 +245,7 @@ impl HashTableRowCollection {
 
 impl RowCollection for HashTableRowCollection {
     fn delete_row(&mut self, id: usize) -> std::io::Result<i64> {
-        let key_value = self.read_field(id, self.key_column_index);
+        let key_value = self.read_field(id, self.key_column_index)?;
         let keys_row_id = self.convert_key_to_row_id(&key_value);
         match key_value {
             ErrorValue(msg) => throw(msg),
@@ -304,7 +304,7 @@ impl RowCollection for HashTableRowCollection {
         self.data_table.overwrite_row_metadata(id, metadata)
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         self.data_table.read_field(id, column_id)
     }
 
@@ -350,7 +350,7 @@ impl RowCollection for HashTableRowCollection {
 
     fn update_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         let new_value = row[self.key_column_index].to_owned();
-        let old_value = self.read_field(id, self.key_column_index);
+        let old_value = self.read_field(id, self.key_column_index)?;
         match old_value {
             TypedValue::Undefined => self.data_table.update_row(id, row),
             _ => {
@@ -482,7 +482,7 @@ mod tests {
 
         let rand_row_id = (max_count - 1) as usize;
         let column_id = stocks.key_column_index;
-        let (symbol, msec) = measure_time(|| stocks.read_field(rand_row_id, column_id));
+        let (symbol, msec) = measure_time(|| stocks.read_field(rand_row_id, column_id).unwrap());
         println!("[{:.4} msec] read_field({}, {}) -> {}", msec, rand_row_id, column_id, symbol.unwrap_value());
 
         let (row_b, msec_b) = measure_time(|| stocks.find_row_by_key(&symbol).unwrap());

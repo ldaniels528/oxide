@@ -181,7 +181,7 @@ pub trait RowCollection: Debug {
         match self.examine_range(self.get_indices()?) {
             ErrorValue(err) => throw(err),
             TableValue(rcv) => Ok(rcv.get_rows()),
-            z => throw(TypeMismatch(TableExpected(String::new(), z.to_code())))
+            z => throw(TypeMismatch(TableExpected(z.to_code())))
         }
     }
 
@@ -193,18 +193,6 @@ pub trait RowCollection: Debug {
             }
         }
         Ok(false)
-    }
-
-    fn filter_rows(&self, condition: &Conditions) -> std::io::Result<Vec<Row>> {
-        let machine = Machine::empty();
-        let result = self.iter().filter(|row| {
-            let machine = machine.with_row(self.get_columns(), &row);
-            match machine.do_condition(condition) {
-                Ok((_, Boolean(true))) => true,
-                _ => false
-            }
-        }).collect::<Vec<_>>();
-        Ok(result)
     }
 
     /// Returns an option of the first row that satisfies the given function
@@ -262,6 +250,33 @@ pub trait RowCollection: Debug {
             false => Ok(None)
         }
     }
+    
+    fn find_last_matching_active_row(
+        &self,
+        condition: &Option<Conditions>
+    ) -> std::io::Result<Option<Row>> {
+        match condition {
+            None => self.find_last_active_row(),
+            Some(cnd) => {
+                let mut row_id = self.len()?;
+
+                // find the last active row
+                while row_id > 0 {
+                    row_id -= 1;
+                    let (row, metadata) = self.read_row(row_id)?;
+                    if metadata.is_allocated && (
+                        match Machine::empty().with_row(self.get_columns(), &row).is_true(&cnd) {
+                            Ok((_, is_true)) => is_true,
+                            _ => false
+                        }
+                    ) {
+                        return Ok(Some(row))
+                    }
+                }
+                Ok(None)
+            }
+        }
+    }
 
     /// Returns an option of the next row that satisfies the function
     /// starting with the initial_row_id.
@@ -315,7 +330,7 @@ pub trait RowCollection: Debug {
                 }
                 result
             }
-            Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
+            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
 
@@ -339,40 +354,6 @@ pub trait RowCollection: Debug {
                 result
             }
             Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
-        }
-    }
-
-    /// returns true if all allocated rows satisfy the provided function
-    fn for_all(&self, callback: fn(Row) -> bool) -> TypedValue {
-        match self.len() {
-            Ok(eof) => {
-                for id in 0..eof {
-                    match self.read_one(id) {
-                        Ok(Some(row)) => if !callback(row) { return Boolean(false); },
-                        Ok(None) => {}
-                        Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
-                    }
-                }
-                Boolean(true)
-            }
-            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
-        }
-    }
-
-    /// Evaluates a callback function for each active row in the table
-    fn for_each(&self, callback: Box<dyn Fn(Row) -> ()>) -> TypedValue {
-        match self.len() {
-            Ok(eof) => {
-                for row_id in 0..eof {
-                    match self.read_one(row_id) {
-                        Ok(Some(row)) => callback(row),
-                        Ok(None) => {}
-                        Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
-                    }
-                }
-                Undefined
-            }
-            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
         }
     }
 
@@ -471,30 +452,19 @@ pub trait RowCollection: Debug {
     /// overwrites the metadata of a specified row by ID
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<i64>;
 
-    /// replaces rows that satisfy the include function
-    fn overwrite_rows(
-        &mut self,
-        include: fn(&Row) -> bool,
-        transform: fn(Row) -> Row,
-    ) -> std::io::Result<i64> {
-        let mut affected_count = 0;
-        for row_id in self.get_indices()? {
-            if let Some(row) = self.read_one(row_id)? {
-                if include(&row) {
-                    affected_count += self.overwrite_row(row_id, transform(row))?;
-                }
-            }
-        }
-        Ok(affected_count)
+    /// Retrieves the last row in the table; deleting the row from the table
+    /// during the process.
+    fn pop_row(&mut self) -> TypedValue {
+        self.pop_matching_row(&None)
     }
 
     /// Retrieves the last row in the table; deleting the row from the table
     /// during the process.
-    fn pop_row(&mut self, parameters: Vec<Parameter>) -> TypedValue {
-        match self.find_last_active_row() {
+    fn pop_matching_row(&mut self, condition: &Option<Conditions>) -> TypedValue {
+        match self.find_last_matching_active_row(condition) {
             Ok(Some(row)) => {
                 let _ = self.delete_row(row.get_id());
-                Structured(Firm(row, parameters))
+                Structured(Firm(row, self.get_parameters()))
             }
             Ok(None) => Undefined,
             Err(err) => ErrorValue(Errors::Exact(err.to_string()))
@@ -530,14 +500,14 @@ pub trait RowCollection: Debug {
         let mut values = vec![];
         let mut row_id = index.start;
         while row_id < index.end {
-            values.push(self.read_field(row_id, column_id));
+            values.push(self.read_field(row_id, column_id)?);
             row_id += 1
         }
         Ok(values)
     }
 
     /// reads a field by column position from an active row by ID
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue;
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue>;
 
     fn read_field_metadata(
         &self,
@@ -765,8 +735,12 @@ pub trait RowCollection: Debug {
 
 impl dyn RowCollection {
     /// creates a new in-memory [RowCollection] from a byte vector.
-    pub fn from_bytes(columns: Vec<Column>, rows: Vec<Vec<u8>>) -> impl RowCollection {
-        ByteRowCollection::from_bytes(columns, rows)
+    pub fn from_bytes(
+        columns: Vec<Column>,
+        rows: Vec<Vec<u8>>,
+        watermark: usize,
+    ) -> impl RowCollection {
+        ByteRowCollection::from_bytes(columns, rows, watermark)
     }
 
     /// creates a new [RowCollection] from a file.
@@ -825,7 +799,7 @@ mod tests {
         // determine the record size of the row
         let columns = make_quote_columns();
         let row = make_quote(0, "RICE", "NYSE", 78.78);
-        let mut rc = <dyn RowCollection>::from_bytes(columns.to_owned(), Vec::new());
+        let mut rc = <dyn RowCollection>::from_bytes(columns.to_owned(), Vec::new(), 0);
 
         // create a new row
         assert_eq!(rc.overwrite_row(row.get_id(), row).unwrap(), 1);
@@ -963,10 +937,10 @@ mod tests {
             assert_eq!(Number(RowId(1)), rc.append_row(make_quote(1, "AMD", "NASDAQ", 77.66)));
 
             // read the first column of the first row
-            assert_eq!(rc.read_field(0, 0), StringValue("INTC".into()));
+            assert_eq!(rc.read_field(0, 0).unwrap(), StringValue("INTC".into()));
 
             // read the second column of the second row
-            assert_eq!(rc.read_field(1, 1), StringValue("NASDAQ".into()));
+            assert_eq!(rc.read_field(1, 1).unwrap(), StringValue("NASDAQ".into()));
 
             rc.len().unwrap() as u64
         }
@@ -1454,12 +1428,12 @@ mod tests {
             assert_eq!(Number(RowId(0)), rc.push_row(make_quote(0, "BILL", "AMEX", 12.33)));
             assert_eq!(Number(RowId(1)), rc.push_row(make_quote(1, "TED", "NYSE", 56.2456)));
             assert_eq!(
-                rc.pop_row(params.clone()),
+                rc.pop_row(),
                 Structured(Firm(make_quote(1, "TED", "NYSE", 56.2456), params.clone())));
             assert_eq!(
-                rc.pop_row(params.clone()),
+                rc.pop_row(),
                 Structured(Firm(make_quote(0, "BILL", "AMEX", 12.33), params.clone())));
-            assert_eq!(rc.pop_row(params.clone()), Undefined);
+            assert_eq!(rc.pop_row(), Undefined);
 
             rc.len().unwrap() as u64
         }
@@ -1876,12 +1850,12 @@ mod tests {
     }
 
     fn verify_byte_array_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let brc = ByteRowCollection::from_bytes(columns.to_owned(), Vec::new());
+        let brc = ByteRowCollection::from_bytes(columns.to_owned(), Vec::new(), 0);
         test_variant(kind, Box::new(brc), columns)
     }
 
     fn verify_dataframe_binary_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let brc = Dataframe::Binary(ByteRowCollection::from_bytes(columns.to_owned(), Vec::new()));
+        let brc = Dataframe::Binary(ByteRowCollection::from_bytes(columns.to_owned(), Vec::new(), 0));
         test_variant(kind, Box::new(brc), columns)
     }
 

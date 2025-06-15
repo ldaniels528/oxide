@@ -50,25 +50,6 @@ impl Hash for Numbers {
 impl Numbers {
 
     ////////////////////////////////////////////////////////////////////
-    //  STATIC METHODS
-    ////////////////////////////////////////////////////////////////////
-
-    /// decodes the typed value based on the supplied data type and buffer
-    pub fn decode(buffer: &Vec<u8>, offset: usize, kind: NumberKind) -> Numbers {
-        kind.decode(buffer, offset)
-    }
-
-    pub fn from_string(number_str: String) -> Numbers {
-        match number_str.parse::<f64>() {
-            Ok(num) => match number_str.parse::<i64>() {
-                Ok(num) => I64Value(num),
-                Err(_) => F64Value(num),
-            }
-            Err(_) => NaNValue,
-        }
-    }
-
-    ////////////////////////////////////////////////////////////////////
     //  INSTANCE METHODS
     ////////////////////////////////////////////////////////////////////
 
@@ -190,17 +171,6 @@ impl Numbers {
         }
     }
 
-    pub fn to_f32(&self) -> f32 {
-        match *self {
-            F64Value(n) => n as f32,
-            I64Value(n) => n as f32,
-            I128Value(n) => n as f32,
-            NaNValue => 0.0,
-            RowId(id) => id as f32,
-            U128Value(n) => n as f32,
-        }
-    }
-
     pub fn to_f64(&self) -> f64 {
         match *self {
             F64Value(n) => n,
@@ -220,39 +190,6 @@ impl Numbers {
             RowId(id) => serde_json::json!(id),
             NaNValue => serde_json::json!("NaN"),
             U128Value(number) => serde_json::json!(number),
-        }
-    }
-
-    pub fn to_i8(&self) -> i8 {
-        match *self {
-            F64Value(n) => n as i8,
-            I64Value(n) => n as i8,
-            I128Value(n) => n as i8,
-            NaNValue => 0i8,
-            RowId(id) => id as i8,
-            U128Value(n) => n as i8,
-        }
-    }
-
-    pub fn to_i16(&self) -> i16 {
-        match *self {
-            F64Value(n) => n as i16,
-            I64Value(n) => n as i16,
-            I128Value(n) => n as i16,
-            NaNValue => 0i16,
-            RowId(id) => id as i16,
-            U128Value(n) => n as i16,
-        }
-    }
-
-    pub fn to_i32(&self) -> i32 {
-        match *self {
-            F64Value(n) => n as i32,
-            I64Value(n) => n as i32,
-            I128Value(n) => n as i32,
-            NaNValue => 0i32,
-            RowId(id) => id as i32,
-            U128Value(n) => n as i32,
         }
     }
 
@@ -297,17 +234,6 @@ impl Numbers {
             I128Value(n) => n as u16,
             NaNValue => 0u16,
             U128Value(n) => n as u16,
-        }
-    }
-
-    pub fn to_u32(&self) -> u32 {
-        match *self {
-            RowId(id) => id as u32,
-            F64Value(n) => n as u32,
-            I64Value(n) => n as u32,
-            I128Value(n) => n as u32,
-            NaNValue => 0u32,
-            U128Value(n) => n as u32,
         }
     }
 

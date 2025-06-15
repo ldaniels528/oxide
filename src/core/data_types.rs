@@ -4,14 +4,16 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::byte_code_compiler::ByteCodeCompiler;
+use crate::compiler;
 use crate::compiler::Compiler;
 use crate::data_types::DataType::*;
+use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Model;
-use crate::errors::Errors::{Exact, InstantiationError, SyntaxError, TypeMismatch};
+use crate::errors::Errors::{Exact, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, UnrecognizedTypeName};
 use crate::errors::{throw, Errors, SyntaxErrors};
-use crate::expression::Expression::*;
 use crate::expression::Expression;
+use crate::expression::Expression::*;
 use crate::field::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind;
@@ -29,7 +31,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
 use uuid::Uuid;
-use crate::compiler;
 
 const PTR_LEN: usize = 8;
 
@@ -69,7 +70,7 @@ impl DataType {
     /// provides type resolution for the given [Vec<DataType>]
     pub fn best_fit(types: Vec<DataType>) -> DataType {
         match types.len() {
-            0 => UnresolvedType,
+            0 => Self::UnresolvedType,
             1 => types[0].to_owned(),
             _ => types[1..].iter().fold(types[0].to_owned(), |agg, t|
                 match (agg, t) {
@@ -90,13 +91,14 @@ impl DataType {
         use crate::typed_values::TypedValue::*;
         match self {
             ArrayType => ArrayValue(Array::new()),
-            BinaryType => Binary(Vec::new()),
+            BinaryType => BinaryValue(Vec::new()),
             BooleanType => ByteCodeCompiler::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             DateTimeType => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
             EnumType(_) => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec()),
             ErrorType => ErrorValue(Exact(ByteCodeCompiler::decode_string(buffer, offset, 255).to_string())),
             FixedSizeType(data_type, size) => match data_type.deref() {
                 StringType => StringValue(ByteCodeCompiler::decode_string(buffer, offset, *size).to_string()),
+                TableType(params) => TableValue(Dataframe::Model(ModelRowCollection::from_bytes(params, buffer.to_vec()))),
                 _ => data_type.decode(buffer, offset)
             },
             FunctionType(params, returns) => Function { 
@@ -108,10 +110,10 @@ impl DataType {
             PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
             StringType => StringValue(ByteCodeCompiler::decode_string(buffer, offset, 255)),
             StructureType(params) => Structured(Hard(HardStructure::from_parameters(params.to_vec()))),
-            TableType(params) => TableValue(Model(ModelRowCollection::from_parameters(params))),
+            TableType(params) => TableValue(Dataframe::Model(ModelRowCollection::from_bytes(params, buffer.to_vec()))),
             TupleType(params) => TupleValue(params.iter().map(|dt| dt.decode(buffer, offset)).collect()),
-            UnresolvedType => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec()),
-            UUIDType => ByteCodeCompiler::decode_u8x16(buffer, offset, |b| UUIDValue(u128::from_be_bytes(b))),
+            Self::UnresolvedType => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec()),
+            Self::UUIDType => ByteCodeCompiler::decode_u8x16(buffer, offset, |b| UUIDValue(u128::from_be_bytes(b))),
         }
     }
 
@@ -120,7 +122,7 @@ impl DataType {
         use crate::typed_values::TypedValue::*;
         let tv = match self {
             ArrayType => ArrayValue(Array::from(bcc.next_array()?)),
-            BinaryType => Binary(bcc.next_blob()),
+            BinaryType => BinaryValue(bcc.next_blob()),
             BooleanType => Boolean(bcc.next_bool()),
             DateTimeType => DateValue(bcc.next_i64()),
             EnumType(labels) => {
@@ -186,15 +188,7 @@ impl DataType {
         let model = Compiler::build(param_type)?;
         Self::decipher_type(&model)
     }
-
-    pub fn get_type_names() -> Vec<String> {
-        vec![
-            "Array", "Binary", "Boolean", "Date", "Error",
-            "Enum", "Fn", "String", "Struct", "Table", "Tuple",
-            "f64", "i64", "i128", "u128", "UUID",
-        ].iter().map(|s| s.to_string()).collect()
-    }
-
+    
     ////////////////////////////////////////////////////////////////////
     //  INSTANCE METHODS
     ////////////////////////////////////////////////////////////////////
@@ -225,8 +219,8 @@ impl DataType {
             StructureType(columns) => columns.len() * PTR_LEN,
             TableType(columns) => columns.len() * PTR_LEN,
             TupleType(types) => types.iter().map(|t| t.compute_fixed_size()).sum(),
-            UnresolvedType => PTR_LEN,
-            UUIDType => 16,
+            Self::UnresolvedType => PTR_LEN,
+            Self::UUIDType => 16,
         };
         width + 1 // +1 for field metadata
     }
@@ -235,7 +229,7 @@ impl DataType {
         use crate::typed_values::TypedValue::*;
         match self {
             ArrayType => ArrayValue(Array::new()),
-            BinaryType => Binary(vec![]),
+            BinaryType => BinaryValue(vec![]),
             BooleanType => Boolean(false),
             DateTimeType => DateValue(Local::now().timestamp_millis()),
             EnumType(..) => Number(I64Value(0)),
@@ -255,16 +249,8 @@ impl DataType {
                 TableValue(Model(ModelRowCollection::from_parameters(params))),
             TupleType(dts) => TupleValue(dts.iter()
                 .map(|dt| dt.get_default_value()).collect()),
-            DataType::UnresolvedType => Null,
-            DataType::UUIDType => UUIDValue(Uuid::new_v4().as_u128())
-        }
-    }
-
-    pub fn instantiate(&self) -> std::io::Result<TypedValue> {
-        match self {
-            PlatformOpsType(_) => throw(InstantiationError(self.clone())),
-            UnresolvedType => throw(InstantiationError(self.clone())),
-            other => Ok(other.get_default_value())
+            Self::UnresolvedType => Null,
+            Self::UUIDType => UUIDValue(Uuid::new_v4().as_u128())
         }
     }
 
@@ -288,9 +274,12 @@ impl DataType {
         }
     }
 
-    /// Indicates whether the given expression represents a known type
-    pub fn is_type(expr: &Expression) -> bool {
-        Self::decipher_type(expr).is_ok()
+    pub fn is_table(&self) -> bool {
+        match self {
+            TableType(..) => true,
+            FixedSizeType(underlying, ..) => underlying.is_table(),
+            _ => false
+        }
     }
 
     /// Indicates whether the given name represents a known type
@@ -351,8 +340,8 @@ impl DataType {
             StructureType(params) => parameterized("Struct", params, false),
             TableType(params) => parameterized("Table", params, false),
             TupleType(types) => typed("", types),
-            UnresolvedType => String::new(),
-            UUIDType => "UUID".into(),
+            Self::UnresolvedType => String::new(),
+            Self::UUIDType => "UUID".into(),
         }
     }
 
@@ -654,7 +643,7 @@ mod tests {
         fn test_get_default_value_binary() {
             assert!(matches!(
                 FixedSizeType(BinaryType.into(), 128).get_default_value(),
-                Binary(..)
+                BinaryValue(..)
             ));
         }
 
@@ -728,7 +717,7 @@ mod tests {
         use crate::structures::Structures::Hard;
         use crate::testdata::{make_quote_columns, verify_exact_value, verify_exact_value_where};
         use crate::typed_values::TypedValue;
-        use crate::typed_values::TypedValue::{ArrayValue, Binary, Boolean, DateValue, ErrorValue, Number, StringValue, Structured, TableValue, TupleValue};
+        use crate::typed_values::TypedValue::{ArrayValue, BinaryValue, Boolean, DateValue, ErrorValue, Number, StringValue, Structured, TableValue, TupleValue};
 
         #[test]
         fn test_array() {
@@ -741,7 +730,7 @@ mod tests {
         fn test_binary() {
             verify_exact_value(r#"
                 Binary::new()
-            "#, Binary(vec![]));
+            "#, BinaryValue(vec![]));
         }
         
         #[test]

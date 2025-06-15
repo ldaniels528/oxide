@@ -14,6 +14,7 @@ use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Null;
 use serde::{Deserialize, Serialize};
+use crate::byte_row_collection::ByteRowCollection;
 
 /// Row-model-vector-based [RowCollection] implementation
 #[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize, PartialOrd)]
@@ -44,20 +45,35 @@ impl ModelRowCollection {
     }
 
     /// Creates a new [ModelRowCollection] from abstract columns
-    pub fn from_parameters(parameters: &Vec<Parameter>) -> ModelRowCollection {
-        ModelRowCollection::with_rows(Column::from_parameters(parameters), Vec::new())
+    pub fn from_bytes(params: &Vec<Parameter>, bytes: Vec<u8>) -> Self {
+        let columns = Column::from_parameters(params);
+        // let record_size = Row::compute_record_size(&columns);
+        // let row_bytes = bytes.chunks(record_size)
+        //     .map(|chunk| chunk.to_vec())
+        //     .collect();
+        // let rows = ByteCodeCompiler::decode_rows(&columns, row_bytes);
+        // let rows_and_meta = rows.iter()
+        //     .map(|row| (row.clone(), RowMetadata::new(true)))
+        //     .collect();
+        // Self::with_rows(columns, rows_and_meta)
+        Self::with_rows(columns, vec![])
     }
 
     /// Creates a new [ModelRowCollection] prefilled with the given rows.
-    pub fn from_columns_and_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> ModelRowCollection {
+    pub fn from_columns_and_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> Self {
         let row_data = rows.iter()
             .map(|r| (r.to_owned(), RowMetadata::new(true)))
             .collect();
         Self::with_rows(columns.to_owned(), row_data)
     }
 
+    /// Creates a new [ModelRowCollection] from abstract columns
+    pub fn from_parameters(parameters: &Vec<Parameter>) -> Self {
+        ModelRowCollection::with_rows(Column::from_parameters(parameters), Vec::new())
+    }
+
     /// Creates a new [ModelRowCollection] prefilled with the given rows.
-    pub fn from_parameters_and_rows(parameters: &Vec<Parameter>, rows: &Vec<Row>) -> ModelRowCollection {
+    pub fn from_parameters_and_rows(parameters: &Vec<Parameter>, rows: &Vec<Row>) -> Self {
         let row_data = rows.iter()
             .map(|r| (r.to_owned(), RowMetadata::new(true)))
             .collect();
@@ -83,6 +99,13 @@ impl ModelRowCollection {
             columns,
             row_data: Vec::new(),
         }
+    }
+
+    pub fn to_binary(&self) -> ByteRowCollection {
+        ByteRowCollection::from_columns_and_rows(
+            self.get_columns().clone(),
+            self.get_rows()
+        )
     }
 
     /// Creates a new [ModelRowCollection] prefilled with rows
@@ -178,8 +201,8 @@ impl RowCollection for ModelRowCollection {
         Ok(1)
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
-        self.row_data[id].0.get_values()[column_id].to_owned()
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
+        Ok(self.row_data[id].0.get_values()[column_id].to_owned())
     }
 
     fn read_field_metadata(
@@ -269,6 +292,26 @@ mod tests {
         let (mrc, phys_columns) = create_data_set();
         let row = make_quote(3, "GOTO", "OTC", 0.1442);
         assert_eq!(mrc.index_of(&row), Number(I64Value(3)));
+    }
+
+    #[test]
+    fn test_to_binary() {
+        let (mrc, phys_columns) = create_data_set();
+        assert_eq!(mrc.get_rows(), vec![
+            make_quote(0, "ABC", "AMEX", 12.33),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 9.775),
+            make_quote(3, "GOTO", "OTC", 0.1442),
+            make_quote(4, "XYZ", "NYSE", 0.0289),
+        ]);
+        let brc = mrc.to_binary();
+        assert_eq!(brc.get_rows(), vec![
+            make_quote(0, "ABC", "AMEX", 12.33),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 9.775),
+            make_quote(3, "GOTO", "OTC", 0.1442),
+            make_quote(4, "XYZ", "NYSE", 0.0289),
+        ]);
     }
 
     fn create_data_set() -> (ModelRowCollection, Vec<Column>) {

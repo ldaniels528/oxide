@@ -5,4 +5,4 @@ stocks := nsd::save(
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-from stocks
+stocks

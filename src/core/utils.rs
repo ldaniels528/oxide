@@ -189,7 +189,7 @@ pub fn pull_string(value: &TypedValue) -> std::io::Result<String> {
 pub fn pull_table(value: &TypedValue) -> std::io::Result<Dataframe> {
     match value {
         TableValue(df) => Ok(df.clone()),
-        x => throw(TypeMismatch(TableExpected("Table".into(), x.to_code())))
+        x => throw(TypeMismatch(TableExpected(x.to_code())))
     }
 }
 

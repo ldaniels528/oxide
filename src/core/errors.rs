@@ -14,23 +14,23 @@ use serde::{Deserialize, Serialize};
 /// Represents an enumeration of compiler errors
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum CompileErrors {
-    UnexpectedEOF,
     ExpectedHttpMethod,
     IllegalHttpMethod(String),
     IllegalOperator(String),
+    UnexpectedEOF,
 }
 
 impl Display for CompileErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let text = match self {
-            CompileErrors::UnexpectedEOF =>
-                "Unexpected end of input".into(),
             CompileErrors::ExpectedHttpMethod =>
                 "HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT".into(),
             CompileErrors::IllegalHttpMethod(method) =>
                 format!("Illegal HTTP method '{method}'"),
             CompileErrors::IllegalOperator(symbol) =>
                 format!("Illegal operator '{symbol}'"),
+            CompileErrors::UnexpectedEOF =>
+                "Unexpected end of input".into(),
         };
         write!(f, "Syntax error: {text}")
     }
@@ -91,7 +91,8 @@ pub enum TypeMismatchErrors {
     StringExpected(String),
     StructExpected(String, String),
     StructsOneOrMoreExpected,
-    TableExpected(String, String),
+    TableExpected(String),
+    TupleExpected(String),
     UnexpectedResult(String),
     UnrecognizedTypeName(String),
     UnsupportedType(DataType, DataType),
@@ -143,8 +144,10 @@ impl Display for TypeMismatchErrors {
                 format!("{name} is not a Struct ({expr})"),
             TypeMismatchErrors::StructsOneOrMoreExpected =>
                 String::from("At least one Struct is required."),
-            TypeMismatchErrors::TableExpected(a, b) =>
-                format!("{a} is not a Table ({b})"),
+            TypeMismatchErrors::TableExpected(a) =>
+                format!("{a} is not a Table"),
+            TypeMismatchErrors::TupleExpected(a) =>
+                format!("{a} is not a Tuple"),
             TypeMismatchErrors::UnexpectedResult(result) =>
                 format!("Unexpected result near {result}"),
             TypeMismatchErrors::UnrecognizedTypeName(name) =>
@@ -164,7 +167,9 @@ impl Display for TypeMismatchErrors {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Errors {
     AssertionError(String, String),
+    CannotBeExecuted(String),
     CannotSubtract(String, String),
+    ColumnNotFoundInColumns(String, Vec<String>),
     CompilerError(CompileErrors, Token),
     Empty,
     Exact(String),
@@ -191,8 +196,12 @@ impl Display for Errors {
         let text = match self {
             Errors::AssertionError(a, b) =>
                 format!("Assertion Error: {a} was not {b}"),
+            Errors::CannotBeExecuted(a) =>
+                format!("{a} cannot be executed"),
             Errors::CannotSubtract(a, b) =>
                 format!("Cannot subtract {b} from {a}"),
+            Errors::ColumnNotFoundInColumns(name, columns) =>
+                format!("Column {name} was not found in {}", columns.join(", ")),
             Errors::CompilerError(e, t) =>
                 format!("Compiler error: {e} near {} on line {} column {}",
                         t.get(), t.get_line_number(), t.get_column_number()),
@@ -321,8 +330,8 @@ mod tests {
                "Type Mismatch: Expected a String near reset");
         verify(TypeMismatch(StructExpected("count".into(), "i64".into())),
                "Type Mismatch: count is not a Struct (i64)");
-        verify(TypeMismatch(TableExpected("stocks".into(), "Date".into())),
-               "Type Mismatch: stocks is not a Table (Date)");
+        verify(TypeMismatch(TableExpected("stocks".into())),
+               "Type Mismatch: stocks is not a Table");
         verify(TypeMismatch(UnsupportedType(StructureType(vec![]), NumberType(I128Kind))),
                "Type Mismatch: Struct is not convertible to i128");
         verify(

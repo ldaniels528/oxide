@@ -292,7 +292,7 @@ mod tests {
 
     fn create_sample_data_1() -> (ByteRowCollection, Vec<Column>) {
         let phys_columns = Column::from_parameters(&make_quote_parameters());
-        let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
+        let brc = ByteRowCollection::from_columns_and_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "NASDAQ", 0.2456),
             make_quote(2, "BIZ", "NYSE", 23.66),
@@ -304,7 +304,7 @@ mod tests {
 
     fn create_sample_data_2() -> (ByteRowCollection, Vec<Column>) {
         let phys_columns = Column::from_parameters(&make_quote_parameters());
-        let brc = ByteRowCollection::from_rows(phys_columns.clone(), vec![
+        let brc = ByteRowCollection::from_columns_and_rows(phys_columns.clone(), vec![
             make_quote(0, "ABC", "NYSE", 11.77),
             make_quote(1, "UNO", "NASDAQ", 0.2456),
             make_quote(2, "BIZ", "NYSE", 23.66),

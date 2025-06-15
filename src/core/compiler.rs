@@ -10,23 +10,20 @@ use crate::dataframe::Dataframe;
 use crate::errors::Errors::{CompilerError, Exact, ExactNear, SyntaxError};
 use crate::errors::SyntaxErrors::IllegalExpression;
 use crate::errors::{throw, CompileErrors, SyntaxErrors};
-use crate::expression::DatabaseOps::{Mutation, Queryable};
 use crate::expression::Expression::*;
-use crate::expression::Mutations::Undelete;
-use crate::expression::Queryables::Select;
 use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::expression::*;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
-use crate::structures::HardStructure;
-use crate::structures::Structures::Hard;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Kind, Null, Number, StringValue, Structured, TableValue};
+use crate::typed_values::TypedValue::{BinaryValue, DateValue, Kind, Null, Number, StringValue, TableValue};
 use crate::utils::{pull_name, pull_variable_name};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use shared_lib::cnv_error;
 use std::fs;
 use std::ops::Deref;
 
@@ -178,7 +175,7 @@ impl Compiler {
                     // handle other operators
                     t if is_operator(t, is_even) => {
                         while let Some(top_op) = operators.last() {
-                            if get_precedence(top_op) >= get_precedence(&t) {
+                            if get_precedence(top_op, is_even) >= get_precedence(&t, is_even) {
                                 let b = output.pop().unwrap();
                                 let a = output.pop().unwrap();
                                 let result = apply_operator_binary(top_op, b, a)?;
@@ -249,11 +246,23 @@ impl Compiler {
         match ts.next() {
             // function, keyword or variable
             (Some(Atom { .. }), _) => self.next_keyword(ts.clone()),
+            // binary literals
+            (Some(BinaryLiteral { text, .. }), ts) => {
+                let bytes = convert_binary_literal_to_bytes(&text)?;
+                Ok((Some(Literal(BinaryValue(bytes))), ts))
+            },
             // variables
             (Some(Backticks { text, .. }), ts) => Ok((Some(Variable(text)), ts)),
-            // dataframe literal
+            // dataframe literals
             (Some(DataframeLiteral { cells, .. }), ts) => 
                 Ok((Some(Literal(TableValue(Dataframe::from_cells(&cells)))), ts)),
+            // date literals
+            (Some(DateLiteral { text, .. }), ts) => {
+                let date = text.parse::<DateTime<Utc>>()
+                    .map(|date| DateValue(date.timestamp_millis()))
+                    .map_err(|e| cnv_error!(e))?;
+                Ok((Some(Literal(date)), ts))
+            }
             // double- or single-quoted or URL strings
             (Some(DoubleQuoted { text, .. }
                   | SingleQuoted { text, .. }
@@ -280,10 +289,6 @@ impl Compiler {
                 "Feature" => self.parse_keyword_feature(nts),
                 "fn" => self.parse_keyword_fn(nts),
                 "for" => self.parse_keyword_for(nts),
-                "from" => {
-                    let (from, ts) = self.parse_expression_1a(nts, From)?;
-                    self.parse_queryable(from, ts)
-                }
                 "GET" => self.parse_keyword_http(ts),
                 "HEAD" => self.parse_keyword_http(ts),
                 "HTTP" => self.parse_keyword_http(nts),
@@ -298,26 +303,18 @@ impl Compiler {
                 "mod" => self.parse_keyword_mod(nts),
                 "NaN" => Ok((Literal(Number(NaNValue)), nts)),
                 "null" => Ok((NULL, nts)),
-                "overwrite" => self.parse_keyword_overwrite(nts),
                 "PATCH" => self.parse_keyword_http(ts),
                 "POST" => self.parse_keyword_http(ts),
                 "PUT" => self.parse_keyword_http(ts),
                 "Scenario" => return self.parse_keyword_scenario(nts),
                 "select" => self.parse_keyword_select(nts),
-                //"Struct" => self.parse_keyword_struct(nts),
                 "throw" => self.parse_keyword_throw(nts),
                 "true" => Ok((TRUE, nts)),
                 "typedef" => self.parse_keyword_type_decl(nts),
                 "type_of" => self.parse_keyword_type_of(nts),
                 "undefined" => Ok((UNDEFINED, nts)),
                 "undelete" => self.parse_keyword_undelete(nts),
-                "update" => self.parse_keyword_update(nts),
                 "use" => self.parse_keyword_use(nts),
-                "via" => self.parse_expression_1a(nts, Via),
-                "where" => throw(ExactNear(
-                    "`from` is expected before `where`: from stocks where last_sale < 1.0".into(),
-                    nts.current(),
-                )),
                 "whenever" => self.parse_keyword_whenever(nts),
                 "while" => self.parse_keyword_while(nts),
                 "yield" => self.parse_expression_1a(nts, Yield),
@@ -423,20 +420,19 @@ impl Compiler {
     }
 
     /// SQL Delete statement.
-    /// ex: delete from stocks where last_sale > 1.00
+    /// #### Examples
+    /// ```
+    /// delete stocks where last_sale > 1.00
+    /// ```
     fn parse_keyword_delete(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (from, ts) = self.next_keyword_expr("from", ts)?;
-        let from = from.expect("Expected keyword 'from'");
-        let (condition, ts) = self.next_keyword_cond("where", ts)?;
-        let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((
-            DatabaseOp(Mutation(Mutations::Delete {
-                path: Box::new(from),
+        let (model, ts) = self.compile_next(ts)?;
+        unwind_sql_update_graph(model, |from, condition, limit| {
+            Delete {
+                from: from.into(),
                 condition,
-                limit: limit.map(Box::new),
-            })),
-            ts,
-        ))
+                limit,
+            }
+        }).map(|expr| (expr, ts))
     }
 
     /// Parses do-while statement
@@ -598,12 +594,12 @@ impl Compiler {
     }
 
     /// Parses an HTTP expression.
-    /// ### Examples
-    /// #### URL-Based Request
+    /// #### Examples
+    /// ##### URL-Based Request
     /// ```http
     /// GET http://localhost:9000/quotes/AAPL/NYSE
     /// ```
-    /// #### Structured Request
+    /// ##### Structured Request
     /// ```http
     /// POST {
     ///     url: http://localhost:8080/machine/append/stocks
@@ -611,11 +607,11 @@ impl Compiler {
     ///     headers: { "Content-Type": "application/json" }
     /// }
     /// ```
-    /// ### Errors
+    /// #### Errors
     /// Returns an `std::io::Result` in case of parsing failures.
-    /// ### Parameters
+    /// #### Parameters
     /// - `ts`: A slice of tokens representing the HTTP expression.
-    /// ### Returns
+    /// #### Returns
     /// - A tuple containing the parsed `Expression` and the remaining `TokenSlice`.
     fn parse_keyword_http(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         if let (Some(Atom { text: method, .. }), ts) = ts.next() {
@@ -693,11 +689,20 @@ impl Compiler {
         }
     }
 
-    /// Builds an use statement:
-    ///   ex: use "os"
-    ///   ex: use str::format
-    ///   ex: use oxide::[eval, serve, version]
-    ///   ex: use "os", str::format, oxide::[eval, serve, version]
+    /// Parses an use statement:
+    /// #### Examples
+    /// ```
+    /// use "os"
+    /// ```
+    /// ```
+    /// use str::format
+    /// ```
+    /// ```
+    /// use oxide::[eval, serve, version]
+    /// ```
+    /// ```
+    /// use "os", str::format, oxide::[eval, serve, version]
+    /// ```
     fn parse_keyword_use(
         &self,
         mut ts: TokenSlice,
@@ -804,76 +809,20 @@ impl Compiler {
         }
     }
 
-    /// Builds a language model from an OVERWRITE statement.
-    /// ### examples
-    /// overwrite stocks
-    ///     via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
-    ///     where symbol == "ABC"
-    ///     limit 5
-    fn parse_keyword_overwrite(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (table, ts) = self.compile_next(ts.clone())?;
-        let (source, ts) = self.compile_next(ts.clone())?;
-        let (condition, ts) = match self.next_keyword_expr("where", ts)? {
-            (Some(Condition(cond)), ts) => (cond, ts),
-            (.., ts) => {
-                return throw(ExactNear(
-                    "Expected a boolean expression".into(),
-                    ts.current(),
-                ))
-            }
-        };
-        let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((
-            DatabaseOp(Mutation(Mutations::Overwrite {
-                path: Box::new(table),
-                source: Box::new(source),
-                condition: Some(condition),
-                limit: limit.map(Box::new),
-            })),
-            ts,
-        ))
-    }
-
     /// Builds a language model from a SELECT statement:
-    /// ex: select sum(last_sale) from stocks group by exchange
+    /// #### Examples
+    /// ```
+    /// select sum(last_sale) from stocks 
+    /// group_by exchange
+    /// ```
     fn parse_keyword_select(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (fields, ts) = self.next_expression_list(ts)?;
         let fields = fields.expect("At least one field is required");
         let (from, ts) = self.next_keyword_expr("from", ts)?;
-        let (condition, ts) = self.next_keyword_cond("where", ts)?;
-        let (group_by, ts) = self.next_keyword_expression_list("group", "by", ts)?;
-        let (having, ts) = self.next_keyword_expr("having", ts)?;
-        let (order_by, ts) = self.next_keyword_expression_list("order", "by", ts)?;
-        let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((
-            DatabaseOp(Queryable(Select {
-                fields,
-                from: from.map(Box::new),
-                condition,
-                group_by,
-                having: having.map(Box::new),
-                order_by,
-                limit: limit.map(Box::new),
-            })),
-            ts,
-        ))
-    }
-
-    /// Builds a language model from a 'struct' statement:
-    /// ex: Struct(symbol: String(8), exchange: String(8), last_sale: f64)
-    /// ex: Struct(symbol: String(8) = "TRX", exchange: String(8) = "AMEX", last_sale: f64 = 17.69)
-    fn parse_keyword_struct(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        if let (Parameters(fields), ts) = self.expect_parameters(ts.to_owned())? {
-            Ok((
-                Literal(Structured(Hard(HardStructure::from_parameters(fields)))),
-                ts,
-            ))
-        } else {
-            throw(ExactNear(
-                "Expected column definitions".into(),
-                ts.current(),
-            ))
-        }
+        Ok((Select {
+            fields,
+            from: from.map(Box::new),
+        }, ts))
     }
 
     /// Builds a `throw` declaration
@@ -910,40 +859,18 @@ impl Compiler {
     }
 
     /// Builds a language model from an UNDELETE statement:
-    /// ex: undelete from stocks where symbol == "BANG"
+    /// ex: undelete stocks where symbol == "BANG"
     fn parse_keyword_undelete(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (from, ts) = self.next_keyword_expr("from", ts)?;
-        let from = from.expect("Expected keyword 'from'");
-        let (condition, ts) = self.next_keyword_cond("where", ts)?;
-        let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((
-            DatabaseOp(Mutation(Undelete {
-                path: Box::new(from),
+        let (model, ts) = self.compile_next(ts)?;
+        unwind_sql_update_graph(model, |from, condition, limit| {
+            Undelete {
+                from: from.into(),
                 condition,
-                limit: limit.map(Box::new),
-            })),
-            ts,
-        ))
+                limit,
+            }
+        }).map(|expr| (expr, ts))
     }
-
-    /// Builds a language model from an UPDATE statement:
-    /// ex: update stocks set last_sale = 0.45 where symbol == "BANG"
-    fn parse_keyword_update(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (table, ts) = self.compile_next(ts.clone())?;
-        let (source, ts) = self.compile_next(ts.clone())?;
-        let (condition, ts) = self.next_keyword_cond("where", ts)?;
-        let (limit, ts) = self.next_keyword_expr("limit", ts)?;
-        Ok((
-            DatabaseOp(Mutation(Mutations::Update {
-                path: Box::new(table),
-                source: Box::new(source),
-                condition,
-                limit: limit.map(Box::new),
-            })),
-            ts,
-        ))
-    }
-
+    
     /// Builds a language model for a `when` expression
     /// #### Examples
     /// ```
@@ -971,39 +898,6 @@ impl Compiler {
         let (condition, ts) = self.compile_next(ts.clone())?;
         let (code, ts) = self.compile_next(ts.clone())?;
         Ok((While { condition: condition.into(), code: code.into() }, ts))
-    }
-
-    fn parse_queryable(
-        &self,
-        host: Expression,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Expression, TokenSlice)> {
-        match ts.to_owned() {
-            t if t.is("limit") => {
-                let (expr, ts) = self.compile_next(ts.skip())?;
-                self.parse_queryable(
-                    DatabaseOp(Queryable(Queryables::Limit {
-                        from: Box::new(host),
-                        limit: expr.into(),
-                    })),
-                    ts,
-                )
-            }
-            t if t.is("where") => match self.compile_next(ts.skip())? {
-                (Condition(condition), ts) => self.parse_queryable(
-                    DatabaseOp(Queryable(Queryables::Where {
-                        from: Box::new(host),
-                        condition,
-                    })),
-                    ts,
-                ),
-                (_, ts) => throw(ExactNear(
-                    "Boolean expression expected".into(),
-                    ts.current(),
-                )),
-            },
-            _ => Ok((host, ts)),
-        }
     }
 
     /// parse an argument list from the [TokenSlice] (e.g. "(symbol, exchange, last_sale)")
@@ -1048,33 +942,6 @@ impl Compiler {
         }
     }
 
-    /// Expects function parameters
-    /// #### Examples
-    /// ```
-    /// (a: i64, b: i64)
-    /// ```
-    /// ```
-    /// (a, b: i64)
-    /// ```
-    /// ```
-    /// (a, b)
-    /// ```
-    fn expect_parameters(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let mut parameters = Vec::new();
-        let mut ts = ts.expect("(")?;
-        let mut is_done = ts.is(")");
-        while !is_done {
-            // get the next parameter
-            let (param, tsn) = self.expect_parameter(ts.to_owned())?;
-            parameters.push(param);
-
-            // are we done yet?
-            is_done = tsn.is(")");
-            ts = if !is_done { tsn.expect(",")? } else { tsn };
-        }
-        Ok((Parameters(parameters), ts.expect(")")?))
-    }
-
     /// Expects a single function parameter
     /// #### Examples
     /// ```
@@ -1094,11 +961,9 @@ impl Compiler {
 
                 // finally, check for a default value
                 let (default_value, ts) = if ts.is("=") {
-                    if let (Some(tok), ts) = ts.skip().next() {
-                        (TypedValue::from_token(&tok)?, ts)
-                    } else {
-                        return throw(ExactNear("An expression was expected".into(), ts.current()));
-                    }
+                    let ts = ts.skip();
+                    let (expr, ts) = self.compile_next(ts)?;
+                    (expr.to_pure()?, ts)
                 } else {
                     (Null, ts)
                 };
@@ -1179,36 +1044,7 @@ impl Compiler {
             Ok((Some(expr), ts))
         }
     }
-
-    /// Returns the option of a [Conditions] based the next token matching the specified keyword
-    fn next_keyword_cond(
-        &self,
-        keyword: &str,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Option<Conditions>, TokenSlice)> {
-        match self.next_keyword_expr(keyword, ts)? {
-            (Some(Condition(cond)), ts) => Ok((Some(cond), ts)),
-            (Some(..), ts) => throw(ExactNear(
-                "Expected a boolean expression".into(),
-                ts.current(),
-            )),
-            (None, ts) => Ok((None, ts)),
-        }
-    }
-
-    /// Returns the [Option] of expressions based on the next token matching the specified keywords
-    fn next_keyword_expression_list(
-        &self,
-        keyword0: &str,
-        keyword1: &str,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Option<Vec<Expression>>, TokenSlice)> {
-        if ts.isnt(keyword0) || ts.skip().isnt(keyword1) {
-            Ok((None, ts))
-        } else {
-            self.next_expression_list(ts.skip().skip())
-        }
-    }
+    
 }
 
 fn apply_colon(
@@ -1239,7 +1075,9 @@ fn apply_operator_binary(
     let (aa, bb) = (a.clone().into(), b.clone().into());
     match op.get().as_str() {
         "<~" => Ok(ArrowCurvyLeft(aa, bb)),
+        "<<~" => Ok(ArrowCurvyLeft2x(aa, bb)),
         "~>" => Ok(ArrowCurvyRight(aa, bb)),
+        "~>>" => Ok(ArrowCurvyRight2x(aa, bb)),
         "=>" => Ok(ArrowFat(aa, bb)),
         "<-" => Ok(ArrowSkinnyLeft(aa, bb)),
         "->" => Ok(ArrowSkinnyRight(aa, bb)),
@@ -1293,6 +1131,11 @@ fn apply_operator_binary(
         "*=" => Ok(SetVariables(aa.clone(), Multiply(aa, bb).into())),
         "+=" => Ok(SetVariables(aa.clone(), Plus(aa, bb).into())),
         ":=" => Ok(SetVariablesExpr(aa, bb)),
+        "group_by" => Ok(GroupBy { from: aa, columns: vec![b] }),
+        "having" => Ok(Having { from: aa, condition: must_be_condition(bb.deref())? }),
+        "limit" => Ok(Limit { from: aa, limit: bb }),
+        "order_by" => Ok(OrderBy { from: aa, columns: vec![b] }),
+        "where" => Ok(Where { from: aa, condition: must_be_condition(bb.deref())? }),
         sym => throw(CompilerError(CompileErrors::IllegalOperator(sym.into()), op.clone())),
     }
 }
@@ -1306,12 +1149,104 @@ fn apply_operator_unary(
         "+" => Ok(a),
         "-" => Ok(Neg(a.into())),
         "!" => Ok(Condition(Conditions::Not(a.into()))),
+        "&" => Ok(Referenced(a.into())),
         sym if exponents.contains(&sym) => {
             let expo = exponents.iter().position(|s| *s == sym ).unwrap();
             Ok(Pow(a.into(), Literal(Number(I64Value(expo as i64))).into()))
         }
         sym => throw(CompilerError(CompileErrors::IllegalOperator(sym.into()), op.clone())),
     }
+}
+
+pub fn unwind_sql_query_graph<F, E>(
+    expr: Expression,
+    f: F
+) -> std::io::Result<E>
+where
+    F: Fn(Expression, Vec<Expression>, Option<Expression>, Option<Vec<Expression>>, Option<Box<Expression>>, Option<Vec<Expression>>, Option<Box<Expression>>) -> std::io::Result<E>,
+{
+    fn unwind<T, S>(
+        from: Expression,
+        fields: Vec<Expression>,
+        condition: Option<Expression>,
+        group_by: Option<Vec<Expression>>,
+        having: Option<Box<Expression>>,
+        order_by: Option<Vec<Expression>>,
+        limit: Option<Box<Expression>>,
+        f: T,
+    ) -> std::io::Result<S>
+    where
+        T: Fn(Expression, Vec<Expression>, Option<Expression>, Option<Vec<Expression>>, Option<Box<Expression>>, Option<Vec<Expression>>, Option<Box<Expression>>) -> std::io::Result<S>,
+    {
+        match from {
+            GroupBy { from, columns: group_by } =>
+                unwind(from.deref().clone(), fields, condition, Some(group_by), having, order_by, limit, f),
+            Having { from, condition } =>
+                unwind(from.deref().clone(), fields, Some(Condition(condition)), group_by, having, order_by, limit, f),
+            Limit { from, limit } =>
+                unwind(from.deref().clone(), fields, condition, group_by, having, order_by, Some(limit), f),
+            OrderBy { from, columns: order_by } =>
+                unwind(from.deref().clone(), fields, condition, group_by, having, Some(order_by), limit, f),
+            Select { fields, from, .. } => {
+                let from = match from {
+                    None => UNDEFINED,
+                    Some(expr) => expr.deref().clone()
+                };
+                unwind(from, fields, condition, group_by, having, order_by, limit, f)
+            }
+            Where { from, condition } =>
+                unwind(from.deref().clone(), fields, Some(Condition(condition)), group_by, having, order_by, limit, f),
+            _ => f(from, fields, condition, group_by, having, order_by, limit)
+        }
+    }
+    unwind(expr, vec![], None, None, None, None, None, f)
+}
+
+pub fn unwind_sql_update_graph<F, E>(
+    expr: Expression, 
+    f: F
+) -> std::io::Result<E>
+where
+    F: Fn(Expression, Option<Conditions>, Option<Box<Expression>>) -> E,
+{
+    fn unwind<T, S>(
+        from: Expression,
+        condition: Option<Conditions>,
+        limit: Option<Box<Expression>>,
+        f: T,
+    ) -> std::io::Result<S>
+    where
+        T: Fn(Expression, Option<Conditions>, Option<Box<Expression>>) -> S,
+    {
+        match from {
+            GroupBy { .. } =>
+                throw(Exact("group_by is not supported in this context".into())),
+            Having { .. } =>
+                throw(Exact("having is not supported in this context".into())),
+            Limit { from, limit } =>
+                unwind(from.deref().clone(), condition, Some(limit.clone()), f),
+            OrderBy { .. } =>
+                throw(Exact("order_by is not supported in this context".into())),
+            Select { .. } =>
+                throw(Exact("select is not supported in this context".into())),
+            Where { from, condition } =>
+                unwind(from.deref().clone(), Some(condition.clone()), limit, f),
+            _ => Ok(f(from, condition, limit))
+        }
+    }
+    unwind(expr, None, None, f)
+}
+
+fn convert_binary_literal_to_bytes(text: &str) -> std::io::Result<Vec<u8>> {
+    use itertools::Itertools;
+    let mut bytes = vec![];
+    for chunk in text[2..].chars().chunks(2).into_iter() {
+        let pair = chunk.collect::<String>();
+        let byte = u8::from_str_radix(&pair, 16)
+            .map_err(|e| cnv_error!(e))?;
+        bytes.push(byte);
+    }
+    Ok(bytes)
 }
 
 pub fn convert_to_parameters(items: Vec<Expression>) -> std::io::Result<Vec<Parameter>> {
@@ -1346,13 +1281,14 @@ fn get_exponent_symbols() -> Vec<&'static str> {
     vec!["⁰", "¹", "²", "³", "⁴", "⁵", "⁶", "⁷", "⁸", "⁹"]
 }
 
-fn get_precedence(op: &Token) -> i8 {
+fn get_precedence(op: &Token, is_even: bool) -> i8 {
     match op.get().as_str() {
         s if get_exponent_symbols().contains(&s) => 12,
         "**" => 11,             // Exponentiation
         "*" | "/" => 10,        // Multiplication / Division
         "+" | "-" => 9,         // Addition / Subtraction
         "<<" | ">>" => 8,       // Bitwise Shift Left/Right
+        "&" if is_even => 0,
         "&" | "&&" => 7,        // Bitwise/Logical AND
         "^" | "|" | "||" => 6,  // Bitwise XOR, Bitwise/Logical OR
         ".." | "..=" => 5,
@@ -1360,7 +1296,7 @@ fn get_precedence(op: &Token) -> i8 {
         ":" => 3,
         "==" | "!=" | "<" | "<=" | ">" | ">=" => 2,
         "contains" | "in" | "is" | "isnt" | "like" | "matches" => 2,
-        "when" => 1,
+        "limit" | "order_by" | "when" | "where" => 1,
         "->" | "=>" | "~>" | "<~" | "~>>" | "<<~" | "|>" | "|>>" => 1,
         "=" | ":=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" => 0,
         "?" | "!?" => 0,
@@ -1381,15 +1317,25 @@ fn is_operator(token: &Token, is_even: bool) -> bool {
 /// Indicates whether the token is a mnemonic operator.
 fn is_mnemonic_operator(token: &Token, _is_even: bool) -> bool {
     matches!(token.get().as_str(), 
-        "contains" | "in" | "is" | "isnt" | "like" | "matches" | "when")
+        "contains" | "in" | "is" | "isnt" | "like" |
+        /* "from" |*/ "group_by" | "having" | "limit" | "matches" | "order_by" | "when" | "where"
+    )
 }
 
 /// Indicates whether the token is a unary operator.
 fn is_unary_operator(token: &Token, is_even: bool) -> bool {
     (token.is("-") && is_even) 
         | (token.is("+") && is_even)
+        | (token.is("&") && is_even)
         | token.is("!")
         | get_exponent_symbols().contains(&token.get().as_str())
+}
+
+fn must_be_condition(expression: &Expression) -> std::io::Result<Conditions> {
+    match expression {
+        Condition(cond) => Ok(cond.to_owned()),
+        z => throw(Exact(format!("Boolean expression expected near {}", z)))
+    }
 }
 
 pub fn resolve_name_and_parameters_and_return_type(
@@ -1426,9 +1372,53 @@ mod tests {
     use crate::numbers::Numbers::I64Value;
     use crate::typed_values::TypedValue::Number;
 
-    /// unit tests
     #[cfg(test)]
     mod unit_tests {
+        use crate::compiler::Compiler;
+        use crate::data_types::DataType::{DateTimeType, NumberType, StringType};
+        use crate::number_kind::NumberKind::F64Kind;
+        use crate::numbers::Numbers::F64Value;
+        use crate::parameter::Parameter;
+        use crate::token_slice::TokenSlice;
+        use crate::typed_values::TypedValue::{DateValue, Number};
+
+        #[test]
+        fn test_expected_parameter() {
+            let ts = TokenSlice::from_string("symbol: String");
+            let compiler = Compiler::new();
+            let (param, _) = compiler.expect_parameter(ts).unwrap();
+            assert_eq!(
+                param,
+                Parameter::new("symbol", StringType),
+            )
+        }
+
+        #[test]
+        fn test_expected_parameter_with_default_literal() {
+            let ts = TokenSlice::from_string("processed_time: Date = 2025-01-13T03:25:47.350Z");
+            let compiler = Compiler::new();
+            let (param, _) = compiler.expect_parameter(ts).unwrap();
+            assert_eq!(
+                param,
+                Parameter::new_with_default("processed_time", DateTimeType, DateValue(1736738747350)),
+            )
+        }
+
+        #[test]
+        fn test_expected_parameter_with_default_expression() {
+            let ts = TokenSlice::from_string("last_sale: f64 = 2.0 + 0.98");
+            let compiler = Compiler::new();
+            let (param, _) = compiler.expect_parameter(ts).unwrap();
+            assert_eq!(
+                param,
+                Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(2.98))),
+            )
+        }
+    }
+
+    /// unit tests
+    #[cfg(test)]
+    mod integration_tests {
         use super::*;
         use crate::compiler::{get_exponent_symbols, Compiler};
         use crate::data_types::DataType::{FixedSizeType, FunctionType, NumberType, StringType, StructureType, UnresolvedType};
@@ -2590,8 +2580,18 @@ mod tests {
         }
 
         #[test]
-        fn test_set_variables_array_destructure() {
-
+        fn test_embedded_table_reference() {
+            verify_build(
+                "&stocks(1, 0)",
+                Referenced(
+                    FunctionCall {
+                        fx: Variable("stocks".into()).into(),
+                        args: vec![
+                            Literal(Number(I64Value(1))).into(),
+                            Literal(Number(I64Value(0))).into(),
+                        ],
+                    }.into()
+                ))
         }
 
         #[test]
@@ -2992,98 +2992,88 @@ mod tests {
     #[cfg(test)]
     mod sql_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Conditions::{Equal, GreaterOrEqual, LessOrEqual, LessThan};
-        use crate::expression::DatabaseOps::{Mutation, Queryable};
+        use crate::expression::Conditions::{Equal, GreaterOrEqual};
         use crate::expression::Expression::*;
-        use crate::expression::{Expression, Mutations, Queryables};
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::typed_values::TypedValue::{Number, StringValue};
 
         #[test]
-        fn test_delete() {
+        fn test_delete_from() {
             let model = Compiler::build(r#"
-                delete from stocks
+                delete stocks
             "#).unwrap();
             assert_eq!(
                 model,
-                DatabaseOp(Mutation(Mutations::Delete {
-                    path: Box::new(Variable("stocks".into())),
+                Delete {
+                    from: Box::new(Variable("stocks".into())),
                     condition: None,
                     limit: None,
-                }))
+                }
             )
         }
 
         #[test]
-        fn test_delete_where_limit() {
+        fn test_delete_from_where_limit() {
             let model = Compiler::build(r#"
-                delete from stocks
+                delete stocks
                 where last_sale >= 1.0
                 limit 100
             "#).unwrap();
             assert_eq!(
                 model,
-                DatabaseOp(Mutation(Mutations::Delete {
-                    path: Box::new(Variable("stocks".into())),
+                Delete {
+                    from: Box::new(Variable("stocks".into())),
                     condition: Some(GreaterOrEqual(
                         Box::new(Variable("last_sale".into())),
                         Box::new(Literal(Number(F64Value(1.0)))),
                     )),
                     limit: Some(Box::new(Literal(Number(I64Value(100))))),
-                }))
+                }
             )
-        }
-        
-        #[test]
-        fn test_from() {
-            let model = Compiler::build("from stocks").unwrap();
-            assert_eq!(model, Expression::From(Box::new(Variable("stocks".into()))));
         }
 
         #[test]
-        fn test_from_where_limit() {
+        fn test_identifier_where_limit() {
             let model = Compiler::build(r#"
-                from stocks where last_sale >= 1.0 limit 20
+                stocks where last_sale >= 1.0 limit 20
             "#).unwrap();
             assert_eq!(
                 model,
-                DatabaseOp(Queryable(Queryables::Limit {
-                    from: Box::new(DatabaseOp(Queryable(Queryables::Where {
-                        from: Box::new(Expression::From(Box::new(Variable("stocks".into())))),
+                Limit {
+                    from: Box::new(Where {
+                        from: Variable("stocks".into()).into(),
                         condition: GreaterOrEqual(
                             Box::new(Variable("last_sale".into())),
                             Box::new(Literal(Number(F64Value(1.0)))),
                         ),
-                    }))),
+                    }),
                     limit: Box::new(Literal(Number(I64Value(20)))),
-                }))
+                }
             );
         }
 
         #[test]
-        fn test_overwrite() {
+        fn test_write_where() {
             let model = Compiler::build(r#"
-                overwrite stocks
-                via {symbol: "ABC", exchange: "NYSE", last_sale: 0.2308}
-                where symbol == "ABCQ"
-                limit 5
+                {symbol: "BKP", exchange: "OTCBB", last_sale: 0.1421} 
+                     ~> (stocks where symbol is "BKPQ")
             "#).unwrap();
             assert_eq!(
                 model,
-                DatabaseOp(Mutation(Mutations::Overwrite {
-                    path: Box::new(Variable("stocks".into())),
-                    source: Box::new(Via(Box::new(StructureExpression(vec![
-                        ("symbol".into(), Literal(StringValue("ABC".into()))),
-                        ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                        ("last_sale".into(), Literal(Number(F64Value(0.2308)))),
-                    ])))),
-                    condition: Some(Equal(
-                        Box::new(Variable("symbol".into())),
-                        Box::new(Literal(StringValue("ABCQ".into()))),
-                    )),
-                    limit: Some(Box::new(Literal(Number(I64Value(5))))),
-                }))
-            )
+                ArrowCurvyRight(
+                    StructureExpression(vec![
+                        ("symbol".into(), Literal(StringValue("BKP".into()))),
+                        ("exchange".into(), Literal(StringValue("OTCBB".into()))),
+                        ("last_sale".into(), Literal(Number(F64Value(0.1421))))
+                    ]).into(),
+                    Where {
+                        from: Variable("stocks".into()).into(),
+                        condition: Equal(
+                            Variable("symbol".into()).into(),
+                            Literal(StringValue("BKPQ".into())).into()
+                        )
+                    }.into())
+            );
         }
 
         #[test]
@@ -3093,163 +3083,49 @@ mod tests {
             "#).unwrap();
             assert_eq!(
                 model,
-                DatabaseOp(Queryable(Queryables::Select {
+                Select {
                     fields: vec![
                         Variable("symbol".into()),
                         Variable("exchange".into()),
                         Variable("last_sale".into())
                     ],
                     from: Some(Box::new(Variable("stocks".into()))),
-                    condition: None,
-                    group_by: None,
-                    having: None,
-                    order_by: None,
-                    limit: None,
-                }))
+                }
             )
         }
 
         #[test]
-        fn test_select_from_where() {
+        fn test_undelete_from() {
             let model = Compiler::build(r#"
-                select symbol, exchange, last_sale from stocks
-                where last_sale >= 1.0
+                undelete stocks
             "#).unwrap();
             assert_eq!(
                 model,
-                DatabaseOp(Queryable(Queryables::Select {
-                    fields: vec![
-                        Variable("symbol".into()),
-                        Variable("exchange".into()),
-                        Variable("last_sale".into())
-                    ],
-                    from: Some(Box::new(Variable("stocks".into()))),
-                    condition: Some(GreaterOrEqual(
-                        Box::new(Variable("last_sale".into())),
-                        Box::new(Literal(Number(F64Value(1.0)))),
-                    )),
-                    group_by: None,
-                    having: None,
-                    order_by: None,
-                    limit: None,
-                }))
-            )
-        }
-
-        #[test]
-        fn test_select_from_where_limit() {
-            let model = Compiler::build(r#"
-                select symbol, exchange, last_sale from stocks
-                where last_sale <= 1.0
-                limit 5
-            "#).unwrap();
-            assert_eq!(
-                model,
-                DatabaseOp(Queryable(Queryables::Select {
-                    fields: vec![
-                        Variable("symbol".into()),
-                        Variable("exchange".into()),
-                        Variable("last_sale".into())
-                    ],
-                    from: Some(Box::new(Variable("stocks".into()))),
-                    condition: Some(LessOrEqual(
-                        Box::new(Variable("last_sale".into())),
-                        Box::new(Literal(Number(F64Value(1.0)))),
-                    )),
-                    group_by: None,
-                    having: None,
-                    order_by: None,
-                    limit: Some(Box::new(Literal(Number(I64Value(5))))),
-                }))
-            )
-        }
-
-        #[test]
-        fn test_select_from_where_order_by_limit() {
-            let opcode = Compiler::build(r#"
-                select symbol, exchange, last_sale from stocks
-                where last_sale < 1.0
-                order by symbol
-                limit 5
-            "#).unwrap();
-            assert_eq!(
-                opcode,
-                DatabaseOp(Queryable(Queryables::Select {
-                    fields: vec![
-                        Variable("symbol".into()),
-                        Variable("exchange".into()),
-                        Variable("last_sale".into())
-                    ],
-                    from: Some(Box::new(Variable("stocks".into()))),
-                    condition: Some(LessThan(
-                        Box::new(Variable("last_sale".into())),
-                        Box::new(Literal(Number(F64Value(1.0)))),
-                    )),
-                    group_by: None,
-                    having: None,
-                    order_by: Some(vec![Variable("symbol".into())]),
-                    limit: Some(Box::new(Literal(Number(I64Value(5))))),
-                }))
-            )
-        }
-
-        #[test]
-        fn test_undelete() {
-            let model = Compiler::build(r#"
-                undelete from stocks
-            "#).unwrap();
-            assert_eq!(
-                model,
-                DatabaseOp(Mutation(Mutations::Undelete {
-                    path: Box::new(Variable("stocks".into())),
+                Undelete {
+                    from: Box::new(Variable("stocks".into())),
                     condition: None,
                     limit: None,
-                }))
+                }
             )
         }
 
         #[test]
-        fn test_undelete_where_limit() {
+        fn test_undelete_from_where_limit() {
             let model = Compiler::build(r#"
-                undelete from stocks
+                undelete stocks
                 where last_sale >= 1.0
                 limit 100
             "#).unwrap();
             assert_eq!(
                 model,
-                DatabaseOp(Mutation(Mutations::Undelete {
-                    path: Box::new(Variable("stocks".into())),
+                Undelete {
+                    from: Box::new(Variable("stocks".into())),
                     condition: Some(GreaterOrEqual(
                         Box::new(Variable("last_sale".into())),
                         Box::new(Literal(Number(F64Value(1.0)))),
                     )),
                     limit: Some(Box::new(Literal(Number(I64Value(100))))),
-                }))
-            )
-        }
-
-        #[test]
-        fn test_update() {
-            let model = Compiler::build(r#"
-                update stocks
-                via { last_sale: 0.1111 }
-                where symbol == "ABC"
-                limit 10
-            "#).unwrap();
-            assert_eq!(
-                model,
-                DatabaseOp(Mutation(Mutations::Update {
-                    path: Box::new(Variable("stocks".into())),
-                    source: Box::new(Via(Box::new(StructureExpression(vec![(
-                        "last_sale".into(),
-                        Literal(Number(F64Value(0.1111)))
-                    ),])))),
-                    condition: Some(Equal(
-                        Box::new(Variable("symbol".into())),
-                        Box::new(Literal(StringValue("ABC".into()))),
-                    )),
-                    limit: Some(Box::new(Literal(Number(I64Value(10))))),
-                }))
+                }
             )
         }
 

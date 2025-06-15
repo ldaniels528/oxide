@@ -6,7 +6,6 @@
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
 use crate::data_types::DataType;
-use crate::dataframe::Dataframe::Model;
 use crate::expression::{Conditions, Expression};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
@@ -27,11 +26,13 @@ use crate::typed_values::TypedValue::{Number, StringValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
+use crate::blob_file_row_collection::BLOBFileRowCollection;
 
 /// DataFrame is a logical representation of a table
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Dataframe {
     Binary(ByteRowCollection),
+    Blob(BLOBFileRowCollection),
     Disk(FileRowCollection),
     EventSource(EventSourceRowCollection),
     Hybrid(HybridRowCollection),
@@ -67,7 +68,7 @@ impl Dataframe {
             let row = Row::new(id, items.to_owned());
             rows.push(row)
         }
-        Model(ModelRowCollection::from_parameters_and_rows(&params, &rows))
+        Dataframe::Model(ModelRowCollection::from_parameters_and_rows(&params, &rows))
     }
 
     fn get_parameters_and_values(cells: &Vec<Vec<String>>) -> (Vec<Parameter>, Vec<Vec<TypedValue>>) {
@@ -223,7 +224,7 @@ impl Dataframe {
             }
             row_id += 1;
         }
-        Model(mrc)
+        Dataframe::Model(mrc)
     }
 
     /// updates rows that match the supplied criteria
@@ -261,8 +262,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.get_columns(),
             Self::Disk(df) => df.get_columns(),
-            Self::Hybrid(df) => df.get_columns(),
+            Self::Blob(df) => df.get_columns(),
             Self::EventSource(df) => df.get_columns(),
+            Self::Hybrid(df) => df.get_columns(),
             Self::Model(df) => df.get_columns(),
             Self::TableFn(rc) => rc.get_columns(),
         }
@@ -272,8 +274,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.get_record_size(),
             Self::Disk(df) => df.get_record_size(),
-            Self::Hybrid(df) => df.get_record_size(),
+            Self::Blob(df) => df.get_record_size(),
             Self::EventSource(df) => df.get_record_size(),
+            Self::Hybrid(df) => df.get_record_size(),
             Self::Model(df) => df.get_record_size(),
             Self::TableFn(rc) => rc.get_record_size(),
         }
@@ -283,8 +286,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.get_rows(),
             Self::Disk(df) => df.get_rows(),
-            Self::Hybrid(df) => df.get_rows(),
+            Self::Blob(df) => df.get_rows(),
             Self::EventSource(df) => df.get_rows(),
+            Self::Hybrid(df) => df.get_rows(),
             Self::Model(df) => df.get_rows(),
             Self::TableFn(rc) => rc.get_rows(),
         }
@@ -294,8 +298,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.len(),
             Self::Disk(df) => df.len(),
-            Self::Hybrid(df) => df.len(),
+            Self::Blob(df) => df.len(),
             Self::EventSource(df) => df.len(),
+            Self::Hybrid(df) => df.len(),
             Self::Model(df) => df.len(),
             Self::TableFn(rc) => rc.len(),
         }
@@ -305,8 +310,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.overwrite_field(id, column_id, new_value),
             Self::Disk(df) => df.overwrite_field(id, column_id, new_value),
-            Self::Hybrid(df) => df.overwrite_field(id, column_id, new_value),
+            Self::Blob(df) => df.overwrite_field(id, column_id, new_value),
             Self::EventSource(df) => df.overwrite_field(id, column_id, new_value),
+            Self::Hybrid(df) => df.overwrite_field(id, column_id, new_value),
             Self::Model(df) => df.overwrite_field(id, column_id, new_value),
             Self::TableFn(rc) => rc.overwrite_field(id, column_id, new_value),
         }
@@ -316,8 +322,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::Disk(df) => df.overwrite_field_metadata(id, column_id, metadata),
-            Self::Hybrid(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::Blob(df) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::EventSource(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::Hybrid(df) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::Model(df) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::TableFn(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
         }
@@ -327,8 +334,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.overwrite_row(id, row),
             Self::Disk(df) => df.overwrite_row(id, row),
-            Self::Hybrid(df) => df.overwrite_row(id, row),
+            Self::Blob(df) => df.overwrite_row(id, row),
             Self::EventSource(df) => df.overwrite_row(id, row),
+            Self::Hybrid(df) => df.overwrite_row(id, row),
             Self::Model(df) => df.overwrite_row(id, row),
             Self::TableFn(rc) => rc.overwrite_row(id, row),
         }
@@ -338,19 +346,21 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.overwrite_row_metadata(id, metadata),
             Self::Disk(df) => df.overwrite_row_metadata(id, metadata),
-            Self::Hybrid(df) => df.overwrite_row_metadata(id, metadata),
+            Self::Blob(df) => df.overwrite_row_metadata(id, metadata),
             Self::EventSource(df) => df.overwrite_row_metadata(id, metadata),
+            Self::Hybrid(df) => df.overwrite_row_metadata(id, metadata),
             Self::Model(df) => df.overwrite_row_metadata(id, metadata),
             Self::TableFn(rc) => rc.overwrite_row_metadata(id, metadata),
         }
     }
 
-    fn read_field(&self, id: usize, column_id: usize) -> TypedValue {
+    fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         match self {
             Self::Binary(df) => df.read_field(id, column_id),
             Self::Disk(df) => df.read_field(id, column_id),
-            Self::Hybrid(df) => df.read_field(id, column_id),
+            Self::Blob(df) => df.read_field(id, column_id),
             Self::EventSource(df) => df.read_field(id, column_id),
+            Self::Hybrid(df) => df.read_field(id, column_id),
             Self::Model(df) => df.read_field(id, column_id),
             Self::TableFn(rc) => rc.read_field(id, column_id),
         }
@@ -360,8 +370,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.read_field_metadata(id, column_id),
             Self::Disk(df) => df.read_field_metadata(id, column_id),
-            Self::Hybrid(df) => df.read_field_metadata(id, column_id),
+            Self::Blob(df) => df.read_field_metadata(id, column_id),
             Self::EventSource(df) => df.read_field_metadata(id, column_id),
+            Self::Hybrid(df) => df.read_field_metadata(id, column_id),
             Self::Model(df) => df.read_field_metadata(id, column_id),
             Self::TableFn(rc) => rc.read_field_metadata(id, column_id),
         }
@@ -371,8 +382,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.read_row(id),
             Self::Disk(df) => df.read_row(id),
-            Self::Hybrid(df) => df.read_row(id),
+            Self::Blob(df) => df.read_row(id),
             Self::EventSource(df) => df.read_row(id),
+            Self::Hybrid(df) => df.read_row(id),
             Self::Model(df) => df.read_row(id),
             Self::TableFn(rc) => rc.read_row(id),
         }
@@ -382,8 +394,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.read_row_metadata(id),
             Self::Disk(df) => df.read_row_metadata(id),
-            Self::Hybrid(df) => df.read_row_metadata(id),
+            Self::Blob(df) => df.read_row_metadata(id),
             Self::EventSource(df) => df.read_row_metadata(id),
+            Self::Hybrid(df) => df.read_row_metadata(id),
             Self::Model(df) => df.read_row_metadata(id),
             Self::TableFn(rc) => rc.read_row_metadata(id),
         }
@@ -393,8 +406,9 @@ impl RowCollection for Dataframe {
         match self {
             Self::Binary(df) => df.resize(new_size),
             Self::Disk(df) => df.resize(new_size),
-            Self::Hybrid(df) => df.resize(new_size),
+            Self::Blob(df) => df.resize(new_size),
             Self::EventSource(df) => df.resize(new_size),
+            Self::Hybrid(df) => df.resize(new_size),
             Self::Model(df) => df.resize(new_size),
             Self::TableFn(rc) => rc.resize(new_size),
         }
@@ -557,17 +571,15 @@ mod tests {
     }
 
     fn create_dataframe() -> Dataframe {
-        Dataframe::Binary(ByteRowCollection::from_rows(
-            make_quote_columns(),
-            vec![
-                make_quote(0, "AAB", "NYSE", 22.44),
-                make_quote(1, "XYZ", "NASDAQ", 66.67),
-                make_quote(2, "SSO", "NYSE", 123.44),
-                make_quote(3, "RAND", "AMEX", 11.33),
-                make_quote(4, "IBM", "NYSE", 21.22),
-                make_quote(5, "ATT", "NYSE", 98.44),
-                make_quote(6, "HOCK", "AMEX", 0.0076),
-                make_quote(7, "XIE", "NASDAQ", 33.33),
-            ]))
+        Dataframe::Binary(ByteRowCollection::from_columns_and_rows(make_quote_columns(), vec![
+            make_quote(0, "AAB", "NYSE", 22.44),
+            make_quote(1, "XYZ", "NASDAQ", 66.67),
+            make_quote(2, "SSO", "NYSE", 123.44),
+            make_quote(3, "RAND", "AMEX", 11.33),
+            make_quote(4, "IBM", "NYSE", 21.22),
+            make_quote(5, "ATT", "NYSE", 98.44),
+            make_quote(6, "HOCK", "AMEX", 0.0076),
+            make_quote(7, "XIE", "NASDAQ", 33.33),
+        ]))
     }
 }

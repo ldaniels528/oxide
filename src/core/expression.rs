@@ -62,29 +62,7 @@ impl Conditions {
     }
 }
 
-/// Represents the set of all Database Operations
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum DatabaseOps {
-    Queryable(Queryables),
-    Mutation(Mutations),
-}
-
-/// Represents a Creation Entity
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum CreationEntity {
-    IndexEntity {
-        columns: Vec<Expression>,
-    },
-    TableEntity {
-        columns: Vec<Parameter>,
-        from: Option<Box<Expression>>,
-    },
-    TableFnEntity {
-        fx: Box<Expression>,
-    },
-}
-
-/// Represents a HTTP Method Call
+/// Represents an HTTP Method Call
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum HttpMethodCalls {
     CONNECT(Box<Expression>),
@@ -178,69 +156,6 @@ impl Display for UseOps {
     }
 }
 
-/// Represents an enumeration of data modification event variations
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum Mutations {
-    Append {
-        path: Box<Expression>,
-        source: Box<Expression>,
-    },
-    Delete {
-        path: Box<Expression>,
-        condition: Option<Conditions>,
-        limit: Option<Box<Expression>>,
-    },
-    IntoNs(Box<Expression>, Box<Expression>),
-    Overwrite {
-        path: Box<Expression>,
-        source: Box<Expression>,
-        condition: Option<Conditions>,
-        limit: Option<Box<Expression>>,
-    },
-    Truncate {
-        path: Box<Expression>,
-        limit: Option<Box<Expression>>,
-    },
-    Undelete {
-        path: Box<Expression>,
-        condition: Option<Conditions>,
-        limit: Option<Box<Expression>>,
-    },
-    Update {
-        path: Box<Expression>,
-        source: Box<Expression>,
-        condition: Option<Conditions>,
-        limit: Option<Box<Expression>>,
-    },
-}
-
-/// Represents an enumeration of Mutation Target variations
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum MutateTarget {
-    IndexTarget {
-        path: Box<Expression>,
-    },
-    TableTarget {
-        path: Box<Expression>,
-    },
-}
-
-/// Represents an enumeration of Queryable variations
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum Queryables {
-    Limit { from: Box<Expression>, limit: Box<Expression> },
-    Select {
-        fields: Vec<Expression>,
-        from: Option<Box<Expression>>,
-        condition: Option<Conditions>,
-        group_by: Option<Vec<Expression>>,
-        having: Option<Box<Expression>>,
-        order_by: Option<Vec<Expression>>,
-        limit: Option<Box<Expression>>,
-    },
-    Where { from: Box<Expression>, condition: Conditions },
-}
-
 /// Represents an enumeration of range variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Ranges {
@@ -253,7 +168,9 @@ pub enum Ranges {
 pub enum Expression {
     ArrayExpression(Vec<Expression>),
     ArrowCurvyLeft(Box<Expression>, Box<Expression>),
+    ArrowCurvyLeft2x(Box<Expression>, Box<Expression>),
     ArrowCurvyRight(Box<Expression>, Box<Expression>),
+    ArrowCurvyRight2x(Box<Expression>, Box<Expression>),
     ArrowFat(Box<Expression>, Box<Expression>),
     ArrowSkinnyRight(Box<Expression>, Box<Expression>),
     ArrowSkinnyLeft(Box<Expression>, Box<Expression>),
@@ -271,7 +188,6 @@ pub enum Expression {
     ColonColon(Box<Expression>, Box<Expression>),
     ColonColonColon(Box<Expression>, Box<Expression>),
     Condition(Conditions),
-    DatabaseOp(DatabaseOps),
     Divide(Box<Expression>, Box<Expression>),
     DoWhile {
         condition: Box<Expression>,
@@ -280,7 +196,6 @@ pub enum Expression {
     ElementAt(Box<Expression>, Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
     For { construct: Box<Expression>, op: Box<Expression> },
-    From(Box<Expression>),
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     HTTP(HttpMethodCalls),
     If {
@@ -303,6 +218,7 @@ pub enum Expression {
     PlusPlus(Box<Expression>, Box<Expression>),
     Pow(Box<Expression>, Box<Expression>),
     Range(Ranges),
+    Referenced(Box<Expression>),
     Return(Box<Expression>),
     Scenario {
         title: Box<Expression>,
@@ -317,7 +233,6 @@ pub enum Expression {
     TypeOf(Box<Expression>),
     Use(Vec<UseOps>),
     Variable(String),
-    Via(Box<Expression>),
     WhenEver {
         condition: Box<Expression>,
         code: Box<Expression>,
@@ -327,6 +242,25 @@ pub enum Expression {
         code: Box<Expression>,
     },
     Yield(Box<Expression>),
+    ////////////////////////////////////////////////////////////////////
+    // SQL models
+    ////////////////////////////////////////////////////////////////////
+    Delete {
+        from: Box<Expression>,
+        condition: Option<Conditions>,
+        limit: Option<Box<Expression>>,
+    },
+    GroupBy { from: Box<Expression>, columns: Vec<Expression> },
+    Having { from: Box<Expression>, condition: Conditions },
+    Limit { from: Box<Expression>, limit: Box<Expression> },
+    OrderBy { from: Box<Expression>, columns: Vec<Expression> },
+    Select { from: Option<Box<Expression>>, fields: Vec<Expression> },
+    Undelete {
+        from: Box<Expression>,
+        condition: Option<Conditions>,
+        limit: Option<Box<Expression>>,
+    },
+    Where { from: Box<Expression>, condition: Conditions },
 }
 
 impl Expression {
@@ -337,109 +271,109 @@ impl Expression {
 
     pub fn decompile(expr: &Expression) -> String {
         match expr {
-            Expression::ArrayExpression(items) =>
+            ArrayExpression(items) =>
                 format!("[{}]", items.iter().map(|i| Self::decompile(i)).collect::<Vec<String>>().join(", ")),
-            Expression::ArrowCurvyLeft(a, b) =>
+            ArrowCurvyLeft(a, b) =>
                 format!("{} <~ {}", Self::decompile(a), Self::decompile(b)),
-            Expression::ArrowCurvyRight(a, b) =>
+            ArrowCurvyLeft2x(a, b) =>
+                format!("{} <<~ {}", Self::decompile(a), Self::decompile(b)),
+            ArrowCurvyRight(a, b) =>
                 format!("{} ~> {}", Self::decompile(a), Self::decompile(b)),
-            Expression::ArrowFat(a, b) =>
+            ArrowCurvyRight2x(a, b) =>
+                format!("{} ~>> {}", Self::decompile(a), Self::decompile(b)),
+            ArrowFat(a, b) =>
                 format!("{} => {}", Self::decompile(a), Self::decompile(b)),
-            Expression::ArrowSkinnyLeft(a, b) =>
+            ArrowSkinnyLeft(a, b) =>
                 format!("{} <- {}", Self::decompile(a), Self::decompile(b)),
-            Expression::ArrowSkinnyRight(a, b) =>
+            ArrowSkinnyRight(a, b) =>
                 format!("{} -> {}", Self::decompile(a), Self::decompile(b)),
-            Expression::ArrowVerticalBar(a, b) =>
+            ArrowVerticalBar(a, b) =>
                 format!("{} |> {}", Self::decompile(a), Self::decompile(b)),
-            Expression::ArrowVerticalBar2x(a, b) =>
+            ArrowVerticalBar2x(a, b) =>
                 format!("{} |>> {}", Self::decompile(a), Self::decompile(b)),
-            Expression::Assert { condition, message } =>
+            Assert { condition, message } =>
                 match message {
                     Some(msg) => format!("assert {}, {} ", Self::decompile(condition), Self::decompile(msg)),
                     None => format!("assert {} ", Self::decompile(condition)),
                 }
-            Expression::BitwiseAnd(a, b) =>
+            BitwiseAnd(a, b) =>
                 format!("{} & {}", Self::decompile(a), Self::decompile(b)),
-            Expression::BitwiseOr(a, b) =>
+            BitwiseOr(a, b) =>
                 format!("{} | {}", Self::decompile(a), Self::decompile(b)),
-            Expression::BitwiseXor(a, b) =>
+            BitwiseXor(a, b) =>
                 format!("{} ^ {}", Self::decompile(a), Self::decompile(b)),
-            Expression::BitwiseShiftLeft(a, b) =>
+            BitwiseShiftLeft(a, b) =>
                 format!("{} << {}", Self::decompile(a), Self::decompile(b)),
-            Expression::BitwiseShiftRight(a, b) =>
+            BitwiseShiftRight(a, b) =>
                 format!("{} >> {}", Self::decompile(a), Self::decompile(b)),
-            Expression::Coalesce(a, b) =>
+            Coalesce(a, b) =>
                 format!("{} ? {}", Self::decompile(a), Self::decompile(b)),
-            Expression::CoalesceErr(a, b) =>
+            CoalesceErr(a, b) =>
                 format!("{} !? {}", Self::decompile(a), Self::decompile(b)),
-            Expression::CodeBlock(items) => Self::decompile_code_blocks(items),
-            Expression::Condition(cond) => Self::decompile_cond(cond),
-            Expression::DatabaseOp(op) =>
-                match op {
-                    DatabaseOps::Queryable(q) => Self::decompile_queryables(q),
-                    DatabaseOps::Mutation(m) => Self::decompile_modifications(m),
-                },
-            Expression::Divide(a, b) =>
+            CodeBlock(items) => Self::decompile_code_blocks(items),
+            Condition(cond) => Self::decompile_cond(cond),
+            Divide(a, b) =>
                 format!("{} / {}", Self::decompile(a), Self::decompile(b)),
-            Expression::DoWhile { condition, code } => 
+            DoWhile { condition, code } => 
                 format!("do {} while {}", Self::decompile(condition), Self::decompile(code)),
-            Expression::ElementAt(a, b) =>
+            ElementAt(a, b) =>
                 format!("{}[{}]", Self::decompile(a), Self::decompile(b)),
-            Expression::ColonColon(a, b) =>
+            ColonColon(a, b) =>
                 format!("{}::{}", Self::decompile(a), Self::decompile(b)),
-            Expression::ColonColonColon(a, b) =>
+            ColonColonColon(a, b) =>
                 format!("{}:::{}", Self::decompile(a), Self::decompile(b)),
-            Expression::Feature { title, scenarios } =>
+            Feature { title, scenarios } =>
                 format!("feature {} {{\n{}\n}}", title.to_code(), scenarios.iter()
                     .map(|s| s.to_code())
                     .collect::<Vec<_>>()
                     .join("\n")),
-            Expression::For { construct, op } =>
+            For { construct, op } =>
                 format!("for {} {}", Self::decompile(construct), Self::decompile(op)),
-            Expression::From(a) => format!("from {}", Self::decompile(a)),
-            Expression::FunctionCall { fx, args } =>
+            FunctionCall { fx, args } =>
                 format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
-            Expression::HTTP(method) =>
+            HTTP(method) =>
                 format!("{} {}", method.get_method(), Self::decompile(&method.get_url_or_config())),
-            Expression::If { condition, a, b } =>
+            If { condition, a, b } =>
                 format!("if {} {}{}", Self::decompile(condition), Self::decompile(a), b.to_owned()
                     .map(|x| format!(" else {}", Self::decompile(&x)))
                     .unwrap_or("".into())),
-            Expression::Include(path) => format!("include {}", Self::decompile(path)),
-            Expression::Infix(a, b) =>
+            Include(path) => format!("include {}", Self::decompile(path)),
+            Infix(a, b) =>
                 format!("{}.{}", Self::decompile(a), Self::decompile(b)),
-            Expression::Literal(value) => value.to_code(),
-            Expression::MatchExpression(a, b) =>
+            Literal(value) => value.to_code(),
+            MatchExpression(a, b) =>
                 format!("match {} {}", Self::decompile(a), Self::decompile(&ArrayExpression(b.clone()))),
-            Expression::Minus(a, b) =>
+            Minus(a, b) =>
                 format!("{} - {}", Self::decompile(a), Self::decompile(b)),
-            Expression::Module(name, ops) =>
+            Module(name, ops) =>
                 format!("{} {}", name, Self::decompile_code_blocks(ops)),
-            Expression::Modulo(a, b) =>
+            Modulo(a, b) =>
                 format!("{} % {}", Self::decompile(a), Self::decompile(b)),
-            Expression::Multiply(a, b) =>
+            Multiply(a, b) =>
                 format!("{} * {}", Self::decompile(a), Self::decompile(b)),
-            Expression::NamedValue(name, expr) =>
+            NamedValue(name, expr) =>
                 format!("{}: {}", name, Self::decompile(expr)),
-            Expression::Neg(a) => format!("-({})", Self::decompile(a)),
-            Expression::Parameters(parameters) => Self::decompile_parameters(parameters),
-            Expression::Use(args) =>
+            Neg(a) => format!("-({})", Self::decompile(a)),
+            Parameters(parameters) => Self::decompile_parameters(parameters),
+            Use(args) =>
                 format!("use {}", args.iter().map(|a| a.to_code())
                     .collect::<Vec<_>>()
                     .join(", ")),
-            Expression::Plus(a, b) =>
+            Plus(a, b) =>
                 format!("{} + {}", Self::decompile(a), Self::decompile(b)),
-            Expression::PlusPlus(a, b) =>
+            PlusPlus(a, b) =>
                 format!("{} ++ {}", Self::decompile(a), Self::decompile(b)),
-            Expression::Pow(a, b) =>
+            Pow(a, b) =>
                 format!("{} ** {}", Self::decompile(a), Self::decompile(b)),
-            Expression::Range(Exclusive(a, b)) =>
+            Range(Exclusive(a, b)) =>
                 format!("{}..{}", Self::decompile(a), Self::decompile(b)),
-            Expression::Range(Inclusive(a, b)) =>
+            Range(Inclusive(a, b)) =>
                 format!("{}..={}", Self::decompile(a), Self::decompile(b)),
-            Expression::Return(a) =>
+            Referenced(a) =>
+                format!("&{}", Self::decompile(a)),
+            Return(a) =>
                 format!("return {}", Self::decompile(a)),
-            Expression::Scenario { title, verifications } => {
+            Scenario { title, verifications } => {
                 let title = title.to_code();
                 let verifications = verifications.iter()
                     .map(|s| s.to_code())
@@ -447,27 +381,46 @@ impl Expression {
                     .join("\n");
                 format!("scenario {title} {{\n{verifications}\n}}")
             }
-            Expression::SetVariables(vars, values) =>
+            SetVariables(vars, values) =>
                 format!("{} = {}", Self::decompile(vars), Self::decompile(values)),
-            Expression::SetVariablesExpr(vars, values) =>
+            SetVariablesExpr(vars, values) =>
                 format!("{} := {}", Self::decompile(vars), Self::decompile(values)),
-            Expression::StructureExpression(items) =>
+            StructureExpression(items) =>
                 format!("{{{}}}", items.iter()
                     .map(|(k, v)| format!("{}: {}", k, v))
                     .collect::<Vec<String>>()
                     .join(", ")),
-            Expression::Throw(message) => format!("throw({})", Self::decompile(message)),
-            Expression::TupleExpression(args) => format!("({})", Self::decompile_list(args)),
-            Expression::TypeDef(expr) => format!("typedef({})", expr.to_code()),
-            Expression::TypeOf(expr) => format!("type_of({})", expr.to_code()),
-            Expression::Variable(name) => name.to_string(),
-            Expression::Via(expr) => format!("via {}", Self::decompile(expr)),
-            Expression::WhenEver { condition, code } => 
+            Throw(message) => format!("throw({})", Self::decompile(message)),
+            TupleExpression(args) => format!("({})", Self::decompile_list(args)),
+            TypeDef(expr) => format!("typedef({})", expr.to_code()),
+            TypeOf(expr) => format!("type_of({})", expr.to_code()),
+            Variable(name) => name.to_string(),
+            WhenEver { condition, code } => 
                 format!("when {} {}", Self::decompile(condition), Self::decompile(code)),
-            Expression::While { condition, code } =>
+            While { condition, code } =>
                 format!("while {} {}", Self::decompile(condition), Self::decompile(code)),
-            Expression::Yield(expr) =>
+            Yield(expr) =>
                 format!("yield {}", Self::decompile(expr)),
+            ////////////////////////////////////////////////////////////////////
+            // SQL models
+            ////////////////////////////////////////////////////////////////////
+            Delete { from, condition, limit } =>
+                format!("delete {} where {}{}", Self::decompile(from), Self::decompile_cond_opt(condition), Self::decompile_opt(limit)),
+            GroupBy { from, columns } =>
+                format!("{} group_by {}", Self::decompile(from), Self::decompile_list(columns)),
+            Having { from, condition } =>
+                format!("{} having {}", Self::decompile(from), Self::decompile_cond(condition)),
+            Limit { from, limit } =>
+                format!("{} limit {}", Self::decompile(from), Self::decompile(limit)),
+            OrderBy { from, columns } =>
+                format!("{} order_by {}", Self::decompile(from), Self::decompile_list(columns)),
+            Select { fields, from } =>
+                format!("select {}{}", Self::decompile_list(fields),
+                        from.to_owned().map(|e| format!(" from {}", Self::decompile(&e))).unwrap_or("".into())),
+            Undelete { from, condition, limit } =>
+                format!("undelete {} where {}{}", Self::decompile(from), Self::decompile_cond_opt(condition), Self::decompile_opt(limit)),
+            Where { from, condition } =>
+                format!("{} where {}", Self::decompile(from), Self::decompile_cond(condition)),
         }
     }
 
@@ -519,20 +472,6 @@ impl Expression {
             .join(", ")
     }
 
-    pub fn decompile_if_exists(if_exists: bool) -> String {
-        (if if_exists { "if exists " } else { "" }).to_string()
-    }
-
-    pub fn decompile_insert_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> String {
-        let field_list = fields.iter().map(|f| Self::decompile(f)).collect::<Vec<String>>().join(", ");
-        let value_list = values.iter().map(|v| Self::decompile(v)).collect::<Vec<String>>().join(", ");
-        format!("({}) values ({})", field_list, value_list)
-    }
-
-    pub fn decompile_limit(opt: &Option<Box<Expression>>) -> String {
-        opt.to_owned().map(|x| format!(" limit {}", Self::decompile(&x))).unwrap_or("".into())
-    }
-
     pub fn decompile_list(fields: &Vec<Expression>) -> String {
         fields.iter().map(|x| Self::decompile(x)).collect::<Vec<String>>().join(", ".into())
     }
@@ -544,66 +483,13 @@ impl Expression {
     pub fn decompile_opt(opt: &Option<Box<Expression>>) -> String {
         opt.to_owned().map(|i| Self::decompile(&i)).unwrap_or("".into())
     }
-
-    pub fn decompile_update_list(fields: &Vec<Expression>, values: &Vec<Expression>) -> String {
-        fields.iter().zip(values.iter()).map(|(f, v)|
-            format!("{} = {}", Self::decompile(f), Self::decompile(v))).collect::<Vec<String>>().join(", ")
-    }
-
-    pub fn decompile_excavations(excavation: &DatabaseOps) -> String {
-        match excavation {
-            DatabaseOps::Queryable(q) => Self::decompile_queryables(q),
-            DatabaseOps::Mutation(m) => Self::decompile_modifications(m),
-        }
-    }
-
-    pub fn decompile_modifications(expr: &Mutations) -> String {
-        match expr {
-            Mutations::Append { path, source } =>
-                format!("append {} {}", Self::decompile(path), Self::decompile(source)),
-            Mutations::Delete { path, condition, limit } =>
-                format!("delete from {} where {}{}", Self::decompile(path), Self::decompile_cond_opt(condition), Self::decompile_opt(limit)),
-            Mutations::IntoNs(a, b) =>
-                format!("{} ~> {}", Self::decompile(a), Self::decompile(b)),
-            Mutations::Overwrite { path, source, condition, limit } =>
-                format!("overwrite {} {}{}{}", Self::decompile(path), Self::decompile(source),
-                        condition.to_owned().map(|e| format!(" where {}", Self::decompile_cond(&e))).unwrap_or("".into()),
-                        limit.to_owned().map(|e| format!(" limit {}", Self::decompile(&e))).unwrap_or("".into()),
-                ),
-            Mutations::Truncate { path, limit } =>
-                format!("truncate {}{}", Self::decompile(path), Self::decompile_limit(limit)),
-            Mutations::Undelete { path, condition, limit } =>
-                format!("undelete from {} where {}{}", Self::decompile(path), Self::decompile_cond_opt(condition), Self::decompile_opt(limit)),
-            Mutations::Update { path, source, condition, limit } =>
-                format!("update {} {} where {}{}", Self::decompile(path), Self::decompile(source), Self::decompile_cond_opt(condition),
-                        limit.to_owned().map(|e| format!(" limit {}", Self::decompile(&e))).unwrap_or("".into()), ),
-        }
-    }
-
-    pub fn decompile_queryables(expr: &Queryables) -> String {
-        match expr {
-            Queryables::Limit { from: a, limit: b } =>
-                format!("{} limit {}", Self::decompile(a), Self::decompile(b)),
-            Queryables::Where { from, condition } =>
-                format!("{} where {}", Self::decompile(from), Self::decompile_cond(condition)),
-            Queryables::Select { fields, from, condition, group_by, having, order_by, limit } =>
-                format!("select {}{}{}{}{}{}{}", Self::decompile_list(fields),
-                        from.to_owned().map(|e| format!(" from {}", Self::decompile(&e))).unwrap_or("".into()),
-                        condition.to_owned().map(|c| format!(" where {}", Self::decompile_cond(&c))).unwrap_or("".into()),
-                        limit.to_owned().map(|e| format!(" limit {}", Self::decompile(&e))).unwrap_or("".into()),
-                        group_by.to_owned().map(|items| format!(" group by {}", items.iter().map(|e| Self::decompile(e)).collect::<Vec<String>>().join(", "))).unwrap_or("".into()),
-                        having.to_owned().map(|e| format!(" having {}", Self::decompile(&e))).unwrap_or("".into()),
-                        order_by.to_owned().map(|e| format!(" order by {}", Self::decompile_list(&e))).unwrap_or("".into()),
-                ),
-        }
-    }
-
+    
     pub fn encode(&self) -> Vec<u8> {
         ByteCodeCompiler::encode(&self).unwrap_or_else(|e| panic!("{}", e))
     }
 
     pub fn infer_type(&self) -> DataType {
-        Expression::infer(self)
+        Self::infer(self)
     }
 
     /// provides type inference for the given [Expression]
@@ -631,7 +517,9 @@ impl Expression {
         match expr {
             ArrayExpression(items) => FixedSizeType(ArrayType.into(), items.len()),
             ArrowCurvyLeft(..) => StructureType(vec![]),
+            ArrowCurvyLeft2x(..) => TableType(vec![]),
             ArrowCurvyRight(..) => BooleanType,
+            ArrowCurvyRight2x(..) => NumberType(I64Kind),
             ArrowFat(_, b) => Self::infer_with_hints(b, hints),
             ArrowSkinnyLeft(..) => UnresolvedType,
             ArrowSkinnyRight(_, b) =>  Self::infer_with_hints(b, hints),
@@ -661,19 +549,11 @@ impl Expression {
                     _ => UnresolvedType
                 }
             Condition(..) => BooleanType,
-            DatabaseOp(a) => match a {
-                DatabaseOps::Queryable(_) => TableType(vec![]),
-                DatabaseOps::Mutation(m) => match m {
-                    Mutations::Append { .. } => NumberType(NumberKind::RowIdKind),
-                    _ => NumberType(NumberKind::I64Kind),
-                }
-            }
             Divide(a, b) => Self::infer_a_or_b(a, b, hints),
             DoWhile { code, .. } => Self::infer_with_hints(code, hints),
             ElementAt(..) => UnresolvedType,
             Feature { .. } => BooleanType,
             For { op, .. } => Self::infer_with_hints(op, hints),
-            From(..) => TableType(vec![]),
             FunctionCall { fx, .. } => Self::infer_with_hints(fx, hints),
             HTTP { .. } => UnresolvedType,
             If { a: true_v, b: Some(false_v), .. } => Self::infer_a_or_b(true_v, false_v, hints),
@@ -712,6 +592,7 @@ impl Expression {
             Pow(a, b) => Self::infer_a_or_b(a, b, hints),
             Range(Exclusive(a, b)) => Self::infer_a_or_b(a, b, hints),
             Range(Inclusive(a, b)) => Self::infer_a_or_b(a, b, hints),
+            Referenced(a) => Self::infer_with_hints(a, hints),
             Return(a) => Self::infer_with_hints(a, hints),
             Scenario { .. } => BooleanType,
             SetVariables(..) => BooleanType,
@@ -744,10 +625,20 @@ impl Expression {
                             None => UnresolvedType
                         }
                 }
-            Via(..) => TableType(vec![]),
             WhenEver { code, .. } => Self::infer_with_hints(code, hints),
             While { code, .. } => Self::infer_with_hints(code, hints),
             Yield(..) => ArrayType,
+            ////////////////////////////////////////////////////////////////////
+            // SQL models
+            ////////////////////////////////////////////////////////////////////
+            Delete { .. } => NumberType(NumberKind::I64Kind),
+            GroupBy { .. } => TableType(vec![]),
+            Having { .. } => TableType(vec![]),
+            Limit { .. } => TableType(vec![]),
+            OrderBy { .. } => TableType(vec![]),
+            Select { .. } => TableType(vec![]),
+            Undelete { .. } => NumberType(NumberKind::I64Kind),
+            Where { .. } => TableType(vec![]),
         }
     }
     
@@ -808,24 +699,37 @@ impl Expression {
     /// Attempts to resolve the [Expression] as a [TypedValue]
     pub fn to_pure(&self) -> std::io::Result<TypedValue> {
         match self {
-            Expression::NamedValue(_, expr) => expr.to_pure(),
-            Expression::ArrayExpression(items) => Self::purify(items),
-            Expression::BitwiseAnd(a, b) => Ok(a.to_pure()? & b.to_pure()?),
-            Expression::BitwiseOr(a, b) => Ok(a.to_pure()? | b.to_pure()?),
-            Expression::BitwiseXor(a, b) => Ok(a.to_pure()? ^ b.to_pure()?),
-            Expression::BitwiseShiftLeft(a, b) => Ok(a.to_pure()? << b.to_pure()?),
-            Expression::BitwiseShiftRight(a, b) => Ok(a.to_pure()? >> b.to_pure()?),
-            Expression::Condition(kind) => match kind {
+            NamedValue(_, expr) => expr.to_pure(),
+            ArrayExpression(items) => Self::purify(items),
+            BitwiseAnd(a, b) => Ok(a.to_pure()? & b.to_pure()?),
+            BitwiseOr(a, b) => Ok(a.to_pure()? | b.to_pure()?),
+            BitwiseXor(a, b) => Ok(a.to_pure()? ^ b.to_pure()?),
+            BitwiseShiftLeft(a, b) => Ok(a.to_pure()? << b.to_pure()?),
+            BitwiseShiftRight(a, b) => Ok(a.to_pure()? >> b.to_pure()?),
+            Condition(kind) => match kind {
                 Conditions::And(a, b) =>
                     Ok(Boolean(a.to_pure()?.is_true() && b.to_pure()?.is_true())),
+                Conditions::AssumedBoolean(a) => a.to_pure(),
                 Conditions::False => Ok(Boolean(false)),
+                Conditions::GreaterOrEqual(a, b) =>
+                    Ok(Boolean(a.to_pure()?.is_true() >= b.to_pure()?.is_true())),
+                Conditions::GreaterThan(a, b) =>
+                    Ok(Boolean(a.to_pure()?.is_true() > b.to_pure()?.is_true())),
+                Conditions::LessOrEqual(a, b) =>
+                    Ok(Boolean(a.to_pure()?.is_true() <= b.to_pure()?.is_true())),
+                Conditions::LessThan(a, b) =>
+                    Ok(Boolean(a.to_pure()?.is_true() < b.to_pure()?.is_true())),
+                Conditions::Not(a) =>
+                    Ok(Boolean(!a.to_pure()?.is_true())),
+                Conditions::NotEqual(a, b) =>
+                    Ok(Boolean(a.to_pure()?.is_true() != b.to_pure()?.is_true())),
                 Conditions::Or(a, b) =>
                     Ok(Boolean(a.to_pure()?.is_true() || b.to_pure()?.is_true())),
                 Conditions::True => Ok(Boolean(true)),
                 z => throw(TypeMismatch(ConstantValueExpected(z.to_code())))
             }
-            Expression::Divide(a, b) => Ok(a.to_pure()? / b.to_pure()?),
-            Expression::ElementAt(a, b) => {
+            Divide(a, b) => Ok(a.to_pure()? / b.to_pure()?),
+            ElementAt(a, b) => {
                 let index = b.to_pure()?.to_usize();
                 Ok(match a.to_pure()? {
                     TypedValue::ArrayValue(arr) => arr.get_or_else(index, Undefined),
@@ -842,28 +746,28 @@ impl Expression {
                     z => return throw(TypeMismatch(UnsupportedType(UnresolvedType, z.get_type())))
                 })
             }
-            Expression::StructureExpression(items) => {
+            StructureExpression(items) => {
                 let mut new_items = Vec::new();
                 for (name, expr) in items {
                     new_items.push((name.to_string(), expr.to_pure()?))
                 }
                 Ok(Structured(Soft(SoftStructure::from_tuples(new_items))))
             }
-            Expression::Literal(value) => Ok(value.clone()),
-            Expression::Minus(a, b) => Ok(a.to_pure()? - b.to_pure()?),
-            Expression::Modulo(a, b) => Ok(a.to_pure()? % b.to_pure()?),
-            Expression::Multiply(a, b) => Ok(a.to_pure()? * b.to_pure()?),
-            Expression::Neg(expr) => expr.to_pure().map(|v| -v),
-            Expression::Plus(a, b) => Ok(a.to_pure()? + b.to_pure()?),
-            Expression::Pow(a, b) => Ok(a.to_pure()?.pow(&b.to_pure()?)
+            Literal(value) => Ok(value.clone()),
+            Minus(a, b) => Ok(a.to_pure()? - b.to_pure()?),
+            Modulo(a, b) => Ok(a.to_pure()? % b.to_pure()?),
+            Multiply(a, b) => Ok(a.to_pure()? * b.to_pure()?),
+            Neg(expr) => expr.to_pure().map(|v| -v),
+            Plus(a, b) => Ok(a.to_pure()? + b.to_pure()?),
+            Pow(a, b) => Ok(a.to_pure()?.pow(&b.to_pure()?)
                 .unwrap_or(Undefined)),
-            Expression::Range(Exclusive(a, b)) =>
+            Range(Exclusive(a, b)) =>
                 Ok(ArrayValue(Array::from(TypedValue::exclusive_range(
                     a.to_pure()?,
                     b.to_pure()?,
                     Number(I64Value(1)),
                 )))),
-            Expression::Range(Inclusive(a, b)) =>
+            Range(Inclusive(a, b)) =>
                 Ok(ArrayValue(Array::from(TypedValue::inclusive_range(
                     a.to_pure()?,
                     b.to_pure()?,
@@ -884,7 +788,6 @@ impl Display for Expression {
 #[cfg(test)]
 mod expression_tests {
     use crate::expression::Conditions::*;
-    use crate::expression::DatabaseOps::Mutation;
     use crate::expression::Expression::*;
     use crate::expression::*;
     use crate::machine::Machine;
@@ -1088,26 +991,6 @@ mod expression_tests {
         };
         assert!(op.is_control_flow());
         assert_eq!(op.to_code(), "if x < y 1 else 10");
-    }
-
-    #[test]
-    fn test_overwrite() {
-        let model = DatabaseOp(Mutation(Mutations::Overwrite {
-            path: Box::new(Variable("stocks".into())),
-            source: Box::new(Via(Box::new(StructureExpression(vec![
-                ("symbol".into(), Literal(StringValue("BOX".into()))),
-                ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                ("last_sale".into(), Literal(Number(F64Value(21.77)))),
-            ])))),
-            condition: Some(Equal(
-                Box::new(Variable("symbol".into())),
-                Box::new(Literal(StringValue("BOX".into()))),
-            )),
-            limit: Some(Box::new(Literal(Number(I64Value(1))))),
-        }));
-        assert_eq!(
-            model.to_code(),
-            r#"overwrite stocks via {symbol: "BOX", exchange: "NYSE", last_sale: 21.77} where symbol == "BOX" limit 1"#)
     }
 
     #[test]

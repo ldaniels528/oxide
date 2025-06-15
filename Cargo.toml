@@ -40,6 +40,7 @@ urlencoding = "2.1"
 home = "0.5.11"
 #wasm-bindgen = "0.2.92"
 isahc = { version = "1.7", features = ["json"] }
+itertools = "0.14.0"
 
 [[bin]]
 name = "oxide"
