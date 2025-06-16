@@ -3,12 +3,14 @@
 // file row-collection module
 ////////////////////////////////////////////////////////////////////
 
+use crate::blob_file_row_collection::BLOBFileRowCollection;
 use crate::blobs::{BLOBCellMetadata, BLOBStore};
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::data_types::DataType::{NumberType, TableType};
 use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::Blob;
 use crate::errors::Errors::Exact;
 use crate::errors::{throw, Errors};
 use crate::field;
@@ -37,8 +39,6 @@ use std::ops::Deref;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 use std::sync::Arc;
-use crate::blob_file_row_collection::BLOBFileRowCollection;
-use crate::dataframe::Dataframe::Blob;
 
 /// File-based RowCollection implementation
 #[derive(Clone)]

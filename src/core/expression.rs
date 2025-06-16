@@ -198,6 +198,7 @@ pub enum Expression {
     For { construct: Box<Expression>, op: Box<Expression> },
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     HTTP(HttpMethodCalls),
+    Identifier(String),
     If {
         condition: Box<Expression>,
         a: Box<Expression>,
@@ -232,7 +233,6 @@ pub enum Expression {
     TypeDef(Box<Expression>),
     TypeOf(Box<Expression>),
     Use(Vec<UseOps>),
-    Variable(String),
     WhenEver {
         condition: Box<Expression>,
         code: Box<Expression>,
@@ -394,7 +394,7 @@ impl Expression {
             TupleExpression(args) => format!("({})", Self::decompile_list(args)),
             TypeDef(expr) => format!("typedef({})", expr.to_code()),
             TypeOf(expr) => format!("type_of({})", expr.to_code()),
-            Variable(name) => name.to_string(),
+            Identifier(name) => name.to_string(),
             WhenEver { condition, code } => 
                 format!("when {} {}", Self::decompile(condition), Self::decompile(code)),
             While { condition, code } =>
@@ -515,7 +515,11 @@ impl Expression {
         hints: &Vec<Parameter>,
     ) -> DataType {
         match expr {
-            ArrayExpression(items) => FixedSizeType(ArrayType.into(), items.len()),
+            ArrayExpression(items) => {
+                let data_types = items.iter().map(|item| item.infer_type()).collect();
+                let best_fit = DataType::best_fit(data_types);
+                FixedSizeType(ArrayType(best_fit.into()).into(), items.len())
+            }
             ArrowCurvyLeft(..) => StructureType(vec![]),
             ArrowCurvyLeft2x(..) => TableType(vec![]),
             ArrowCurvyRight(..) => BooleanType,
@@ -538,9 +542,9 @@ impl Expression {
             // platform functions: cal::now()
             ColonColon(a, b) | ColonColonColon(a, b) =>
                 match (a.deref(), b.deref()) {
-                    (Variable(package), FunctionCall { fx, .. }) =>
+                    (Identifier(package), FunctionCall { fx, .. }) =>
                         match fx.deref() {
-                            Variable(name) =>
+                            Identifier(name) =>
                                 PackageOps::find_function(package, name)
                                     .map(|pf| pf.get_return_type())
                                     .unwrap_or(UnresolvedType),
@@ -564,7 +568,7 @@ impl Expression {
                     let new_hints = Self::convert_to_combined_hints(key_values, hints);
                     Self::infer_with_hints(field, &new_hints)
                 }
-                Variable(name) => {
+                Identifier(name) => {
                     match hints.iter().find(|hint| hint.get_name() == name) {
                         Some(param) => param.get_data_type(),
                         None => UnresolvedType
@@ -586,7 +590,10 @@ impl Expression {
             Multiply(a, b) => Self::infer_a_or_b(a, b, hints),
             NamedValue(_, e) => Self::infer_with_hints(e, hints),
             Neg(a) => Self::infer_with_hints(a, hints),
-            Parameters(params) => FixedSizeType(ArrayType.into(), params.len()),
+            Parameters(params) => {
+                let data_types = params.iter().map(|p| p.get_data_type()).collect();
+                FixedSizeType(TupleType(data_types).into(), params.len())
+            },
             Plus(a, b) => Self::infer_a_or_b(a, b, hints),
             PlusPlus(a, b) => Self::infer_a_or_b(a, b, hints),
             Pow(a, b) => Self::infer_a_or_b(a, b, hints),
@@ -616,7 +623,7 @@ impl Expression {
             TypeDef(expr) => Self::infer_with_hints(expr, hints),
             TypeOf(expr) => Self::infer_with_hints(expr, hints),
             Use(..) => BooleanType,
-            Variable(name) =>
+            Identifier(name) =>
                 match name {
                     s if s == machine::ROW_ID => NumberType(I64Kind),
                     _ =>
@@ -627,7 +634,7 @@ impl Expression {
                 }
             WhenEver { code, .. } => Self::infer_with_hints(code, hints),
             While { code, .. } => Self::infer_with_hints(code, hints),
-            Yield(..) => ArrayType,
+            Yield(..) => ArrayType(UnresolvedType.into()),
             ////////////////////////////////////////////////////////////////////
             // SQL models
             ////////////////////////////////////////////////////////////////////
@@ -680,7 +687,7 @@ impl Expression {
 
     /// Indicates whether the expression is a referential expression
     pub fn is_referential(&self) -> bool {
-        matches!(self, Variable(..))
+        matches!(self, Identifier(..))
     }
 
     /// Returns a string representation of this object
@@ -802,7 +809,7 @@ mod expression_tests {
     fn test_conditional_and() {
         let machine = Machine::empty();
         let model = Conditions::And(Box::new(TRUE), Box::new(FALSE));
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(false));
         assert_eq!(model.to_code(), "true && false")
     }
@@ -817,7 +824,7 @@ mod expression_tests {
                 Literal(Number(I64Value(10))).into()
             )).into(),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(false));
         assert_eq!(model.to_code(), "10 in 1..10")
     }
@@ -832,7 +839,7 @@ mod expression_tests {
                 Literal(Number(I64Value(10))).into()
             )).into(),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "10 in 1..=10")
     }
@@ -844,7 +851,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(5)))),
             Box::new(Literal(Number(I64Value(5)))),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5 == 5")
     }
@@ -856,7 +863,7 @@ mod expression_tests {
             Box::new(Literal(Number(F64Value(5.1)))),
             Box::new(Literal(Number(F64Value(5.1)))),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5.1 == 5.1")
     }
@@ -868,7 +875,7 @@ mod expression_tests {
             Box::new(Literal(StringValue("Hello".to_string()))),
             Box::new(Literal(StringValue("Hello".to_string()))),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "\"Hello\" == \"Hello\"")
     }
@@ -880,7 +887,7 @@ mod expression_tests {
             Box::new(Literal(StringValue("Hello".to_string()))),
             Box::new(Literal(StringValue("Goodbye".to_string()))),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "\"Hello\" != \"Goodbye\"")
     }
@@ -890,10 +897,10 @@ mod expression_tests {
         let machine = Machine::empty()
             .with_variable("x", Number(I64Value(5)));
         let model = GreaterThan(
-            Box::new(Variable("x".into())),
+            Box::new(Identifier("x".into())),
             Box::new(Literal(Number(I64Value(1)))),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "x > 1")
     }
@@ -905,7 +912,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(5)))),
             Box::new(Literal(Number(I64Value(1)))),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "5 >= 1")
     }
@@ -917,7 +924,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(4)))),
             Box::new(Literal(Number(I64Value(5)))),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "4 < 5")
     }
@@ -929,7 +936,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(1)))),
             Box::new(Literal(Number(I64Value(5)))),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "1 <= 5")
     }
@@ -941,7 +948,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(-5)))),
             Box::new(Literal(Number(I64Value(5)))),
         );
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "-5 != 5")
     }
@@ -950,7 +957,7 @@ mod expression_tests {
     fn test_conditional_or() {
         let machine = Machine::empty();
         let model = Conditions::Or(Box::new(TRUE), Box::new(FALSE));
-        let (_, result) = machine.do_condition(&model).unwrap();
+        let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(true));
         assert_eq!(model.to_code(), "true || false")
     }
@@ -964,7 +971,7 @@ mod expression_tests {
         
         // x in y..=z
         let model = Condition(In(
-            Variable("x".into()).into(),
+            Identifier("x".into()).into(),
             Range(Inclusive(
                 Literal(Number(I64Value(1))).into(),
                 Literal(Number(I64Value(10))).into(),
@@ -983,8 +990,8 @@ mod expression_tests {
     fn test_if_is_control_flow() {
         let op = If {
             condition: Box::new(Condition(LessThan(
-                Box::new(Variable("x".into())),
-                Box::new(Variable("y".into())),
+                Box::new(Identifier("x".into())),
+                Box::new(Identifier("y".into())),
             ))),
             a: Box::new(Literal(Number(I64Value(1)))),
             b: Some(Box::new(Literal(Number(I64Value(10))))),
@@ -998,8 +1005,8 @@ mod expression_tests {
         // CodeBlock(..) | If(..) | Return(..) | While { .. }
         let op = While {
             condition: Box::new(Condition(LessThan(
-                Box::new(Variable("x".into())),
-                Box::new(Variable("y".into())))
+                Box::new(Identifier("x".into())),
+                Box::new(Identifier("y".into())))
             )),
             code: Box::new(Literal(Number(I64Value(1)))),
         };
@@ -1008,7 +1015,7 @@ mod expression_tests {
 
     #[test]
     fn test_is_referential() {
-        assert!(Variable("symbol".into()).is_referential());
+        assert!(Identifier("symbol".into()).is_referential());
     }
 
     #[test]
@@ -1090,7 +1097,7 @@ mod expression_tests {
     #[test]
     fn test_function_call() {
         let model = FunctionCall {
-            fx: Box::new(Variable("f".into())),
+            fx: Box::new(Identifier("f".into())),
             args: vec![
                 Literal(Number(I64Value(2))),
                 Literal(Number(I64Value(3))),

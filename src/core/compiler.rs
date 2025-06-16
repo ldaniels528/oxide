@@ -19,8 +19,8 @@ use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{BinaryValue, DateValue, Kind, Null, Number, StringValue, TableValue};
-use crate::utils::{pull_name, pull_variable_name};
+use crate::typed_values::TypedValue::{BinaryValue, CharValue, DateValue, Kind, Null, Number, StringValue, TableValue};
+use crate::utils::{expand_escapes, pull_identifier_name, pull_name};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
@@ -252,7 +252,7 @@ impl Compiler {
                 Ok((Some(Literal(BinaryValue(bytes))), ts))
             },
             // variables
-            (Some(Backticks { text, .. }), ts) => Ok((Some(Variable(text)), ts)),
+            (Some(Backticks { text, .. }), ts) => Ok((Some(Identifier(text)), ts)),
             // dataframe literals
             (Some(DataframeLiteral { cells, .. }), ts) => 
                 Ok((Some(Literal(TableValue(Dataframe::from_cells(&cells)))), ts)),
@@ -263,11 +263,16 @@ impl Compiler {
                     .map_err(|e| cnv_error!(e))?;
                 Ok((Some(Literal(date)), ts))
             }
-            // double- or single-quoted or URL strings
+            // double-quote or URL strings
             (Some(DoubleQuoted { text, .. }
-                  | SingleQuoted { text, .. }
                   | URL { text, .. }), ts) =>
                 Ok((Some(Literal(StringValue(text))), ts)),
+            // single-quoted strings
+            (Some(SingleQuoted { text, .. }), ts) =>
+                match expand_escapes(text.as_str()) {
+                    s if s.len() == 1 => Ok((s.chars().next().map(|c| Literal(CharValue(c))), ts)),
+                    s => Ok((Some(Literal(StringValue(s))), ts)),
+                }
             // numeric values
             (Some(Numeric { text, .. }), ts) => {
                 Ok((Some(Literal(TypedValue::from_numeric(text.as_str())?)), ts))
@@ -318,7 +323,7 @@ impl Compiler {
                 "whenever" => self.parse_keyword_whenever(nts),
                 "while" => self.parse_keyword_while(nts),
                 "yield" => self.parse_expression_1a(nts, Yield),
-                name => self.expect_function_call_or_variable(name, nts),
+                name => self.expect_function_call_or_type_or_identifier(name, nts),
             }?;
             Ok((Some(expr), ts))
         } else {
@@ -532,14 +537,14 @@ impl Compiler {
             (Some(Atom { text: name, .. }), ts) => {
                 let (expr, ts) = self.compile_next(ts.clone())?;
                 Ok((SetVariables(
-                    Variable(name.into()).into(),
+                    Identifier(name.into()).into(),
                     expr.into()
                 ), ts))
             }
             _ => {
                 let (expr, ts) = self.compile_next(ts.clone())?;
                 let params = match expr {
-                    Variable(name) => vec![
+                    Identifier(name) => vec![
                         Parameter::add(name)
                     ],
                     Parameters(params) => params,
@@ -716,21 +721,21 @@ impl Compiler {
                 // use 'cnv'
                 Literal(StringValue(pkg)) => ops.push(UseOps::Everything(pkg)),
                 // use vm
-                Variable(pkg) => ops.push(UseOps::Everything(pkg)),
+                Identifier(pkg) => ops.push(UseOps::Everything(pkg)),
                 // use www::serve | oxide::[eval, serve, version]
                 ColonColon(a, b) => {
                     match (*a, *b) {
                         // use www::serve
-                        (Variable(pkg), Variable(func)) => {
+                        (Identifier(pkg), Identifier(func)) => {
                             ops.push(UseOps::Selection(pkg, vec![func]))
                         }
                         // use oxide::[eval, serve, version]
-                        (Variable(pkg), ArrayExpression(items)) => {
+                        (Identifier(pkg), ArrayExpression(items)) => {
                             let mut func_list = Vec::new();
                             for item in items {
                                 match item {
                                     Literal(StringValue(name)) => func_list.push(name),
-                                    Variable(name) => func_list.push(name),
+                                    Identifier(name) => func_list.push(name),
                                     other => {
                                         return throw(SyntaxError(
                                             SyntaxErrors::TypeIdentifierExpected(other.to_code()),
@@ -916,9 +921,9 @@ impl Compiler {
         Ok((args, ts.expect(")")?))
     }
 
-    /// Expects a function call or variable
+    /// Expects a data type, function call or identifier
     /// ex: String(32) | f(2, 3) | abc
-    fn expect_function_call_or_variable(
+    fn expect_function_call_or_type_or_identifier(
         &self,
         name: &str,
         ts: TokenSlice,
@@ -927,7 +932,7 @@ impl Compiler {
         if ts.is("(") {
             let (args, ts) = self.expect_arguments(ts)?;
             let fx = FunctionCall {
-                fx: Box::new(Variable(name.to_string())),
+                fx: Box::new(Identifier(name.to_string())),
                 args,
             };
             // is it a type declaration? e.g., String(32)
@@ -936,9 +941,9 @@ impl Compiler {
                 Err(_) => Ok((fx, ts))
             }
         }
-        // must be a variable. e.g., abc
+        // must be a identifier. e.g., abc
         else {
-            Ok((Variable(name.to_string()), ts))
+            Ok((Identifier(name.to_string()), ts))
         }
     }
 
@@ -1060,7 +1065,7 @@ fn apply_colon(
             Ok(Literal(Kind(FunctionType(params, b_as_type?.into())))),
         (TupleExpression(args), _b) if b_is_type =>
             Ok(Literal(Kind(FunctionType(convert_to_parameters(args)?, b_as_type?.into())))),
-        (Variable(name), _b) if b_is_type =>
+        (Identifier(name), _b) if b_is_type =>
             Ok(Parameters(vec![Parameter::new(name, b_as_type?)])),
         (a, b) => 
             Ok(NamedValue(pull_name(&a)?, b.into())),
@@ -1263,14 +1268,14 @@ pub fn convert_to_parameters(items: Vec<Expression>) -> std::io::Result<Vec<Para
                             .map(|param| param.with_default(value.clone()))
                             .collect::<Vec<_>>());
                     }
-                    (Variable(name), Literal(value)) => {
+                    (Identifier(name), Literal(value)) => {
                         my_params.push(Parameter::new_with_default(name, value.get_type(), value.clone()))
                     }
                     _ => return throw(SyntaxError(IllegalExpression(item.to_code())))
                 }
             }
             // x
-            Variable(name) => my_params.push(Parameter::new(name, UnresolvedType)),
+            Identifier(name) => my_params.push(Parameter::new(name, UnresolvedType)),
             other => return throw(SyntaxError(IllegalExpression(other.to_code())))
         }
     }
@@ -1344,7 +1349,7 @@ pub fn resolve_name_and_parameters_and_return_type(
     match expr.to_owned() {
         // product(a: i64, b: i64)
         FunctionCall { fx, args } => {
-            let fx_name = pull_variable_name(fx.deref())?;
+            let fx_name = pull_identifier_name(fx.deref())?;
             convert_to_parameters(args).map(|params| (Some(fx_name), params, None))
         }
         Literal(Kind(FunctionType(params, returns))) =>
@@ -1355,7 +1360,7 @@ pub fn resolve_name_and_parameters_and_return_type(
         TupleExpression(items) =>
             convert_to_parameters(items).map(|params| (None, params, None)),
         // x -> x + 1
-        Variable(name) =>
+        Identifier(name) =>
             Ok((None, vec![Parameter::new(name, UnresolvedType)], None)),
         other => {
             println!("resolve_name_and_parameters_and_return_type: {:?}", other);
@@ -1540,14 +1545,14 @@ mod tests {
                 "{\nx = 19 ^ 13\nx\n}",
                 CodeBlock(vec![
                     SetVariables(
-                        Variable("x".into()).into(),
+                        Identifier("x".into()).into(),
                         BitwiseXor(
                             Literal(Number(I64Value(19))).into(),
                             Literal(Number(I64Value(13))).into(),
                         )
                         .into(),
                     ),
-                    Variable("x".into()),
+                    Identifier("x".into()),
                 ]),
             );
         }
@@ -1557,9 +1562,9 @@ mod tests {
             assert_eq!(
                 Compiler::build("cal::now()").unwrap(),
                 ColonColon(
-                    Variable("cal".into()).into(),
+                    Identifier("cal".into()).into(),
                     FunctionCall {
-                        fx: Variable("now".into()).into(),
+                        fx: Identifier("now".into()).into(),
                         args: vec![]
                     }
                     .into()
@@ -1572,8 +1577,8 @@ mod tests {
             verify_build(
                 "time::seconds",
                 ColonColon(
-                    Variable("time".into()).into(),
-                    Variable("seconds".into()).into(),
+                    Identifier("time".into()).into(),
+                    Identifier("seconds".into()).into(),
                 ),
             )
         }
@@ -1585,11 +1590,11 @@ mod tests {
                 code,
                 ColonColon(
                     ColonColon(
-                        Variable("oxide".into()).into(),
-                        Variable("tools".into()).into(),
+                        Identifier("oxide".into()).into(),
+                        Identifier("tools".into()).into(),
                         
                     ).into(),
-                    Variable("compact".into()).into()
+                    Identifier("compact".into()).into()
                 )
             );
             assert_eq!(code.to_code(), "oxide::tools::compact");
@@ -1600,9 +1605,9 @@ mod tests {
             assert_eq!(
                 Compiler::build("clock:::seconds()").unwrap(),
                 ColonColonColon(
-                    Variable("clock".into()).into(),
+                    Identifier("clock".into()).into(),
                     FunctionCall {
-                        fx: Variable("seconds".into()).into(),
+                        fx: Identifier("seconds".into()).into(),
                         args: vec![]
                     }
                     .into()
@@ -1615,7 +1620,7 @@ mod tests {
             verify_build(
                 "n == 0",
                 Condition(Equal(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Literal(Number(I64Value(0))).into(),
                 )),
             );
@@ -1626,7 +1631,7 @@ mod tests {
             verify_build(
                 "n > 0",
                 Condition(GreaterThan(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Literal(Number(I64Value(0))).into(),
                 )),
             );
@@ -1637,7 +1642,7 @@ mod tests {
             verify_build(
                 "n >= 0",
                 Condition(GreaterOrEqual(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Literal(Number(I64Value(0))).into(),
                 )),
             );
@@ -1648,7 +1653,7 @@ mod tests {
             verify_build(
                 "n < 0",
                 Condition(LessThan(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Literal(Number(I64Value(0))).into(),
                 )),
             );
@@ -1659,7 +1664,7 @@ mod tests {
             verify_build(
                 "n <= 0",
                 Condition(LessOrEqual(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Literal(Number(I64Value(0))).into(),
                 )),
             );
@@ -1670,7 +1675,7 @@ mod tests {
             verify_build(
                 "a != 0",
                 Condition(NotEqual(
-                    Variable("a".into()).into(),
+                    Identifier("a".into()).into(),
                     Literal(Number(I64Value(0))).into(),
                 )),
             );
@@ -1712,13 +1717,13 @@ mod tests {
                 model,
                 DoWhile {
                     condition: Condition(LessThan(
-                        Box::new(Variable("x".into())),
+                        Box::new(Identifier("x".into())),
                         Box::new(Literal(Number(I64Value(5)))),
                     )).into(),
                     code: SetVariables(
-                        Variable("x".into()).into(),
+                        Identifier("x".into()).into(),
                         Plus(
-                            Variable("x".into()).into(),
+                            Identifier("x".into()).into(),
                             Literal(Number(I64Value(1))).into()
                         ).into(),
                     ).into(),
@@ -1749,7 +1754,7 @@ mod tests {
             assert_eq!(
                 Compiler::build("stocks[1]").unwrap(),
                 ElementAt(
-                    Variable("stocks".into()).into(),
+                    Identifier("stocks".into()).into(),
                     Literal(Number(I64Value(1))).into()
                 )
             )
@@ -1790,11 +1795,11 @@ mod tests {
                 code,
                 ArrowSkinnyRight(
                     TupleExpression(vec![
-                        Variable("a".into()), Variable("b".into())
+                        Identifier("a".into()), Identifier("b".into())
                     ]).into(),
                     Multiply(
-                        Variable("a".into()).into(),
-                        Variable("b".into()).into()
+                        Identifier("a".into()).into(),
+                        Identifier("b".into()).into()
                     ).into()
                 )
             )
@@ -1811,8 +1816,8 @@ mod tests {
                         Parameter::new("b", NumberType(I64Kind)),
                     ]).into(),
                     Multiply(
-                        Variable("a".into()).into(),
-                        Variable("b".into()).into()
+                        Identifier("a".into()).into(),
+                        Identifier("b".into()).into()
                     ).into()
                 )
             )
@@ -1826,7 +1831,7 @@ mod tests {
             assert_eq!(
                 code,
                 SetVariables(
-                    Variable("add".into()).into(),
+                    Identifier("add".into()).into(),
                     ArrowSkinnyRight(
                         Literal(Kind(FunctionType(
                             vec![
@@ -1836,8 +1841,8 @@ mod tests {
                             NumberType(I64Kind).into()
                         ))).into(),
                         Plus(
-                            Variable("a".into()).into(),
-                            Variable("b".into()).into()
+                            Identifier("a".into()).into(),
+                            Identifier("b".into()).into()
                         ).into()
                     ).into()
                 ))
@@ -1851,15 +1856,15 @@ mod tests {
             assert_eq!(
                 code,
                 SetVariables(
-                    Variable("add".into()).into(),
+                    Identifier("add".into()).into(),
                     ArrowSkinnyRight(
                         Parameters(vec![
                             Parameter::new("a", NumberType(I64Kind)),
                             Parameter::new("b", NumberType(I64Kind))
                         ]).into(),
                         Plus(
-                            Variable("a".into()).into(),
-                            Variable("b".into()).into()
+                            Identifier("a".into()).into(),
+                            Identifier("b".into()).into()
                         ).into()
                     ).into()
                 ))
@@ -1873,15 +1878,15 @@ mod tests {
             assert_eq!(
                 code,
                 SetVariables(
-                    Variable("add".into()).into(),
+                    Identifier("add".into()).into(),
                     ArrowSkinnyRight(
                         TupleExpression(vec![
-                            Variable("a".into()),
-                            Variable("b".into()),
+                            Identifier("a".into()),
+                            Identifier("b".into()),
                         ]).into(),
                         Plus(
-                            Box::new(Variable("a".into())),
-                            Box::new(Variable("b".into()))
+                            Box::new(Identifier("a".into())),
+                            Box::new(Identifier("b".into()))
                         ).into(),
                     ).into()
                 )
@@ -1903,7 +1908,7 @@ mod tests {
             assert_eq!(
                 code,
                 SetVariables(
-                    Variable("make_quote".into()).into(),
+                    Identifier("make_quote".into()).into(),
                     ArrowSkinnyRight(
                         Literal(Kind(FunctionType(
                             vec![
@@ -1919,13 +1924,13 @@ mod tests {
                             ]).into()
                         ))).into(),
                         StructureExpression(vec![
-                            ("symbol".to_string(), Variable("symbol".into())),
-                            ("market".to_string(), Variable("exchange".into())),
+                            ("symbol".to_string(), Identifier("symbol".into())),
+                            ("market".to_string(), Identifier("exchange".into())),
                             ("last_sale".to_string(), Multiply(
-                                Variable("last_sale".into()).into(),
+                                Identifier("last_sale".into()).into(),
                                 Literal(Number(F64Value(2.0))).into()
                             )),
-                            ("uid".to_string(), Variable("__row_id__".into()))
+                            ("uid".to_string(), Identifier("__row_id__".into()))
                         ]).into()
                     ).into())
             )
@@ -1937,7 +1942,7 @@ mod tests {
                 "for item in [1, 5, 6, 11, 17] println(item)",
                 For {
                     construct: Condition(In(
-                        Variable("item".into()).into(),
+                        Identifier("item".into()).into(),
                         ArrayExpression(vec![
                             Literal(Number(I64Value(1))),
                             Literal(Number(I64Value(5))),
@@ -1947,8 +1952,8 @@ mod tests {
                         ]).into()
                     )).into(),
                     op: FunctionCall {
-                        fx: Variable("println".into()).into(),
-                        args: vec![Variable("item".into())],
+                        fx: Identifier("println".into()).into(),
+                        args: vec![Identifier("item".into())],
                     }
                     .into(),
                 },
@@ -1965,26 +1970,26 @@ mod tests {
                     TupleExpression(vec![
                         // i = 0
                         SetVariables(
-                            Variable("i".into()).into(),
+                            Identifier("i".into()).into(),
                             Literal(Number(I64Value(0))).into()
                         ).into(),
                         // i < 5
                         Condition(LessThan(
-                            Variable("i".into()).into(),
+                            Identifier("i".into()).into(),
                             Literal(Number(I64Value(5))).into()
                         )).into(),
                         // i = i + 1
                         SetVariables(
-                            Variable("i".into()).into(),
+                            Identifier("i".into()).into(),
                             Plus(
-                                Variable("i".into()).into(),
+                                Identifier("i".into()).into(),
                                 Literal(Number(I64Value(1))).into()
                             ).into()
                         ).into(),
                     ]).into(),
                     op: FunctionCall {
-                        fx: Variable("println".into()).into(),
-                        args: vec![Variable("i".into())],
+                        fx: Identifier("println".into()).into(),
+                        args: vec![Identifier("i".into())],
                     }
                         .into(),
                 },
@@ -1996,7 +2001,7 @@ mod tests {
             verify_build(
                 "plot(2, 3)",
                 FunctionCall {
-                    fx: Box::new(Variable("plot".into())),
+                    fx: Box::new(Identifier("plot".into())),
                     args: vec![Literal(Number(I64Value(2))), Literal(Number(I64Value(3)))],
                 },
             )
@@ -2016,15 +2021,15 @@ mod tests {
                     ArrowVerticalBar(
                         Literal(StringValue("Hello".into())).into(),
                         ColonColon(
-                            Variable("util".into()).into(),
-                            Variable("md5".into()).into(),
+                            Identifier("util".into()).into(),
+                            Identifier("md5".into()).into(),
                         )
                         .into(),
                     )
                     .into(),
                     ColonColon(
-                        Variable("util".into()).into(),
-                        Variable("hex".into()).into(),
+                        Identifier("util".into()).into(),
+                        Identifier("hex".into()).into(),
                     )
                     .into(),
                 ),
@@ -2202,7 +2207,7 @@ mod tests {
                 model,
                 If {
                     condition: Box::new(Condition(GreaterThan(
-                        Box::new(Variable("n".to_string())),
+                        Box::new(Identifier("n".to_string())),
                         Box::new(Literal(Number(I64Value(100)))),
                     ))),
                     a: Box::new(Literal(StringValue("Yes".to_string()))),
@@ -2220,11 +2225,11 @@ mod tests {
                 code,
                 If {
                     condition: Box::new(Condition(GreaterThan(
-                        Box::new(Variable("n".to_string())),
+                        Box::new(Identifier("n".to_string())),
                         Box::new(Literal(Number(I64Value(100)))),
                     ))),
-                    a: Box::new(Variable("n".to_string())),
-                    b: Some(Box::new(Variable("m".to_string()))),
+                    a: Box::new(Identifier("n".to_string())),
+                    b: Some(Box::new(Identifier("m".to_string()))),
                 }
             );
         }
@@ -2238,11 +2243,11 @@ mod tests {
                 model,
                 If {
                     condition: Box::new(Condition(GreaterThan(
-                        Box::new(Variable("n".to_string())),
+                        Box::new(Identifier("n".to_string())),
                         Box::new(Literal(Number(I64Value(5)))),
                     ))),
-                    a: Box::new(Variable("a".to_string())),
-                    b: Some(Box::new(Variable("b".to_string()))),
+                    a: Box::new(Identifier("a".to_string())),
+                    b: Some(Box::new(Identifier("b".to_string()))),
                 }
             );
         }
@@ -2252,10 +2257,10 @@ mod tests {
             verify_build(
                 "n in a..z",
                 Condition(In(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Range(Exclusive(
-                        Variable("a".into()).into(),
-                        Variable("z".into()).into(),
+                        Identifier("a".into()).into(),
+                        Identifier("z".into()).into(),
                     ))
                         .into(),
                 )),
@@ -2267,10 +2272,10 @@ mod tests {
             verify_build(
                 "n in a..=z",
                 Condition(In(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Range(Inclusive(
-                        Variable("a".into()).into(),
-                        Variable("z".into()).into(),
+                        Identifier("a".into()).into(),
+                        Identifier("z".into()).into(),
                     ))
                         .into(),
                 )),
@@ -2281,14 +2286,14 @@ mod tests {
         fn test_let_statement() {
             assert_eq!(
                 Compiler::build("let x = 5").unwrap(),
-                SetVariables(Variable("x".into()).into(), Literal(Number(I64Value(5))).into())
+                SetVariables(Identifier("x".into()).into(), Literal(Number(I64Value(5))).into())
             );
         }
 
         #[test]
         fn test_like_statement() {
             assert_eq!(
-                Compiler::build("'Hello' like 'H.ll.'").unwrap(),
+                Compiler::build(r#""Hello" like "H.ll.""#).unwrap(),
                 Condition(Like(
                     Literal(StringValue("Hello".into())).into(),
                     Literal(StringValue("H.ll.".into())).into(),
@@ -2308,14 +2313,14 @@ mod tests {
             assert_eq!(
                 model,
                 MatchExpression(
-                    Variable("code".into()).into(),
+                    Identifier("code".into()).into(),
                     vec![
                         // 100 => "Accepted"
                         ArrowFat(
                             Condition(When(
-                                Variable("n".into()).into(), 
+                                Identifier("n".into()).into(),
                                 Condition(Equal(
-                                    Variable("n".into()).into(),
+                                    Identifier("n".into()).into(),
                                     Literal(Number(I64Value(100))).into()
                                 )).into()
                             )).into(),
@@ -2323,7 +2328,7 @@ mod tests {
                         ),
                         // n => "Rejected"
                         ArrowFat(
-                            Variable("n".into()).into(),
+                            Identifier("n".into()).into(),
                             Literal(StringValue("Rejected".into())).into()
                         ).into()
                     ]
@@ -2337,7 +2342,7 @@ mod tests {
             assert_eq!(
                 model,
                 Plus(
-                    Box::new(Variable("n".into())),
+                    Box::new(Identifier("n".into())),
                     Box::new(Literal(Number(I64Value(3)))),
                 )
             );
@@ -2349,7 +2354,7 @@ mod tests {
             assert_eq!(
                 model,
                 Divide(
-                    Box::new(Variable("n".into())),
+                    Box::new(Identifier("n".into())),
                     Box::new(Literal(Number(I64Value(3)))),
                 )
             );
@@ -2389,7 +2394,7 @@ mod tests {
             assert_eq!(
                 model,
                 Modulo(
-                    Box::new(Variable("n".into())),
+                    Box::new(Identifier("n".into())),
                     Box::new(Literal(Number(I64Value(4))))
                 )
             );
@@ -2401,7 +2406,7 @@ mod tests {
             assert_eq!(
                 model,
                 Multiply(
-                    Box::new(Variable("n".into())),
+                    Box::new(Identifier("n".into())),
                     Box::new(Literal(Number(I64Value(10)))),
                 )
             );
@@ -2412,7 +2417,7 @@ mod tests {
             verify_build(
                 "_ - 7",
                 Minus(
-                    Variable("_".into()).into(),
+                    Identifier("_".into()).into(),
                     Literal(Number(I64Value(7))).into(),
                 ),
             );
@@ -2424,10 +2429,10 @@ mod tests {
                 "-[w, x, y, z]",
                 "-([w, x, y, z])",
                 Neg(ArrayExpression(vec![
-                    Variable("w".into()).into(),
-                    Variable("x".into()).into(),
-                    Variable("y".into()).into(),
-                    Variable("z".into()).into(),
+                    Identifier("w".into()).into(),
+                    Identifier("x".into()).into(),
+                    Identifier("y".into()).into(),
+                    Identifier("z".into()).into(),
                 ])
                 .into()),
             );
@@ -2444,9 +2449,9 @@ mod tests {
                 "-(x, y, z)",
                 "-((x, y, z))",
                 Neg(TupleExpression(vec![
-                    Variable("x".into()).into(),
-                    Variable("y".into()).into(),
-                    Variable("z".into()).into(),
+                    Identifier("x".into()).into(),
+                    Identifier("y".into()).into(),
+                    Identifier("z".into()).into(),
                 ])
                 .into()),
             );
@@ -2454,7 +2459,7 @@ mod tests {
 
         #[test]
         fn test_negative_variable() {
-            verify_build_with_decompile("-x", "-(x)", Neg(Variable("x".into()).into()));
+            verify_build_with_decompile("-x", "-(x)", Neg(Identifier("x".into()).into()));
         }
 
         #[test]
@@ -2469,7 +2474,7 @@ mod tests {
 
         #[test]
         fn test_not_variable() {
-            verify_build_with_decompile("!x", "!(x)", Condition(Not(Variable("x".into()).into())));
+            verify_build_with_decompile("!x", "!(x)", Condition(Not(Identifier("x".into()).into())));
         }
 
         #[test]
@@ -2530,7 +2535,7 @@ mod tests {
 
         #[test]
         fn test_positive_variable() {
-            verify_build_with_decompile("+x", "x", Variable("x".into()).into());
+            verify_build_with_decompile("+x", "x", Identifier("x".into()).into());
         }
 
         #[test]
@@ -2539,7 +2544,7 @@ mod tests {
                 "(n + 5)",
                 "n + 5",
                 Plus(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Literal(Number(I64Value(5))).into(),
                 ),
             )
@@ -2550,7 +2555,7 @@ mod tests {
             verify_build(
                 "n in 1..100",
                 Condition(In(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Range(
                         Exclusive(
                             Literal(Number(I64Value(1))).into(),
@@ -2567,7 +2572,7 @@ mod tests {
             verify_build(
                 "n in 1..=100",
                 Condition(In(
-                    Variable("n".into()).into(),
+                    Identifier("n".into()).into(),
                     Range(
                         Inclusive(
                             Literal(Number(I64Value(1))).into(),
@@ -2585,7 +2590,7 @@ mod tests {
                 "&stocks(1, 0)",
                 Referenced(
                     FunctionCall {
-                        fx: Variable("stocks".into()).into(),
+                        fx: Identifier("stocks".into()).into(),
                         args: vec![
                             Literal(Number(I64Value(1))).into(),
                             Literal(Number(I64Value(0))).into(),
@@ -2601,10 +2606,10 @@ mod tests {
                 "{\nx = 6\nx\n}",
                 CodeBlock(vec![
                     SetVariables(
-                        Variable("x".into()).into(), 
+                        Identifier("x".into()).into(),
                         Literal(Number(I64Value(6))).into()
-                    ), 
-                    Variable("x".into()).into()
+                    ),
+                    Identifier("x".into()).into()
                 ])
             )
         }
@@ -2615,9 +2620,9 @@ mod tests {
                 "(a, b, c) = (3, 5, 7)",
                 SetVariables(
                     TupleExpression(vec![
-                        Variable("a".into()),
-                        Variable("b".into()),
-                        Variable("c".into()),
+                        Identifier("a".into()),
+                        Identifier("b".into()),
+                        Identifier("c".into()),
                     ])
                     .into(),
                     TupleExpression(vec![
@@ -2633,7 +2638,7 @@ mod tests {
         #[test]
         fn test_simple_soft_structure() {
             let code = Compiler::build(r#"
-                {w:'abc', x:1.0, y:2, z:[1, 2, 3]}
+                {w:"abc", x:1.0, y:2, z:[1, 2, 3]}
             "#).unwrap();
             assert_eq!(
                 code,
@@ -2682,16 +2687,16 @@ mod tests {
                           |}"#, '|').trim(),
                 "{symbol: symbol, exchange: exchange, last_sale: last_sale * 2, event_time: cal::now()}",
                 StructureExpression(vec![
-                    ("symbol".into(), Variable("symbol".into())),
-                    ("exchange".into(), Variable("exchange".into())),
+                    ("symbol".into(), Identifier("symbol".into())),
+                    ("exchange".into(), Identifier("exchange".into())),
                     ("last_sale".into(), Multiply(
-                        Variable("last_sale".into()).into(),
+                        Identifier("last_sale".into()).into(),
                         Literal(Number(F64Value(2.0))).into()
                     )),
                     ("event_time".into(), ColonColon(
-                        Variable("cal".into()).into(),
+                        Identifier("cal".into()).into(),
                         FunctionCall {
-                            fx: Variable("now".into()).into(),
+                            fx: Identifier("now".into()).into(),
                             args: vec![]
                         }.into()))
                 ]))
@@ -2714,7 +2719,7 @@ mod tests {
             verify_build(
                 r#"(abc, 123, "Hello")"#,
                 TupleExpression(vec![
-                    Variable("abc".into()),
+                    Identifier("abc".into()),
                     Literal(Number(I64Value(123))),
                     Literal(StringValue("Hello".into())),
                 ]))
@@ -2725,9 +2730,9 @@ mod tests {
             verify_build(
                 r#"(a, b, c)"#,
                 TupleExpression(vec![
-                    Variable("a".into()),
-                    Variable("b".into()),
-                    Variable("c".into()),
+                    Identifier("a".into()),
+                    Identifier("b".into()),
+                    Identifier("c".into()),
                 ])
             )
         }
@@ -2795,7 +2800,7 @@ mod tests {
 
         #[test]
         fn test_variable_expression() {
-            verify_build("abc", Variable("abc".into()))
+            verify_build("abc", Identifier("abc".into()))
         }
 
         #[test]
@@ -2806,11 +2811,11 @@ mod tests {
                 model,
                 WhenEver {
                     condition: Condition(Equal(
-                        Variable("x".into()).into(),
+                        Identifier("x".into()).into(),
                         Literal(Number(I64Value(0))).into()
                     )).into(),
                     code: FunctionCall {
-                        fx: Variable("hit_boundary".into()).into(),
+                        fx: Identifier("hit_boundary".into()).into(),
                         args: vec![]
                     }.into(),
                 })
@@ -2824,11 +2829,11 @@ mod tests {
                 model,
                 WhenEver {
                     condition: Condition(Equal(
-                        Variable("x".into()).into(),
+                        Identifier("x".into()).into(),
                         Literal(Number(I64Value(0))).into()
                     )).into(),
                     code: FunctionCall {
-                        fx: Variable("hit_boundary".into()).into(),
+                        fx: Identifier("hit_boundary".into()).into(),
                         args: vec![]
                     }.into(),
                 })
@@ -2842,13 +2847,13 @@ mod tests {
                 model,
                 While {
                     condition: Condition(LessThan(
-                        Variable("x".into()).into(),
+                        Identifier("x".into()).into(),
                         Literal(Number(I64Value(5))).into(),
                     )).into(),
                     code: SetVariables(
-                        Variable("x".into()).into(),
+                        Identifier("x".into()).into(),
                         Plus(
-                            Variable("x".into()).into(),
+                            Identifier("x".into()).into(),
                             Literal(Number(I64Value(1))).into()
                         ).into(),
                     ).into(),
@@ -2866,25 +2871,25 @@ mod tests {
                 model,
                 CodeBlock(vec![
                     SetVariables(
-                        Variable("x".into()).into(),
+                        Identifier("x".into()).into(),
                         Literal(Number(I64Value(0))).into()
                     ),
                     While {
                         condition: Box::new(Condition(LessThan(
-                            Box::new(Variable("x".into())),
+                            Box::new(Identifier("x".into())),
                             Box::new(Literal(Number(I64Value(7)))),
                         ))),
                         code: SetVariables(
-                            Variable("x".into()).into(),
+                            Identifier("x".into()).into(),
                             Plus(
-                                Variable("x".into()).into(),
+                                Identifier("x".into()).into(),
                                 Literal(Number(I64Value(1))).into(),
                             )
                             .into()
                         )
                         .into()
                     },
-                    Variable("x".into()),
+                    Identifier("x".into()),
                 ])
             );
         }
@@ -2894,7 +2899,7 @@ mod tests {
     #[cfg(test)]
     mod precedence_tests {
         use crate::compiler::Compiler;
-        use crate::expression::Expression::{ArrowVerticalBar, ColonColon, Divide, Literal, Minus, Multiply, Plus, Variable};
+        use crate::expression::Expression::{ArrowVerticalBar, ColonColon, Divide, Identifier, Literal, Minus, Multiply, Plus};
         use crate::machine::Machine;
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::token_slice::TokenSlice;
@@ -2951,7 +2956,7 @@ mod tests {
 
         #[test]
         fn test_function_pipelining() {
-            let ts = TokenSlice::from_string("'Hello' |> str::reverse |> util::md5");
+            let ts = TokenSlice::from_string(r#""Hello" |> str::reverse |> util::md5"#);
             let compiler = Compiler::new();
             let (model, _) = compiler.compile_next(ts).unwrap();
             assert_eq!(
@@ -2959,9 +2964,9 @@ mod tests {
                 ArrowVerticalBar(
                     ArrowVerticalBar(
                         Literal(StringValue("Hello".into())).into(), 
-                        ColonColon(Variable("str".into()).into(), Variable("reverse".into()).into()).into()
+                        ColonColon(Identifier("str".into()).into(), Identifier("reverse".into()).into()).into()
                     ).into(),
-                    ColonColon(Variable("util".into()).into(), Variable("md5".into()).into()).into()
+                    ColonColon(Identifier("util".into()).into(), Identifier("md5".into()).into()).into()
                 )
             )
         }
@@ -3005,7 +3010,7 @@ mod tests {
             assert_eq!(
                 model,
                 Delete {
-                    from: Box::new(Variable("stocks".into())),
+                    from: Box::new(Identifier("stocks".into())),
                     condition: None,
                     limit: None,
                 }
@@ -3022,9 +3027,9 @@ mod tests {
             assert_eq!(
                 model,
                 Delete {
-                    from: Box::new(Variable("stocks".into())),
+                    from: Box::new(Identifier("stocks".into())),
                     condition: Some(GreaterOrEqual(
-                        Box::new(Variable("last_sale".into())),
+                        Box::new(Identifier("last_sale".into())),
                         Box::new(Literal(Number(F64Value(1.0)))),
                     )),
                     limit: Some(Box::new(Literal(Number(I64Value(100))))),
@@ -3041,9 +3046,9 @@ mod tests {
                 model,
                 Limit {
                     from: Box::new(Where {
-                        from: Variable("stocks".into()).into(),
+                        from: Identifier("stocks".into()).into(),
                         condition: GreaterOrEqual(
-                            Box::new(Variable("last_sale".into())),
+                            Box::new(Identifier("last_sale".into())),
                             Box::new(Literal(Number(F64Value(1.0)))),
                         ),
                     }),
@@ -3067,9 +3072,9 @@ mod tests {
                         ("last_sale".into(), Literal(Number(F64Value(0.1421))))
                     ]).into(),
                     Where {
-                        from: Variable("stocks".into()).into(),
+                        from: Identifier("stocks".into()).into(),
                         condition: Equal(
-                            Variable("symbol".into()).into(),
+                            Identifier("symbol".into()).into(),
                             Literal(StringValue("BKPQ".into())).into()
                         )
                     }.into())
@@ -3085,11 +3090,11 @@ mod tests {
                 model,
                 Select {
                     fields: vec![
-                        Variable("symbol".into()),
-                        Variable("exchange".into()),
-                        Variable("last_sale".into())
+                        Identifier("symbol".into()),
+                        Identifier("exchange".into()),
+                        Identifier("last_sale".into())
                     ],
-                    from: Some(Box::new(Variable("stocks".into()))),
+                    from: Some(Box::new(Identifier("stocks".into()))),
                 }
             )
         }
@@ -3102,7 +3107,7 @@ mod tests {
             assert_eq!(
                 model,
                 Undelete {
-                    from: Box::new(Variable("stocks".into())),
+                    from: Box::new(Identifier("stocks".into())),
                     condition: None,
                     limit: None,
                 }
@@ -3119,9 +3124,9 @@ mod tests {
             assert_eq!(
                 model,
                 Undelete {
-                    from: Box::new(Variable("stocks".into())),
+                    from: Box::new(Identifier("stocks".into())),
                     condition: Some(GreaterOrEqual(
-                        Box::new(Variable("last_sale".into())),
+                        Box::new(Identifier("last_sale".into())),
                         Box::new(Literal(Number(F64Value(1.0)))),
                     )),
                     limit: Some(Box::new(Literal(Number(I64Value(100))))),
@@ -3157,7 +3162,7 @@ mod tests {
                             ("last_sale".into(), Literal(Number(F64Value(32.12)))),
                         ]),
                     ])),
-                    Variable("stocks".into()).into(),
+                    Identifier("stocks".into()).into(),
                 )
             );
         }

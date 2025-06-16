@@ -33,7 +33,7 @@ use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use crate::utils::{extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0, extract_value_fn1, extract_value_fn2, extract_value_fn3, pull_array, pull_number, pull_string, strip_margin, superscript};
 use crate::{machine, oxide_server};
-use chrono::{Datelike, Local, TimeZone, Timelike};
+use chrono::{Datelike, Local, MappedLocalTime, TimeZone, Timelike};
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
 use std::fs::File;
@@ -235,24 +235,30 @@ impl Package for ArraysPkg {
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
             ArraysPkg::Filter => vec![
-                ArrayType,
+                ArrayType(UnresolvedType.into()),
                 FunctionType(
                     vec![Parameter::new("item", UnresolvedType)],
                     BooleanType.into(),
                 ),
             ],
-            ArraysPkg::Len => vec![ArrayType],
+            ArraysPkg::Len => vec![
+                ArrayType(UnresolvedType.into())
+            ],
             ArraysPkg::Map => vec![
-                ArrayType,
+                ArrayType(UnresolvedType.into()),
                 FunctionType(
                     vec![Parameter::new("item", UnresolvedType)],
                     UnresolvedType.into(),
                 ),
             ],
-            ArraysPkg::Pop | ArraysPkg::Reverse => vec![ArrayType],
-            ArraysPkg::Push => vec![ArrayType, UnresolvedType],
+            ArraysPkg::Pop | ArraysPkg::Reverse => vec![
+                ArrayType(UnresolvedType.into())
+            ],
+            ArraysPkg::Push => vec![
+                ArrayType(UnresolvedType.into()), UnresolvedType
+            ],
             ArraysPkg::Reduce => vec![
-                ArrayType, UnresolvedType, FunctionType(vec![
+                ArrayType(UnresolvedType.into()), UnresolvedType, FunctionType(vec![
                     Parameter::new("a", UnresolvedType),
                     Parameter::new("b", UnresolvedType),
                 ], UnresolvedType.into())
@@ -266,7 +272,7 @@ impl Package for ArraysPkg {
             ArraysPkg::Filter
             | ArraysPkg::Map
             | ArraysPkg::Reverse
-            | ArraysPkg::ToArray => ArrayType,
+            | ArraysPkg::ToArray => ArrayType(UnresolvedType.into()),
             ArraysPkg::Len => NumberType(I64Kind),
             ArraysPkg::Pop | ArraysPkg::Push => BooleanType,
             ArraysPkg::Reduce => UnresolvedType,
@@ -330,9 +336,10 @@ impl CalPkg {
         match value {
             DateValue(epoch_millis) => {
                 let datetime = {
-                    let seconds = epoch_millis / 1000;
-                    let millis_part = epoch_millis % 1000;
-                    Local.timestamp(seconds, (millis_part * 1_000_000) as u32)
+                    match Local.timestamp_millis_opt(*epoch_millis) {
+                        MappedLocalTime::Single(dt) => dt,
+                        _ => return throw(Exact(format!("Incorrect timestamp_millis {}", epoch_millis))),
+                    }
                 };
                 match plat {
                     CalPkg::DateDay => Ok((ms, Number(I64Value(datetime.day() as i64)))),
@@ -828,7 +835,7 @@ impl Package for IoPkg {
 
     fn get_return_type(&self) -> DataType {
         match self {
-            IoPkg::FileReadText => ArrayType,
+            IoPkg::FileReadText => ArrayType(UnresolvedType.into()),
             IoPkg::FileCreate | IoPkg::FileExists => BooleanType,
             IoPkg::StdErr | IoPkg::StdOut => StringType,
         }
@@ -1402,7 +1409,7 @@ impl Package for NsdPkg {
             ],
             // (String, Array)
             NsdPkg::CreateIndex => vec![
-                StringType, ArrayType
+                StringType, ArrayType(UnresolvedType.into())
             ],
             // (String)
             NsdPkg::Exists
@@ -1776,7 +1783,9 @@ impl Package for OxidePkg {
             | OxidePkg::Version
             | OxidePkg::UUID => vec![],
             OxidePkg::Printf
-            | OxidePkg::Sprintf => vec![StringType, ArrayType],
+            | OxidePkg::Sprintf => vec![
+                StringType, ArrayType(UnresolvedType.into())
+            ],
         }
     }
 
@@ -2289,7 +2298,9 @@ impl Package for StringsPkg {
             }
             StringsPkg::Len => vec![StringType],
             // two-parameter (array, string)
-            StringsPkg::Join => vec![ArrayType, StringType],
+            StringsPkg::Join => vec![
+                ArrayType(UnresolvedType.into()), StringType
+            ],
             // three-parameter (string, i64, i64)
             StringsPkg::Substring => vec![StringType, NumberType(I64Kind), NumberType(I64Kind)],
             StringsPkg::SuperScript => vec![NumberType(I64Kind)],
@@ -2311,7 +2322,7 @@ impl Package for StringsPkg {
             // Number
             StringsPkg::IndexOf | StringsPkg::Len => NumberType(I64Kind),
             // Array
-            StringsPkg::Split => ArrayType,
+            StringsPkg::Split => ArrayType(StringType.into()),
             // String
             StringsPkg::SuperScript => StringType,
         }
@@ -4119,13 +4130,12 @@ mod tests {
             verify_exact_table(r#"
                 oxide::inspect("{ x = 1; x = x + 1 }")
             "#, vec![
-                  "|-------------------------------------------------------------------------------------------------|", 
-                  "| id | code      | model                                                                          |", 
-                  "|-------------------------------------------------------------------------------------------------|", 
-                r#"| 0  | x = 1     | SetVariables(Variable("x"), Literal(Number(I64Value(1))))                      |"#, 
-                r#"| 1  | x = x + 1 | SetVariables(Variable("x"), Plus(Variable("x"), Literal(Number(I64Value(1))))) |"#, 
-                  "|-------------------------------------------------------------------------------------------------|"
-            ])
+                r#"|-----------------------------------------------------------------------------------------------------|"#,
+                r#"| id | code      | model                                                                              |"#,
+                r#"|-----------------------------------------------------------------------------------------------------|"#,
+                r#"| 0  | x = 1     | SetVariables(Identifier("x"), Literal(Number(I64Value(1))))                        |"#,
+                r#"| 1  | x = x + 1 | SetVariables(Identifier("x"), Plus(Identifier("x"), Literal(Number(I64Value(1))))) |"#,
+                r#"|-----------------------------------------------------------------------------------------------------|"#])
         }
         
         #[test]
@@ -4515,7 +4525,7 @@ mod tests {
         use super::*;
         use crate::compiler::Compiler;
         use crate::expression::Expression::{
-            ColonColon, FunctionCall, StructureExpression, Variable,
+            ColonColon, FunctionCall, Identifier, StructureExpression,
         };
         use crate::interpreter::Interpreter;
         use crate::number_kind::NumberKind::F64Kind;
@@ -4811,11 +4821,11 @@ mod tests {
             assert_eq!(
                 code,
                 ColonColon(
-                    Box::from(Variable("tools".into())),
+                    Box::from(Identifier("tools".into())),
                     Box::from(FunctionCall {
-                        fx: Box::from(Variable("push".into())),
+                        fx: Box::from(Identifier("push".into())),
                         args: vec![
-                            Variable("stocks".into()),
+                            Identifier("stocks".into()),
                             StructureExpression(vec![
                                 ("symbol".to_string(), Literal(StringValue("DEX".into()))),
                                 (

@@ -75,7 +75,7 @@ mod tests {
         use crate::typed_values::TypedValue::{Boolean, Number};
 
         #[test]
-        fn test_assignment_via_array() {
+        fn test_assignment_via_array_destructuring() {
             verify_exact_code(r#"
             let [a, b, c, d] = [3, 5, 7, 9]
             a + b + c + d
@@ -83,7 +83,7 @@ mod tests {
         }
 
         #[test]
-        fn test_assignment_via_tuple() {
+        fn test_assignment_via_tuple_destructuring() {
             verify_exact_code(r#"
             let (x, y, z) = (3, 5, 7)
             x + y + z
@@ -138,6 +138,55 @@ mod tests {
             interpreter = verify_exact_value_with(interpreter, "x % 5", Number(F64Value(0.)));
             interpreter = verify_exact_value_with(interpreter, "x < 35", Boolean(false));
             interpreter = verify_exact_value_with(interpreter, "x >= 35", Boolean(true));
+        }
+    }
+
+    /// Coalesce tests
+    #[cfg(test)]
+    mod coalesce_tests {
+        use crate::testdata::verify_exact_code;
+
+        #[test]
+        fn test_coalesce_not_null_or_undefined() {
+            verify_exact_code(r#"
+                "Hello" ? "it was null or undefined"
+            "#, "\"Hello\"");
+        }
+
+        #[test]
+        fn test_coalesce_null() {
+            verify_exact_code(r#"
+                null ? "it was null or undefined"
+            "#, "\"it was null or undefined\"");
+        }
+
+        #[test]
+        fn test_coalesce_undefined() {
+            verify_exact_code(r#"
+                undefined ? "it was null or undefined"
+            "#, "\"it was null or undefined\"");
+        }
+
+        // Error::new('Boom!')
+        #[test]
+        fn test_coalesce_error() {
+            verify_exact_code(r#"
+                (Error::new()) !? "An error occurred"
+            "#, "\"An error occurred\"");
+        }
+
+        #[test]
+        fn test_coalesce_thrown_error() {
+            verify_exact_code(r#"
+                (throw "Boom!") !? "An error occurred"
+            "#, "\"An error occurred\"");
+        }
+
+        #[test]
+        fn test_coalesce_no_thrown_error() {
+            verify_exact_code(r#"
+                "No problem" !? "An error occurred"
+            "#, "\"No problem\"");
         }
     }
 
@@ -229,49 +278,6 @@ mod tests {
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
 
-        #[test]
-        fn test_coalesce_not_null_or_undefined() {
-            verify_exact_code(r#"
-                "Hello" ? "it was null or undefined"
-            "#, "\"Hello\"");
-        }
-
-        #[test]
-        fn test_coalesce_null() {
-            verify_exact_code(r#"
-                null ? "it was null or undefined"
-            "#, "\"it was null or undefined\"");
-        }
-
-        #[test]
-        fn test_coalesce_undefined() {
-            verify_exact_code(r#"
-                undefined ? "it was null or undefined"
-            "#, "\"it was null or undefined\"");
-        }
-
-        // Error::new('Boom!')
-        #[test]
-        fn test_coalesce_error() {
-            verify_exact_code(r#"
-                (Error::new()) !? "An error occurred"
-            "#, "\"An error occurred\"");
-        }
-
-        #[test]
-        fn test_coalesce_thrown_error() {
-            verify_exact_code(r#"
-                (throw "Boom!") !? "An error occurred"
-            "#, "\"An error occurred\"");
-        }
-
-        #[test]
-        fn test_coalesce_no_thrown_error() {
-            verify_exact_code(r#"
-                "No problem" !? "An error occurred"
-            "#, "\"No problem\"");
-        }
-        
         #[test]
         fn test_for_each_item_in_an_array() {
             verify_exact_code(r#"
@@ -448,49 +454,7 @@ mod tests {
     /// Declarative tests
     #[cfg(test)]
     mod declarative_tests {
-        use crate::testdata::{verify_exact_code, verify_exact_table};
-
-        #[test]
-        fn test_feature_and_scenarios() {
-            verify_exact_table(r#"
-            Feature "Matches function" {
-                Scenario "Compare Array contents: Equal" {
-                    assert(
-                        [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
-                    )
-                }
-                Scenario "Compare Array contents: Not Equal" {
-                    assert(!(
-                        [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
-                    ))
-                }
-                Scenario "Compare JSON contents (in sequence)" {
-                    assert(
-                        { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
-                    )
-                }
-                Scenario "Compare JSON contents (out of sequence)" {
-                    assert(
-                        { scores: [82 78 99], id: "A1537" }
-                                matches
-                        { id: "A1537", scores: [82 78 99] }
-                    )
-                }
-            }"#, vec![
-                r#"|------------------------------------------------------------------------------------------------------------------------|"#, 
-                r#"| id | level | item                                                                                    | passed | result |"#, 
-                r#"|------------------------------------------------------------------------------------------------------------------------|"#, 
-                r#"| 0  | 0     | Matches function                                                                        | true   | true   |"#, 
-                r#"| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |"#, 
-                r#"| 2  | 2     | assert [1, "a", "b", "c"] matches [1, "a", "b", "c"]                                    | true   | true   |"#, 
-                r#"| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |"#, 
-                r#"| 4  | 2     | assert !([1, "a", "b", "c"] matches [0, "x", "y", "z"])                                 | true   | true   |"#, 
-                r#"| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |"#, 
-                r#"| 6  | 2     | assert {first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"}                | true   | true   |"#, 
-                r#"| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |"#, 
-                r#"| 8  | 2     | assert {scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}  | true   | true   |"#, 
-                r#"|------------------------------------------------------------------------------------------------------------------------|"#]);
-        }
+        use crate::testdata::verify_exact_code;
 
         #[test]
         fn test_whenever_is_triggered() {
@@ -740,22 +704,22 @@ mod tests {
 
         #[test]
         fn test_type_of_array_bool() {
-            verify_exact_code("type_of([true, false])", r#"Array(2)"#);
+            verify_exact_code("type_of([true, false])", "Array(Boolean):::(2)");
         }
 
         #[test]
         fn test_type_of_array_i64() {
-            verify_exact_code("type_of([12, 76, 444])", "Array(3)");
+            verify_exact_code("type_of([12, 76, 444])", "Array(i64):::(3)");
         }
 
         #[test]
         fn test_type_of_array_str() {
-            verify_exact_code("type_of(['ciao', 'hello', 'world'])", "Array(3)");
+            verify_exact_code("type_of(['ciao', 'hello', 'world'])", "Array(String(5)):::(3)");
         }
 
         #[test]
         fn test_type_of_array_f64() {
-            verify_exact_code("type_of([12, 'hello', 76.78])", "Array(3)");
+            verify_exact_code("type_of([12.5, 123.2, 76.78])", "Array(f64):::(3)");
         }
 
         #[test]
@@ -815,6 +779,14 @@ mod tests {
         }
 
         #[test]
+        fn test_type_of_tuple() {
+            verify_exact_code(
+                "type_of(('ABC', 123.2, 2025-01-13T03:25:47.350Z))", 
+                "(String(3), f64, Date)"
+            );
+        }
+
+        #[test]
         fn test_type_of_uuid() {
             verify_exact_code("type_of(oxide::uuid())", "UUID");
         }
@@ -834,6 +806,54 @@ mod tests {
         #[test]
         fn test_type_of_undefined() {
             verify_exact_code("type_of(undefined)", "");
+        }
+    }
+
+    /// Verification/Unit-Testing tests
+    #[cfg(test)]
+    mod verification_tests {
+        use crate::testdata::verify_exact_table;
+
+        #[test]
+        fn test_basic_unit_test() {
+            verify_exact_table(r#"
+            Feature "Matches function" {
+                Scenario "Compare Array contents: Equal" {
+                    assert(
+                        [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+                    )
+                }
+                Scenario "Compare Array contents: Not Equal" {
+                    assert(!(
+                        [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
+                    ))
+                }
+                Scenario "Compare JSON contents (in sequence)" {
+                    assert(
+                        { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+                    )
+                }
+                Scenario "Compare JSON contents (out of sequence)" {
+                    assert(
+                        { scores: [82 78 99], id: "A1537" }
+                                matches
+                        { id: "A1537", scores: [82 78 99] }
+                    )
+                }
+            }"#, vec![
+                r#"|------------------------------------------------------------------------------------------------------------------------|"#,
+                r#"| id | level | item                                                                                    | passed | result |"#,
+                r#"|------------------------------------------------------------------------------------------------------------------------|"#,
+                r#"| 0  | 0     | Matches function                                                                        | true   | true   |"#,
+                r#"| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |"#,
+                r#"| 2  | 2     | assert [1, "a", "b", "c"] matches [1, "a", "b", "c"]                                    | true   | true   |"#,
+                r#"| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |"#,
+                r#"| 4  | 2     | assert !([1, "a", "b", "c"] matches [0, "x", "y", "z"])                                 | true   | true   |"#,
+                r#"| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |"#,
+                r#"| 6  | 2     | assert {first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"}                | true   | true   |"#,
+                r#"| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |"#,
+                r#"| 8  | 2     | assert {scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}  | true   | true   |"#,
+                r#"|------------------------------------------------------------------------------------------------------------------------|"#]);
         }
     }
 }

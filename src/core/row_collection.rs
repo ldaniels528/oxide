@@ -368,7 +368,7 @@ pub trait RowCollection: Debug {
         let columns = self.get_columns();
         for row in self.iter() {
             let ms = machine.with_row(columns, &row);
-            match ms.do_condition(condition) {
+            match ms.evaluate_condition(condition) {
                 Ok((_ms, Boolean(true) | Boolean(true))) => {
                     match callback(&result, row) {
                         ErrorValue(msg) => return ErrorValue(msg),
@@ -620,7 +620,7 @@ pub trait RowCollection: Debug {
                 Box::new(move |row: &Row| column_value == row[column_index]),
             TableScanTypes::ConditionScan { machine, condition } =>
                 Box::new(move |row: &Row| matches!(
-                        machine.with_row(self.get_columns(), row).do_condition(&condition),
+                        machine.with_row(self.get_columns(), row).evaluate_condition(&condition),
                         Ok((_ms, Boolean(true)))
                     )),
             TableScanTypes::CompleteScan => Box::new(|_row: &Row| true)
@@ -774,7 +774,7 @@ mod tests {
     use crate::byte_code_compiler::ByteCodeCompiler;
     use crate::dataframe::Dataframe;
     use crate::expression::Conditions::Equal;
-    use crate::expression::Expression::{Literal, Variable};
+    use crate::expression::Expression::{Identifier, Literal};
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::hybrid_row_collection::HybridRowCollection;
     use crate::journaling::EventSourceRowCollection;
@@ -1220,7 +1220,7 @@ mod tests {
 
             // fold and verify
             let condition = Equal(
-                Box::new(Variable("exchange".into())),
+                Box::new(Identifier("exchange".into())),
                 Box::new(Literal(StringValue("NYSE".into()))));
             assert_eq!(
                 rc.for_left_where(

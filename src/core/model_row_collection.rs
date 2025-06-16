@@ -6,6 +6,7 @@
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
 
+use crate::byte_row_collection::ByteRowCollection;
 use crate::field::FieldMetadata;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
@@ -14,7 +15,6 @@ use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Null;
 use serde::{Deserialize, Serialize};
-use crate::byte_row_collection::ByteRowCollection;
 
 /// Row-model-vector-based [RowCollection] implementation
 #[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize, PartialOrd)]

@@ -10,7 +10,7 @@ use crate::errors::Errors::{Exact, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, SyntaxErrors};
 use crate::expression::Conditions::{AssumedBoolean, False, True};
-use crate::expression::Expression::{Condition, Literal, Variable};
+use crate::expression::Expression::{Condition, Identifier, Literal};
 use crate::expression::{Conditions, Expression};
 use crate::machine::Machine;
 use crate::number_kind::NumberKind::F64Kind;
@@ -18,7 +18,7 @@ use crate::numbers::Numbers;
 use crate::sequences::Sequences::{TheArray, TheRange};
 use crate::sequences::{range_to_vec, Array, Sequence};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, Boolean, Kind, Number, StringValue, TableValue, TupleValue};
+use crate::typed_values::TypedValue::{ArrayValue, Boolean, CharValue, Kind, Number, StringValue, TableValue, TupleValue};
 use chrono::TimeDelta;
 use num_traits::ToPrimitive;
 
@@ -27,6 +27,43 @@ pub fn compute_time_millis(dt: TimeDelta) -> f64 {
         Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
         None => dt.num_milliseconds().to_f64().unwrap_or(0.)
     }
+}
+
+pub fn expand_escapes(input: &str) -> String {
+    let mut output = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some('n') => output.push('\n'),
+                Some('r') => output.push('\r'),
+                Some('t') => output.push('\t'),
+                Some('0') => output.push('\0'),
+                Some('\\') => output.push('\\'),
+                Some('\'') => output.push('\''),
+                Some('\"') => output.push('\"'),
+                Some('x') => {
+                    let hi = chars.next();
+                    let lo = chars.next();
+                    if let (Some(h), Some(l)) = (hi, lo) {
+                        if let Ok(byte) = u8::from_str_radix(&format!("{h}{l}"), 16) {
+                            output.push(byte as char);
+                        }
+                    }
+                }
+                Some(other) => {
+                    output.push('\\');
+                    output.push(other);
+                }
+                None => output.push('\\'),
+            }
+        } else {
+            output.push(c);
+        }
+    }
+
+    output
 }
 
 pub fn extract_value_fn0<F>(
@@ -164,10 +201,17 @@ pub fn pull_bool(value: &TypedValue) -> std::io::Result<bool> {
     }
 }
 
+pub fn pull_identifier_name(expr: &Expression) -> std::io::Result<String> {
+    match expr {
+        Identifier(name) => Ok(name.clone()),
+        z => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(z.to_code())))
+    }
+}
+
 pub fn pull_name(expr: &Expression) -> std::io::Result<String> {
     match expr {
         Literal(StringValue(name)) => Ok(name.clone()),
-        Variable(name) => Ok(name.clone()),
+        Identifier(name) => Ok(name.clone()),
         x => throw(TypeMismatch(StringExpected(x.to_code())))
     }
 }
@@ -181,7 +225,8 @@ pub fn pull_number(value: &TypedValue) -> std::io::Result<Numbers> {
 
 pub fn pull_string(value: &TypedValue) -> std::io::Result<String> {
     match value {
-        StringValue(string) => Ok(string.clone()),
+        CharValue(c) => Ok(c.to_string()),
+        StringValue(s) => Ok(s.clone()),
         x => throw(TypeMismatch(StringExpected(x.to_code())))
     }
 }
@@ -197,13 +242,6 @@ pub fn pull_type(value: &TypedValue) -> std::io::Result<DataType> {
     match value {
         Kind(data_type) => Ok(data_type.clone()),
         x => throw(Exact(format!("Expected type near {}", x.to_code())))
-    }
-}
-
-pub fn pull_variable_name(expr: &Expression) -> std::io::Result<String> {
-    match expr {
-        Variable(name) => Ok(name.clone()),
-        z => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(z.to_code())))
     }
 }
 

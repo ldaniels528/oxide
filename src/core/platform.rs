@@ -40,8 +40,8 @@ use std::io::{Read, Write};
 use std::ops::Deref;
 
 pub const MAJOR_VERSION: u8 = 1;
-pub const MINOR_VERSION: u8 = 44;
-pub const VERSION: &str = "0.44";
+pub const MINOR_VERSION: u8 = 45;
+pub const VERSION: &str = "0.45";
 
 /// Represents an Oxide Platform Package
 pub trait Package {
@@ -447,21 +447,21 @@ mod tests {
         // arrays
         assert_eq!(
             Arrays(ArraysPkg::Filter).to_code(),
-            "arrays::filter(a: Array, b: fn(item): Boolean)"
+            "arrays::filter(a: Array(), b: fn(item): Boolean)"
         );
-        assert_eq!(Arrays(ArraysPkg::Len).to_code(), "arrays::len(a: Array)");
+        assert_eq!(Arrays(ArraysPkg::Len).to_code(), "arrays::len(a: Array())");
         assert_eq!(
             Arrays(ArraysPkg::Map).to_code(),
-            "arrays::map(a: Array, b: fn(item))"
+            "arrays::map(a: Array(), b: fn(item))"
         );
-        assert_eq!(Arrays(ArraysPkg::Pop).to_code(), "arrays::pop(a: Array)");
+        assert_eq!(Arrays(ArraysPkg::Pop).to_code(), "arrays::pop(a: Array())");
         assert_eq!(
             Arrays(ArraysPkg::Push).to_code(),
-            "arrays::push(a: Array, b)"
+            "arrays::push(a: Array(), b)"
         );
         assert_eq!(
             Arrays(ArraysPkg::Reverse).to_code(),
-            "arrays::reverse(a: Array)"
+            "arrays::reverse(a: Array())"
         );
         assert_eq!(Arrays(ArraysPkg::ToArray).to_code(), "arrays::to_array(a)");
         // cal
@@ -554,7 +554,7 @@ mod tests {
         );
         assert_eq!(
             Strings(StringsPkg::Join).to_code(),
-            "str::join(a: Array, b: String)"
+            "str::join(a: Array(), b: String)"
         );
         assert_eq!(
             Strings(StringsPkg::Left).to_code(),

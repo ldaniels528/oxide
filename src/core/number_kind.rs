@@ -48,18 +48,6 @@ impl NumberKind {
         }
     }
 
-    pub fn decode_buffer(&self, bcc: &mut ByteCodeCompiler) -> std::io::Result<Numbers> {
-        let result = match self {
-            NumberKind::RowIdKind => Numbers::RowId(bcc.next_u64()),
-            NumberKind::F64Kind => Numbers::F64Value(bcc.next_f64()),
-            NumberKind::I64Kind => Numbers::I64Value(bcc.next_i64()),
-            NumberKind::I128Kind => Numbers::I128Value(bcc.next_i128()),
-            NumberKind::NaNKind => Numbers::NaNValue,
-            NumberKind::U128Kind => Numbers::U128Value(bcc.next_u128()),
-        };
-        Ok(result)
-    }
-
     pub fn get_default_value(&self) -> Numbers {
         match self {
             NumberKind::RowIdKind => Numbers::RowId(0),

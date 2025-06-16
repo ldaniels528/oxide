@@ -37,9 +37,10 @@ const PTR_LEN: usize = 8;
 /// Represents an Oxide-native datatype
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DataType {
-    ArrayType,
+    ArrayType(Box<DataType>),
     BinaryType,
     BooleanType,
+    CharType,
     DateTimeType,
     EnumType(Vec<Parameter>),
     ErrorType,
@@ -90,12 +91,21 @@ impl DataType {
     pub fn decode(&self, buffer: &Vec<u8>, offset: usize) -> TypedValue {
         use crate::typed_values::TypedValue::*;
         match self {
-            ArrayType => ArrayValue(Array::new()),
-            BinaryType => BinaryValue(Vec::new()),
-            BooleanType => ByteCodeCompiler::decode_u8(buffer, offset, |b| Boolean(b == 1)),
-            DateTimeType => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
+            ArrayType(..) => ArrayValue(Array::new()),
+            Self::BinaryType => BinaryValue(Vec::new()),
+            Self::BooleanType => ByteCodeCompiler::decode_u8(buffer, offset, |b| Boolean(b == 1)),
+            Self::CharType => {
+                std::str::from_utf8(&buffer[offset..offset+4].to_vec()).ok()
+                    .and_then(|s| {
+                        let mut chars = s.chars();
+                        chars.next()
+                    })
+                    .map(|c| CharValue(c))
+                    .unwrap_or(Undefined)
+            }
+            Self::DateTimeType => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| DateValue(i64::from_be_bytes(b))),
             EnumType(_) => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec()),
-            ErrorType => ErrorValue(Exact(ByteCodeCompiler::decode_string(buffer, offset, 255).to_string())),
+            Self::ErrorType => ErrorValue(Exact(ByteCodeCompiler::decode_string(buffer, offset, 255).to_string())),
             FixedSizeType(data_type, size) => match data_type.deref() {
                 StringType => StringValue(ByteCodeCompiler::decode_string(buffer, offset, *size).to_string()),
                 TableType(params) => TableValue(Dataframe::Model(ModelRowCollection::from_bytes(params, buffer.to_vec()))),
@@ -108,7 +118,7 @@ impl DataType {
             },
             NumberType(kind) => Number(kind.decode(buffer, offset)),
             PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
-            StringType => StringValue(ByteCodeCompiler::decode_string(buffer, offset, 255)),
+            Self::StringType => StringValue(ByteCodeCompiler::decode_string(buffer, offset, 255)),
             StructureType(params) => Structured(Hard(HardStructure::from_parameters(params.to_vec()))),
             TableType(params) => TableValue(Dataframe::Model(ModelRowCollection::from_bytes(params, buffer.to_vec()))),
             TupleType(params) => TupleValue(params.iter().map(|dt| dt.decode(buffer, offset)).collect()),
@@ -117,53 +127,11 @@ impl DataType {
         }
     }
 
-    /// decodes the typed value based on the supplied data type and buffer
-    pub fn decode_bcc(&self, bcc: &mut ByteCodeCompiler) -> std::io::Result<TypedValue> {
-        use crate::typed_values::TypedValue::*;
-        let tv = match self {
-            ArrayType => ArrayValue(Array::from(bcc.next_array()?)),
-            BinaryType => BinaryValue(bcc.next_blob()),
-            BooleanType => Boolean(bcc.next_bool()),
-            DateTimeType => DateValue(bcc.next_i64()),
-            EnumType(labels) => {
-                let index = bcc.next_u32() as usize;
-                StringValue(labels[index].get_name().to_string())
-            }
-            ErrorType => ErrorValue(Exact(bcc.next_string())),
-            FixedSizeType(data_type, size) => {
-                // TODO revisit
-                data_type.decode_bcc(bcc)?
-            }
-            FunctionType(columns, returns) => Function {
-                params: columns.to_owned(),
-                body: Box::new(ByteCodeCompiler::disassemble(bcc)?),
-                returns: returns.deref().clone(),
-            },
-            NumberType(kind) => Number(kind.decode_buffer(bcc)?),
-            PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
-            StringType => StringValue(bcc.next_string()),
-            StructureType(params) => Structured(Hard(bcc.next_struct_with_parameters(params.to_vec())?)),
-            TableType(columns, ..) => TableValue(Model(bcc.next_table_with_columns(columns)?)),
-            TupleType(..) => TupleValue(bcc.next_array()?),
-            DataType::UnresolvedType => Undefined,
-            DataType::UUIDType => UUIDValue(bcc.next_u128()),
-        };
-        Ok(tv)
-    }
-
     pub fn decode_field_value(&self, buffer: &Vec<u8>, offset: usize) -> TypedValue {
         let metadata = FieldMetadata::decode(buffer[offset]);
         if metadata.is_active {
             self.decode(buffer, offset + 1)
         } else { TypedValue::Null }
-    }
-
-    pub fn decode_field_value_bcc(&self, bcc: &mut ByteCodeCompiler, offset: usize) -> std::io::Result<TypedValue> {
-        let metadata: FieldMetadata = FieldMetadata::decode(bcc[offset]);
-        let value: TypedValue = if metadata.is_active {
-            self.decode_bcc(bcc)?
-        } else { TypedValue::Null };
-        Ok(value)
     }
 
     pub fn encode(&self, value: &TypedValue) -> std::io::Result<Vec<u8>> {
@@ -186,6 +154,7 @@ impl DataType {
     /// parses a datatype expression (e.g. "String(20)")
     pub fn from_str(param_type: &str) -> std::io::Result<DataType> {
         let model = Compiler::build(param_type)?;
+        println!("DataType::from_str: '{param_type}' -> {model:?}");
         Self::decipher_type(&model)
     }
     
@@ -197,12 +166,13 @@ impl DataType {
     pub fn compute_fixed_size(&self) -> usize {
         use crate::data_types::DataType::*;
         let width: usize = match self {
-            ArrayType => PTR_LEN,
-            BinaryType => PTR_LEN,
-            BooleanType => 1,
-            DateTimeType => 8,
+            ArrayType(..) => PTR_LEN,
+            Self::BinaryType => PTR_LEN,
+            Self::BooleanType => 1,
+            Self::CharType => 4,
+            Self::DateTimeType => 8,
             EnumType(..) => 2,
-            ErrorType => 256,
+            Self::ErrorType => 256,
             FixedSizeType(data_type, size) =>
                 match data_type.deref() {
                     BinaryType | StringType =>
@@ -215,7 +185,7 @@ impl DataType {
             FunctionType(columns, ..) => columns.len() * PTR_LEN,
             NumberType(nk) => nk.compute_fixed_size(),
             PlatformOpsType(..) => 4,
-            StringType => PTR_LEN,
+            Self::StringType => PTR_LEN,
             StructureType(columns) => columns.len() * PTR_LEN,
             TableType(columns) => columns.len() * PTR_LEN,
             TupleType(types) => types.iter().map(|t| t.compute_fixed_size()).sum(),
@@ -228,16 +198,17 @@ impl DataType {
     pub fn get_default_value(&self) -> TypedValue {
         use crate::typed_values::TypedValue::*;
         match self {
-            ArrayType => ArrayValue(Array::new()),
-            BinaryType => BinaryValue(vec![]),
-            BooleanType => Boolean(false),
-            DateTimeType => DateValue(Local::now().timestamp_millis()),
+            ArrayType(..) => ArrayValue(Array::new()),
+            Self::BinaryType => BinaryValue(vec![]),
+            Self::BooleanType => Boolean(false),
+            Self::CharType => CharValue('\0'),
+            Self::DateTimeType => DateValue(Local::now().timestamp_millis()),
             EnumType(..) => Number(I64Value(0)),
-            ErrorType => ErrorValue(Errors::Empty),
+            Self::ErrorType => ErrorValue(Errors::Empty),
             FixedSizeType(data_type, _) => data_type.get_default_value(),
             FunctionType(params, returns) => Function {
                 params: params.to_vec(),
-                body: Box::new(Literal(returns.get_default_value())),
+                body: Literal(returns.get_default_value()).into(),
                 returns: returns.deref().clone(),
             },
             NumberType(kind) => Number(kind.get_default_value()),
@@ -256,7 +227,7 @@ impl DataType {
 
     pub fn is_compatible(&self, other: &DataType) -> bool {
         match (self, other) {
-            (ArrayType, ArrayType) |
+            (ArrayType(..), ArrayType(..)) |
             (BinaryType, BinaryType) |
             (StringType, StringType) |
             (UnresolvedType, _) | (_, UnresolvedType) => true,
@@ -284,7 +255,7 @@ impl DataType {
 
     /// Indicates whether the given name represents a known type
     pub fn is_type_name(name: &str) -> bool {
-        decipher_model_variable(name).is_ok()
+        decipher_model_identifier(name).is_ok()
     }
 
     pub fn render(types: &Vec<DataType>) -> String {
@@ -311,6 +282,7 @@ impl DataType {
         fn sized(name: &str, size: usize) -> String {
             match size {
                 0 => name.to_string(),
+                n if name.ends_with(")") => format!("{name}:::({n})"),
                 n => format!("{name}({n})"),
             }
         }
@@ -321,12 +293,13 @@ impl DataType {
             }
         }
         match self {
-            ArrayType => "Array".into(),
-            BinaryType => "Binary".into(), // UTF8
-            BooleanType => "Boolean".into(),
-            DateTimeType => "Date".into(),
+            ArrayType(data_type) => format!("Array({})", data_type.to_code()),
+            Self::BinaryType => "Binary".into(), // UTF8
+            Self::BooleanType => "Boolean".into(),
+            Self::CharType => "Char".into(),
+            Self::DateTimeType => "Date".into(),
             EnumType(labels) => parameterized("Enum", labels, true),
-            ErrorType => "Error".into(),
+            Self::ErrorType => "Error".into(),
             FixedSizeType(data_type, size) => sized(data_type.to_code().as_str(), *size),
             FunctionType(params, returns) =>
                 format!("fn({}){}", Parameter::render(params),
@@ -336,7 +309,7 @@ impl DataType {
                         }),
             NumberType(nk) => nk.get_type_name(),
             PlatformOpsType(pf) => pf.to_code(),
-            StringType => "String".into(),
+            Self::StringType => "String".into(),
             StructureType(params) => parameterized("Struct", params, false),
             TableType(params) => parameterized("Table", params, false),
             TupleType(types) => typed("", types),
@@ -362,6 +335,14 @@ impl Display for DataType {
 fn decipher_model(model: &Expression) -> std::io::Result<DataType> {
     use crate::typed_values::TypedValue::Structured;
     match model {
+        // e.g. Array(Date):::(12)
+        ColonColonColon(model, size) => {
+            match size.deref() {
+                Literal(TypedValue::Number(n)) =>
+                    Ok(FixedSizeType(decipher_model(model)?.into(), n.to_usize())),
+                _ => throw(Exact(format!("Invalid type declaration: try {}:::({})", model, 20)))
+            }
+        }
         // e.g. [String, String, f64]
         ArrayExpression(params) => decipher_model_array(params),
         // e.g. String(80)
@@ -373,7 +354,7 @@ fn decipher_model(model: &Expression) -> std::io::Result<DataType> {
         // e.g. (f64, f64, f64)
         TupleExpression(params) => decipher_model_tuple(params),
         // e.g. i64
-        Variable(name) => decipher_model_variable(name),
+        Identifier(name) => decipher_model_identifier(name),
         other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
     }
 }
@@ -383,7 +364,10 @@ fn decipher_model_array(items: &Vec<Expression>) -> std::io::Result<DataType> {
     for item in items {
         kinds.push(decipher_model(item)?); 
     }
-    Ok(FixedSizeType(ArrayType.into(), kinds.len()))
+    match kinds.as_slice() { 
+        [kind] => Ok(ArrayType(kind.clone().into())),
+        other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
+    }
 }
 
 fn decipher_model_function_call(
@@ -391,7 +375,10 @@ fn decipher_model_function_call(
     args: &Vec<Expression>,
 ) -> std::io::Result<DataType> {
     use crate::typed_values::TypedValue::Number;
-
+    fn expect_params(args: &Vec<Expression>, f: fn(Vec<Parameter>) -> DataType) -> std::io::Result<DataType> {
+        let params = compiler::convert_to_parameters(args.to_vec())?;
+        Ok(f(params))
+    }
     fn expect_size(args: &Vec<Expression>, data_type: DataType) -> std::io::Result<DataType> {
         match args.as_slice() {
             [] => Ok(data_type),
@@ -400,6 +387,14 @@ fn decipher_model_function_call(
             other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
         }
     }
+    fn expect_type(args: &Vec<Expression>, f: fn(DataType) -> DataType) -> std::io::Result<DataType> {
+        let data_type = match args.as_slice() {
+            [] => UnresolvedType,
+            [arg] => decipher_model(arg)?,
+            other => return throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
+        };
+        Ok(f(data_type))
+    }
     fn expect_types(args: &Vec<Expression>, f: fn(Vec<DataType>) -> DataType) -> std::io::Result<DataType> {
         let mut data_types = vec![];
         for arg in args {
@@ -407,16 +402,12 @@ fn decipher_model_function_call(
         }
         Ok(f(data_types))
     }
-    fn expect_params(args: &Vec<Expression>, f: fn(Vec<Parameter>) -> DataType) -> std::io::Result<DataType> {
-        let params = compiler::convert_to_parameters(args.to_vec())?;
-        Ok(f(params))
-    }
 
     // decode the type
     match fx {
-        Variable(name) =>
+        Identifier(name) =>
             match name.as_str() {
-                "Array" => expect_size(args, ArrayType),
+                "Array" => expect_type(args, |data_type| ArrayType(data_type.into())),
                 "Binary" => expect_size(args, BinaryType),
                 "Enum" => expect_params(args, |params| EnumType(params)),
                 "fn" => expect_params(args, |params| FunctionType(params, UnresolvedType.into())),
@@ -424,7 +415,7 @@ fn decipher_model_function_call(
                 "Struct" => expect_params(args, |params| StructureType(params)),
                 "Table" => expect_params(args, |params| TableType(params)),
                 "Tuple" => expect_types(args, |types| TupleType(types)),
-                type_name if args.is_empty() => decipher_model_variable(type_name),
+                type_name if args.is_empty() => decipher_model_identifier(type_name),
                 type_name => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(type_name.into())))
             }
         other => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code())))
@@ -439,20 +430,24 @@ fn decipher_model_tuple(items: &Vec<Expression>) -> std::io::Result<DataType> {
     Ok(TupleType(kinds))
 }
 
-fn decipher_model_variable(name: &str) -> std::io::Result<DataType> {
+fn decipher_model_identifier(name: &str) -> std::io::Result<DataType> {
     match name {
+        "Array" => Ok(ArrayType(UnresolvedType.into())),
         "Boolean" => Ok(BooleanType),
+        "Char" => Ok(CharType),
         "Date" => Ok(DateTimeType),
         "Enum" => Ok(EnumType(vec![])),
         "Error" => Ok(ErrorType),
         "f64" => Ok(NumberType(F64Kind)),
-        "Fn" => Ok(FunctionType(vec![], Box::new(UnresolvedType))),
+        "Fn" => Ok(FunctionType(vec![], UnresolvedType.into())),
         "i64" => Ok(NumberType(I64Kind)),
         "i128" => Ok(NumberType(I128Kind)),
+        "Number" => Ok(NumberType(I64Kind)),
         "RowId" => Ok(NumberType(RowIdKind)),
         "String" => Ok(StringType),
         "Struct" => Ok(StructureType(vec![])),
         "Table" => Ok(TableType(vec![])),
+        "Tuple" => Ok(TupleType(vec![])),
         "UUID" => Ok(UUIDType),
         "u128" => Ok(NumberType(U128Kind)),
         type_name => throw(TypeMismatch(UnrecognizedTypeName(type_name.to_string())))
@@ -471,8 +466,9 @@ mod tests {
         #[test]
         fn test_arrays() {
             verify_compatibility(
-                FixedSizeType(ArrayType.into(), 800), 
-                ArrayType)
+                FixedSizeType(ArrayType(DateTimeType.into()).into(), 800),
+                ArrayType(DateTimeType.into())
+            )
         }
 
         #[test]
@@ -497,12 +493,11 @@ mod tests {
         }
 
         fn verify_compatibility(a: DataType, b: DataType) {
-            println!("Verifying compatibility of {} and {}", a, b);
-            assert!(a.is_compatible(&b));
+            assert!(a.is_compatible(&b), "{} is not compatible with {}", a, b);
         }
 
         fn verify_incompatibility(a: DataType, b: DataType) {
-            assert!(!a.is_compatible(&b));
+            assert!(!a.is_compatible(&b), "{} is compatible with {}", a, b);
         }
     }
 
@@ -518,7 +513,26 @@ mod tests {
 
         #[test]
         fn test_array() {
-            verify_type_construction("Array(12)", FixedSizeType(ArrayType.into(), 12));
+            verify_type_construction(
+                "Array()",
+                ArrayType(UnresolvedType.into()).into()
+            );
+        }
+
+        #[test]
+        fn test_array_of_type() {
+            verify_type_construction(
+                "Array(Date)",
+                ArrayType(DateTimeType.into()).into()
+            );
+        }
+
+        #[test]
+        fn test_array_fixed_of_type() {
+            verify_type_construction(
+                "Array(Date):::(12)", 
+                FixedSizeType(ArrayType(DateTimeType.into()).into(), 12)
+            );
         }
 
         #[test]

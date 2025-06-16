@@ -165,7 +165,7 @@ impl HashIndexConfig {
 mod tests {
     use super::*;
     use crate::data_types::DataType::{FixedSizeType, NumberType, StringType};
-    use crate::expression::Expression::{ColonColon, FunctionCall, StructureExpression, Variable};
+    use crate::expression::Expression::{ColonColon, FunctionCall, Identifier, StructureExpression};
     use crate::namespaces::Namespace;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::F64Value;
@@ -206,13 +206,13 @@ mod tests {
                 Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
             ],
             StructureExpression(vec![
-                ("symbol".to_string(), Variable("symbol".into())),
-                ("market".to_string(), Variable("exchange".into())),
-                ("last_sale".to_string(), Variable("last_sale".into())),
+                ("symbol".to_string(), Identifier("symbol".into())),
+                ("market".to_string(), Identifier("exchange".into())),
+                ("last_sale".to_string(), Identifier("last_sale".into())),
                 ("process_time".to_string(), ColonColon(
-                    Box::new(Variable("cal".into())),
+                    Box::new(Identifier("cal".into())),
                     Box::new(FunctionCall {
-                        fx: Box::new(Variable("now".into())),
+                        fx: Box::new(Identifier("now".into())),
                         args: vec![]
                     })))
             ]),
@@ -229,13 +229,13 @@ mod tests {
                 Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
             ],
             code: StructureExpression(vec![
-                ("symbol".to_string(), Variable("symbol".into())),
-                ("market".to_string(), Variable("exchange".into())),
-                ("last_sale".to_string(), Variable("last_sale".into())),
+                ("symbol".to_string(), Identifier("symbol".into())),
+                ("market".to_string(), Identifier("exchange".into())),
+                ("last_sale".to_string(), Identifier("last_sale".into())),
                 ("process_time".to_string(), ColonColon(
-                    Box::new(Variable("cal".into())),
+                    Box::new(Identifier("cal".into())),
                     Box::new(FunctionCall {
-                        fx: Box::new(Variable("now".into())),
+                        fx: Box::new(Identifier("now".into())),
                         args: vec![]
                     })))
             ]),

@@ -62,7 +62,7 @@ use crate::table_renderer::TableRenderer;
 use crate::testdata::verify_exact_table_with;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use crate::utils::{lift_condition, pull_array, pull_bool, pull_name, pull_number, pull_variable_name, pull_vec};
+use crate::utils::{lift_condition, pull_array, pull_bool, pull_identifier_name, pull_name, pull_number, pull_vec};
 use crate::{compiler, query_engine};
 use shared_lib::cnv_error;
 
@@ -174,7 +174,7 @@ impl Machine {
             CodeBlock(ops) => self.evaluate_scope(ops),
             ColonColon(a, b) => self.do_colon_colon(a, b),
             ColonColonColon(a, b) => self.do_colon_colon_colon(a, b),
-            Condition(condition) => self.do_condition(condition),
+            Condition(condition) => self.evaluate_condition(condition),
             Divide(a, b) => self.eval_inline_2(a, b, |aa, bb| aa / bb),
             DoWhile { condition, code } => self.eval_while(condition, code),
             ElementAt(a, b) => self.do_index_of_collection(a, b),
@@ -213,7 +213,7 @@ impl Machine {
             TypeDef(expr) => self.do_type_decl(expr),
             TypeOf(expr) => self.do_type_of(expr),
             Use(ops) => self.do_uses(ops),
-            Variable(name) => self.do_get_variable(name),
+            Identifier(name) => self.do_get_variable(name),
             WhenEver { condition, code } => self.eval_when_statement(condition, code),
             While { condition, code } => self.eval_while(condition, code),
             Yield(a) => self.do_yield(a),
@@ -478,7 +478,7 @@ impl Machine {
         let ms = self.clone();
         match field {
             // ex: Error::new("Process failed")
-            FunctionCall { fx, args } if pull_variable_name(fx)? == "new" => {
+            FunctionCall { fx, args } if pull_identifier_name(fx)? == "new" => {
                 // `Error::new("Process failed")` becomes `Error("Process failed")`
                 let data_type = DataType::decipher_type(&FunctionCall {
                     fx: container.clone().into(),
@@ -489,7 +489,7 @@ impl Machine {
             }
             // must be a platform function. ex: nsd::replay(stocks)
             _ => {
-                let container_name = pull_variable_name(container)?;
+                let container_name = pull_identifier_name(container)?;
                 match ms.get(container_name.as_str()) {
                     Some(Structured(structure)) => 
                         self.do_colon_colon_structure(&container_name, Box::from(structure), field),
@@ -527,7 +527,7 @@ impl Machine {
             // stock::last_sale = 24.11
             SetVariables(var_expr, value_expr) => {
                 match var_expr.deref() {
-                    Variable(name) => {
+                    Identifier(name) => {
                         let (ms, value) = ms.evaluate(value_expr)?;
                         Ok((ms.with_variable(container_name, Structured(structure.update_by_name(name, value))), Boolean(true)))
                     }
@@ -536,7 +536,7 @@ impl Machine {
                 }
             }
             // stock::symbol
-            Variable(name) => Ok((ms, structure.get(name))),
+            Identifier(name) => Ok((ms, structure.get(name))),
             z => throw(Exact(format!("Illegal field '{}' for structure {}",
                                      z.to_code(), container_name)))
         }
@@ -557,7 +557,7 @@ impl Machine {
             // stocks::describe()
             FunctionCall { fx, args } => {
                 match fx.deref() {
-                    Variable(name) => {
+                    Identifier(name) => {
                         let (ms, args) = self.eval_as_vec(args)?;
                         let mut f_args = vec![TableValue(df)];
                         f_args.extend(args);
@@ -592,7 +592,7 @@ impl Machine {
                 self.do_function_call(fx, &enriched_args)
             }
             // 3.2:::kb //=> kb(3.2)
-            Variable(..) => {
+            Identifier(..) => {
                 self.do_function_call(field, &vec![
                     object.to_owned()
                 ])
@@ -603,7 +603,7 @@ impl Machine {
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
-    pub fn do_condition(
+    pub fn evaluate_condition(
         &self,
         condition: &Conditions,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -640,7 +640,7 @@ impl Machine {
         Ok((machine, Boolean(a.contains(&b))))
     }
 
-    /// Performs destructure of an [ArrayExpression], [Variable]
+    /// Performs destructure of an [ArrayExpression], [Identifier]
     /// or [TupleExpression] for variable assignment.
     /// #### Parameters
     /// - identifiers: the identifier(s) for which to deconstruct
@@ -673,7 +673,7 @@ impl Machine {
                 }
                 Ok(ms)
             }
-            Variable(name) => Ok(self.with_variable(name.as_str(), values.clone())),
+            Identifier(name) => Ok(self.with_variable(name.as_str(), values.clone())),
             z => throw(Exact(format!("{} could not be deconstructed", z.to_code())))
         }
     }
@@ -922,7 +922,7 @@ impl Machine {
         let result = match self.get(name) {
             Some(value) => value,
             None if DataType::is_type_name(name) =>
-                Kind(DataType::decipher_type(&Variable(name.into()))?),
+                Kind(DataType::decipher_type(&Identifier(name.into()))?),
             None => return throw(Exact(format!("Variable '{}' not found", name))),
         };
         Ok((self.clone(), result))
@@ -1153,10 +1153,10 @@ impl Machine {
                 match self.evaluate(container)? {
                     (ms, Structured(structure)) =>
                         match var_expr.deref() {
-                            Variable(name) => {
+                            Identifier(name) => {
                                 let (ms, value) = ms.evaluate(value_expr)?;
                                 Ok((ms.with_variable(
-                                    &pull_variable_name(container)?, 
+                                    &pull_identifier_name(container)?,
                                     Structured(structure.update_by_name(name, value))), Boolean(true)))
                             }
                             z => throw(Exact(format!("Illegal field '{}' for structure {}", z, container)))
@@ -1164,7 +1164,7 @@ impl Machine {
                     (_, z) => throw(Exact(format!("Expected a structure near {}", z)))
                 }
             // field access: stock.last_sale
-            Variable(field_name) => 
+            Identifier(field_name) => 
                 match self.evaluate(container)? {
                     (ms, Structured(st)) =>
                         match st.get_opt(field_name.as_str()) {
@@ -1263,7 +1263,7 @@ impl Machine {
                     match cond_expr.deref() {
                         // condition case: n when n < 100 => "Accepted"
                         Condition(When(given_expr, given_cond)) => {
-                            let name = pull_variable_name(given_expr)?;
+                            let name = pull_identifier_name(given_expr)?;
                             let ms = ms.with_variable(name.as_str(), host_value.clone());
                             if let (ms, Boolean(true)) = ms.do_assume_boolean(given_cond)? {
                                 return ms.evaluate(op_expr);
@@ -1276,7 +1276,7 @@ impl Machine {
                             }
                         }
                         // variable case: n => "Rejected"
-                        Variable(name) => return ms.with_variable(name, host_value.clone()).evaluate(&op_expr),
+                        Identifier(name) => return ms.with_variable(name, host_value.clone()).evaluate(&op_expr),
                         // unsupported cases ...
                         z => return throw(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
                     }
@@ -1301,7 +1301,7 @@ impl Machine {
         variable: &Expression,
         condition: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let name = pull_variable_name(variable)?;
+        let name = pull_identifier_name(variable)?;
         let ms = self.with_variable(name.as_str(), Undefined);
         let (ms, host_value) = self.evaluate(variable)?;
         self.do_assume_boolean(condition)
@@ -1320,7 +1320,7 @@ impl Machine {
                     match op {
                         SetVariables(var_expr, value_expr) =>
                             match var_expr.deref() {
-                                Variable(name) =>
+                                Identifier(name) =>
                                     match self.evaluate(value_expr) {
                                         Ok((_, value)) => Structured(Hard(structure.with_variable(name, value))),
                                         Err(err) => ErrorValue(Exact(err.to_string()))
@@ -1333,7 +1333,7 @@ impl Machine {
                     match op {
                         SetVariables(var_expr, expr) =>
                             match var_expr.deref() {
-                                Variable(name) =>
+                                Identifier(name) =>
                                     match self.evaluate(expr) {
                                         Ok((_, value)) => Structured(Soft(structure.with_variable(name, value))),
                                         Err(err) => ErrorValue(Exact(err.to_string()))
@@ -1523,8 +1523,8 @@ impl Machine {
                 }
             // stock::last_sale = 24.11
             ColonColon(container, variable) => {
-                let container_name = pull_variable_name(container.deref())?;
-                let variable_name = pull_variable_name(variable.deref())?;
+                let container_name = pull_identifier_name(container.deref())?;
+                let variable_name = pull_identifier_name(variable.deref())?;
                 match ms.get(container_name.as_str()) {
                     None => throw(Exact(format!("Expected a variable near {}", container.to_code()))),
                     Some(Structured(Hard(hs))) => {
@@ -1553,7 +1553,7 @@ impl Machine {
                     z => throw(Exact(format!("Expected a Tuple near {}", z)))
                 }
             // a := 7
-            Variable(name) => {
+            Identifier(name) => {
                 let ms1 = ms.set(name.as_str(), result.clone());
                 let (ms2, _) = ms1.eval_whenever_observations()?;
                 Ok((ms2, result))
@@ -1603,7 +1603,7 @@ impl Machine {
         let mut variables = vec![];
         for item in items {
             match item {
-                Variable(name) => variables.push(name.into()),
+                Identifier(name) => variables.push(name.into()),
                 other =>
                     return throw(Exact(format!("Expected a variable near {}", other.to_code())))
             }
@@ -1643,7 +1643,7 @@ impl Machine {
                         // name = "Hello World"
                         SetVariables(var_expr, value_expr) =>
                             match var_expr.deref() {
-                                Variable(name) =>
+                                Identifier(name) =>
                                     match self.evaluate(value_expr) {
                                         Ok((_, value)) => Structured(structure.update_by_name(name, value)),
                                         Err(err) => ErrorValue(Exact(err.to_string()))
@@ -1854,7 +1854,7 @@ impl Machine {
         let (machine, results, errors) = ops.iter()
             .fold((self.to_owned(), Vec::new(), Vec::new()),
                   |(ma, mut array, mut errors), op| match op {
-                      Variable(name) => {
+                      Identifier(name) => {
                           array.push(name.to_owned());
                           (ma, array, errors)
                       }
@@ -2023,7 +2023,7 @@ mod tests {
     #[test]
     fn test_divide() {
         let machine = Machine::empty().with_variable("x", Number(I64Value(50)));
-        let model = Divide(Box::new(Variable("x".into())), Box::new(Literal(Number(I64Value(7)))));
+        let model = Divide(Box::new(Identifier("x".into())), Box::new(Literal(Number(I64Value(7)))));
         assert_eq!(model.to_code(), "x / 7");
 
         let (machine, result) = machine.evaluate(&model).unwrap();
@@ -2111,7 +2111,7 @@ mod tests {
         fn test_if_else_flow_1() {
             let model = If {
                 condition: Box::new(Condition(GreaterThan(
-                    Box::new(Variable("num".into())),
+                    Box::new(Identifier("num".into())),
                     Box::new(Literal(Number(I64Value(25)))),
                 ))),
                 a: Box::new(Literal(StringValue("Yes".into()))),
@@ -2132,7 +2132,7 @@ mod tests {
         fn test_if_else_flow_2() {
             let model = If {
                 condition: Box::new(Condition(LessThan(
-                    Box::new(Variable("num".into())),
+                    Box::new(Identifier("num".into())),
                     Box::new(Literal(Number(I64Value(10)))),
                 ))),
                 a: Box::new(Literal(StringValue("Yes".into()))),
@@ -2154,14 +2154,14 @@ mod tests {
             let model = While {
                 // num < 5
                 condition: Box::new(Condition(LessThan(
-                    Box::new(Variable("num".into())),
+                    Box::new(Identifier("num".into())),
                     Box::new(Literal(Number(I64Value(5)))),
                 ))),
                 // num = num + 1
                 code: SetVariables(
-                    Variable("num".into()).into(),
+                    Identifier("num".into()).into(),
                     Plus(
-                        Variable("num".into()).into(),
+                        Identifier("num".into()).into(),
                         Literal(Number(I64Value(1))).into(),
                     ).into()).into(),
             };
@@ -2189,7 +2189,7 @@ mod tests {
                             Parameter::new("n", NumberType(I64Kind))
                         ],
                         body: Box::new(Plus(
-                            Box::new(Variable("n".into())),
+                            Box::new(Identifier("n".into())),
                             Box::new(Literal(Number(I64Value(5)))))),
                         returns: NumberType(I64Kind),
                     })),
@@ -2216,9 +2216,9 @@ mod tests {
                     Parameter::new("b", NumberType(I64Kind)),
                 ],
                 body: Box::new(Plus(Box::new(
-                    Variable("a".into())
+                    Identifier("a".into())
                 ), Box::new(
-                    Variable("b".into())
+                    Identifier("b".into())
                 ))),
                 returns: UnresolvedType,
             };
@@ -2227,7 +2227,7 @@ mod tests {
             let machine = Machine::empty();
             let (machine, result) = machine.evaluate_scope(&vec![
                 SetVariables(
-                    Variable("add".into()).into(),
+                    Identifier("add".into()).into(),
                     Literal(fx.to_owned()).into()
                 )
             ]).unwrap();
@@ -2256,13 +2256,13 @@ mod tests {
                 Box::new(ArrowVerticalBar(
                     Box::new(Literal(StringValue("Hello".to_string()))),
                     Box::new(ColonColon(
-                        Box::new(Variable("util".to_string())),
-                        Box::new(Variable("md5".to_string())),
+                        Box::new(Identifier("util".to_string())),
+                        Box::new(Identifier("md5".to_string())),
                     )),
                 )),
                 Box::new(ColonColon(
-                    Box::new(Variable("util".to_string())),
-                    Box::new(Variable("hex".to_string())),
+                    Box::new(Identifier("util".to_string())),
+                    Box::new(Identifier("hex".to_string())),
                 )),
             );
 
@@ -2285,19 +2285,19 @@ mod tests {
                 body: Box::new(If {
                     // n <= 1
                     condition: Box::new(Condition(LessOrEqual(
-                        Box::new(Variable("n".into())),
+                        Box::new(Identifier("n".into())),
                         Box::new(Literal(Number(I64Value(1)))),
                     ))),
                     // 1
                     a: Box::new(Literal(Number(I64Value(1)))),
                     // n * f(n - 1)
                     b: Some(Box::from(Multiply(
-                        Box::from(Variable("n".into())),
+                        Box::from(Identifier("n".into())),
                         Box::from(FunctionCall {
-                            fx: Box::new(Variable("f".into())),
+                            fx: Box::new(Identifier("f".into())),
                             args: vec![
                                 Minus(
-                                    Box::from(Variable("n".into())),
+                                    Box::from(Identifier("n".into())),
                                     Box::from(Literal(Number(I64Value(1)))),
                                 ),
                             ],
@@ -2311,7 +2311,7 @@ mod tests {
             // f(5.0)
             let machine = Machine::empty().with_variable("f", model);
             let (machine, result) = machine.evaluate(&FunctionCall {
-                fx: Box::new(Variable("f".into())),
+                fx: Box::new(Identifier("f".into())),
                 args: vec![
                     Literal(Number(I64Value(5)))
                 ],

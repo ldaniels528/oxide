@@ -37,6 +37,9 @@ use std::ops::Deref;
 /// ```
 /// stock <~ stocks
 /// ```
+/// ```
+/// stock <~ (stocks where exchange is "NASDAQ")
+/// ```
 pub fn eval_pull_row(
     ms: &Machine,
     container: &Expression,
@@ -56,13 +59,16 @@ pub fn eval_pull_row(
 
     // return the table
     match container {
-        Variable(name) => Ok((ms.with_variable(name, row), Boolean(true))),
+        Identifier(name) => Ok((ms.with_variable(name, row), Boolean(true))),
         other => throw(Exact(other.to_code()))
     }
 }
 
-/// Pulls all rows (retrieves then deletes them) from a table structure
+/// Pulls all qualifying rows (retrieves then deletes them) from a table structure
 /// #### Examples
+/// ```
+/// my_stocks <<~ (stocks where exchange is "NASDAQ" limit 3)
+/// ```
 /// ```
 /// my_stocks <<~ (stocks limit 3)
 /// ```
@@ -102,7 +108,7 @@ pub fn eval_pull_rows(
     
     // return the table
     match container {
-        Variable(name) => Ok((ms.with_variable(name, TableValue(Model(mrc))), Boolean(true))),
+        Identifier(name) => Ok((ms.with_variable(name, TableValue(Model(mrc))), Boolean(true))),
         other => throw(Exact(other.to_code()))
     }
 }
@@ -519,7 +525,7 @@ fn split_row_into_fields_and_values(
     row: &Row
 ) -> (Vec<Expression>, Vec<Expression>) {
     let my_fields = columns.iter()
-        .map(|tc| Variable(tc.get_name().to_string()))
+        .map(|tc| Identifier(tc.get_name().to_string()))
         .collect::<Vec<_>>();
     let my_values = row.get_values().iter()
         .map(|v| Literal(v.to_owned()))
@@ -583,7 +589,7 @@ fn resolve_field_as_column(
         NamedValue(label, expr) =>
             match expr.deref() {
                 // price: last_sale
-                Variable(name) =>
+                Identifier(name) =>
                     match column_dict.get(name) {
                         Some(dt) => Ok(Column::new(label, dt.clone(), Null, offset)),
                         None => column_not_found(name, columns),
@@ -595,7 +601,7 @@ fn resolve_field_as_column(
                     }
             }
         // last_sale
-        Variable(name) =>
+        Identifier(name) =>
             match column_dict.get(name) {
                 Some(dt) => Ok(Column::new(name, dt.clone(), Null, offset)),
                 None => column_not_found(name, columns),
@@ -610,7 +616,7 @@ fn column_not_found<A>(name: &str, columns: &Vec<Column>) -> std::io::Result<A> 
         .map(|c| c.get_name().into()).collect::<Vec<_>>()))
 }
 
-/// SQL tests
+/// Oxide QL tests
 #[cfg(test)]
 mod tests {
     use crate::columns::Column;

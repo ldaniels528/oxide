@@ -3,6 +3,7 @@
 // Dataframe class
 ////////////////////////////////////////////////////////////////////
 
+use crate::blob_file_row_collection::BLOBFileRowCollection;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
 use crate::data_types::DataType;
@@ -26,7 +27,6 @@ use crate::typed_values::TypedValue::{Number, StringValue};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
-use crate::blob_file_row_collection::BLOBFileRowCollection;
 
 /// DataFrame is a logical representation of a table
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]

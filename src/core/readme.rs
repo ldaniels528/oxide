@@ -851,7 +851,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                 |stocks
             "#, '|')
         ],
-        Expression::Variable(..) => vec![
+        Expression::Identifier(..) => vec![
             strip_margin(r#"
                 |let (a, b, c) = (3, 5, 7)
                 |c > b

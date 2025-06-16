@@ -17,7 +17,6 @@ use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
-use crate::row_metadata::RowMetadata;
 use crate::sequences::{Array, Tuple};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
@@ -568,27 +567,6 @@ impl Row {
         Self::new(id, columns.iter().map(|c| c.get_default_value()).collect())
     }
 
-    pub fn from_buffer(
-        columns: &Vec<Column>,
-        buffer: &mut ByteCodeCompiler,
-    ) -> std::io::Result<(Self, RowMetadata)> {
-        // if the buffer is empty, just return an empty row
-        let size = buffer.next_u64();
-        if size == 0 {
-            return Ok((Self::create(0, &columns), RowMetadata::new(false)));
-        }
-        let metadata = RowMetadata::decode(buffer.next_u8());
-        let id = buffer.next_row_id();
-        let mut values = Vec::new();
-        for column in columns {
-            let data_type = column.get_data_type();
-            let offset = column.get_offset();
-            let field = data_type.decode_field_value_bcc(buffer, offset)?;
-            values.push(field);
-        }
-        Ok((Self::new(id as usize, values), metadata))
-    }
-
     pub fn from_json(columns: &Vec<Column>, value: &Value) -> Row {
         let values = columns.iter()
             .map(|column| value.get(column.get_name())
@@ -661,7 +639,7 @@ impl Row {
     ) -> bool {
         if let Some(condition) = condition {
             let machine = machine.with_row(columns, &self);
-            match machine.do_condition(condition) {
+            match machine.evaluate_condition(condition) {
                 Ok((_, Boolean(true) | Null | Undefined)) => true,
                 Ok(_) => false,
                 Err(..) => false

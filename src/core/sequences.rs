@@ -4,7 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType;
-use crate::data_types::DataType::{ArrayType, TableType, UnresolvedType};
+use crate::data_types::DataType::{ArrayType, NumberType, TableType, UnresolvedType};
 use crate::data_types::DataType::{FixedSizeType, TupleType};
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::Model;
@@ -12,6 +12,7 @@ use crate::errors::throw;
 use crate::errors::Errors::{Exact, TypeMismatch, UnsupportedFeature};
 use crate::errors::TypeMismatchErrors::StructExpected;
 use crate::model_row_collection::ModelRowCollection;
+use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers::I64Value;
 use crate::row_collection::RowCollection;
 use crate::structures::Structures::{Firm, Hard};
@@ -118,7 +119,7 @@ impl Sequence for Sequences {
         match self {
             Sequences::TheArray(array) => array.get_type(),
             Sequences::TheDataframe(df) => TableType(df.get_parameters()),
-            Sequences::TheRange(..) => ArrayType,
+            Sequences::TheRange(..) => ArrayType(NumberType(I64Kind).into()),
             Sequences::TheTuple(tuple) => TupleType(tuple.iter().map(|v| v.get_type()).collect()),
         }
     }
@@ -277,7 +278,7 @@ impl Array {
         match kinds.as_slice() {
             [] => UnresolvedType,
             [kind] => kind.clone(),
-            _ => UnresolvedType
+            kinds => DataType::best_fit(kinds.to_vec())
         }
     }
 
@@ -344,7 +345,8 @@ impl Sequence for Array {
 
     /// Returns the type
     fn get_type(&self) -> DataType {
-        FixedSizeType(ArrayType.into(), self.the_array.len())
+        let data_type = self.get_component_type();
+        FixedSizeType(ArrayType(data_type.into()).into(), self.the_array.len())
     }
 
     fn get_values(&self) -> Vec<TypedValue> {
@@ -607,7 +609,8 @@ mod tests {
     /// Unit array tests
     #[cfg(test)]
     mod array_tests {
-        use crate::data_types::DataType::{ArrayType, FixedSizeType, StringType, UnresolvedType};
+        use crate::data_types::DataType;
+        use crate::data_types::DataType::{ArrayType, FixedSizeType, StringType};
         use crate::numbers::Numbers::I64Value;
         use crate::sequences::{Array, Sequence, Tuple};
         use crate::testdata::*;
@@ -648,13 +651,13 @@ mod tests {
             assert_eq!(array.get_component_type(), FixedSizeType(StringType.into(), 5));
 
             array.push(Boolean(true));
-            assert_eq!(array.get_component_type(), UnresolvedType);
+            assert_eq!(array.get_component_type(), DataType::BooleanType);
 
             array.push(StringValue("Hello World".into()));
             array.push(StringValue("Hello World".into()));
-            assert_eq!(array.get_component_type(), UnresolvedType);
+            assert_eq!(array.get_component_type(), FixedSizeType(StringType.into(), 11));
 
-            assert_eq!(array.get_type(), FixedSizeType(ArrayType.into(), 4));
+            assert_eq!(array.get_type(), FixedSizeType(ArrayType(FixedSizeType(StringType.into(), 11).into()).into(), 4));
         }
 
         #[test]

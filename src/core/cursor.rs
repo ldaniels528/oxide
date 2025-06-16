@@ -168,7 +168,7 @@ mod tests {
     use crate::columns::Column;
     use crate::cursor::Cursor;
     use crate::expression::Conditions::Equal;
-    use crate::expression::Expression::{Literal, Variable};
+    use crate::expression::Expression::{Identifier, Literal};
     use crate::testdata::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue::StringValue;
 
@@ -209,7 +209,7 @@ mod tests {
     fn test_cursor_with_filtered_rows() {
         let (brc, _) = create_sample_data_2();
         let mut cursor = Cursor::filter(Box::new(brc), Equal(
-            Box::new(Variable("exchange".to_string())),
+            Box::new(Identifier("exchange".to_string())),
             Box::new(Literal(StringValue("NYSE".to_string()))),
         ));
         assert_eq!(cursor.next().unwrap(), Some(make_quote(0, "ABC", "NYSE", 11.77)));

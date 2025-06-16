@@ -10,7 +10,7 @@ use crate::dataframe::Dataframe::Disk;
 use crate::errors::Errors::{Exact, TypeMismatch};
 use crate::errors::{throw, TypeMismatchErrors};
 use crate::expression::Expression;
-use crate::expression::Expression::{FunctionCall, Literal, Variable};
+use crate::expression::Expression::{FunctionCall, Identifier, Literal};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
@@ -483,7 +483,7 @@ impl RowCollection for TableFunction {
             .with_variable(machine::FX_SELF, self.fx.clone())
             .with_row(self.get_columns(), &row);
         let fx_call = FunctionCall {
-            fx: Box::new(Variable(machine::FX_SELF.into())),
+            fx: Box::new(Identifier(machine::FX_SELF.into())),
             args: row.get_values().iter().map(|v| Literal(v.clone())).collect(),
         };
         match ms.evaluate(&fx_call).map(|(_, v)| v)? {
