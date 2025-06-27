@@ -206,6 +206,7 @@ pub enum Expression {
     },
     Include(Box<Expression>),
     Infix(Box<Expression>, Box<Expression>),
+    IsDefined(Box<Expression>),
     Literal(TypedValue),
     MatchExpression(Box<Expression>, Vec<Expression>),
     Minus(Box<Expression>, Box<Expression>),
@@ -223,11 +224,13 @@ pub enum Expression {
     Return(Box<Expression>),
     Scenario {
         title: Box<Expression>,
+        inherits: Option<String>,
         verifications: Vec<Expression>,
     },
     SetVariables(Box<Expression>, Box<Expression>),
     SetVariablesExpr(Box<Expression>, Box<Expression>),
     StructureExpression(Vec<(String, Expression)>),
+    Test(Box<Expression>),
     Throw(Box<Expression>),
     TupleExpression(Vec<Expression>),
     TypeDef(Box<Expression>),
@@ -242,24 +245,17 @@ pub enum Expression {
         code: Box<Expression>,
     },
     Yield(Box<Expression>),
+    Zip(Box<Expression>, Box<Expression>),
     ////////////////////////////////////////////////////////////////////
     // SQL models
     ////////////////////////////////////////////////////////////////////
-    Delete {
-        from: Box<Expression>,
-        condition: Option<Conditions>,
-        limit: Option<Box<Expression>>,
-    },
+    Delete { from: Box<Expression> },
     GroupBy { from: Box<Expression>, columns: Vec<Expression> },
     Having { from: Box<Expression>, condition: Conditions },
     Limit { from: Box<Expression>, limit: Box<Expression> },
     OrderBy { from: Box<Expression>, columns: Vec<Expression> },
-    Select { from: Option<Box<Expression>>, fields: Vec<Expression> },
-    Undelete {
-        from: Box<Expression>,
-        condition: Option<Conditions>,
-        limit: Option<Box<Expression>>,
-    },
+    Select { from: Box<Expression>, fields: Vec<Expression> },
+    Undelete { from: Box<Expression> },
     Where { from: Box<Expression>, condition: Conditions },
 }
 
@@ -340,6 +336,7 @@ impl Expression {
             Include(path) => format!("include {}", Self::decompile(path)),
             Infix(a, b) =>
                 format!("{}.{}", Self::decompile(a), Self::decompile(b)),
+            IsDefined(a) => format!("is_defined({})", Self::decompile(a)),
             Literal(value) => value.to_code(),
             MatchExpression(a, b) =>
                 format!("match {} {}", Self::decompile(a), Self::decompile(&ArrayExpression(b.clone()))),
@@ -373,13 +370,16 @@ impl Expression {
                 format!("&{}", Self::decompile(a)),
             Return(a) =>
                 format!("return {}", Self::decompile(a)),
-            Scenario { title, verifications } => {
+            Scenario { title, inherits, verifications } => {
                 let title = title.to_code();
+                let inherits = inherits.clone()
+                    .map(|name| format!(" inherits \"{name}\""))
+                    .unwrap_or("".into());
                 let verifications = verifications.iter()
                     .map(|s| s.to_code())
                     .collect::<Vec<_>>()
                     .join("\n");
-                format!("scenario {title} {{\n{verifications}\n}}")
+                format!("scenario {title}{inherits} {{\n{verifications}\n}}")
             }
             SetVariables(vars, values) =>
                 format!("{} = {}", Self::decompile(vars), Self::decompile(values)),
@@ -390,6 +390,11 @@ impl Expression {
                     .map(|(k, v)| format!("{}: {}", k, v))
                     .collect::<Vec<String>>()
                     .join(", ")),
+            Test(expr) => format!("test{}", match expr.deref() {
+                Condition(cond) => format!(" where {}", Self::decompile_cond(cond)),
+                Literal(TypedValue::Null | TypedValue::Undefined) => "".to_string(),
+                other => format!(" {}", Self::decompile(other)),
+            }),
             Throw(message) => format!("throw({})", Self::decompile(message)),
             TupleExpression(args) => format!("({})", Self::decompile_list(args)),
             TypeDef(expr) => format!("typedef({})", expr.to_code()),
@@ -401,11 +406,13 @@ impl Expression {
                 format!("while {} {}", Self::decompile(condition), Self::decompile(code)),
             Yield(expr) =>
                 format!("yield {}", Self::decompile(expr)),
+            Zip(a, b) =>
+                format!("{} <|> {}", Self::decompile(a), Self::decompile(b)),
             ////////////////////////////////////////////////////////////////////
             // SQL models
             ////////////////////////////////////////////////////////////////////
-            Delete { from, condition, limit } =>
-                format!("delete {} where {}{}", Self::decompile(from), Self::decompile_cond_opt(condition), Self::decompile_opt(limit)),
+            Delete { from } =>
+                format!("delete {}", Self::decompile(from)),
             GroupBy { from, columns } =>
                 format!("{} group_by {}", Self::decompile(from), Self::decompile_list(columns)),
             Having { from, condition } =>
@@ -415,10 +422,9 @@ impl Expression {
             OrderBy { from, columns } =>
                 format!("{} order_by {}", Self::decompile(from), Self::decompile_list(columns)),
             Select { fields, from } =>
-                format!("select {}{}", Self::decompile_list(fields),
-                        from.to_owned().map(|e| format!(" from {}", Self::decompile(&e))).unwrap_or("".into())),
-            Undelete { from, condition, limit } =>
-                format!("undelete {} where {}{}", Self::decompile(from), Self::decompile_cond_opt(condition), Self::decompile_opt(limit)),
+                format!("select {} from {}", Self::decompile_list(fields), Self::decompile(from)),
+            Undelete { from } =>
+                format!("undelete {}", Self::decompile(from)),
             Where { from, condition } =>
                 format!("{} where {}", Self::decompile(from), Self::decompile_cond(condition)),
         }
@@ -540,7 +546,7 @@ impl Expression {
             CodeBlock(ops) => ops.last().map(|op| Self::infer_with_hints(op, hints))
                 .unwrap_or(UnresolvedType),
             // platform functions: cal::now()
-            ColonColon(a, b) | ColonColonColon(a, b) =>
+            ColonColon(a, b) =>
                 match (a.deref(), b.deref()) {
                     (Identifier(package), FunctionCall { fx, .. }) =>
                         match fx.deref() {
@@ -552,6 +558,8 @@ impl Expression {
                         }
                     _ => UnresolvedType
                 }
+            ColonColonColon(..) => UnresolvedType,
+            Zip(a, b) => Self::infer_a_or_b(a, b, hints),
             Condition(..) => BooleanType,
             Divide(a, b) => Self::infer_a_or_b(a, b, hints),
             DoWhile { code, .. } => Self::infer_with_hints(code, hints),
@@ -565,7 +573,7 @@ impl Expression {
             Include(..) => BooleanType,
             Infix(container, field) => match container.deref() {
                 StructureExpression(key_values) => {
-                    let new_hints = Self::convert_to_combined_hints(key_values, hints);
+                    let (_, new_hints) = Self::convert_to_combined_hints(key_values, hints);
                     Self::infer_with_hints(field, &new_hints)
                 }
                 Identifier(name) => {
@@ -576,6 +584,7 @@ impl Expression {
                 }
                 _ => UnresolvedType
             }
+            IsDefined(..) => BooleanType,
             Literal(Function { body, .. }) => Self::infer_with_hints(body, hints),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
@@ -606,15 +615,10 @@ impl Expression {
             SetVariablesExpr(_, b) => b.infer_type(),
             // structures: { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
             StructureExpression(key_values) => {
-                let mut params = vec![];
-                let mut combined_hints = hints.clone();
-                for (name, value) in key_values {
-                    let param = Parameter::new(name.clone(), Self::infer_with_hints(value, &combined_hints));
-                    params.push(param.clone());
-                    combined_hints.push(param);
-                }
+                let (params, _) = Self::convert_to_combined_hints(key_values, &hints);
                 StructureType(params)
             }
+            Test(..) => TableType(vec![]),
             Throw(..) => ErrorType,
             // tuples: (100, 23, 36)
             TupleExpression(values) => TupleType(values.iter()
@@ -652,7 +656,7 @@ impl Expression {
     fn convert_to_combined_hints(
         key_values: &Vec<(String, Expression)>,
         hints: &Vec<Parameter>,
-    ) -> Vec<Parameter> {
+    ) -> (Vec<Parameter>, Vec<Parameter>) {
         let mut params = vec![];
         let mut combined_hints = hints.clone();
         for (name, value) in key_values {
@@ -660,7 +664,7 @@ impl Expression {
             params.push(param.clone());
             combined_hints.push(param);
         }
-        combined_hints
+        (params, combined_hints)
     }
 
     /// provides type inference for the given [Expression]s
@@ -1317,7 +1321,7 @@ mod inference_tests {
 
     #[test]
     fn test_infer_infix() {
-        // TODO find a way to resolve: stock.last_sale
+        // TODO find a way to resolve the type: stock.last_sale
         verify_data_type(r#"
             let stock = { symbol: "TED", exchange: "AMEX", last_sale: 13.37 }
             stock.last_sale

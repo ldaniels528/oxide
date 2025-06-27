@@ -108,19 +108,9 @@ pub trait Structure {
         serde_json::to_string_pretty(&value).map_err(|e| cnv_error!(e))
     }
 
-    fn to_row(&self) -> Row {
-        Row::new(0, self.get_values())
-    }
-
     fn to_table(&self) -> ModelRowCollection {
-        let row = self.to_row();
+        let row = Row::new(0, self.get_values());
         let columns = Column::from_parameters(&self.get_parameters());
-        ModelRowCollection::from_columns_and_rows(&columns, &vec![row])
-    }
-
-    fn to_table_with_params(&self, params: &Vec<Parameter>) -> ModelRowCollection {
-        let row = self.to_row();
-        let columns = Column::from_parameters(params);
         ModelRowCollection::from_columns_and_rows(&columns, &vec![row])
     }
 
@@ -150,9 +140,40 @@ impl Structures {
     pub fn to_dataframe(&self) -> Dataframe {
         match self {
             Self::Firm(row, params) => row.to_dataframe(params),
-            s => Model(ModelRowCollection::from_parameters_and_rows(&s.get_parameters(), &vec![s.to_row()])),
+            s => Model(ModelRowCollection::from_parameters_and_rows(
+                &s.get_parameters(),
+                &vec![Row::new(0, s.get_values())])),
         }
     }
+
+    pub fn transform_row(
+        src: &Vec<Parameter>,
+        src_values: &Vec<TypedValue>,
+        dest: &Vec<Parameter>,
+    ) -> Row {
+        let mut dest_values = vec![Null; dest.len()];
+        for (n, param) in dest.iter().enumerate() {
+            match src.iter().position(|mp| mp.get_name() == param.get_name()) {
+                Some(pos) if pos < src_values.len() => dest_values[n] = src_values[pos].clone(),
+                _ => {}
+            };
+        }
+        Row::new(0, dest_values)
+    }
+
+    pub fn transform_rows(
+        src_params: &Vec<Parameter>,
+        src_rows: &Vec<Row>,
+        dest_params: &Vec<Parameter>,
+    ) -> Vec<Row> {
+        src_rows.iter()
+            .map(|row| Structures::transform_row(
+                src_params,
+                &row.get_values(),
+                dest_params,
+            )).collect::<Vec<_>>()
+    }
+    
 }
 
 impl Display for Structures {
@@ -203,7 +224,7 @@ impl Structure for Structures {
     /// ex: Struct(symbol: String(8), exchange: String(8), last_sale: f64)
     fn to_code(&self) -> String {
         match self {
-            Self::Firm(row, columns) => row.to_code_with_keys(columns),
+            Self::Firm(row, columns) => row.to_code_with_params(columns),
             Self::Hard(hs) => hs.to_code(),
             Self::Soft(ss) => ss.to_code(),
         }
@@ -418,7 +439,9 @@ impl Structure for HardStructure {
     }
 
     fn to_table(&self) -> ModelRowCollection {
-        ModelRowCollection::from_parameters_and_rows(&self.fields, &vec![self.to_row()])
+        ModelRowCollection::from_parameters_and_rows(
+            &self.fields,
+            &vec![Row::new(0, self.get_values())])
     }
 
     fn update_by_name(&self, name: &str, value: TypedValue) -> Structures {
@@ -680,7 +703,7 @@ impl Row {
     }
 
     /// Returns the structure as source code
-    pub fn to_code_with_keys(&self, params: &Vec<Parameter>) -> String {
+    pub fn to_code_with_params(&self, params: &Vec<Parameter>) -> String {
         format!("{{{}}}", self.get_named_tuples(params).iter()
             .map(|(name, value)| (name.to_string(), value.to_code()))
             .map(|(k, v)| format!("{k}: {v}"))
@@ -742,6 +765,17 @@ impl Row {
         format!("[{}]", self.values.iter()
             .map(|tv| tv.to_code())
             .collect::<Vec<_>>().join(", "))
+    }
+
+    pub fn to_table_with_params(&self, params: &Vec<Parameter>) -> ModelRowCollection {
+        let columns = Column::from_parameters(params);
+        ModelRowCollection::from_columns_and_rows(&columns, &vec![
+            Structures::transform_row(
+                &self.get_parameters(),
+                &self.get_values(),
+                &params
+            )
+        ])
     }
 
     /// Creates a new [Row] from the supplied fields and values
@@ -896,6 +930,47 @@ mod tests {
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
         use serde_json::json;
+
+        #[test]
+        fn test_transform_row() {
+            let a = Soft(SoftStructure::new(&vec![
+                ("last_sale", Number(F64Value(12.56))),
+                ("exchange", StringValue("NYSE".into())),
+                ("symbol", StringValue("ABC".into()))
+            ]));
+
+            let b = Soft(SoftStructure::new(&vec![
+                ("symbol", StringValue("XYZ".into())),
+                ("exchange", StringValue("NASDAQ".into())),
+                ("last_sale", Number(F64Value(38.33))),
+                ("rank", Number(I64Value(12))),
+            ]));
+
+            assert_eq!(
+                Structures::transform_row(
+                    &b.get_parameters(),
+                    &b.get_values(),
+                    &a.get_parameters(),
+                ),
+                Row::new(0, vec![
+                    Number(F64Value(38.33)),
+                    StringValue("NASDAQ".into()),
+                    StringValue("XYZ".into())
+                ]));
+
+            assert_eq!(
+                Structures::transform_row(
+                    &a.get_parameters(),
+                    &a.get_values(),
+                    &b.get_parameters(),
+                ),
+                Row::new(0, vec![
+                    StringValue("ABC".into()),
+                    StringValue("NYSE".into()),
+                    Number(F64Value(12.56)),
+                    Null
+                ]));
+        }
 
         #[test]
         fn test_array_of_soft_structures() {
@@ -1494,21 +1569,6 @@ mod tests {
                 Number(F64Value(17.76)),
             ]);
             assert_eq!(structure.to_json().to_string(), r#"{"exchange":"NASDAQ","last_sale":17.76,"symbol":"WSKY"}"#)
-        }
-
-        #[test]
-        fn test_to_row() {
-            let structure = HardStructure::new(make_quote_parameters(), vec![
-                StringValue("ZZY".into()),
-                StringValue("NYSE".into()),
-                Number(F64Value(77.66)),
-            ]);
-            let values = structure.to_row().get_values();
-            assert_eq!(values, vec![
-                StringValue("ZZY".into()),
-                StringValue("NYSE".into()),
-                Number(F64Value(77.66)),
-            ])
         }
 
         #[test]

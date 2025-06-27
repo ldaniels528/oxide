@@ -23,10 +23,11 @@ use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers::*;
 use crate::packages::*;
 use crate::parameter::Parameter;
+use crate::platform::PackageOps::Agg;
 use crate::row_collection::RowCollection;
-use crate::structures::SoftStructure;
 use crate::structures::Structure;
 use crate::structures::Structures::Soft;
+use crate::structures::{Row, SoftStructure};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use actix::ActorStreamExt;
@@ -40,8 +41,8 @@ use std::io::{Read, Write};
 use std::ops::Deref;
 
 pub const MAJOR_VERSION: u8 = 1;
-pub const MINOR_VERSION: u8 = 45;
-pub const VERSION: &str = "0.45";
+pub const MINOR_VERSION: u8 = 46;
+pub const VERSION: &str = "0.46";
 
 /// Represents an Oxide Platform Package
 pub trait Package {
@@ -61,14 +62,15 @@ pub trait Package {
 /// Represents an enumeration of Oxide Platform Package Functions
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum PackageOps {
+    Agg(AggPkg),
     Arrays(ArraysPkg),
     Cal(CalPkg),
     Durations(DurationsPkg),
     Io(IoPkg),
     Math(MathPkg),
     Nsd(NsdPkg),
-    Oxide(OxidePkg),
     Os(OsPkg),
+    Oxide(OxidePkg),
     Strings(StringsPkg),
     Tools(ToolsPkg),
     Utils(UtilsPkg),
@@ -104,7 +106,8 @@ impl PackageOps {
     }
 
     pub fn get_contents() -> Vec<PackageOps> {
-        let mut contents = Vec::with_capacity(125);
+        let mut contents = Vec::with_capacity(150);
+        contents.extend(AggPkg::get_contents());
         contents.extend(ArraysPkg::get_contents());
         contents.extend(CalPkg::get_contents());
         contents.extend(DurationsPkg::get_contents());
@@ -130,6 +133,7 @@ impl PackageOps {
 
     pub fn get_package(&self) -> Box<dyn Package> {
         match self {
+            PackageOps::Agg(pkg) => Box::new(pkg.clone()),
             PackageOps::Arrays(pkg) => Box::new(pkg.clone()),
             PackageOps::Cal(pkg) => Box::new(pkg.clone()),
             PackageOps::Durations(pkg) => Box::new(pkg.clone()),
@@ -234,40 +238,40 @@ impl PackageOps {
 
     pub(crate) fn apply_fn_over_table(
         ms: Machine,
-        df: &Dataframe,
+        src: &Dataframe,
         function: &TypedValue,
         logic: fn(TypedValue, TypedValue) -> std::io::Result<Option<TypedValue>>,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        // cache the columns and column names
-        let columns = df.get_columns();
-        let column_names = columns
+        // cache the source columns and column names
+        let src_columns = src.get_columns();
+        let src_column_names = src_columns
             .iter()
             .map(|col| col.get_name().to_string())
             .collect::<Vec<_>>();
 
         // apply the function over all rows of the table
-        let (mut new_arr, mut new_params, mut is_table) = (vec![], vec![], true);
-        for row in df.get_rows() {
+        let (mut new_arr, mut dest_params, mut is_table) = (vec![], vec![], true);
+        for src_row in src.get_rows() {
             // build the typed-value version of the row
-            let tuple_val = column_names
+            let src_tuple_val = src_column_names
                 .iter()
-                .zip(row.get_values())
+                .zip(src_row.get_values())
                 .map(|(key, value)| (key.to_string(), value))
                 .collect::<Vec<_>>();
-            // build the expression version of the row
-            let tuple_expr = tuple_val
+            // build the expression variant of the row
+            let src_tuple_expr = src_tuple_val
                 .iter()
                 .map(|(key, value)| (key.to_string(), Literal(value.clone())))
                 .collect::<Vec<_>>();
             // apply the function on the current row
-            let ms1 = ms.with_row(columns, &row);
+            let ms1 = ms.with_row(src_columns, &src_row);
             let (_, result) = ms1.evaluate(&FunctionCall {
                 fx: Literal(function.clone()).into(),
-                args: vec![StructureExpression(tuple_expr)],
+                args: vec![StructureExpression(src_tuple_expr)],
             })?;
             // if an outcome was produced, capture it
             if let Some(outcome) = logic(
-                Structured(Soft(SoftStructure::from_tuples(tuple_val))),
+                Structured(Soft(SoftStructure::from_tuples(src_tuple_val))),
                 result,
             )? {
                 let outcome_params = match &outcome {
@@ -278,34 +282,27 @@ impl PackageOps {
                         vec![]
                     }
                 };
-                new_params = Parameter::merge_parameters(new_params, outcome_params);
+                dest_params = Parameter::merge_parameters(dest_params, outcome_params);
                 new_arr.push(outcome)
             }
         }
 
         // return a table (preferably) or an array
         if is_table {
-            Ok((
-                ms,
-                TableValue(Model({
-                    let mut rows = vec![];
-                    for item in new_arr {
-                        let transformed_rows = match item {
-                            Structured(s) => vec![s.to_row()],
-                            TableValue(df) => df.get_rows(),
-                            z => {
-                                return throw(TypeMismatch(StructExpected(
-                                    z.to_code(),
-                                    z.to_code(),
-                                )))
-                            }
-                        };
-                        rows.extend(transformed_rows)
-                    }
-                    let mut rc = ModelRowCollection::from_parameters(&new_params);
-                    rc.append_rows(rows)?;
-                    rc
-                })),
+            Ok((ms, TableValue(Model({
+                let mut dest_rows = vec![];
+                for item in new_arr {
+                    let transformed_rows = match item {
+                        Structured(s) => vec![Row::new(0, s.get_values())],
+                        TableValue(df) => df.get_rows(),
+                        z => return throw(TypeMismatch(StructExpected(z.to_code(), z.to_code(), )))
+                    };
+                    dest_rows.extend(transformed_rows)
+                }
+                let mut dest = ModelRowCollection::from_parameters(&dest_params);
+                dest.append_rows(dest_rows)?;
+                dest
+            })),
             ))
         } else {
             Ok((ms, ArrayValue(Array::from(new_arr))))
@@ -425,6 +422,7 @@ mod tests {
                 println!("// {}", last_module)
             }
             let opcode = match &pf {
+                Agg(op) => format!("Agg(AggPkg::{:?})", op),
                 Arrays(op) => format!("Arrays(ArraysPkg::{:?})", op),
                 Cal(op) => format!("Cal(CalPkg::{:?})", op),
                 Durations(op) => format!("Durations(DurationsPkg::{:?})", op),
@@ -643,6 +641,6 @@ mod tests {
             Www(WwwPkg::URLEncode).to_code(),
             "www::url_encode(s: String)"
         );
-        assert_eq!(Www(WwwPkg::Serve).to_code(), "www::serve(n: i64)");
+        assert_eq!(Www(WwwPkg::Serve).to_code(), "http::serve(n: i64)");
     }
 }

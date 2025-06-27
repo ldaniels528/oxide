@@ -34,7 +34,7 @@ use crate::data_types::DataType::*;
 use crate::sequences::{is_in_range, Array, Sequence};
 
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Disk, Model};
+use crate::dataframe::Dataframe::{Disk, Model, TestReport};
 
 use crate::errors::Errors::*;
 use crate::errors::SyntaxErrors::IllegalExpression;
@@ -48,21 +48,24 @@ use crate::file_row_collection::FileRowCollection;
 use crate::machine::Observations::VariableObservation;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
+use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers::*;
 use crate::object_config::{HashIndexConfig, ObjectConfig};
 use crate::packages::{ToolsPkg, UtilsPkg};
 use crate::parameter::Parameter;
 use crate::platform::{Package, PackageOps};
+use crate::query_engine::QueryEngine;
 use crate::row_collection::RowCollection;
 use crate::sequences::Sequences::{TheArray, TheDataframe, TheRange, TheTuple};
 use crate::structures::Row;
 use crate::structures::Structures::{Firm, Hard, Soft};
 use crate::structures::*;
 use crate::table_renderer::TableRenderer;
+use crate::test_engine::TestEngine;
 use crate::testdata::verify_exact_table_with;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use crate::utils::{lift_condition, pull_array, pull_bool, pull_identifier_name, pull_name, pull_number, pull_vec};
+use crate::utils::{lift_condition, pull_array, pull_bool, pull_identifier_name, pull_name, pull_number, pull_string, pull_string_lit, pull_vec};
 use crate::{compiler, query_engine};
 use shared_lib::cnv_error;
 
@@ -153,79 +156,185 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         use crate::expression::Expression::*;
         match expression {
-            ArrayExpression(items) => self.eval_as_array(items),
-            ArrowCurvyLeft(a, b) => self.do_arrow_curvy_left(a, b),
-            ArrowCurvyLeft2x(a, b) => self.do_arrow_curvy_x2_left(a, b),
-            ArrowCurvyRight(a, b) => self.do_arrow_curvy_right(a, b),
-            ArrowCurvyRight2x(a, b) => self.do_arrow_curvy_x2_right(a, b),
-            ArrowFat(a, b) => self.do_arrow_fat(a, b),
-            ArrowSkinnyLeft(a, b) => self.do_arrow_skinny_left(a, b),
-            ArrowSkinnyRight(a, b) => self.do_arrow_skinny_right(a, b),
-            ArrowVerticalBar(a, b) => self.do_function_pipeline(a, b, false),
-            ArrowVerticalBar2x(a, b) => self.do_function_pipeline(a, b, true),
-            Assert { condition, message } =>  self.do_assert(condition, message),
+            ArrayExpression(items) => self.evaluate_as_array(items),
+            ArrowCurvyLeft(a, b) => self.exec_arrow_curvy_left(a, b),
+            ArrowCurvyLeft2x(a, b) => self.exec_arrow_curvy_x2_left(a, b),
+            ArrowCurvyRight(a, b) => self.exec_arrow_curvy_right(a, b),
+            ArrowCurvyRight2x(a, b) => self.exec_arrow_curvy_x2_right(a, b),
+            ArrowFat(a, b) => self.exec_arrow_fat(a, b),
+            ArrowSkinnyLeft(a, b) => self.exec_arrow_skinny_left(a, b),
+            ArrowSkinnyRight(a, b) => self.exec_arrow_skinny_right(a, b),
+            ArrowVerticalBar(a, b) => self.exec_function_pipeline(a, b, false),
+            ArrowVerticalBar2x(a, b) => self.exec_function_pipeline(a, b, true),
+            Assert { condition, message } =>  self.exec_assert(condition, message),
             BitwiseAnd(a, b) => self.eval_inline_2(a, b, |aa, bb| aa & bb),
             BitwiseOr(a, b) => self.eval_inline_2(a, b, |aa, bb| aa | bb),
             BitwiseShiftLeft(a, b) => self.eval_inline_2(a, b, |aa, bb| aa << bb),
             BitwiseShiftRight(a, b) => self.eval_inline_2(a, b, |aa, bb| aa >> bb),
             BitwiseXor(a, b) => self.eval_inline_2(a, b, |aa, bb| aa ^ bb),
             Coalesce(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.coalesce(bb)),
-            CoalesceErr(a, b) => self.do_coalesce_error(a, b),
+            CoalesceErr(a, b) => self.exec_coalesce_error(a, b),
             CodeBlock(ops) => self.evaluate_scope(ops),
-            ColonColon(a, b) => self.do_colon_colon(a, b),
-            ColonColonColon(a, b) => self.do_colon_colon_colon(a, b),
+            ColonColon(a, b) => self.exec_colon_colon(a, b),
+            ColonColonColon(a, b) => self.exec_colon_colon_colon(a, b),
             Condition(condition) => self.evaluate_condition(condition),
             Divide(a, b) => self.eval_inline_2(a, b, |aa, bb| aa / bb),
-            DoWhile { condition, code } => self.eval_while(condition, code),
-            ElementAt(a, b) => self.do_index_of_collection(a, b),
-            Feature { title, scenarios } => self.do_feature(title, scenarios),
-            For { construct, op } => self.do_for_construct(construct, op),
-            FunctionCall { fx, args } => self.do_function_call(fx, args),
-            HTTP(method_call) => self.do_http_exec(method_call),
-            If { condition, a, b } => self.do_if_then_else(condition, a, b),
-            Include(path) => self.do_include(path),
-            Infix(a, b) => self.do_infix(a, b),
+            DoWhile { condition, code } => self.exec_while(condition, code),
+            ElementAt(a, b) => self.exec_index_of_collection(a, b),
+            Feature { title, scenarios } => TestEngine::add_feature(self, title, scenarios),
+            For { construct, op } => self.exec_for_construct(construct, op),
+            FunctionCall { fx, args } => self.exec_function_call(fx, args),
+            HTTP(method_call) => self.exec_http(method_call),
+            Identifier(name) => self.exec_get_variable(name),
+            If { condition, a, b } => self.exec_if_then_else(condition, a, b),
+            Include(path) => self.exec_include(path),
+            Infix(a, b) => self.exec_infix(a, b),
+            IsDefined(a) => self.exec_is_defined(a),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
-            MatchExpression(src, cases) => self.do_match_cases(src, cases),
+            MatchExpression(src, cases) => self.exec_match(src, cases),
             Minus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa - bb),
-            Module(name, ops) => self.do_structure_module(name, ops),
+            Module(name, ops) => self.exec_structure_module(name, ops),
             Modulo(a, b) => self.eval_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) => self.eval_inline_2(a, b, |aa, bb| aa * bb),
             NamedValue(name, expr) => {
                 let (machine, tv) = self.evaluate(expr)?;
                 Ok((machine.with_variable(name, tv.clone()), tv))
             }
-            Neg(a) => self.do_negate(a),
+            Neg(a) => self.exec_negate(a),
             Parameters(params) => self.evaluate_parameters(params),
             Plus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa + bb),
-            PlusPlus(a, b) => self.eval_inline_2(a, b, Self::do_plus_plus),
+            PlusPlus(a, b) => self.eval_inline_2(a, b, Self::exec_plus_plus),
             Pow(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.pow(&bb).unwrap_or(Undefined)),
             Range(Exclusive(a, b)) => self.eval_inline_2(a, b, |aa, bb| aa.range_exclusive(&bb).unwrap_or(Undefined)),
             Range(Inclusive(a, b)) => self.eval_inline_2(a, b, |aa, bb| aa.range_inclusive(&bb).unwrap_or(Undefined)),
-            Referenced(a) => self.do_referenced(a),
+            Referenced(a) => self.exec_referenced(a),
             Return(a) => self.evaluate(a),
-            Scenario { .. } => throw(Exact("Scenario should not be called directly".to_string())),
-            SetVariables(vars, values) => self.do_set_variables(vars, values),
-            SetVariablesExpr(vars, values) => self.do_set_variables_expr(vars, values),
-            StructureExpression(items) => self.do_structure_soft(items),
-            Throw(expr) => self.do_throw(expr),
-            TupleExpression(args) => self.do_tuple(args),
-            TypeDef(expr) => self.do_type_decl(expr),
-            TypeOf(expr) => self.do_type_of(expr),
-            Use(ops) => self.do_uses(ops),
-            Identifier(name) => self.do_get_variable(name),
-            WhenEver { condition, code } => self.eval_when_statement(condition, code),
-            While { condition, code } => self.eval_while(condition, code),
-            Yield(a) => self.do_yield(a),
+            Scenario { .. } => throw(Exact("scenario should not be called directly".to_string())),
+            SetVariables(vars, values) => self.exec_set_variables(vars, values),
+            SetVariablesExpr(vars, values) => self.exec_set_variables_expr(vars, values),
+            StructureExpression(items) => self.exec_structure_soft(items),
+            Test(expr) => TestEngine::evaluate_feature(self, expr),
+            Throw(expr) => self.exec_throw(expr),
+            TupleExpression(args) => self.exec_tuple(args),
+            TypeDef(expr) => self.exec_type_def(expr),
+            TypeOf(expr) => self.exec_type_of(expr),
+            Use(ops) => self.exec_uses(ops),
+            WhenEver { condition, code } => self.exec_when_statement(condition, code),
+            While { condition, code } => self.exec_while(condition, code),
+            Yield(a) => self.exec_yield(a),
+            Zip(a, b) => self.exec_zip(a, b),
             ////////////////////////////////////////////////////////////////////
             // SQL models
             ////////////////////////////////////////////////////////////////////
-            Delete { from, condition, limit } =>
-                query_engine::do_table_row_delete(self, from, condition, limit),
-            GroupBy { .. } | Having { .. } | Limit { .. } | OrderBy { .. } | Select { .. } | Where { .. } => 
-                query_engine::do_table_query(self, expression),
-            Undelete { from, condition, limit } =>
-                query_engine::do_table_row_undelete(self, from, condition, limit),
+            Delete { .. } | GroupBy { .. } | Having { .. }
+            | Limit { .. } | OrderBy { .. } | Select { .. }
+            | Undelete { .. } | Where { .. } =>
+                QueryEngine::evaluate(self, expression),
+        }
+    }
+
+    /// evaluates the specified [Expression]; returning an array ([TypedValue]) result.
+    pub fn evaluate_as_array(
+        &self,
+        ops: &Vec<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        self.evaluate_as_vec(ops).map(|(ms, vec)| (ms, ArrayValue(Array::from(vec))))
+    }
+
+    /// evaluates the specified [Expression]; returning an array ([String]) result.
+    pub fn evaluate_as_atoms(
+        &self,
+        ops: &Vec<Expression>,
+    ) -> std::io::Result<(Self, Vec<String>)> {
+        let (machine, results, errors) = ops.iter()
+            .fold((self.to_owned(), Vec::new(), Vec::new()),
+                  |(ma, mut array, mut errors), op| match op {
+                      Identifier(name) => {
+                          array.push(name.to_owned());
+                          (ma, array, errors)
+                      }
+                      expr => {
+                          errors.push(ErrorValue(TypeMismatch(ParameterExpected(expr.to_code()))));
+                          (ma, array, errors)
+                      }
+                  });
+
+        // if errors occurred ...
+        if !errors.is_empty() {
+            throw(Exact(errors.iter()
+                .map(|v| v.unwrap_value())
+                .collect::<Vec<_>>()
+                .join("\n")))
+        } else {
+            Ok((machine, results))
+        }
+    }
+
+    /// evaluates the specified [Expression]; returning a [Dataframe] result.
+    pub fn evaluate_as_dataframe(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, Dataframe)> {
+        let (ms, value) = self.evaluate(expr)?;
+        Ok((ms, value.to_dataframe()?))
+    }
+
+    /// evaluates the specified [Expression]; returning a [String] result.
+    pub fn evaluate_as_string(
+        &self,
+        expression: &Expression,
+    ) -> std::io::Result<(Self, String)> {
+        let (ms, value) = self.evaluate(expression)?;
+        match value {
+            StringValue(s) => Ok((ms, s)),
+            other => throw(TypeMismatch(StringExpected(other.to_code())))
+        }
+    }
+    
+    /// evaluates the specified [Expression]; returning a [Vec] of [TypedValue]s.
+    pub fn evaluate_as_vec(
+        &self,
+        ops: &Vec<Expression>,
+    ) -> std::io::Result<(Self, Vec<TypedValue>)> {
+        let (ms, results) = ops.iter()
+            .fold((self.to_owned(), Vec::new()),
+                  |(ms, mut array), op| match ms.evaluate(op) {
+                      Ok((ms, tv)) => {
+                          array.push(tv);
+                          (ms, array)
+                      }
+                      Err(err) => {
+                          error!("{}", err.to_string());
+                          (ms, array)
+                      }
+                  });
+        Ok((ms, results))
+    }
+
+    /// evaluates the specified [Expression]; returning a [TypedValue] result.
+    pub fn evaluate_condition(
+        &self,
+        condition: &Conditions,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        use crate::expression::Conditions::*;
+        match condition {
+            And(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
+            AssumedBoolean(a) => self.exec_assume_boolean(a),
+            Contains(a, b) => self.exec_contains(a, b),
+            Equal(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa == bb)),
+            False => Ok((self.to_owned(), Boolean(false))),
+            GreaterThan(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa > bb)),
+            GreaterOrEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa >= bb)),
+            In(a, b) => self.exec_in(a, b),
+            LessThan(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa < bb)),
+            LessOrEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa <= bb)),
+            Like(text, pattern) => self.exec_like(text, pattern),
+            Matches(src, pattern) => self.eval_inline_2(src, pattern, |aa, bb| aa.matches(&bb)),
+            Not(a) => self.eval_inline_1(a, |aa| !aa),
+            NotEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa != bb)),
+            Or(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
+            True => Ok((self.to_owned(), Boolean(true))),
+            When(..) => Ok((self.clone(), Boolean(false))),
         }
     }
 
@@ -244,14 +353,6 @@ impl Machine {
             None => Ok((self.to_owned(), Undefined)),
             Some(item) => self.evaluate(item)
         }
-    }
-
-    pub fn is_true(
-        &self,
-        conditions: &Conditions,
-    ) -> std::io::Result<(Self, bool)> {
-        let (ms, result) = self.evaluate(&Condition(conditions.clone()))?;
-        Ok((ms, pull_bool(&result)?))
     }
 
     fn evaluate_parameters(
@@ -284,6 +385,22 @@ impl Machine {
         }
     }
 
+    pub fn is_true(
+        &self,
+        conditions: &Conditions,
+    ) -> std::io::Result<(Self, bool)> {
+        let (ms, result) = self.evaluate_condition(conditions)?;
+        Ok((ms, pull_bool(&result)?))
+    }
+
+    pub fn is_true_expr(
+        &self,
+        conditions: &Expression,
+    ) -> std::io::Result<(Self, bool)> {
+        let (ms, result) = self.evaluate(&conditions)?;
+        Ok((ms, pull_bool(&result)?))
+    }
+
     /// Evaluates a curvy left arrow (<~)
     /// #### fetches a record from a table
     /// ```
@@ -291,12 +408,12 @@ impl Machine {
     /// stock <~ stocks
     /// // { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }
     /// ```
-    fn do_arrow_curvy_left(
+    fn exec_arrow_curvy_left(
         &self,
         dest: &Expression,
         src: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        query_engine::eval_pull_row(&self, dest, src)
+        QueryEngine::eval_pull_row(&self, dest, src)
     }
 
     /// Evaluates a curvy left x2 arrow (<<~)
@@ -306,12 +423,12 @@ impl Machine {
     /// stock <<~ stocks
     /// // { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }
     /// ```
-    fn do_arrow_curvy_x2_left(
+    fn exec_arrow_curvy_x2_left(
         &self,
         dest: &Expression,
         src: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        query_engine::eval_pull_rows(&self, dest, src)
+        QueryEngine::eval_pull_rows(&self, dest, src)
     }
 
     /// Evaluates a curvy right arrow (~>), which appends record(s) to a table
@@ -326,12 +443,12 @@ impl Machine {
     /// { symbol: "BKP", last_sale: 0.1421 } 
     ///    ~> (stocks where symbol is "BKPQ")
     /// ```
-    fn do_arrow_curvy_right(
+    fn exec_arrow_curvy_right(
         &self,
         source: &Expression,
         target: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        query_engine::eval_write_to_target(self, source, target, None, None, false)
+        QueryEngine::eval_push_rows(self, source, target, false)
     }
 
     /// Evaluates a curvy right x2 arrow (~>>), which overwrites record(s) in a table
@@ -346,12 +463,12 @@ impl Machine {
     /// { symbol: "BKP", exchange: "OTCBB", last_sale: 0.1421 }
     ///    ~>> (stocks where symbol is "BKPQ")
     /// ```
-    fn do_arrow_curvy_x2_right(
+    fn exec_arrow_curvy_x2_right(
         &self,
         source: &Expression,
         target: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        query_engine::eval_write_to_target(self, source, target, None, None, true)
+        QueryEngine::eval_push_rows(self, source, target, true)
     }
 
     /// Evaluates a fat arrow (=>)
@@ -359,7 +476,7 @@ impl Machine {
     /// ```
     /// x when x == 1 => stocks
     /// ```
-    fn do_arrow_fat(
+    fn exec_arrow_fat(
         &self,
         _src: &Expression,
         _dest: &Expression,
@@ -372,7 +489,7 @@ impl Machine {
     /// ```
     /// x <- stocks
     /// ```
-    fn do_arrow_skinny_left(
+    fn exec_arrow_skinny_left(
         &self,
         _src: &Expression,
         _dest: &Expression,
@@ -397,7 +514,7 @@ impl Machine {
     /// ```
     /// power = (a, b = 1) -> a * b
     /// ```
-    fn do_arrow_skinny_right(
+    fn exec_arrow_skinny_right(
         &self,
         head: &Expression,
         body: &Expression,
@@ -419,12 +536,12 @@ impl Machine {
     }
 
     /// Evaluates an assertion returning true or an error
-    fn do_assert(
+    fn exec_assert(
         &self,
         condition: &Expression,
         message: &Option<Box<Expression>>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        match self.do_assume_boolean(condition)? {
+        match self.exec_assume_boolean(condition)? {
             (machine, Boolean(true)) => Ok((machine, Boolean(true))),
             _ => {
                 let message = match message {
@@ -437,7 +554,7 @@ impl Machine {
     }
 
     /// Requires the result to be [Boolean]
-    fn do_assume_boolean(
+    fn exec_assume_boolean(
         &self,
         expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -447,7 +564,7 @@ impl Machine {
         }
     }
 
-    fn do_coalesce_error(
+    fn exec_coalesce_error(
         &self,
         attempt: &Expression,
         substitute: &Expression,
@@ -469,7 +586,7 @@ impl Machine {
     /// ```
     /// stock::last_sale = 24.11
     /// ```
-    fn do_colon_colon(
+    fn exec_colon_colon(
         &self,
         container: &Expression,
         field: &Expression,
@@ -492,9 +609,9 @@ impl Machine {
                 let container_name = pull_identifier_name(container)?;
                 match ms.get(container_name.as_str()) {
                     Some(Structured(structure)) => 
-                        self.do_colon_colon_structure(&container_name, Box::from(structure), field),
+                        self.exec_colon_colon_structure(&container_name, Box::from(structure), field),
                     Some(TableValue(df)) =>
-                        self.do_colon_colon_table_tools(&container_name, df, field),
+                        self.exec_colon_colon_table_tools(&container_name, df, field),
                     // error cases
                     None => throw(Exact(format!("Variable '{}' was not found", container_name))),
                     Some(ErrorValue(err)) => throw(err),
@@ -514,7 +631,7 @@ impl Machine {
     /// ```
     /// stock::last_sale = 24.11
     /// ```
-    fn do_colon_colon_structure(
+    fn exec_colon_colon_structure(
         &self,
         container_name: &str,
         structure: Box<dyn Structure>,
@@ -523,7 +640,7 @@ impl Machine {
         let ms = self.clone();
         match field {
             // math::compute(5, 8)
-            FunctionCall { fx, args } => structure.pollute(ms).do_function_call(fx, args),
+            FunctionCall { fx, args } => structure.pollute(ms).exec_function_call(fx, args),
             // stock::last_sale = 24.11
             SetVariables(var_expr, value_expr) => {
                 match var_expr.deref() {
@@ -547,7 +664,7 @@ impl Machine {
     /// ```
     /// stocks::reverse()
     /// ```
-    fn do_colon_colon_table_tools(
+    fn exec_colon_colon_table_tools(
         &self,
         container_name: &str,
         df: Dataframe,
@@ -558,7 +675,7 @@ impl Machine {
             FunctionCall { fx, args } => {
                 match fx.deref() {
                     Identifier(name) => {
-                        let (ms, args) = self.eval_as_vec(args)?;
+                        let (ms, args) = self.evaluate_as_vec(args)?;
                         let mut f_args = vec![TableValue(df)];
                         f_args.extend(args);
                         ToolsPkg::invoke(name, ms, f_args)
@@ -578,7 +695,7 @@ impl Machine {
     /// ```
     /// 3.2:::kb //=> kb(3.2)
     /// ```
-    fn do_colon_colon_colon(
+    fn exec_colon_colon_colon(
         &self,
         object: &Expression,
         field: &Expression,
@@ -589,11 +706,11 @@ impl Machine {
                 let mut enriched_args = Vec::new();
                 enriched_args.push(object.to_owned());
                 enriched_args.extend(args.to_owned());
-                self.do_function_call(fx, &enriched_args)
+                self.exec_function_call(fx, &enriched_args)
             }
             // 3.2:::kb //=> kb(3.2)
             Identifier(..) => {
-                self.do_function_call(field, &vec![
+                self.exec_function_call(field, &vec![
                     object.to_owned()
                 ])
             }
@@ -602,35 +719,8 @@ impl Machine {
         }
     }
 
-    /// evaluates the specified [Expression]; returning a [TypedValue] result.
-    pub fn evaluate_condition(
-        &self,
-        condition: &Conditions,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        use crate::expression::Conditions::*;
-        match condition {
-            And(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
-            AssumedBoolean(a) => self.do_assume_boolean(a),
-            Contains(a, b) => self.do_contains(a, b),
-            Equal(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa == bb)),
-            False => Ok((self.to_owned(), Boolean(false))),
-            GreaterThan(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa > bb)),
-            GreaterOrEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa >= bb)),
-            In(a, b) => self.do_in(a, b),
-            LessThan(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa < bb)),
-            LessOrEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa <= bb)),
-            Like(text, pattern) => self.do_like(text, pattern),
-            Matches(src, pattern) => self.eval_inline_2(src, pattern, |aa, bb| aa.matches(&bb)), 
-            Not(a) => self.eval_inline_1(a, |aa| !aa),
-            NotEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa != bb)),
-            Or(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
-            True => Ok((self.to_owned(), Boolean(true))),
-            When(a, b) => self.do_match_when(a, b),
-        }
-    }
-
     /// Returns [True] if `a` contains `b`
-    fn do_contains(
+    fn exec_contains(
         &self,
         a: &Expression,
         b: &Expression,
@@ -659,7 +749,7 @@ impl Machine {
     /// let { symbol: _, exchange: _, last_sale: _ } =
     ///     {"symbol":"ABC","exchange":"NYSE","last_sale":56.11}
     /// ```
-    fn do_destructure(
+    fn exec_destructure(
         &self,
         identifiers: &Expression,
         values: &TypedValue,
@@ -669,7 +759,7 @@ impl Machine {
                 let mut ms = self.clone();
                 let values = pull_vec(&values)?;
                 for (elem, value) in elems.iter().zip(values.iter()) {
-                    ms = ms.do_destructure(elem, value)?;
+                    ms = ms.exec_destructure(elem, value)?;
                 }
                 Ok(ms)
             }
@@ -678,82 +768,27 @@ impl Machine {
         }
     }
 
-    /// Feature declaration - unit testing
-    /// #### Parameters
-    /// - title: the title of the feature
-    /// - scenarios: the collection of test scenarios
-    /// #### Examples
-    /// ```
-    /// use testing
-    /// Feature "Matches function" {
-    ///     Scenario "Compare Array contents" {
-    ///         assert(matches(
-    ///             [ 1 "a" "b" "c" ],
-    ///             [ 1 "a" "b" "c" ]
-    ///         ))
-    /// }
-    /// ```
-    pub fn do_feature(&self,
-                      title: &Box<Expression>,
-                      scenarios: &Vec<Expression>,
+    /// Evaluates the `do..while` declaration
+    fn exec_do_while(
+        &self,
+        condition: &Expression,
+        code: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        // create a table and capture function to store the verification report
-        let parameters = UtilsPkg::get_testing_feature_parameters();
-        let verification_columns = Column::from_parameters(&parameters);
-        let mut report = ModelRowCollection::new(verification_columns.to_owned());
-        let mut capture = |level: i64, text: String, passed: bool, result: TypedValue| {
-            let outcome = report.push_row(Row::new(0, vec![
-                Number(I64Value(level)), StringValue(text), Boolean(passed), result,
-            ]));
-            let count = match outcome {
-                Number(n) => n.to_usize(),
-                ErrorValue(err) => return throw(Exact(err.to_string())),
-                _ => 0
-            };
-            Ok((self, count))
-        };
+        // evaluate the code
+        let (mut ms, mut result) = self.evaluate(code)?;
 
-        // feature processing
-        let (mut ms, title) = self.evaluate(title)?;
-        capture(0, title.unwrap_value(), true, Boolean(true))?;
-
-        // scenario processing
-        for scenario in scenarios {
-            match &scenario {
-                // scenarios require specialized processing
-                Scenario { title, verifications } => {
-                    // scenario::title
-                    let (msb, subtitle) = ms.evaluate(title)?;
-                    ms = msb;
-
-                    // update the report
-                    capture(1, subtitle.unwrap_value(), true, Boolean(true))?;
-
-                    // verification processing
-                    let level = 2;
-                    let mut errors = 0;
-                    for verification in verifications {
-                        let (msb, result) = ms.evaluate(verification)?;
-                        ms = msb;
-                        match result {
-                            ErrorValue(msg) => {
-                                capture(level, verification.to_code(), false, ErrorValue(msg))?;
-                                errors += 1;
-                            }
-                            result => {
-                                capture(level, verification.to_code(), true, result)?;
-                            }
-                        };
-                    }
-                }
-                other => {
-                    let (msb, result) = ms.evaluate(other)?;
-                    ms = msb;
-                    capture(2, other.to_code(), true, result)?;
-                }
-            };
+        // while the condition is true, execute the code
+        let mut is_looping = true;
+        while is_looping {
+            let (ms1, result1) = ms.evaluate(condition)?;
+            is_looping = result1.is_true();
+            if is_looping {
+                let (ms2, result2) = ms1.evaluate(code)?;
+                ms = ms2;
+                result = result2;
+            }
         }
-        Ok((ms, TableValue(Model(report))))
+        Ok((ms, result))
     }
 
     /// Evaluates a for statement
@@ -779,18 +814,18 @@ impl Machine {
     /// ```
     /// for row in tools::to_table([{symbol:'ABC', price: 10.0}, ...]) ...
     /// ```
-    fn do_for_construct(&self,
-                        construct: &Box<Expression>,
-                        block: &Box<Expression>,
+    fn exec_for_construct(&self,
+                          construct: &Box<Expression>,
+                          block: &Box<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         match construct.deref() {
             // for item in ['apple', 'berry', ...] ...
-            Condition(In(item, items)) => self.do_for_each(item, items, block),
+            Condition(In(item, items)) => self.exec_for_each(item, items, block),
             // for(i = 0, i < 5, i = i + 1) ...
             TupleExpression(components) => {
                 match components.as_slice() {
                     [init, Condition(cond), counter] => {
-                        self.do_for_loop(init, cond, counter, block)
+                        self.exec_for_loop(init, cond, counter, block)
                     },
                     _ => throw(Exact(format!("Invalid for loop construct: {}", construct.to_code())))
                 }
@@ -799,10 +834,11 @@ impl Machine {
         }
     }
 
-    fn do_for_each(&self,
-                   item: &Expression,
-                   items: &Expression,
-                   block: &Expression,
+    fn exec_for_each(
+        &self,
+        item: &Expression,
+        items: &Expression,
+        block: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
         let mut ms = self.clone();
         let (_, array_value) = ms.evaluate(items)?;
@@ -813,7 +849,7 @@ impl Machine {
             // get the value at `index`
             let value = array.get_or_else(index, Undefined);
             // deconstruct the value (e.g. (a, b) ~> a = ?, b = ?)
-            ms = ms.do_destructure(item, &value)?;
+            ms = ms.exec_destructure(item, &value)?;
             // evaluate the block - capture the results
             let (ms1, result1) = ms.evaluate(block)?;
             ms = ms1;
@@ -824,7 +860,7 @@ impl Machine {
         Ok((ms, result))
     }
 
-    fn do_for_loop(
+    fn exec_for_loop(
         &self,
         init: &Expression,
         cond: &Conditions,
@@ -858,7 +894,7 @@ impl Machine {
     /// fn inverse(a) => 1.0 / a
     /// (2, 3) |>> add |> inverse
     /// ```
-    fn do_function_pipeline(
+    fn exec_function_pipeline(
         &self,
         expr: &Expression,
         operation: &Expression,
@@ -880,9 +916,10 @@ impl Machine {
         })
     }
 
-    fn do_function_arguments(&self,
-                             params: Vec<Parameter>,
-                             args: Vec<TypedValue>,
+    fn exec_function_arguments(
+        &self,
+        params: Vec<Parameter>,
+        args: Vec<TypedValue>,
     ) -> Self {
         if params.len() > args.len() {
             println!("Argument mismatch (params: {}, args: {:?})", Parameter::render(&params), args);
@@ -898,15 +935,15 @@ impl Machine {
     /// ```
     /// factorial(5)
     /// ```
-    fn do_function_call(&self,
-                        fx: &Expression,
-                        args: &Vec<Expression>,
+    fn exec_function_call(&self,
+                          fx: &Expression,
+                          args: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        match self.eval_as_array(args)? {
+        match self.evaluate_as_array(args)? {
             (ms, ArrayValue(args)) =>
                 match ms.evaluate(fx)? {
                     (ms, Function { params, body, .. }) =>
-                        ms.do_function_arguments(params, args.get_values())
+                        ms.exec_function_arguments(params, args.get_values())
                             .evaluate(&body),
                     (ms, PlatformOp(pf)) => pf.evaluate(ms, args.get_values()),
                     (_, z) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
@@ -915,7 +952,7 @@ impl Machine {
         }
     }
 
-    fn do_get_variable(
+    fn exec_get_variable(
         &self,
         name: &str,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -928,7 +965,7 @@ impl Machine {
         Ok((self.clone(), result))
     }
 
-    fn do_http_exec(&self, call: &HttpMethodCalls) -> std::io::Result<(Self, TypedValue)> {
+    fn exec_http(&self, call: &HttpMethodCalls) -> std::io::Result<(Self, TypedValue)> {
         // fn create_form(structure: Box<dyn Structure>) -> Form {
         //     structure.to_name_values().iter().fold(Form::new(), |form, (name, value)| {
         //         form.part(name.to_owned(), Part::text(value.unwrap_value()))
@@ -953,7 +990,7 @@ impl Machine {
         match self.evaluate(&call.get_url_or_config())? {
             // GET http://localhost:9000/quotes/AAPL/NYSE
             (ms, StringValue(url)) =>
-                ms.do_http_request(call, url.to_string(), None, Vec::new()),
+                ms.exec_http_request(call, url.to_string(), None, Vec::new()),
             // POST {
             //     url: http://localhost:8080/machine/append/stocks
             //     body: stocks
@@ -967,7 +1004,7 @@ impl Machine {
                     None => Vec::new(),
                     Some(headers) => extract_string_tuples(headers)?
                 };
-                ms.do_http_request(call, url.unwrap_value(), maybe_body, headers)
+                ms.exec_http_request(call, url.unwrap_value(), maybe_body, headers)
             }
             // unsupported expression
             (_ms, other) =>
@@ -975,7 +1012,7 @@ impl Machine {
         }
     }
 
-    fn do_http_request(
+    fn exec_http_request(
         &self,
         method_call: &HttpMethodCalls,
         url: String,
@@ -1013,12 +1050,12 @@ impl Machine {
                 .send()
                 .map_err(|e| cnv_error!(e))?
         };
-        self.do_http_response(response, method_call.is_header_only())
+        self.exec_http_response(response, method_call.is_header_only())
             .map(|result| (self.clone(), result))
     }
 
     /// Converts a [Response] to a [TypedValue]
-    pub fn do_http_response(
+    fn exec_http_response(
         &self,
         mut response: Response<Body>,
         is_header_only: bool,
@@ -1030,7 +1067,7 @@ impl Machine {
                     let value = match h_val.to_str() {
                         Ok(s) => StringValue(s.into()),
                         Err(e) => {
-                            eprintln!("do_http_response: {}", e.to_string());
+                            eprintln!("exec_http_response: {}", e.to_string());
                             ErrorValue(Exact(e.to_string()))
                         }
                     };
@@ -1056,7 +1093,7 @@ impl Machine {
     }
 
     /// Evaluates an if-then-else expression
-    fn do_if_then_else(
+    fn exec_if_then_else(
         &self,
         condition: &Box<Expression>,
         a: &Expression,
@@ -1092,8 +1129,7 @@ impl Machine {
     /// ```
     /// "apple" in ("apple", "banana", "blueberry", "mango")
     /// ```
-    ///
-    fn do_in(
+    fn exec_in(
         &self,
         item: &Expression,
         container: &Expression,
@@ -1104,7 +1140,13 @@ impl Machine {
             TheArray(array) => array.contains(&item_val),
             TheDataframe(df) => {
                 match item_val {
-                    Structured(s) => df.contains(&s.to_row()),
+                    Structured(s) => {
+                        df.contains(&Structures::transform_row(
+                            &s.get_parameters(),
+                            &s.get_values(),
+                            &df.get_parameters()
+                        ))
+                    },
                     _ => false
                 }
             },
@@ -1114,7 +1156,7 @@ impl Machine {
         Ok((ms, Boolean(result)))
     }
 
-    fn do_include(
+    fn exec_include(
         &self,
         path: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -1133,7 +1175,7 @@ impl Machine {
         }
     }
 
-    fn do_infix(
+    fn exec_infix(
         &self,
         container: &Expression,
         field: &Expression,
@@ -1176,9 +1218,19 @@ impl Machine {
             z => throw(Exact(format!("Illegal field '{}' for {}", z, container)))
         }
     }
+    
+    fn exec_is_defined(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match expr { 
+            Identifier(name) => Ok((self.to_owned(), Boolean(self.get(name).is_some()))),
+            z => throw(TypeMismatch(IdentifierExpected(z.to_code())))
+        }
+    }
 
     /// Evaluates the index of a collection (array, string or table)
-    fn do_index_of_collection(
+    fn exec_index_of_collection(
         &self,
         collection_expr: &Expression,
         index_expr: &Expression,
@@ -1221,7 +1273,7 @@ impl Machine {
         Ok((machine, value))
     }
 
-    fn do_like(
+    fn exec_like(
         &self,
         text: &Expression,
         pattern: &Expression,
@@ -1250,7 +1302,7 @@ impl Machine {
     ///     _ => "Rejected"
     /// }
     /// ```
-    fn do_match_cases(
+    fn exec_match(
         &self,
         host: &Expression,
         cases: &Vec<Expression>,
@@ -1265,7 +1317,7 @@ impl Machine {
                         Condition(When(given_expr, given_cond)) => {
                             let name = pull_identifier_name(given_expr)?;
                             let ms = ms.with_variable(name.as_str(), host_value.clone());
-                            if let (ms, Boolean(true)) = ms.do_assume_boolean(given_cond)? {
+                            if let (ms, Boolean(true)) = ms.exec_assume_boolean(given_cond)? {
                                 return ms.evaluate(op_expr);
                             }
                         }
@@ -1286,28 +1338,7 @@ impl Machine {
         throw(Exact("Failed to find a matching case".into()))
     }
 
-    /// Evaluates a match-when expression
-    /// #### Examples
-    /// ```
-    /// match code (
-    ///     100 => "Accepted",
-    ///     n when n in 101..104 => "Escalated",
-    ///     n when n > 0 && n < 100 => "Pending",
-    ///     _ => "Rejected"
-    /// )
-    /// ```
-    fn do_match_when(
-        &self,
-        variable: &Expression,
-        condition: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let name = pull_identifier_name(variable)?;
-        let ms = self.with_variable(name.as_str(), Undefined);
-        let (ms, host_value) = self.evaluate(variable)?;
-        self.do_assume_boolean(condition)
-    }
-
-    fn do_module_alone(
+    fn exec_module_alone(
         &self,
         name: &str,
         ops: &Vec<Expression>,
@@ -1348,13 +1379,13 @@ impl Machine {
     }
 
     /// evaluates the specified [Expression]; returning a negative [TypedValue] result.
-    fn do_negate(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
+    fn exec_negate(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
         self.evaluate(expr).map(|(ms, result)| (ms, result.neg()))
     }
 
     /// ++ operator
     /// ex: checks++
-    fn do_plus_plus(
+    fn exec_plus_plus(
         a: TypedValue,
         b: TypedValue,
     ) -> TypedValue {
@@ -1385,7 +1416,7 @@ impl Machine {
     /// 
     /// // { symbol: "BIZ", exchange: "NYSE", history: [{ last_sale: 11.67, processed_time: 2025-01-13T03:25:47.350Z }] }
     /// ```
-    fn do_referenced(
+    fn exec_referenced(
         &self,
         expr: &Expression
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -1478,12 +1509,12 @@ impl Machine {
     /// ```
     /// let [a, b, c, d] = [1, 3, 5, 7]
     /// ```
-    fn do_set_variables(
+    fn exec_set_variables(
         &self,
         src: &Expression,
         dest: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        self.do_set_variables_expr(src, dest).map(|(ms, _)| (ms, Boolean(true)))        
+        self.exec_set_variables_expr(src, dest).map(|(ms, _)| (ms, Boolean(true)))        
     }
 
     /// Sets variable(s) in the current [Machine] instance 
@@ -1500,7 +1531,7 @@ impl Machine {
     /// ```
     /// let [a, b, c, d] := [1, 3, 5, 7]
     /// ```
-    fn do_set_variables_expr(
+    fn exec_set_variables_expr(
         &self,
         src: &Expression,
         dest: &Expression,
@@ -1516,7 +1547,7 @@ impl Machine {
                             array.get_values(),
                             |v| ArrayValue(Array::from(v))
                         )?;
-                        let (ms2, _) = ms1.eval_whenever_observations()?;
+                        let (ms2, _) = ms1.exec_whenever_observations()?;
                         Ok((ms2, result1))
                     }
                     z => throw(Exact(format!("Expected an Array near {}", z)))
@@ -1547,7 +1578,7 @@ impl Machine {
                             values,
                             TupleValue
                         )?;
-                        let (ms2, _) = ms1.eval_whenever_observations()?;
+                        let (ms2, _) = ms1.exec_whenever_observations()?;
                         Ok((ms2, result1))
                     }
                     z => throw(Exact(format!("Expected a Tuple near {}", z)))
@@ -1555,81 +1586,26 @@ impl Machine {
             // a := 7
             Identifier(name) => {
                 let ms1 = ms.set(name.as_str(), result.clone());
-                let (ms2, _) = ms1.eval_whenever_observations()?;
+                let (ms2, _) = ms1.exec_whenever_observations()?;
                 Ok((ms2, result))
             }
             z => throw(Exact(format!("Expected an Array, Tuple or variable near {}", z)))
         }
     }
-
-    /// Produces an aggregate [Machine] instance containing
-    /// the specified imports
-    fn do_use(
-        &self,
-        package_name: &str,
-        selection: &Vec<String>,
-    ) -> (Self, TypedValue) {
-        let ms = self.to_owned();
-        match ms.get(package_name) {
-            None => (ms, ErrorValue(PackageNotFound(package_name.into()))),
-            Some(component) => match component {
-                Structured(structure) =>
-                    if selection.is_empty() {
-                        (structure.pollute(ms), Boolean(true))
-                    } else {
-                        let ms = selection.iter().fold(ms, |ms, name| {
-                            ms.with_variable(name, structure.get(name))
-                        });
-                        (ms, Boolean(true))
-                    }
-                other => (ms, ErrorValue(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code()))))
-            }
-        }
-    }
-
-    fn do_uses(&self, ops: &Vec<UseOps>) -> std::io::Result<(Self, TypedValue)> {
-        let result = ops.iter().fold(
-            (self.to_owned(), Undefined),
-            |(ms, tv), iop| match iop {
-                UseOps::Everything(pkg) =>
-                    ms.do_use(pkg, &Vec::new()),
-                UseOps::Selection(pkg, selection) =>
-                    ms.do_use(pkg, selection),
-            });
-        Ok(result)
-    }
-
-    fn get_variables_names(items: &Vec<Expression>) -> std::io::Result<Vec<String>> {
-        let mut variables = vec![];
-        for item in items {
-            match item {
-                Identifier(name) => variables.push(name.into()),
-                other =>
-                    return throw(Exact(format!("Expected a variable near {}", other.to_code())))
-            }
-        }
-        Ok(variables)
-    }
-
-    fn set_variables(&self, names: Vec<String>, values: Vec<TypedValue>, f: fn(Vec<TypedValue>) -> TypedValue) -> std::io::Result<(Machine, TypedValue)> {
-        let ms = names.iter().zip(values.iter())
-            .fold(self.clone(), |ms, (name, value)| ms.set(name, value.clone()));
-        Ok((ms, f(values)))
-    }
-
-    fn do_structure_module(
+    
+    fn exec_structure_module(
         &self,
         name: &str,
         ops: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         match self.get(name) {
-            Some(Structured(structure)) => self.do_structure_module_impl(name, structure, ops),
+            Some(Structured(structure)) => self.exec_structure_module_impl(name, structure, ops),
             Some(v) => throw(TypeMismatch(StructExpected(name.into(), v.to_code()))),
-            None => self.do_module_alone(name, ops)
+            None => self.exec_module_alone(name, ops)
         }
     }
 
-    fn do_structure_module_impl(
+    fn exec_structure_module_impl(
         &self,
         name: &str,
         structure: Structures,
@@ -1660,7 +1636,7 @@ impl Machine {
         }
     }
 
-    fn do_structure_soft(
+    fn exec_structure_soft(
         &self,
         items: &Vec<(String, Expression)>,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -1671,8 +1647,8 @@ impl Machine {
         }
         Ok((self.to_owned(), Structured(Soft(SoftStructure::from_tuples(elems)))))
     }
-
-    fn do_throw(
+    
+    fn exec_throw(
         &self,
         expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -1682,11 +1658,11 @@ impl Machine {
     
     /// Defines a tuple expression
     /// ex: (1, 2, 3)
-    fn do_tuple(
+    fn exec_tuple(
         &self,
         ops: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        self.eval_as_vec(ops).map(|(ms, values)| (ms, TupleValue(values)))
+        self.evaluate_as_vec(ops).map(|(ms, values)| (ms, TupleValue(values)))
     }
 
     /// Declares a type definition expression
@@ -1694,7 +1670,7 @@ impl Machine {
     /// ```
     /// stock_type = typedef(Table(symbol: String(8), exchange: String(8), last_sale: f64)
     /// ```
-    fn do_type_decl(
+    fn exec_type_def(
         &self,
         expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -1706,7 +1682,7 @@ impl Machine {
     /// ```
     /// type_of stock_type
     /// ```
-    fn do_type_of(
+    fn exec_type_of(
         &self,
         expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
@@ -1714,31 +1690,87 @@ impl Machine {
         Ok((ms, Kind(value.get_type())))
     }
 
-    /// Evaluates the `do..while` declaration
-    fn eval_do_while(
+    /// Produces an aggregate [Machine] instance containing
+    /// the specified imports
+    fn exec_use(
         &self,
-        condition: &Expression,
-        code: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        // evaluate the code
-        let (mut ms, mut result) = self.evaluate(code)?;
-
-        // while the condition is true, execute the code
-        let mut is_looping = true;
-        while is_looping {
-            let (ms1, result1) = ms.evaluate(condition)?;
-            is_looping = result1.is_true();
-            if is_looping {
-                let (ms2, result2) = ms1.evaluate(code)?;
-                ms = ms2;
-                result = result2;
+        package_name: &str,
+        selection: &Vec<String>,
+    ) -> (Self, TypedValue) {
+        let ms = self.to_owned();
+        match ms.get(package_name) {
+            None => (ms, ErrorValue(PackageNotFound(package_name.into()))),
+            Some(component) => match component {
+                Structured(structure) =>
+                    if selection.is_empty() {
+                        (structure.pollute(ms), Boolean(true))
+                    } else {
+                        let ms = selection.iter().fold(ms, |ms, name| {
+                            ms.with_variable(name, structure.get(name))
+                        });
+                        (ms, Boolean(true))
+                    }
+                other => (ms, ErrorValue(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code()))))
             }
         }
-        Ok((ms, result))
+    }
+
+    fn exec_uses(&self, ops: &Vec<UseOps>) -> std::io::Result<(Self, TypedValue)> {
+        let result = ops.iter().fold(
+            (self.to_owned(), Undefined),
+            |(ms, tv), iop| match iop {
+                UseOps::Everything(pkg) =>
+                    ms.exec_use(pkg, &Vec::new()),
+                UseOps::Selection(pkg, selection) =>
+                    ms.exec_use(pkg, selection),
+            });
+        Ok(result)
+    }
+
+    /// Evaluates the `yield` declaration
+    fn exec_yield(
+        &self,
+        expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        const LABEL: &str = "__yield__";
+        let full_prop_name = format!("{}{}", LABEL, hex::encode(expr.encode()));
+        let prop_name = full_prop_name.as_str();
+        let (mut ms, value) = self.evaluate(expr)?;
+        let array = match ms.get(prop_name) {
+            Some(ArrayValue(mut array)) => {
+                array.push(value);
+                ms = ms.set(prop_name, ArrayValue(array.clone()));
+                array
+            },
+            _ => {
+                let array = Array::from(vec![value]);
+                ms = ms.with_variable(prop_name, ArrayValue(array.clone()));
+                array
+            }
+        };
+        Ok((ms, ArrayValue(array)))
+    }
+
+    fn exec_zip(
+        &self,
+        a: &Expression,
+        b: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, aa) = self.evaluate(a)?;
+        let (ms, bb) = ms.evaluate(b)?;
+        match (aa, bb) {
+            (ArrayValue(aa), ArrayValue(bb)) => {
+                let items = aa.iter().zip(bb.iter()).map(|(i, j)| {
+                    TupleValue(vec![i.to_owned(), j.to_owned()])
+                }).collect();
+                Ok((ms, ArrayValue(Array::from(items))))
+            }
+            (x, y) => throw(Exact(format!("Incompatible types: {} and {}", x.get_type(), y.get_type())))
+        }
     }
     
     /// Evaluates the `when` declaration
-    fn eval_when_statement(
+    fn exec_when_statement(
         &self,
         condition: &Expression,
         code: &Expression,
@@ -1749,7 +1781,7 @@ impl Machine {
     }
 
     /// Evaluates the `whenever` observations (triggers) 
-    fn eval_whenever_observations(&self) -> std::io::Result<(Self, TypedValue)> {
+    fn exec_whenever_observations(&self) -> std::io::Result<(Self, TypedValue)> {
         let mut ms = self.clone(); 
         for observation in &self.observations {
             match observation {
@@ -1773,7 +1805,7 @@ impl Machine {
     }
 
     /// Evaluates the `while` declaration
-    fn eval_while(
+    fn exec_while(
         &self,
         condition: &Expression,
         code: &Expression,
@@ -1792,96 +1824,6 @@ impl Machine {
             }
         }
         Ok((machine, outcome))
-    }
-
-    /// Evaluates the `yield` declaration
-    fn do_yield(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        const LABEL: &str = "__yield__";
-        let full_prop_name = format!("{}{}", LABEL, hex::encode(expr.encode()));
-        let prop_name = full_prop_name.as_str();
-        let (mut ms, value) = self.evaluate(expr)?;
-        let array = match ms.get(prop_name) {
-            Some(ArrayValue(mut array)) => {
-                array.push(value);
-                ms = ms.set(prop_name, ArrayValue(array.clone()));
-                array
-            },
-            _ => {
-                let array = Array::from(vec![value]);
-                ms = ms.with_variable(prop_name, ArrayValue(array.clone()));
-                array
-            }
-        };
-        Ok((ms, ArrayValue(array)))
-    }
-
-    /// evaluates the specified [Expression]; returning an array ([TypedValue]) result.
-    pub fn eval_as_array(
-        &self,
-        ops: &Vec<Expression>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        self.eval_as_vec(ops).map(|(ms, vec)| (ms, ArrayValue(Array::from(vec))))
-    }
-
-    /// evaluates the specified [Expression]; returning a [Vec] of [TypedValue]s.
-    pub fn eval_as_vec(
-        &self,
-        ops: &Vec<Expression>,
-    ) -> std::io::Result<(Self, Vec<TypedValue>)> {
-        let (ms, results) = ops.iter()
-            .fold((self.to_owned(), Vec::new()),
-                  |(ms, mut array), op| match ms.evaluate(op) {
-                      Ok((ms, tv)) => {
-                          array.push(tv);
-                          (ms, array)
-                      }
-                      Err(err) => {
-                          error!("{}", err.to_string());
-                          (ms, array)
-                      }
-                  });
-        Ok((ms, results))
-    }
-
-    /// evaluates the specified [Expression]; returning an array ([String]) result.
-    pub fn eval_as_atoms(
-        &self,
-        ops: &Vec<Expression>,
-    ) -> std::io::Result<(Self, Vec<String>)> {
-        let (machine, results, errors) = ops.iter()
-            .fold((self.to_owned(), Vec::new(), Vec::new()),
-                  |(ma, mut array, mut errors), op| match op {
-                      Identifier(name) => {
-                          array.push(name.to_owned());
-                          (ma, array, errors)
-                      }
-                      expr => {
-                          errors.push(ErrorValue(TypeMismatch(ParameterExpected(expr.to_code()))));
-                          (ma, array, errors)
-                      }
-                  });
-
-        // if errors occurred ...
-        if !errors.is_empty() {
-            throw(Exact(errors.iter()
-                .map(|v| v.unwrap_value())
-                .collect::<Vec<_>>()
-                .join("\n")))
-        } else {
-            Ok((machine, results))
-        }
-    }
-
-    /// evaluates the specified [Expression]; returning a [Dataframe] result.
-    pub fn eval_as_dataframe(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, Dataframe)> {
-        let (ms, value) = self.evaluate(expr)?;
-        Ok((ms, value.to_dataframe()?))
     }
 
     /// evaluates expression `a` then applies function `f`. ex: f(a)
@@ -1920,6 +1862,24 @@ impl Machine {
         self.variables.iter().collect::<Vec<_>>()
     }
 
+    fn get_variables_names(items: &Vec<Expression>) -> std::io::Result<Vec<String>> {
+        let mut variables = vec![];
+        for item in items {
+            match item {
+                Identifier(name) => variables.push(name.into()),
+                other =>
+                    return throw(Exact(format!("Expected a variable near {}", other.to_code())))
+            }
+        }
+        Ok(variables)
+    }
+
+    fn set_variables(&self, names: Vec<String>, values: Vec<TypedValue>, f: fn(Vec<TypedValue>) -> TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        let ms = names.iter().zip(values.iter())
+            .fold(self.clone(), |ms, (name, value)| ms.set(name, value.clone()));
+        Ok((ms, f(values)))
+    }
+    
     pub fn set(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.to_owned();
         variables.insert(name.to_string(), value);
@@ -1973,7 +1933,6 @@ mod tests {
     use crate::expression::Conditions::{GreaterThan, LessOrEqual, LessThan};
     use crate::expression::{FALSE, NULL, TRUE};
     use crate::number_kind::NumberKind::I64Kind;
-    use crate::table_renderer::TableRenderer;
     use crate::testdata::*;
 
     #[test]
@@ -1983,7 +1942,7 @@ mod tests {
             "3.25", "true", "false", "null", "undefined",
         ]);
 
-        let (_, array) = Machine::empty().eval_as_array(&models).unwrap();
+        let (_, array) = Machine::empty().evaluate_as_array(&models).unwrap();
         assert_eq!(array, ArrayValue(Array::from(vec![
             Number(F64Value(3.25)), Boolean(true), Boolean(false), Null, Undefined
         ])));
@@ -2048,49 +2007,6 @@ mod tests {
         let machine = Machine::empty();
         let (_, result) = machine.evaluate(&model).unwrap();
         assert_eq!(result, Number(I64Value(7)))
-    }
-
-    #[test]
-    fn test_feature_with_a_scenario() {
-        let model = Feature {
-            title: Box::new(Literal(StringValue("Karate translator".to_string()))),
-            scenarios: vec![
-                Scenario {
-                    title: Box::new(Literal(StringValue("Translate Karate Scenario to Oxide Scenario".to_string()))),
-                    verifications: vec![
-                        Assert { condition: TRUE.into(), message: None }
-                    ]
-                }
-            ],
-        };
-
-        let machine = Machine::new_platform();
-        let (_, result) = machine.evaluate(&model).unwrap();
-        let table = result.to_table().unwrap();
-        let columns = table.get_columns();
-        let rows = table.read_active_rows().unwrap();
-        for s in TableRenderer::from_table(&table) { println!("{}", s) }
-        let dump = rows.iter().map(|row| row.get_values()).collect::<Vec<_>>();
-        assert_eq!(dump, vec![
-            vec![
-                Number(I64Value(0)),
-                StringValue("Karate translator".into()),
-                Boolean(true),
-                Boolean(true),
-            ],
-            vec![
-                Number(I64Value(1)),
-                StringValue("Translate Karate Scenario to Oxide Scenario".into()),
-                Boolean(true),
-                Boolean(true),
-            ],
-            vec![
-                Number(I64Value(2)),
-                StringValue("assert true ".into()),
-                Boolean(true),
-                Boolean(true),
-            ],
-        ]);
     }
 
     #[test]

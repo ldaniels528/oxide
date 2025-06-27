@@ -9,7 +9,7 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Disk;
+use crate::dataframe::Dataframe::{Disk, Model, TestReport};
 
 use crate::errors::Errors;
 use crate::expression::Expression;
@@ -23,9 +23,12 @@ use crate::oxide_server::start_http_server;
 use crate::parameter::Parameter;
 use crate::structures::Row;
 use crate::table_renderer::TableRenderer;
+use crate::test_engine::TestEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use chrono::Utc;
+use futures_util::AsyncReadExt;
+use itertools::Itertools;
 use rand::distributions::Uniform;
 use rand::prelude::ThreadRng;
 use rand::{thread_rng, Rng, RngCore};
@@ -136,6 +139,36 @@ pub fn verify_exact_json(code: &str, expected: Value) {
     assert_eq!(actual.to_json(), expected);
 }
 
+pub fn verify_exact_report(code: &str, expected: Vec<&str>) {
+    verify_exact_report_with(Interpreter::new(), code, expected);
+}
+
+pub fn verify_exact_report_with(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: Vec<&str>,
+) -> Interpreter {
+    use itertools::Itertools;
+    let report = interpreter.evaluate(code)
+        .unwrap();
+    let actual = match report {
+        TableValue(TestReport(mrc, state)) => {
+            let mut report = TestEngine::generate_summary(&state);
+            report.push("".to_string());
+            report.extend(TestEngine::generate_report(Model(mrc)));
+            report.iter()
+                .map(|s| s.replace("\"", "'"))
+                .collect::<Vec<_>>()
+        }
+        other => other.unwrap_value().split('\n')
+            .map(|s| s.replace("\"", "'"))
+            .collect::<Vec<_>>()
+    };
+    for s in &actual { println!("{}", s) }
+    are_equal_unordered(expected, actual);
+    interpreter
+}
+
 pub fn verify_exact_table(code: &str, expected: Vec<&str>) {
     verify_exact_table_with(Interpreter::new(), code, expected);
 }
@@ -193,13 +226,18 @@ pub fn verify_math_operator(op: &str) {
     verify_data_type(format!("a {} b", op).as_str(), UnresolvedType);
 }
 
-pub fn verify_outcome_whence(
-    mut interpreter: Interpreter,
-    code: &str,
-    f: fn(std::io::Result<TypedValue>) -> bool,
-) -> Interpreter {
-    assert!(f(interpreter.evaluate(code)));
-    interpreter
+/////////////////////////////////////////////////////////////
+//      Private Functions
+/////////////////////////////////////////////////////////////
+
+fn are_equal_unordered(expected: Vec<&str>, actual: Vec<String>)  {
+    let mut a_norm: Vec<_> = expected.iter().map(|s| s.trim().to_string()).collect();
+    let mut b_norm: Vec<_> = actual.iter().map(|s| s.trim().to_string()).collect();
+    a_norm.sort();
+    b_norm.sort();
+    if a_norm != b_norm {
+        assert_eq!(a_norm, b_norm)
+    }
 }
 
 /////////////////////////////////////////////////////////////

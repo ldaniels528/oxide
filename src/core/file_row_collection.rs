@@ -4,7 +4,7 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::blob_file_row_collection::BLOBFileRowCollection;
-use crate::blobs::{BLOBCellMetadata, BLOBStore};
+use crate::blobs::{BLOBMetadata, BLOBStore};
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
 use crate::data_types::DataType;

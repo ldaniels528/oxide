@@ -15,17 +15,18 @@ use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::namespaces::Namespace;
-use crate::numbers::Numbers::I64Value;
 use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::Sequence;
-use crate::structures::Row;
+use crate::structures::{Row, Structure};
+use crate::test_engine::TestState;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Number, StringValue};
+use crate::typed_values::TypedValue::StringValue;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// DataFrame is a logical representation of a table
@@ -37,6 +38,7 @@ pub enum Dataframe {
     EventSource(EventSourceRowCollection),
     Hybrid(HybridRowCollection),
     Model(ModelRowCollection),
+    TestReport(ModelRowCollection, TestState),
     TableFn(Box<TableFunction>),
 }
 
@@ -51,6 +53,26 @@ impl Dataframe {
         Ok(Self::Disk(FileRowCollection::new(columns, file, path.as_str())))
     }
 
+    /// deletes rows from the table based on a condition
+    pub fn delete_where(
+        mut self,
+        machine: &Machine,
+        condition: &Option<Conditions>,
+        limit: TypedValue,
+    ) -> std::io::Result<i64> {
+        let mut deleted = 0;
+        for id in self.get_indices_with_limit(limit)? {
+            // read an active row
+            if let Some(row) = self.read_one(id)? {
+                // if the predicate matches the condition, delete the row.
+                if row.matches(machine, condition, self.get_columns()) {
+                    deleted += self.delete_row(id)?;
+                }
+            }
+        }
+        Ok(deleted)
+    }
+    
     /// Creates a dataframe from a grid of raw text values
     /// ```
     /// |--------------------------------------|
@@ -95,26 +117,6 @@ impl Dataframe {
         (params, body)
     }
 
-    /// deletes rows from the table based on a condition
-    pub fn delete_where(
-        mut self,
-        machine: &Machine,
-        condition: &Option<Conditions>,
-        limit: TypedValue,
-    ) -> std::io::Result<TypedValue> {
-        let mut deleted = 0;
-        for id in self.get_indices_with_limit(limit)? {
-            // read an active row
-            if let Some(row) = self.read_one(id)? {
-                // if the predicate matches the condition, delete the row.
-                if row.matches(machine, condition, self.get_columns()) {
-                    deleted += self.delete_row(id)?;
-                }
-            }
-        }
-        Ok(Number(I64Value(deleted)))
-    }
-
     /// overwrites rows that match the supplied criteria
     pub fn overwrite_where(
         df: Dataframe,
@@ -123,7 +125,7 @@ impl Dataframe {
         values: &Vec<Expression>,
         condition: &Option<Conditions>,
         limit: TypedValue,
-    ) -> std::io::Result<(Dataframe, TypedValue)> {
+    ) -> std::io::Result<(Dataframe, i64)> {
         let mut overwritten = 0;
         let mut df = df;
         for id in df.get_indices_with_limit(limit)? {
@@ -132,15 +134,15 @@ impl Dataframe {
                 // if the predicate matches the condition, overwrite the row.
                 if row.matches(machine, condition, df.get_columns()) {
                     let (machine, my_fields) =
-                        machine.with_row(df.get_columns(), &row).eval_as_atoms(fields)?;
-                    if let (_, TypedValue::ArrayValue(my_values)) = machine.eval_as_array(values)? {
+                        machine.with_row(df.get_columns(), &row).evaluate_as_atoms(fields)?;
+                    if let (_, TypedValue::ArrayValue(my_values)) = machine.evaluate_as_array(values)? {
                         let new_row = row.transform(df.get_columns(), &my_fields, &my_values.get_values())?;
                         overwritten += df.overwrite_row(row.get_id(), new_row)?;
                     }
                 }
             }
         }
-        Ok((df, Number(I64Value(overwritten))))
+        Ok((df, overwritten))
     }
     
     /// restores rows from the table based on a condition
@@ -149,7 +151,7 @@ impl Dataframe {
         machine: &Machine,
         condition: &Option<Conditions>,
         limit: TypedValue,
-    ) -> std::io::Result<TypedValue> {
+    ) -> std::io::Result<i64> {
         let mut restored = 0;
         for id in self.get_indices_with_limit(limit)? {
             // read a row with its metadata
@@ -161,23 +163,35 @@ impl Dataframe {
                 }
             }
         }
-        Ok(Number(I64Value(restored)))
+        Ok(restored)
     }
 
     /// Returns an aggregate collection of unique columns
-    pub fn get_combined_parameters(dataframes: &[Dataframe]) -> Vec<Parameter> {
-        let mut seen_names = HashSet::new();
-        let mut combined_params = Vec::new();
-
+    fn get_combined_parameters(dataframes: &[Dataframe]) -> Vec<Parameter> {
+        let mut combined_params: Vec<Parameter> = Vec::new();
         for df in dataframes {
             for param in df.get_parameters() {
+                // get the next parameter name
                 let name = param.get_name();
-                if seen_names.insert(name.to_string()) {
-                    combined_params.push(param);
+                // does a parameter with this name already exist?
+                match combined_params.iter().position(|p| p.get_name() == name) {
+                    None => combined_params.push(param),
+                    Some(index) => {
+                        // if so, build a type that fits both
+                        let data_type = DataType::best_fit(vec![
+                            combined_params[index].get_data_type(),
+                            param.get_data_type()
+                        ]);
+                        // attempt to get a default value
+                        let default = combined_params[index].get_default_value()
+                            .coalesce(param.get_default_value());
+                        // replace the parameter
+                        let new_param = Parameter::new_with_default(name, data_type, default);
+                        combined_params[index] = new_param;
+                    }
                 }
             }
         }
-
         combined_params
     }
 
@@ -206,9 +220,96 @@ impl Dataframe {
         mrc
     }
 
+    pub fn intersect(&self, that: &Dataframe) -> Dataframe {
+        fn make_key(row: &Row) -> String {
+            row.get_values().iter().map(|v| v.unwrap_value())
+                .collect::<Vec<_>>()
+                .join("|")
+        }
+        fn do_intersect(df_a: &Dataframe, df_b: &Dataframe) -> Dataframe {
+            // cache the data from the smaller table
+            let mut hm = HashMap::new();
+            for row_b in df_b.iter() {
+                hm.entry(make_key(&row_b)).or_insert(true);
+            }
+
+            // write matching rows from the larger table
+            let mut mrc = ModelRowCollection::new(df_a.get_columns().clone());
+            for row_a in df_a.iter() {
+                if hm.contains_key(&make_key(&row_a)) {
+                    mrc.append_row(row_a);
+                }
+            }
+            Dataframe::Model(mrc)
+        }
+        
+        if self.len().unwrap_or(0) > that.len().unwrap_or(0) {
+            do_intersect(self, that)
+        } else {
+            do_intersect(that, self)
+        }
+    }
+
+    pub fn product(&self, that: &Dataframe) -> Dataframe {
+        let mut product_columns = vec![];
+        product_columns.extend(self.get_columns().clone());
+        product_columns.extend(that.get_columns().clone());
+
+        let mut mrc = ModelRowCollection::new(product_columns);
+        for row_a in self.iter() {
+            for row_b in that.iter() {
+                let mut values = vec![];
+                values.extend(row_a.get_values());
+                values.extend(row_b.get_values());
+                mrc.append_row(Row::new(0, values));
+            }
+        }
+        Self::Model(mrc)
+    }
+
+    pub fn union(&self, that: &Dataframe) -> Dataframe {
+        let mut mrc = ModelRowCollection::new(self.get_columns().clone());
+        mrc.append_rows(self.get_rows()).ok();
+        mrc.append_rows(that.get_rows()).ok();
+        Self::Model(mrc)
+    }
+
     pub fn to_model(self) -> ModelRowCollection {
         let (rows, columns) = (self.get_rows(), self.get_columns());
         ModelRowCollection::from_columns_and_rows(columns, &rows)
+    }
+    
+    pub fn sort_by_columns(
+        &self,
+        columns: &Vec<(usize, bool)>
+    ) -> std::io::Result<Dataframe> {
+        // Step 1: Gather active rows
+        let mut rows = self.get_rows();
+
+        // Step 2: Perform multi-column sort
+        rows.sort_by(|a, b| {
+            for (col_idx, ascending) in columns {
+                let va = &a[*col_idx];
+                let vb = &b[*col_idx];
+                match va.partial_cmp(vb) {
+                    Some(std::cmp::Ordering::Equal) => continue,
+                    Some(ordering) => {
+                        return if *ascending { ordering } else { ordering.reverse() };
+                    },
+                    None => return std::cmp::Ordering::Equal,
+                }
+            }
+            std::cmp::Ordering::Equal
+        });
+
+        // Step 3: Construct new sorted table
+        let mut sorted = ModelRowCollection::with_rows(self.get_columns().clone(), vec![]);
+        for (i, mut row) in rows.into_iter().enumerate() {
+            row.with_row_id(i);
+            sorted.append_row(row);
+        }
+
+        Ok(Self::Model(sorted))
     }
 
     pub fn sublist(&self, start: usize, end: usize) -> Self {
@@ -229,31 +330,31 @@ impl Dataframe {
 
     /// updates rows that match the supplied criteria
     pub fn update_where(
-        mut rc: Dataframe,
+        mut df: Dataframe,
         ms: &Machine,
         fields: &Vec<Expression>,
         values: &Vec<Expression>,
         condition: &Option<Conditions>,
         limit: TypedValue,
-    ) -> std::io::Result<TypedValue> {
-        let columns = rc.get_columns().clone();
+    ) -> std::io::Result<i64> {
+        let columns = df.get_columns().clone();
         let mut updated = 0;
-        for id in rc.get_indices_with_limit(limit)? {
+        for id in df.get_indices_with_limit(limit)? {
             // read an active row
-            if let Some(row) = rc.read_one(id)? {
+            if let Some(row) = df.read_one(id)? {
                 // if the predicate matches the condition, update the row.
                 if row.matches(ms, condition, &columns) {
                     let (ms, field_names) =
-                        ms.with_row(&columns, &row).eval_as_atoms(fields)?;
-                    if let (_, TypedValue::ArrayValue(field_values)) = ms.eval_as_array(values)? {
+                        ms.with_row(&columns, &row).evaluate_as_atoms(fields)?;
+                    if let (_, TypedValue::ArrayValue(field_values)) = ms.evaluate_as_array(values)? {
                         let new_row = row.transform(&columns, &field_names, &field_values.get_values())?;
-                        let result = rc.overwrite_row(id, new_row);
+                        let result = df.overwrite_row(id, new_row);
                         if result.is_ok() { updated += 1 }
                     }
                 }
             }
         }
-        Ok(Number(I64Value(updated)))
+        Ok(updated)
     }
 }
 
@@ -266,7 +367,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.get_columns(),
             Self::Hybrid(df) => df.get_columns(),
             Self::Model(df) => df.get_columns(),
-            Self::TableFn(rc) => rc.get_columns(),
+            Self::TestReport(df, ..) => df.get_columns(),
+            Self::TableFn(df) => df.get_columns(),
         }
     }
 
@@ -278,7 +380,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.get_record_size(),
             Self::Hybrid(df) => df.get_record_size(),
             Self::Model(df) => df.get_record_size(),
-            Self::TableFn(rc) => rc.get_record_size(),
+            Self::TestReport(df, ..) => df.get_record_size(),
+            Self::TableFn(df) => df.get_record_size(),
         }
     }
 
@@ -290,7 +393,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.get_rows(),
             Self::Hybrid(df) => df.get_rows(),
             Self::Model(df) => df.get_rows(),
-            Self::TableFn(rc) => rc.get_rows(),
+            Self::TestReport(df, ..) => df.get_rows(),
+            Self::TableFn(df) => df.get_rows(),
         }
     }
 
@@ -302,7 +406,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.len(),
             Self::Hybrid(df) => df.len(),
             Self::Model(df) => df.len(),
-            Self::TableFn(rc) => rc.len(),
+            Self::TestReport(df, ..) => df.len(),
+            Self::TableFn(df) => df.len(),
         }
     }
 
@@ -314,7 +419,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.overwrite_field(id, column_id, new_value),
             Self::Hybrid(df) => df.overwrite_field(id, column_id, new_value),
             Self::Model(df) => df.overwrite_field(id, column_id, new_value),
-            Self::TableFn(rc) => rc.overwrite_field(id, column_id, new_value),
+            Self::TestReport(df, ..) => df.overwrite_field(id, column_id, new_value),
+            Self::TableFn(df) => df.overwrite_field(id, column_id, new_value),
         }
     }
 
@@ -326,7 +432,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::Hybrid(df) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::Model(df) => df.overwrite_field_metadata(id, column_id, metadata),
-            Self::TableFn(rc) => rc.overwrite_field_metadata(id, column_id, metadata),
+            Self::TestReport(df, ..) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::TableFn(df) => df.overwrite_field_metadata(id, column_id, metadata),
         }
     }
 
@@ -338,7 +445,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.overwrite_row(id, row),
             Self::Hybrid(df) => df.overwrite_row(id, row),
             Self::Model(df) => df.overwrite_row(id, row),
-            Self::TableFn(rc) => rc.overwrite_row(id, row),
+            Self::TestReport(df, ..) => df.overwrite_row(id, row),
+            Self::TableFn(df) => df.overwrite_row(id, row),
         }
     }
 
@@ -350,7 +458,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.overwrite_row_metadata(id, metadata),
             Self::Hybrid(df) => df.overwrite_row_metadata(id, metadata),
             Self::Model(df) => df.overwrite_row_metadata(id, metadata),
-            Self::TableFn(rc) => rc.overwrite_row_metadata(id, metadata),
+            Self::TestReport(df, ..) => df.overwrite_row_metadata(id, metadata),
+            Self::TableFn(df) => df.overwrite_row_metadata(id, metadata),
         }
     }
 
@@ -362,7 +471,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.read_field(id, column_id),
             Self::Hybrid(df) => df.read_field(id, column_id),
             Self::Model(df) => df.read_field(id, column_id),
-            Self::TableFn(rc) => rc.read_field(id, column_id),
+            Self::TestReport(df, ..) => df.read_field(id, column_id),
+            Self::TableFn(df) => df.read_field(id, column_id),
         }
     }
 
@@ -374,7 +484,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.read_field_metadata(id, column_id),
             Self::Hybrid(df) => df.read_field_metadata(id, column_id),
             Self::Model(df) => df.read_field_metadata(id, column_id),
-            Self::TableFn(rc) => rc.read_field_metadata(id, column_id),
+            Self::TestReport(df, ..) => df.read_field_metadata(id, column_id),
+            Self::TableFn(df) => df.read_field_metadata(id, column_id),
         }
     }
 
@@ -386,7 +497,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.read_row(id),
             Self::Hybrid(df) => df.read_row(id),
             Self::Model(df) => df.read_row(id),
-            Self::TableFn(rc) => rc.read_row(id),
+            Self::TestReport(df, ..) => df.read_row(id),
+            Self::TableFn(df) => df.read_row(id),
         }
     }
 
@@ -398,7 +510,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.read_row_metadata(id),
             Self::Hybrid(df) => df.read_row_metadata(id),
             Self::Model(df) => df.read_row_metadata(id),
-            Self::TableFn(rc) => rc.read_row_metadata(id),
+            Self::TestReport(df, ..) => df.read_row_metadata(id),
+            Self::TableFn(df) => df.read_row_metadata(id),
         }
     }
 
@@ -410,7 +523,8 @@ impl RowCollection for Dataframe {
             Self::EventSource(df) => df.resize(new_size),
             Self::Hybrid(df) => df.resize(new_size),
             Self::Model(df) => df.resize(new_size),
-            Self::TableFn(rc) => rc.resize(new_size),
+            Self::TestReport(df, ..) => df.resize(new_size),
+            Self::TableFn(df) => df.resize(new_size),
         }
     }
 }

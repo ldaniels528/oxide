@@ -357,13 +357,13 @@ fn generate_language_results(example: &str) -> std::io::Result<Vec<String>> {
 fn generate_example_results(example: &str) -> std::io::Result<Vec<String>> {
     match Interpreter::new().evaluate(example)? {
         Structured(s) => {
-            Ok(vec![
-                format!(r#"
-                    ```json
-                    {}
-                    ```
-                "#, s.to_pretty_json()?)
-            ])
+            let prett_json = s.to_pretty_json()?;
+            let formatted = format!(r#"
+                |```json
+                |{}
+                |```
+            "#, prett_json.trim());
+            Ok(vec![strip_margin(&formatted, '|')])
         }
         TableValue(df) => {
             let rc: Box<dyn RowCollection> = Box::new(df);
@@ -578,30 +578,32 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             "#, '|')],
         Expression::Feature { .. } => vec![
             strip_margin(r#"
-                |Feature "Matches function" {
-                |    Scenario "Compare Array contents: Equal" {
+                |feature "Matches function" {
+                |    scenario "Compare Array contents: Equal" {
                 |        assert(
                 |            [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
                 |        )
                 |    }
-                |    Scenario "Compare Array contents: Not Equal" {
+                |    scenario "Compare Array contents: Not Equal" {
                 |        assert(!(
                 |            [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
                 |        ))
                 |    }
-                |    Scenario "Compare JSON contents (in sequence)" {
+                |    scenario "Compare JSON contents (in sequence)" {
                 |        assert(
                 |           { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
                 |        )
                 |    }
-                |    Scenario "Compare JSON contents (out of sequence)" {
+                |    scenario "Compare JSON contents (out of sequence)" {
                 |        assert(
                 |           { scores: [82 78 99], id: "A1537" } 
                 |                       matches 
                 |           { id: "A1537", scores: [82 78 99] }
                 |        )
                 |    }
-                |}"#, '|')],
+                |}
+                |test
+                |"#, '|')],
         Expression::ArrowSkinnyRight(..) => vec![
             strip_margin(r#"
                 |product = (a, b) -> a * b
@@ -621,7 +623,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                     |   "readme.www.stocks",
                     |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
                     |)
-                    |www::serve(8855)
+                    |http::serve(8855)
                     "#, '|'),
             strip_margin(r#"
                     |POST {
@@ -648,6 +650,12 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             "DELETE http://localhost:8855/readme/www/stocks/0".into(),
             "GET http://localhost:8855/readme/www/stocks/0".into(),
         ],
+        Expression::Identifier(..) => vec![
+            strip_margin(r#"
+                |let (a, b, c) = (3, 5, 7)
+                |c > b
+            "#, '|')
+        ],
         Expression::If { .. } => vec![
             strip_margin(r#"
                     |// Oxide provides an if-else statement
@@ -669,6 +677,15 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |let stock = { symbol: "TED", exchange: "AMEX", last_sale: 13.37 }
                 |stock.last_sale
+            "#, '|'),
+        ],
+        Expression::IsDefined(..) => vec![
+            strip_margin(r#"
+                |let stock = { symbol: "TED", exchange: "AMEX", last_sale: 13.37 }
+                |is_defined(stock)
+            "#, '|'),
+            strip_margin(r#"
+                |is_defined(x)
             "#, '|'),
         ],
         Expression::Literal(..) => vec![],
@@ -771,6 +788,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             "#, '|'),
         ],
         Expression::StructureExpression(..) => vec![],
+        Expression::Test(..) => vec![],
         Expression::Throw(..) => vec![
             strip_margin(r#"
                 |throw("this is an error")
@@ -851,12 +869,6 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                 |stocks
             "#, '|')
         ],
-        Expression::Identifier(..) => vec![
-            strip_margin(r#"
-                |let (a, b, c) = (3, 5, 7)
-                |c > b
-            "#, '|')
-        ],
         Expression::WhenEver { .. } => vec![
             strip_margin(r#"
                 |// Executes the block at the moment the condition becomes true.
@@ -902,6 +914,11 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                 for(i = 0, i < 5, i = i + 1) yield i * 2
             "#, '|')
         ],
+        Expression::Zip(..) => vec![
+            strip_margin(r#"
+                | [1, 2, 3] <|> ['A','B','C']
+            "#, '|')
+        ],
         ////////////////////////////////////////////////////////////////////
         // SQL models
         ////////////////////////////////////////////////////////////////////
@@ -911,7 +928,9 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         Having { ..} => vec![],
         Limit { ..} => vec![],
         OrderBy { .. } => vec![],
-        Select { .. } => vec![],
+        Select { .. } => vec![
+            "select name, age from { name: 'Tom', age: 37, sex: 'M' }".into()
+        ],
         Where { .. } => vec![],
     }
 }
@@ -946,6 +965,7 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("IF expression", If { condition: null.clone(), a: null.clone(), b: None }),
         ("Includes", Include(null.clone())),
         ("Infix", Infix(null.clone(), null.clone())),
+        ("Is Defined", IsDefined(null.clone())),
         ("Match expression", MatchExpression(null.clone(), vec![])),
         ("Mathematics: subtraction", Minus(null.clone(), null.clone())),
         ("Mathematics: multiplication", Multiply(null.clone(), null.clone())),
@@ -964,6 +984,7 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("When statement", WhenEver { condition: null.clone(), code: null.clone() }),
         ("While expression", While { condition: null.clone(), code: null.clone() }),
         ("Yield", Yield(null.clone())),
+        ("Zip", Zip(null.clone(), null.clone())),
     ];
 
     let mut examples = models.iter()
@@ -975,11 +996,12 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
 }
 
 fn print_text_block(mut file: File, lines: Vec<String>) -> std::io::Result<File> {
-    writeln!(file, "<pre>")?;
+    let is_pre_formatted = lines.iter().any(|s| s.contains("```"));
+    if !is_pre_formatted { writeln!(file, "<pre>")? }
     for line in lines {
         writeln!(file, "{}", line)?;
     }
-    writeln!(file, "</pre>")?;
+    if !is_pre_formatted { writeln!(file, "\n</pre>")? }
     Ok(file)
 }
 

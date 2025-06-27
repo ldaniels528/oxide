@@ -3,7 +3,7 @@
 // BLOB file row-collection module
 ////////////////////////////////////////////////////////////////////
 
-use crate::blobs::{BLOBCellMetadata, BLOBStore};
+use crate::blobs::{BLOBMetadata, BLOBStore};
 use crate::columns::Column;
 use crate::field::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
@@ -23,7 +23,7 @@ use std::fmt::{Debug, Formatter};
 pub struct BLOBFileRowCollection {
     blobs: BLOBStore,
     columns: Vec<Column>,
-    metadata: BLOBCellMetadata,
+    metadata: BLOBMetadata,
     record_size: usize,
 }
 
@@ -32,7 +32,7 @@ impl BLOBFileRowCollection {
     pub fn new(
         blobs: BLOBStore,
         parameters: &Vec<Parameter>,
-        metadata: BLOBCellMetadata,
+        metadata: BLOBMetadata,
     ) -> Self {
         let columns = Column::from_parameters(parameters);
         let record_size = Row::compute_record_size(&columns);
@@ -113,7 +113,7 @@ impl<'de> Deserialize<'de> for BLOBFileRowCollection {
         struct FileRowCollectionHelper {
             path: String,
             parameters: Vec<Parameter>,
-            metadata: BLOBCellMetadata,
+            metadata: BLOBMetadata,
         }
 
         let helper = FileRowCollectionHelper::deserialize(deserializer)?;

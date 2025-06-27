@@ -5,7 +5,9 @@
 
 use std::fmt::{Debug, Display, Formatter};
 
+use crate::columns::Column;
 use crate::data_types::DataType;
+use crate::errors::Errors::ColumnNotFoundInColumns;
 use crate::parameter::Parameter;
 use crate::platform::PackageOps;
 use crate::tokens::Token;
@@ -250,6 +252,11 @@ impl Display for Errors {
 
 pub fn throw<A>(error: Errors) -> std::io::Result<A> {
     Err(std::io::Error::new(std::io::ErrorKind::Other, error.to_string()))
+}
+
+pub fn column_not_found<A>(name: &str, columns: &Vec<Column>) -> std::io::Result<A> {
+    throw(ColumnNotFoundInColumns(name.into(), columns.iter()
+        .map(|c| c.get_name().into()).collect::<Vec<_>>()))
 }
 
 /// Unit tests

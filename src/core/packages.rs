@@ -20,6 +20,7 @@ use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers::*;
 use crate::object_config::{HashIndexConfig, ObjectConfig};
+use crate::oxide_server::{APIMethods, UserAPI, UserAPIMethod};
 use crate::parameter::Parameter;
 use crate::platform::PackageOps::Cal;
 use crate::platform::{Package, PackageOps, VERSION};
@@ -28,12 +29,13 @@ use crate::sequences::Sequences::{TheArray, TheDataframe, TheRange, TheTuple};
 use crate::sequences::{range_diff, Array, Sequence};
 use crate::sprintf::StringPrinter;
 use crate::structures::Structures::{Hard, Soft};
-use crate::structures::{Row, Structure};
+use crate::structures::{Row, Structure, Structures};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use crate::utils::{extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0, extract_value_fn1, extract_value_fn2, extract_value_fn3, pull_array, pull_number, pull_string, strip_margin, superscript};
+use crate::utils::{extract_array_fn1, extract_number_fn1, extract_number_fn2, extract_value_fn0, extract_value_fn1, extract_value_fn1_or_2, extract_value_fn2, extract_value_fn3, pull_array, pull_number, pull_string, strip_margin, superscript};
 use crate::{machine, oxide_server};
 use chrono::{Datelike, Local, MappedLocalTime, TimeZone, Timelike};
+use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
 use std::fs::File;
@@ -62,6 +64,293 @@ impl DataFormats {
             DataFormats::CSV => "CSV",
             DataFormats::JSON => "JSON",
         }).to_string()
+    }
+}
+
+/// Aggregate package
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum AggPkg {
+    Avg,
+    Count,
+    Max,
+    Min,
+    Sum,
+}
+
+impl AggPkg {
+    /// stateful reduce function
+    fn agg_reduce_stateful_fn<F>(
+        label: &str,
+        ms: Machine,
+        value: &TypedValue,
+        f: F,
+    ) -> std::io::Result<(Machine, TypedValue)>
+    where
+        F: Fn(TypedValue, TypedValue) -> TypedValue,
+    {
+        let ms0 = match ms.get(label) {
+            None => ms.with_variable(label, f(Undefined, value.clone())),
+            Some(prev_value) => ms.with_variable(label, f(prev_value, value.clone())),
+        };
+        let result = ms0.get_or_else(label, || Null);
+        Ok((ms0, result))
+    }
+
+    /// aggregate function: returns the average of values in a column
+    fn do_agg_avg(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        // track the sum
+        let (ms1, sum) = Self::agg_reduce_stateful_fn("$avg_sum", ms, value, |v0, v1| {
+            match (v0, v1) {
+                (Number(n0), Number(n1)) => Number(n0 + n1),
+                _ => value.clone()
+            }
+        })?;
+        // track the count
+        let (ms2, count) = Self::agg_reduce_stateful_fn("$avg_count", ms1, value, |v0, v1| {
+            let n1 = I64Value(if v1 == Null || v1 == Undefined { 0 } else { 1 });
+            match (v0, v1) {
+                (Number(count), _) => Number(count + n1),
+                _ => Number(n1)
+            }
+        })?;
+        // compute the average
+        let result = match (sum, count) {
+            (Number(a), Number(b)) => 
+                if b.is_effectively_zero() { Null } else { Number(a / b) }
+            _ => value.clone()
+        };
+        Ok((ms2, result))
+    }
+
+    /// aggregate function: returns the count of non-null values in a column
+    fn do_agg_count(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Self::agg_reduce_stateful_fn("$count", ms, value, |v0, v1| {
+            let n1 = I64Value(if v1 == Null || v1 == Undefined { 0 } else { 1 });
+            match (v0, v1) {
+                (Number(count), _) => Number(count + n1),
+                _ => Number(n1)
+            }
+        })
+    }
+    
+    /// aggregate function: returns the maximum value (highest) in a column
+    fn do_agg_max(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Self::agg_reduce_stateful_fn("$max", ms, value, |v0, v1| {
+            match (v0, v1) {
+                (DateValue(n0), DateValue(n1)) =>
+                    if n0 > n1 { DateValue(n0) } else { DateValue(n1) },
+                (Number(n0), Number(n1)) =>
+                    if n0 > n1 { Number(n0) } else { Number(n1) },
+                (UUIDValue(n0), UUIDValue(n1)) =>
+                    if n0 > n1 { UUIDValue(n0) } else { UUIDValue(n1) },
+                _ => value.clone()
+            }
+        })
+    }
+
+    /// aggregate function: returns the minimum value (lowest) in a column
+    fn do_agg_min(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Self::agg_reduce_stateful_fn("$min", ms, value, |v0, v1| {
+            match (v0, v1) {
+                (DateValue(n0), DateValue(n1)) =>
+                    if n0 < n1 { DateValue(n0) } else { DateValue(n1) }
+                (Number(n0), Number(n1)) =>
+                    if n0 < n1 { Number(n0) } else { Number(n1) }
+                (UUIDValue(n0), UUIDValue(n1)) =>
+                    if n0 < n1 { UUIDValue(n0) } else { UUIDValue(n1) }
+                _ => value.clone()
+            }
+        })
+    }
+
+    /// aggregate function: sum value
+    fn do_agg_sum(
+        ms: Machine,
+        value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Self::agg_reduce_stateful_fn("$sum", ms, value, |v0, v1| {
+            match (v0, v1) {
+                (Number(n0), Number(n1)) => Number(n0 + n1),
+                _ => value.clone()
+            }
+        })
+    }
+
+    pub fn get_contents() -> Vec<PackageOps> {
+        vec![
+            PackageOps::Agg(AggPkg::Avg),
+            PackageOps::Agg(AggPkg::Count),
+            PackageOps::Agg(AggPkg::Max),
+            PackageOps::Agg(AggPkg::Min),
+            PackageOps::Agg(AggPkg::Sum),
+        ]
+    }
+}
+
+impl Package for AggPkg {
+    fn get_name(&self) -> String {
+        (match self {
+            AggPkg::Avg => "avg",
+            AggPkg::Count => "count",
+            AggPkg::Max => "max",
+            AggPkg::Min => "min",
+            AggPkg::Sum => "sum",
+        }).into()
+    }
+
+    fn get_package_name(&self) -> String {
+        "agg".into()
+    }
+
+    fn get_description(&self) -> String {
+        (match self {
+            AggPkg::Avg => "returns the average of values in a column",
+            AggPkg::Count => "returns the counts of rows or non-null fields",
+            AggPkg::Max => "returns the maximum value of a collection of fields",
+            AggPkg::Min => "returns the minimum value of a collection of fields",
+            AggPkg::Sum => "returns the sum of a collection of fields",
+        }).to_string()
+    }
+
+    fn get_examples(&self) -> Vec<String> {
+        match self {
+            AggPkg::Avg => vec![
+                strip_margin(r#"
+                    |use agg
+                    |select exchange, avg_sale: avg(last_sale)
+                    |from
+                    |    |--------------------------------|
+                    |    | symbol | exchange  | last_sale |
+                    |    |--------------------------------|
+                    |    | GIF    | NYSE      | 11.77     |
+                    |    | TRX    | NASDAQ    | 32.97     |
+                    |    | RLP    | NYSE      | 23.66     |
+                    |    | GTO    | NASDAQ    | 51.23     |
+                    |    | BST    | NASDAQ    | 214.88    |
+                    |    |--------------------------------|
+                    |group_by exchange
+                    "#, '|')
+            ],
+            AggPkg::Count => vec![
+                strip_margin(r#"
+                    |use agg
+                    |select exchange, qty: count(last_sale)
+                    |from
+                    |    |--------------------------------|
+                    |    | symbol | exchange  | last_sale |
+                    |    |--------------------------------|
+                    |    | GIF    | NYSE      | 11.77     |
+                    |    | TRX    | NASDAQ    | 32.97     |
+                    |    | RLP    | NYSE      | 23.66     |
+                    |    | GTO    | NASDAQ    | 51.23     |
+                    |    | BST    | NASDAQ    | 214.88    |
+                    |    |--------------------------------|
+                    |group_by exchange                    
+                    "#, '|')
+            ],
+            AggPkg::Max => vec![
+                strip_margin(r#"
+                    |use agg
+                    |select exchange, max_sale: max(last_sale)
+                    |from
+                    |    |--------------------------------|
+                    |    | symbol | exchange  | last_sale |
+                    |    |--------------------------------|
+                    |    | GIF    | NYSE      | 11.77     |
+                    |    | TRX    | NASDAQ    | 32.97     |
+                    |    | RLP    | NYSE      | 23.66     |
+                    |    | GTO    | NASDAQ    | 51.23     |
+                    |    | BST    | NASDAQ    | 214.88    |
+                    |    |--------------------------------|
+                    |group_by exchange                    
+                    "#, '|')
+            ],
+            AggPkg::Min => vec![
+                strip_margin(r#"
+                    |use agg
+                    |select exchange, min_sale: min(last_sale)
+                    |from
+                    |    |--------------------------------|
+                    |    | symbol | exchange  | last_sale |
+                    |    |--------------------------------|
+                    |    | GIF    | NYSE      | 11.77     |
+                    |    | TRX    | NASDAQ    | 32.97     |
+                    |    | RLP    | NYSE      | 23.66     |
+                    |    | GTO    | NASDAQ    | 51.23     |
+                    |    | BST    | NASDAQ    | 214.88    |
+                    |    |--------------------------------|
+                    |group_by exchange                    
+                    "#, '|')
+            ],
+            AggPkg::Sum => vec![
+                strip_margin(r#"
+                    |use agg
+                    |select exchange, total_sale: sum(last_sale)
+                    |from
+                    |    |--------------------------------|
+                    |    | symbol | exchange  | last_sale |
+                    |    |--------------------------------|
+                    |    | GIF    | NYSE      | 11.77     |
+                    |    | TRX    | NASDAQ    | 32.97     |
+                    |    | RLP    | NYSE      | 23.66     |
+                    |    | GTO    | NASDAQ    | 51.23     |
+                    |    | BST    | NASDAQ    | 214.88    |
+                    |    |--------------------------------|
+                    |group_by exchange                    
+                    "#, '|')
+            ]
+        }
+    }
+
+    fn get_parameter_types(&self) -> Vec<DataType> {
+        match self {
+            AggPkg::Avg => vec![
+                UnresolvedType
+            ],
+            AggPkg::Count => vec![
+                UnresolvedType
+            ],
+            AggPkg::Max | AggPkg::Min => vec![
+                UnresolvedType
+            ],
+            AggPkg::Sum => vec![
+                UnresolvedType
+            ],
+        }
+    }
+
+    fn get_return_type(&self) -> DataType {
+        match self {
+            AggPkg::Avg | AggPkg::Max | AggPkg::Min => NumberType(F64Kind),
+            AggPkg::Count => NumberType(I64Kind),
+            AggPkg::Sum => NumberType(F64Kind),
+        }
+    }
+
+    fn evaluate(
+        &self, 
+        ms: Machine, 
+        args: Vec<TypedValue>
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match self {
+            AggPkg::Avg => extract_value_fn1(ms, args, Self::do_agg_avg),
+            AggPkg::Count => extract_value_fn1(ms, args, Self::do_agg_count),
+            AggPkg::Max => extract_value_fn1(ms, args, Self::do_agg_max),
+            AggPkg::Min => extract_value_fn1(ms, args, Self::do_agg_min),
+            AggPkg::Sum => extract_value_fn1(ms, args, Self::do_agg_sum),
+        }
     }
 }
 
@@ -696,6 +985,7 @@ pub enum IoPkg {
     FileExists,
     FileReadText,
     StdErr,
+    StdIn,
     StdOut,
 }
 
@@ -736,6 +1026,12 @@ impl IoPkg {
         out.flush()?;
         Ok((ms, Boolean(true)))
     }
+    
+    fn do_io_stdin(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
+        let mut input = String::new();
+        let _ = std::io::stdin().read_line(&mut input)?;
+        Ok((ms, StringValue(input)))
+    }
 
     pub(crate) fn do_io_stdout(
         ms: Machine,
@@ -753,34 +1049,37 @@ impl IoPkg {
             PackageOps::Io(IoPkg::FileExists),
             PackageOps::Io(IoPkg::FileReadText),
             PackageOps::Io(IoPkg::StdErr),
+            PackageOps::Io(IoPkg::StdIn),
             PackageOps::Io(IoPkg::StdOut),
         ]
     }
 }
 
 impl Package for IoPkg {
-    fn evaluate(
-        &self,
-        ms: Machine,
-        args: Vec<TypedValue>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        match self {
-            IoPkg::FileCreate => extract_value_fn2(ms, args, Self::do_io_create_file),
-            IoPkg::FileExists => extract_value_fn1(ms, args, Self::do_io_exists),
-            IoPkg::FileReadText => extract_value_fn1(ms, args, Self::do_io_read_text_file),
-            IoPkg::StdErr => extract_value_fn1(ms, args, Self::do_io_stderr),
-            IoPkg::StdOut => extract_value_fn1(ms, args, Self::do_io_stdout),
-        }
+    fn get_name(&self) -> String {
+        (match self {
+            IoPkg::FileCreate => "create_file",
+            IoPkg::FileExists => "exists",
+            IoPkg::FileReadText => "read_text_file",
+            IoPkg::StdErr => "stderr",
+            IoPkg::StdIn => "stdin",
+            IoPkg::StdOut => "stdout",
+        }).to_string()
+    }
+
+    fn get_package_name(&self) -> String {
+        "io".into()
     }
 
     fn get_description(&self) -> String {
-        match self {
-            IoPkg::FileCreate => "Creates a new file".into(),
-            IoPkg::FileExists => "Returns true if the source path exists".into(),
-            IoPkg::FileReadText => "Reads the contents of a text file into memory".into(),
-            IoPkg::StdErr => "Writes a string to STDERR".into(),
-            IoPkg::StdOut => "Writes a string to STDOUT".into(),
-        }
+        (match self {
+            IoPkg::FileCreate => "Creates a new file",
+            IoPkg::FileExists => "Returns true if the source path exists",
+            IoPkg::FileReadText => "Reads the contents of a text file into memory",
+            IoPkg::StdErr => "Writes a string to STDERR",
+            IoPkg::StdIn => "Reads input from STDIN as a string",
+            IoPkg::StdOut => "Writes a string to STDOUT",
+        }).to_string()
     }
 
     fn get_examples(&self) -> Vec<String> {
@@ -792,36 +1091,22 @@ impl Package for IoPkg {
                     |   exchange: "NYSE",
                     |   last_sale: 45.32
                     |})
-                "#,
-                '|',
-            )],
+                "#, '|', )
+            ],
             IoPkg::FileExists => vec![r#"io::exists("quote.json")"#.to_string()],
-            IoPkg::FileReadText => vec![strip_margin(
+            IoPkg::FileReadText => vec![
+                strip_margin(
                 r#"
                     |use io, util
                     |file = "temp_secret.txt"
                     |file:::create_file(md5("**keep**this**secret**"))
                     |file:::read_text_file()
-                "#,
-                '|',
-            )],
+                "#, '|')
+            ],
             IoPkg::StdErr => vec![r#"io::stderr("Goodbye Cruel World")"#.to_string()],
+            IoPkg::StdIn => vec![],
             IoPkg::StdOut => vec![r#"io::stdout("Hello World")"#.to_string()],
         }
-    }
-
-    fn get_name(&self) -> String {
-        match self {
-            IoPkg::FileCreate => "create_file".into(),
-            IoPkg::FileExists => "exists".into(),
-            IoPkg::FileReadText => "read_text_file".into(),
-            IoPkg::StdErr => "stderr".into(),
-            IoPkg::StdOut => "stdout".into(),
-        }
-    }
-
-    fn get_package_name(&self) -> String {
-        "io".into()
     }
 
     fn get_parameter_types(&self) -> Vec<DataType> {
@@ -830,6 +1115,7 @@ impl Package for IoPkg {
             IoPkg::FileExists | IoPkg::FileReadText | IoPkg::StdErr | IoPkg::StdOut => {
                 vec![StringType]
             }
+            IoPkg::StdIn => vec![],
         }
     }
 
@@ -837,7 +1123,22 @@ impl Package for IoPkg {
         match self {
             IoPkg::FileReadText => ArrayType(UnresolvedType.into()),
             IoPkg::FileCreate | IoPkg::FileExists => BooleanType,
-            IoPkg::StdErr | IoPkg::StdOut => StringType,
+            IoPkg::StdErr | IoPkg::StdIn | IoPkg::StdOut => StringType,
+        }
+    }
+
+    fn evaluate(
+        &self,
+        ms: Machine,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match self {
+            IoPkg::FileCreate => extract_value_fn2(ms, args, Self::do_io_create_file),
+            IoPkg::FileExists => extract_value_fn1(ms, args, Self::do_io_exists),
+            IoPkg::FileReadText => extract_value_fn1(ms, args, Self::do_io_read_text_file),
+            IoPkg::StdErr => extract_value_fn1(ms, args, Self::do_io_stderr),
+            IoPkg::StdIn => extract_value_fn0(ms, args, Self::do_io_stdin),
+            IoPkg::StdOut => extract_value_fn1(ms, args, Self::do_io_stdout),
         }
     }
 }
@@ -2360,6 +2661,7 @@ pub enum ToolsPkg {
     Describe,
     Fetch,
     Filter,
+    Latest,
     Len,
     Map,
     Pop,
@@ -2421,9 +2723,7 @@ impl ToolsPkg {
 
                 // apply the function to every element in the array
                 match items.to_sequence()? {
-                    TheArray(array) => {
-                        PackageOps::apply_fn_over_array(ms, &array, function, filter)
-                    }
+                    TheArray(array) => PackageOps::apply_fn_over_array(ms, &array, function, filter),
                     TheDataframe(df) => PackageOps::apply_fn_over_table(ms, &df, function, filter),
                     TheRange(..) => Self::do_tools_filter(ms, &items.to_array(), function),
                     TheTuple(..) => throw(TypeMismatch(SequenceExpected(items.get_type()))),
@@ -2433,6 +2733,21 @@ impl ToolsPkg {
                 z.to_code(),
             ))),
         }
+    }
+
+    fn do_tools_latest(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        let result = match value.to_sequence()? {
+            TheArray(..) => Undefined,
+            TheDataframe(df) =>
+                match df.find_last_active_row_id() {
+                    Ok(Some(id)) => Number(I64Value(id as i64)),
+                    Ok(None) => Undefined,
+                    Err(err) => ErrorValue(Exact(err.to_string()))
+                }
+            TheRange(..) => Undefined,
+            TheTuple(..) => Undefined,
+        };
+        Ok((ms, result))
     }
 
     fn do_tools_length(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
@@ -2521,7 +2836,13 @@ impl ToolsPkg {
             Structured(structure) => {
                 let seq = seq_like.to_sequence()?;
                 let result = match seq {
-                    TheDataframe(mut df) => df.push_row(structure.to_row()),
+                    TheDataframe(mut df) => {
+                        df.push_row(Structures::transform_row(
+                            &structure.get_parameters(),
+                            &structure.get_values(),
+                            &df.get_parameters()
+                        ))
+                    },
                     TheArray(mut arr) => arr.push(Structured(structure)),
                     TheRange(..) => return throw(UnsupportedFeature("Range::push()".into())),
                     TheTuple(mut tpl) => {
@@ -2618,6 +2939,7 @@ impl ToolsPkg {
             PackageOps::Tools(ToolsPkg::Describe),
             PackageOps::Tools(ToolsPkg::Fetch),
             PackageOps::Tools(ToolsPkg::Filter),
+            PackageOps::Tools(ToolsPkg::Latest),
             PackageOps::Tools(ToolsPkg::Len),
             PackageOps::Tools(ToolsPkg::Map),
             PackageOps::Tools(ToolsPkg::Pop),
@@ -2670,23 +2992,24 @@ impl ToolsPkg {
 
 impl Package for ToolsPkg {
     fn get_name(&self) -> String {
-        match self {
-            ToolsPkg::Compact => "compact".into(),
-            ToolsPkg::Describe => "describe".into(),
-            ToolsPkg::Fetch => "fetch".into(),
-            ToolsPkg::Filter => "filter".into(),
-            ToolsPkg::Len => "len".into(),
-            ToolsPkg::Map => "map".into(),
-            ToolsPkg::Pop => "pop".into(),
-            ToolsPkg::Push => "push".into(),
-            ToolsPkg::Reverse => "reverse".into(),
-            ToolsPkg::RowId => "row_id".into(),
-            ToolsPkg::Scan => "scan".into(),
-            ToolsPkg::ToArray => "to_array".into(),
-            ToolsPkg::ToCSV => "to_csv".into(),
-            ToolsPkg::ToJSON => "to_json".into(),
-            ToolsPkg::ToTable => "to_table".into(),
-        }
+        (match self {
+            ToolsPkg::Compact => "compact",
+            ToolsPkg::Describe => "describe",
+            ToolsPkg::Fetch => "fetch",
+            ToolsPkg::Filter => "filter",
+            ToolsPkg::Latest => "latest",
+            ToolsPkg::Len => "len",
+            ToolsPkg::Map => "map",
+            ToolsPkg::Pop => "pop",
+            ToolsPkg::Push => "push",
+            ToolsPkg::Reverse => "reverse",
+            ToolsPkg::RowId => "row_id",
+            ToolsPkg::Scan => "scan",
+            ToolsPkg::ToArray => "to_array",
+            ToolsPkg::ToCSV => "to_csv",
+            ToolsPkg::ToJSON => "to_json",
+            ToolsPkg::ToTable => "to_table",
+        }).into()
     }
 
     fn get_package_name(&self) -> String {
@@ -2694,29 +3017,31 @@ impl Package for ToolsPkg {
     }
 
     fn get_description(&self) -> String {
-        match self {
-            ToolsPkg::Compact => "Shrinks a table by removing deleted rows".into(),
-            ToolsPkg::Describe => "Describes a table or structure".into(),
-            ToolsPkg::Fetch => "Retrieves a raw structure from a table".into(),
-            ToolsPkg::Filter => "Filters a collection based on a function".into(),
-            ToolsPkg::Len => "Returns the length of a table".into(),
-            ToolsPkg::Map => "Transform a collection based on a function".into(),
-            ToolsPkg::Pop => "Removes and returns a value or object from a Sequence".into(),
-            ToolsPkg::Push => "Appends a value or object to a Sequence".into(),
-            ToolsPkg::Reverse => "Returns a reverse copy of a table, string or array".into(),
-            ToolsPkg::RowId => "Returns the unique ID for the last retrieved row".into(),
-            ToolsPkg::Scan => "Returns existence metadata for a table".into(),
-            ToolsPkg::ToArray => "Converts a collection into an array".into(),
-            ToolsPkg::ToCSV => "Converts a collection to CSV format".into(),
-            ToolsPkg::ToJSON => "Converts a collection to JSON format".into(),
-            ToolsPkg::ToTable => "Converts an object into a to_table".into(),
-        }
+        (match self {
+            ToolsPkg::Compact => "Shrinks a table by removing deleted rows",
+            ToolsPkg::Describe => "Describes a table or structure",
+            ToolsPkg::Fetch => "Retrieves a raw structure from a table",
+            ToolsPkg::Filter => "Filters a collection based on a function",
+            ToolsPkg::Latest => "Returns the row_id of last inserted record",
+            ToolsPkg::Len => "Returns the length of a table",
+            ToolsPkg::Map => "Transform a collection based on a function",
+            ToolsPkg::Pop => "Removes and returns a value or object from a Sequence",
+            ToolsPkg::Push => "Appends a value or object to a Sequence",
+            ToolsPkg::Reverse => "Returns a reverse copy of a table, string or array",
+            ToolsPkg::RowId => "Returns the unique ID for the last retrieved row",
+            ToolsPkg::Scan => "Returns existence metadata for a table",
+            ToolsPkg::ToArray => "Converts a collection into an array",
+            ToolsPkg::ToCSV => "Converts a collection to CSV format",
+            ToolsPkg::ToJSON => "Converts a collection to JSON format",
+            ToolsPkg::ToTable => "Converts an object into a to_table",
+        }).into()
     }
 
     fn get_examples(&self) -> Vec<String> {
         match self {
             // tools
-            ToolsPkg::Compact => vec![strip_margin(r#"
+            ToolsPkg::Compact => vec![
+                strip_margin(r#"
                     |stocks = nsd::save(
                     |   "examples.compact.stocks",
                     |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
@@ -2752,8 +3077,8 @@ impl Package for ToolsPkg {
                     |tools::describe(stocks)
                 "#, '|')
             ],
-            ToolsPkg::Fetch => vec![strip_margin(
-                r#"
+            ToolsPkg::Fetch => vec![
+                strip_margin(r#"
                     |stocks = nsd::save(
                     |   "examples.fetch.stocks",
                     |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
@@ -2762,29 +3087,47 @@ impl Package for ToolsPkg {
                     | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                     | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                     |tools::fetch(stocks, 2)
-                "#,
-                '|',
-            )],
-            ToolsPkg::Filter => vec![strip_margin(
-                r#"
+                "#, '|')
+            ],
+            ToolsPkg::Filter => vec![
+                strip_margin(r#"
                     |tools::filter(1..11, n -> (n % 2) == 0)
-                "#,
-                '|',
-            )],
-            ToolsPkg::Len => vec![strip_margin(
-                r#"
+                "#, '|')
+            ],
+            ToolsPkg::Latest => vec![
+                strip_margin(r#"
+                    |stocks = nsd::save(
+                    |   "packages.tools_latest.stocks",
+                    |    |--------------------------------|
+                    |    | symbol | exchange  | last_sale |
+                    |    |--------------------------------|
+                    |    | GIF    | NYSE      | 11.75     |
+                    |    | TRX    | NASDAQ    | 32.96     |
+                    |    | SHMN   | OTCBB     | 5.02      |
+                    |    | XCD    | OTCBB     | 1.37      |
+                    |    | DRMQ   | OTHER_OTC | 0.02      |
+                    |    | JTRQ   | OTHER_OTC | 0.0001    |
+                    |    |--------------------------------|
+                    |)
+                    |delete stocks where last_sale < 1
+                    |row_id = tools::latest(stocks)
+                    |stocks[row_id]
+                "#, '|')
+            ],
+            ToolsPkg::Len => vec![
+                strip_margin(r#"
                     |stocks = nsd::save(
                     |   "examples.table_len.stocks",
-                    |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                    |   [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+                    |    { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+                    |    { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] 
                     |)
-                    |[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
-                    | { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
-                    | { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
                     |tools::len(stocks)
                 "#,
-                '|',
-            )],
-            ToolsPkg::Map => vec![strip_margin(r#"
+                '|')
+            ],
+            ToolsPkg::Map => vec![
+                strip_margin(r#"
                     |stocks = nsd::save(
                     |   "examples.map_over_table.stocks",
                     |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
@@ -2799,10 +3142,10 @@ impl Package for ToolsPkg {
                     |    last_sale: last_sale,
                     |    processed_time: cal::now()
                     |})
-                "#,
-                '|',
-            )],
-            ToolsPkg::Pop => vec![strip_margin(r#"
+                "#, '|')
+            ],
+            ToolsPkg::Pop => vec![
+                strip_margin(r#"
                     |use tools
                     |stocks = nsd::save(
                     |   "examples.tools_pop.stocks",
@@ -2812,11 +3155,10 @@ impl Package for ToolsPkg {
                     | { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                     | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                     |stocks:::pop()
-                "#,
-                '|',
-            )],
-            ToolsPkg::Push => vec![strip_margin(
-                r#"
+                "#, '|')
+            ],
+            ToolsPkg::Push => vec![
+                strip_margin(r#"
                     |use tools
                     |stocks = nsd::save(
                     |   "examples.tools_push.stocks",
@@ -2827,20 +3169,21 @@ impl Package for ToolsPkg {
                     | { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
                     |stocks:::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
                     |stocks
-                "#,
-                '|',
-            )],
-            ToolsPkg::Reverse => vec![strip_margin(
-                r#"
+                "#, '|')
+            ],
+            ToolsPkg::Reverse => vec![
+                strip_margin(r#"
                     |use tools
                     |to_table(reverse(
                     |   ['cat', 'dog', 'ferret', 'mouse']
                     |))
-                "#,
-                '|',
-            )],
-            ToolsPkg::RowId => vec!["tools::row_id()".into()],
-            ToolsPkg::Scan => vec![strip_margin(r#"
+                "#, '|')
+            ],
+            ToolsPkg::RowId => vec![
+                "tools::row_id()".into()
+            ],
+            ToolsPkg::Scan => vec![
+                strip_margin(r#"
                     |use tools
                     |stocks = nsd::save(
                     |   "examples.scan.stocks",
@@ -2853,12 +3196,13 @@ impl Package for ToolsPkg {
                     | { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
                     |delete stocks where last_sale > 1.0
                     |stocks:::scan()
-                "#,
-                '|',
-            )],
-            ToolsPkg::ToArray => vec![r#"tools::to_array("Hello")"#.into()],
-            ToolsPkg::ToCSV => vec![strip_margin(
-                r#"
+                "#, '|')
+            ],
+            ToolsPkg::ToArray => vec![
+                r#"tools::to_array("Hello")"#.into()
+            ],
+            ToolsPkg::ToCSV => vec![
+                strip_margin(r#"
                     |use tools::to_csv
                     |stocks = nsd::save(
                     |   "examples.csv.stocks",
@@ -2870,11 +3214,10 @@ impl Package for ToolsPkg {
                     | { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
                     | { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
                     |stocks:::to_csv()
-                "#,
-                '|',
-            )],
-            ToolsPkg::ToJSON => vec![strip_margin(
-                r#"
+                "#, '|')
+            ],
+            ToolsPkg::ToJSON => vec![
+                strip_margin(r#"
                     |use tools::to_json
                     |stocks = nsd::save(
                     |   "examples.json.stocks",
@@ -2886,9 +3229,8 @@ impl Package for ToolsPkg {
                     | { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
                     | { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
                     |stocks:::to_json()
-                "#,
-                '|',
-            )],
+                "#, '|')
+            ],
             ToolsPkg::ToTable => vec![strip_margin(
                 r#"
                     |tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
@@ -2903,6 +3245,7 @@ impl Package for ToolsPkg {
             // single-parameter (table)
             ToolsPkg::Compact
             | ToolsPkg::Describe
+            | ToolsPkg::Latest
             | ToolsPkg::Len
             | ToolsPkg::Pop
             | ToolsPkg::Reverse
@@ -2927,8 +3270,9 @@ impl Package for ToolsPkg {
             | ToolsPkg::Scan
             | ToolsPkg::ToTable => TableType(vec![]),
             ToolsPkg::Describe => TableType(ToolsPkg::get_tools_describe_parameters()),
-            ToolsPkg::Len => NumberType(I64Kind),
-            ToolsPkg::RowId => NumberType(I64Kind),
+            ToolsPkg::Latest
+            | ToolsPkg::Len
+            | ToolsPkg::RowId => NumberType(I64Kind),
             ToolsPkg::ToCSV
             | ToolsPkg::ToJSON
             | ToolsPkg::Filter
@@ -2950,6 +3294,7 @@ impl Package for ToolsPkg {
             ToolsPkg::Describe => extract_value_fn1(ms, args, Self::do_tools_describe),
             ToolsPkg::Fetch => extract_value_fn2(ms, args, Self::do_tools_fetch),
             ToolsPkg::Filter => extract_value_fn2(ms, args, Self::do_tools_filter),
+            ToolsPkg::Latest => extract_value_fn1(ms, args, Self::do_tools_latest),
             ToolsPkg::Len => extract_value_fn1(ms, args, Self::do_tools_length),
             ToolsPkg::Map => extract_value_fn2(ms, args, Self::do_tools_map),
             ToolsPkg::Pop => extract_value_fn1(ms, args, Self::do_tools_pop),
@@ -2974,6 +3319,7 @@ pub enum UtilsPkg {
     Gunzip,
     Hex,
     MD5,
+    Round,
     To,
     ToASCII,
     ToDate,
@@ -3046,6 +3392,22 @@ impl UtilsPkg {
         }
     }
 
+    fn do_util_round(
+        ms: Machine,
+        value: &TypedValue,
+        places: &TypedValue
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        use rust_decimal::Decimal;
+        use rust_decimal::prelude::ToPrimitive;
+        use num_traits::FromPrimitive;
+
+        let result = Decimal::from_f64(value.to_f64())
+            .and_then(|decimal| decimal.round_dp(places.to_u32()).to_f64())
+            .and_then(|rounded| Some(Number(F64Value(rounded))))
+            .unwrap_or(Undefined);
+        Ok((ms, result))
+    }
+
     fn do_util_to_ascii(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
         Ok((ms, StringValue(format!("{}", value.to_u8() as char))))
     }
@@ -3076,6 +3438,7 @@ impl UtilsPkg {
             PackageOps::Utils(UtilsPkg::Gunzip),
             PackageOps::Utils(UtilsPkg::Hex),
             PackageOps::Utils(UtilsPkg::MD5),
+            PackageOps::Utils(UtilsPkg::Round),
             PackageOps::Utils(UtilsPkg::To),
             PackageOps::Utils(UtilsPkg::ToASCII),
             PackageOps::Utils(UtilsPkg::ToDate),
@@ -3085,34 +3448,26 @@ impl UtilsPkg {
             PackageOps::Utils(UtilsPkg::ToU128),
         ]
     }
-
-    pub fn get_testing_feature_parameters() -> Vec<Parameter> {
-        vec![
-            Parameter::new("level", NumberType(I64Kind)),
-            Parameter::new("item", FixedSizeType(StringType.into(), 256)),
-            Parameter::new("passed", BooleanType),
-            Parameter::new("result", FixedSizeType(StringType.into(), 256)),
-        ]
-    }
 }
 
 impl Package for UtilsPkg {
     fn get_name(&self) -> String {
-        match self {
-            UtilsPkg::Base64 => "base64".into(),
-            UtilsPkg::Binary => "to_binary".into(),
-            UtilsPkg::Gzip => "gzip".into(),
-            UtilsPkg::Gunzip => "gunzip".into(),
-            UtilsPkg::Hex => "hex".into(),
-            UtilsPkg::MD5 => "md5".into(),
-            UtilsPkg::To => "to".into(),
-            UtilsPkg::ToASCII => "to_ascii".into(),
-            UtilsPkg::ToDate => "to_date".into(),
-            UtilsPkg::ToF64 => "to_f64".into(),
-            UtilsPkg::ToI64 => "to_i64".into(),
-            UtilsPkg::ToI128 => "to_i128".into(),
-            UtilsPkg::ToU128 => "to_u128".into(),
-        }
+        (match self {
+            UtilsPkg::Base64 => "base64",
+            UtilsPkg::Binary => "to_binary",
+            UtilsPkg::Gzip => "gzip",
+            UtilsPkg::Gunzip => "gunzip",
+            UtilsPkg::Hex => "hex",
+            UtilsPkg::MD5 => "md5",
+            UtilsPkg::Round => "round",
+            UtilsPkg::To => "to",
+            UtilsPkg::ToASCII => "to_ascii",
+            UtilsPkg::ToDate => "to_date",
+            UtilsPkg::ToF64 => "to_f64",
+            UtilsPkg::ToI64 => "to_i64",
+            UtilsPkg::ToI128 => "to_i128",
+            UtilsPkg::ToU128 => "to_u128",
+        }).into()
     }
 
     fn get_package_name(&self) -> String {
@@ -3120,21 +3475,22 @@ impl Package for UtilsPkg {
     }
 
     fn get_description(&self) -> String {
-        match self {
-            UtilsPkg::Base64 => "Translates bytes into Base 64".into(),
-            UtilsPkg::Binary => "Translates a numeric value into binary".into(),
-            UtilsPkg::Gzip => "Compresses bytes via gzip".into(),
-            UtilsPkg::Gunzip => "Decompresses bytes via gzip".into(),
-            UtilsPkg::Hex => "Translates bytes into hexadecimal".into(),
-            UtilsPkg::MD5 => "Creates a MD5 digest".into(),
-            UtilsPkg::To => "Converts a value to the desired type".into(),
-            UtilsPkg::ToASCII => "Converts an integer to ASCII".into(),
-            UtilsPkg::ToDate => "Converts a value to Date".into(),
-            UtilsPkg::ToF64 => "Converts a value to f64".into(),
-            UtilsPkg::ToI64 => "Converts a value to i64".into(),
-            UtilsPkg::ToI128 => "Converts a value to i128".into(),
-            UtilsPkg::ToU128 => "Converts a value to u128".into(),
-        }
+        (match self {
+            UtilsPkg::Base64 => "Translates bytes into Base 64",
+            UtilsPkg::Binary => "Translates a numeric value into binary",
+            UtilsPkg::Gzip => "Compresses bytes via gzip",
+            UtilsPkg::Gunzip => "Decompresses bytes via gzip",
+            UtilsPkg::Hex => "Translates bytes into hexadecimal",
+            UtilsPkg::MD5 => "Creates a MD5 digest",
+            UtilsPkg::Round => "Rounds a Float to a specific number of decimal places",
+            UtilsPkg::To => "Converts a value to the desired type",
+            UtilsPkg::ToASCII => "Converts an integer to ASCII",
+            UtilsPkg::ToDate => "Converts a value to Date",
+            UtilsPkg::ToF64 => "Converts a value to f64",
+            UtilsPkg::ToI64 => "Converts a value to i64",
+            UtilsPkg::ToI128 => "Converts a value to i128",
+            UtilsPkg::ToU128 => "Converts a value to u128",
+        }).into()
     }
 
     fn get_examples(&self) -> Vec<String> {
@@ -3145,6 +3501,7 @@ impl Package for UtilsPkg {
             UtilsPkg::Gunzip => vec!["util::gunzip(util::gzip('Hello World'))".into()],
             UtilsPkg::Hex => vec!["util::hex('Hello World')".into()],
             UtilsPkg::MD5 => vec!["util::md5('Hello World')".into()],
+            UtilsPkg::Round => vec!["util::round(1.42857, 2)".into()],
             UtilsPkg::To => vec!["util::to(1376438453123, Date)".into()],
             UtilsPkg::ToASCII => vec!["util::to_ascii(177)".into()],
             UtilsPkg::ToDate => vec!["util::to_date(177)".into()],
@@ -3167,6 +3524,7 @@ impl Package for UtilsPkg {
         match self {
             UtilsPkg::Gzip | UtilsPkg::Gunzip => BinaryType,
             UtilsPkg::MD5 => FixedSizeType(BinaryType.into(), 16),
+            UtilsPkg::Round => NumberType(F64Kind),
             UtilsPkg::ToDate => DateTimeType,
             UtilsPkg::To => UnresolvedType,
             UtilsPkg::ToF64 => NumberType(F64Kind),
@@ -3191,6 +3549,7 @@ impl Package for UtilsPkg {
             UtilsPkg::Gunzip => extract_value_fn1(ms, args, Self::do_util_gunzip),
             UtilsPkg::Hex => extract_value_fn1(ms, args, Self::do_util_to_hex),
             UtilsPkg::MD5 => extract_value_fn1(ms, args, Self::do_util_md5),
+            UtilsPkg::Round => extract_value_fn2(ms, args, Self::do_util_round),
             UtilsPkg::To => extract_value_fn2(ms, args, Self::do_util_to_xxx),
             UtilsPkg::ToASCII => extract_value_fn1(ms, args, Self::do_util_to_ascii),
             UtilsPkg::ToDate => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
@@ -3211,8 +3570,48 @@ pub enum WwwPkg {
 }
 
 impl WwwPkg {
-    fn do_www_serve(ms: Machine, port: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
-        oxide_server::start_http_server(port.to_u16());
+    
+    /// Converts a graph of [Structures] into a vector of [UserAPI]s
+    fn convert_to_user_api_config(
+        value: &TypedValue
+    ) -> std::io::Result<Vec<UserAPI>> {
+
+        /// Extracts a [Structures] from a [TypedValue]
+        fn extract_structure(value: &TypedValue) -> std::io::Result<Structures> {
+            match value {
+                Structured(ss) => Ok(ss.clone()),
+                other => throw(Exact(format!("Structure expected near {}", other.to_code())))
+            }
+        }
+
+        // perform the transformation
+        let mut user_apis = vec![];
+        let ss0 = extract_structure(value)?;
+        for (path, graph) in ss0.to_name_values() {
+            let ss1 = extract_structure(&graph)?;
+            let mut methods = vec![];
+            for (method_str, code) in ss1.to_name_values() {
+                let method = APIMethods::from_string(method_str.as_str())?;
+                methods.push(UserAPIMethod  { method, code });
+            }
+            user_apis.push(UserAPI { path, methods })
+        }
+        Ok(user_apis)
+    }
+    
+    fn do_http_serve(
+        ms: Machine,
+        port: &TypedValue,
+        maybe_api_cfg: Option<&TypedValue>
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let port = port.to_u16();
+        match maybe_api_cfg {
+            None => { oxide_server::start_http_server(port); }
+            Some(cfg_value) => {
+                let api_cfg = Self::convert_to_user_api_config(cfg_value)?;
+                oxide_server::start_http_server_with_user_apis(port, api_cfg);
+            }
+        }
         Ok((ms, Boolean(true)))
     }
 
@@ -3247,7 +3646,10 @@ impl Package for WwwPkg {
     }
 
     fn get_package_name(&self) -> String {
-        "www".into()
+        (match self {
+            WwwPkg::Serve => "http",
+            _ => "www"
+        }).into()
     }
 
     fn get_description(&self) -> String {
@@ -3261,7 +3663,7 @@ impl Package for WwwPkg {
     fn get_examples(&self) -> Vec<String> {
         match self {
             WwwPkg::Serve => vec![strip_margin(r#"
-                    |www::serve(8787)
+                    |http::serve(8787)
                     |stocks = nsd::save(
                     |   "examples.www.stocks",
                     |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
@@ -3307,7 +3709,7 @@ impl Package for WwwPkg {
         match self {
             WwwPkg::URLDecode => extract_value_fn1(ms, args, WwwPkg::do_www_url_decode),
             WwwPkg::URLEncode => extract_value_fn1(ms, args, WwwPkg::do_www_url_encode),
-            WwwPkg::Serve => extract_value_fn1(ms, args, WwwPkg::do_www_serve),
+            WwwPkg::Serve => extract_value_fn1_or_2(ms, args, WwwPkg::do_http_serve),
         }
     }
 }
@@ -3316,6 +3718,39 @@ impl Package for WwwPkg {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    //thread::sleep(Duration::from_secs(2));
+
+    /// Package "array" tests
+    #[cfg(test)]
+    mod agg_tests {
+        use crate::testdata::verify_exact_table;
+
+        #[test]
+        fn test_agg_max_min_sum() {
+            verify_exact_table(r#"
+                select 
+                    total_sale: agg::sum(last_sale),
+                    min_sale: agg::min(last_sale),
+                    max_sale: agg::max(last_sale)
+                from
+                    |--------------------------------|
+                    | symbol | exchange  | last_sale |
+                    |--------------------------------|
+                    | GIF    | NYSE      | 11.77     |
+                    | TRX    | NASDAQ    | 32.97     |
+                    | RLP    | NYSE      | 23.66     |
+                    | GTO    | NASDAQ    | 51.23     |
+                    | BST    | NASDAQ    | 214.88    |
+                    |--------------------------------|
+            "#, vec![
+                    "|---------------------------------------|",
+                    "| id | total_sale | min_sale | max_sale |",
+                    "|---------------------------------------|",
+                    "| 0  | 334.51     | 11.77    | 214.88   |",
+                    "|---------------------------------------|"]);
+        }
+    }
 
     /// Package "array" tests
     #[cfg(test)]
@@ -3634,6 +4069,357 @@ mod tests {
         }
     }
 
+    /// Package "http" tests
+    #[cfg(test)]
+    mod http_tests {
+        use super::*;
+        use crate::columns::Column;
+        use crate::expression::Expression::{Identifier, TypeOf};
+        use crate::interpreter::Interpreter;
+        use crate::platform::PackageOps;
+        use crate::structures::Structures::Soft;
+        use crate::structures::{HardStructure, SoftStructure};
+        use crate::testdata::*;
+        use crate::typed_values::TypedValue::*;
+        use serde_json::json;
+        use PackageOps::*;
+
+        #[test]
+        fn test_http_serve_and_query() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                http::serve(8282)
+                stocks = nsd::save(
+                    "platform.www_sql.stocks",
+                    |--------------------------------|
+                    | symbol | exchange  | last_sale |
+                    |--------------------------------|
+                    | GIF    | NYSE      | 11.75     |
+                    | TRX    | NASDAQ    | 32.96     |
+                    | RLP    | NYSE      | 23.66     |
+                    | GTO    | NASDAQ    | 51.23     |
+                    | BST    | NASDAQ    | 214.88    |
+                    | SHMN   | OTCBB     | 5.02      |
+                    | XCD    | OTCBB     | 1.37      |
+                    | DRMQ   | OTHER_OTC | 0.02      |
+                    | JTRQ   | OTHER_OTC | 0.0001    |
+                    |--------------------------------|
+                )
+            "#, "true");
+
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_table_with(interpreter, r#"
+                (GET http://localhost:8282/platform/www_sql/stocks/0/9)
+                    where exchange is "NYSE"
+            "#, vec![
+                "|------------------------------------|",
+                "| id | exchange | last_sale | symbol |",
+                "|------------------------------------|",
+                "| 0  | NYSE     | 11.75     | GIF    |",
+                "| 2  | NYSE     | 23.66     | RLP    |",
+                "|------------------------------------|"]);
+
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_table_with(interpreter, r#"
+                use agg
+                select
+                    exchange,
+                    min_sale: min(last_sale),
+                    max_sale: max(last_sale),
+                    avg_sale: avg(last_sale),
+                    total_sale: sum(last_sale),
+                    qty: count(last_sale)
+                from
+                    (GET http://localhost:8282/platform/www_sql/stocks/0/9)
+                group_by exchange
+                having total_sale > 1.0
+                order_by total_sale::asc
+            "#, vec![
+                "|-------------------------------------------------------------------|",
+                "| id | exchange | min_sale | max_sale | avg_sale | total_sale | qty |",
+                "|-------------------------------------------------------------------|",
+                "| 0  | OTCBB    | 1.37     | 5.02     | 3.195    | 6.39       | 2   |",
+                "| 1  | NYSE     | 11.75    | 23.66    | 17.705   | 35.41      | 2   |",
+                "| 2  | NASDAQ   | 32.96    | 214.88   | 99.69    | 299.07     | 3   |",
+                "|-------------------------------------------------------------------|"]);
+        }
+
+        #[test]
+        fn test_http_serve_workflow() {
+            let mut interpreter = Interpreter::new();
+            let result = interpreter.evaluate(r#"
+                stocks = nsd::save(
+                    "platform.www.stocks",
+                    Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                )
+            "#).unwrap();
+            assert_eq!(result, Boolean(true));
+
+            // set up a listener on port 8838
+            let result = interpreter.evaluate(r#"
+                http::serve(8838)
+            "#).unwrap();
+            assert_eq!(result, Boolean(true));
+
+            // append a new row
+            let row_id = interpreter.evaluate(r#"
+                POST {
+                    url: http://localhost:8838/platform/www/stocks/0
+                    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
+                }
+            "#).unwrap();
+            assert!(matches!(row_id, Number(I64Value(..))));
+
+            // fetch the previously created row
+            let row = interpreter.evaluate(format!(r#"
+                GET http://localhost:8838/platform/www/stocks/{row_id}
+            "#).as_str()).unwrap();
+            assert_eq!(
+                row.to_json(),
+                json!({"exchange":"AMEX","symbol":"ABC","last_sale":11.77})
+            );
+
+            // replace the previously created row
+            let result = interpreter.evaluate(format!(r#"
+                PUT {{
+                    url: http://localhost:8838/platform/www/stocks/{row_id}
+                    body: {{ symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }}
+                }}
+            "#).as_str()).unwrap();
+            assert_eq!(result, Number(I64Value(1)));
+
+            // re-fetch the previously updated row
+            let row = interpreter.evaluate(format!(r#"
+                GET http://localhost:8838/platform/www/stocks/{row_id}
+            "#).as_str()).unwrap();
+            assert_eq!(
+                row.to_json(),
+                json!({"symbol":"ABC","exchange":"AMEX","last_sale":11.79})
+            );
+
+            // update the previously created row
+            let result = interpreter.evaluate(format!(r#"
+                PATCH {{
+                    url: http://localhost:8838/platform/www/stocks/{row_id}
+                    body: {{ last_sale: 11.81 }}
+                }}
+            "#).as_str()).unwrap();
+            assert_eq!(result, Number(I64Value(1)));
+
+            // re-fetch the previously updated row
+            let row = interpreter.evaluate(format!(r#"
+                GET http://localhost:8838/platform/www/stocks/{row_id}
+            "#).as_str()).unwrap();
+            assert_eq!(
+                row.to_json(),
+                json!({"last_sale":11.81,"symbol":"ABC","exchange":"AMEX"})
+            );
+
+            // fetch the headers for the previously updated row
+            let result = interpreter.evaluate(format!(r#"
+                HEAD http://localhost:8838/platform/www/stocks/{row_id}
+            "#).as_str()).unwrap();
+            println!("HEAD: {}", result.to_string());
+            assert!(matches!(result, Structured(Soft(..))));
+
+            // delete the previously updated row
+            let result = interpreter.evaluate(format!(r#"
+                DELETE http://localhost:8838/platform/www/stocks/{row_id}
+            "#).as_str()).unwrap();
+            assert_eq!(result, Number(I64Value(1)));
+
+            // verify the deleted row is empty
+            let row = interpreter.evaluate(format!(r#"
+                GET http://localhost:8838/platform/www/stocks/{row_id}
+            "#).as_str()).unwrap();
+            assert_eq!(row, Structured(Soft(SoftStructure::empty())));
+        }
+
+        #[test]
+        fn test_http_serve_workflow_script() {
+            let mut interpreter = Interpreter::new();
+            let result = interpreter.evaluate(r#"
+                // setup a listener on port 8848
+                http::serve(8848)
+
+                // create the table
+                nsd::save(
+                    "platform.http_workflow.stocks",
+                    Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                )
+                row_id = POST {
+                    url: http://localhost:8848/platform/http_workflow/stocks/0
+                    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
+                }
+                assert(row_id matches 0)
+                GET http://localhost:8848/platform/http_workflow/stocks/0
+            "#).unwrap();
+            assert_eq!(
+                result.to_json(),
+                json!({"exchange": "AMEX", "last_sale": 11.77, "symbol": "ABC"})
+            );
+        }
+
+        #[test]
+        fn test_http_serve_user_api_convert_to_config() {
+            let mut interpreter = Interpreter::new();
+            let config = interpreter.evaluate(r#"
+                {
+                    "/api/orders" : {
+                        "GET" : (order_id -> {
+                           type_of(order_id)
+                        })   
+                    }       
+                     "/api/contests" : {          
+                        "GET" : (order_id -> {
+                           type_of(order_id)
+                        })                   
+                        "POST" : ((symbol: String, exchange: String, lastSale: f64) -> {
+                            type_of(symbol)
+                        })
+                        "PUT" : (form -> {
+                            type_of(form)
+                        })                        
+                    }
+                }           
+            "#).unwrap();
+            let cfg = WwwPkg::convert_to_user_api_config(&config).unwrap();
+            assert_eq!(cfg, vec![
+                UserAPI {
+                    path: "/api/orders".into(),
+                    methods: vec![
+                        UserAPIMethod {
+                            method: APIMethods::GET,
+                            code: Function {
+                                params: vec![
+                                    Parameter::new("order_id", UnresolvedType),
+                                ],
+                                body: TypeOf(Identifier("order_id".into()).into()).into(),
+                                returns: UnresolvedType
+                            }
+                        }
+                    ]
+                },
+                UserAPI {
+                    path: "/api/contests".into(),
+                    methods: vec![
+                        UserAPIMethod {
+                            method: APIMethods::GET,
+                            code: Function {
+                                params: vec![
+                                    Parameter::new("order_id", UnresolvedType),
+                                ],
+                                body: TypeOf(Identifier("order_id".into()).into()).into(),
+                                returns: UnresolvedType
+                            }
+                        }, UserAPIMethod {
+                            method: APIMethods::POST,
+                            code: Function {
+                                params: vec![
+                                    Parameter::new("symbol", StringType),
+                                    Parameter::new("exchange", StringType),
+                                    Parameter::new("lastSale", NumberType(F64Kind)),
+                                ],
+                                body: TypeOf(Identifier("symbol".into()).into()).into(),
+                                returns: UnresolvedType
+                            }
+                        },
+                        UserAPIMethod {
+                            method: APIMethods::PUT,
+                            code: Function {
+                                params: vec![
+                                    Parameter::new("form", UnresolvedType),
+                                ],
+                                body: TypeOf(Identifier("form".into()).into()).into(),
+                                returns: UnresolvedType
+                            }
+                        }
+                    ]
+                }
+            ])
+        }
+
+        #[test]
+        fn test_http_serve_user_api_get() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                http::serve(8289, {
+                    "/api/stocks" : {               
+                        "GET" : (ticker -> {
+                            let stocks = nsd::load("packages.http_serve_api_get.stocks")
+                            stocks where symbol is ticker
+                        })                                       
+                    }
+                })
+            "#, "true");
+
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                let stocks = nsd::save("packages.http_serve_api_get.stocks",
+                    |--------------------------------|
+                    | symbol | exchange  | last_sale |
+                    |--------------------------------|
+                    | GIF    | NYSE      | 11.75     |
+                    | TRX    | NASDAQ    | 32.96     |
+                    | SHMN   | OTCBB     | 5.02      |
+                    | XCD    | OTCBB     | 1.37      |
+                    | DRMQ   | OTHER_OTC | 0.02      |
+                    | JTRQ   | OTHER_OTC | 0.0001    |
+                    |--------------------------------|
+                )
+            "#, "true");
+
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"                
+                GET http://localhost:8289/api/stocks?ticker=SHMN
+            "#, r#"[{exchange: "OTCBB", last_sale: 5.02, symbol: "SHMN"}]"#);
+        }
+
+        #[test]
+        fn test_http_serve_user_api_post() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                http::serve(8219, {
+                    "/api/stocks" : {
+                        "GET" : (ticker -> {
+                            let stocks = nsd::load("packages.http_serve_api_post.stocks")
+                            stocks where symbol is ticker
+                        })
+                        "POST" : (quote -> {
+                            let stocks = nsd::load("packages.http_serve_api_post.stocks")
+                            quote ~> stocks
+                        })
+                    }
+                })
+            "#, "true");
+
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                let stocks = nsd::save("packages.http_serve_api_post.stocks",
+                    |--------------------------------|
+                    | symbol | exchange  | last_sale |
+                    |--------------------------------|
+                    | GIF    | NYSE      | 11.75     |
+                    |--------------------------------|
+                )
+            "#, "true");
+
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                POST {
+                    url: http://localhost:8219/api/stocks
+                    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }
+                }
+            "#, r#"1"#);
+
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                GET http://localhost:8219/api/stocks?ticker=ABC
+            "#, r#"[{exchange: "AMEX", last_sale: 11.79, symbol: "ABC"}]"#);
+        }
+        
+    }
+
     /// Package "io" tests
     #[cfg(test)]
     mod io_tests {
@@ -3645,15 +4431,13 @@ mod tests {
 
         #[test]
         fn test_io_create_file_qualified() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 io::create_file("quote.json", { symbol: "TRX", exchange: "NYSE", last_sale: 45.32 })
             "#,
                 Number(I64Value(52)),
             );
 
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 io::exists("quote.json")
             "#,
                 Boolean(true),
@@ -4243,8 +5027,7 @@ mod tests {
                 "This {} the {}":::format("is", "way")
             "#, StringValue("This is the way".into()));
         }
-
-        #[ignore]
+        
         #[test]
         fn test_str_format_in_scope() {
             verify_exact_value(r#"
@@ -4542,16 +5325,14 @@ mod tests {
             interpreter = verify_exact_table_with(interpreter, r#"
                 stocks = nsd::save(
                     "platform.compact.stocks",
-                    Table::new(symbol: String(8), exchange: String(8), last_sale: f64))
-                let rows = [
-                    { symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
-                    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
-                    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-                    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
-                    { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
-                    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
-                    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
-                rows ~> stocks
+                    [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+                     { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+                     { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+                     { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+                     { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+                     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] 
+                )
                 delete stocks where last_sale > 1.0
                 stocks
             "#,
@@ -4566,9 +5347,7 @@ mod tests {
                 ],
             );
 
-            verify_exact_table_with(
-                interpreter,
-                r#"
+            verify_exact_table_with(interpreter, r#"
                 use tools
                 stocks:::compact()
                 stocks
@@ -4729,6 +5508,27 @@ mod tests {
                     "|------------------------------------|",
                 ],
             )
+        }
+
+        #[test]
+        fn test_tools_latest() {
+            verify_exact_value(r#"
+                stocks = nsd::save(
+                   "packages.tools_latest.stocks",
+                    |--------------------------------|
+                    | symbol | exchange  | last_sale |
+                    |--------------------------------|
+                    | GIF    | NYSE      | 11.75     |
+                    | TRX    | NASDAQ    | 32.96     |
+                    | SHMN   | OTCBB     | 5.02      |
+                    | XCD    | OTCBB     | 1.37      |
+                    | DRMQ   | OTHER_OTC | 0.02      |
+                    | JTRQ   | OTHER_OTC | 0.0001    |
+                    |--------------------------------|
+                )
+                delete stocks where last_sale < 1
+                tools::latest(stocks)
+           "#, Number(I64Value(3)))
         }
 
         #[test]
@@ -5130,7 +5930,7 @@ mod tests {
                 .unwrap();
             let params = vec![
                 Parameter::new_with_default("symbol", FixedSizeType(StringType.into(), 3), StringValue("BIZ".into())),
-                Parameter::new_with_default("exchange", FixedSizeType(StringType.into(), 4), StringValue("NYSE".into())),
+                Parameter::new_with_default("exchange", FixedSizeType(StringType.into(), 6), StringValue("NYSE".into())),
                 Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(23.66))),
             ];
             assert_eq!(
@@ -5334,6 +6134,13 @@ mod tests {
         }
 
         #[test]
+        fn test_util_round() {
+            verify_exact_code(
+                "util::round(99.69333333333333, 4)", 
+                "99.6933");
+        }
+
+        #[test]
         fn test_util_to_date_string() {
             verify_exact_code(r#"
                 use util
@@ -5412,16 +6219,8 @@ mod tests {
     /// Package "www" tests
     #[cfg(test)]
     mod www_tests {
-        use super::*;
-        use crate::columns::Column;
-        use crate::interpreter::Interpreter;
-        use crate::platform::PackageOps;
-        use crate::structures::Structures::Soft;
-        use crate::structures::{HardStructure, SoftStructure};
-        use crate::testdata::*;
-        use crate::typed_values::TypedValue::*;
-        use serde_json::json;
-        use PackageOps::*;
+        use crate::testdata::verify_exact_value;
+        use crate::typed_values::TypedValue::StringValue;
 
         #[test]
         fn test_www_url_decode() {
@@ -5439,152 +6238,6 @@ mod tests {
                     "http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998".to_string(),
                 ),
             )
-        }
-
-        #[test]
-        fn test_www_serve() {
-            let mut interpreter = Interpreter::new();
-            let result = interpreter.evaluate(r#"
-                www::serve(8282)
-                stocks = nsd::save(
-                    "platform.www.quotes",
-                    Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
-                )
-               [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
-                { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
-                { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
-                { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-                { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
-                GET http://localhost:8282/platform/www/quotes/1/4
-            "#).unwrap();
-            assert_eq!(
-                result.to_json(),
-                json!([
-                    {"symbol": "BOX", "exchange": "NYSE", "last_sale": 56.88},
-                    {"symbol": "JET", "exchange": "NASDAQ", "last_sale": 32.12},
-                    {"symbol": "ABC", "exchange": "AMEX", "last_sale": 12.49}
-                ])
-            );
-        }
-
-        #[test]
-        fn test_www_serve_workflow() {
-            let mut interpreter = Interpreter::new();
-
-            // create the table
-            let result = interpreter.evaluate(r#"
-                stocks = nsd::save(
-                    "platform.www.stocks",
-                    Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
-                )
-            "#).unwrap();
-            assert_eq!(result, Boolean(true));
-
-            // set up a listener on port 8838
-            let result = interpreter.evaluate(r#"
-                www::serve(8838)
-            "#).unwrap();
-            assert_eq!(result, Boolean(true));
-
-            // append a new row
-            let row_id = interpreter.evaluate(r#"
-                POST {
-                    url: http://localhost:8838/platform/www/stocks/0
-                    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
-                }
-            "#).unwrap();
-            assert!(matches!(row_id, Number(I64Value(..))));
-
-            // fetch the previously created row
-            let row = interpreter.evaluate(format!(r#"
-                GET http://localhost:8838/platform/www/stocks/{row_id}
-            "#).as_str()).unwrap();
-            assert_eq!(
-                row.to_json(),
-                json!({"exchange":"AMEX","symbol":"ABC","last_sale":11.77})
-            );
-
-            // replace the previously created row
-            let result = interpreter.evaluate(format!(r#"
-                PUT {{
-                    url: http://localhost:8838/platform/www/stocks/{row_id}
-                    body: {{ symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }}
-                }}
-            "#).as_str()).unwrap();
-            assert_eq!(result, Number(I64Value(1)));
-
-            // re-fetch the previously updated row
-            let row = interpreter.evaluate(format!(r#"
-                GET http://localhost:8838/platform/www/stocks/{row_id}
-            "#).as_str()).unwrap();
-            assert_eq!(
-                row.to_json(),
-                json!({"symbol":"ABC","exchange":"AMEX","last_sale":11.79})
-            );
-
-            // update the previously created row
-            let result = interpreter.evaluate(format!(r#"
-                PATCH {{
-                    url: http://localhost:8838/platform/www/stocks/{row_id}
-                    body: {{ last_sale: 11.81 }}
-                }}
-            "#).as_str()).unwrap();
-            assert_eq!(result, Number(I64Value(1)));
-
-            // re-fetch the previously updated row
-            let row = interpreter.evaluate(format!(r#"
-                GET http://localhost:8838/platform/www/stocks/{row_id}
-            "#).as_str()).unwrap();
-            assert_eq!(
-                row.to_json(),
-                json!({"last_sale":11.81,"symbol":"ABC","exchange":"AMEX"})
-            );
-
-            // fetch the headers for the previously updated row
-            let result = interpreter.evaluate(format!(r#"
-                HEAD http://localhost:8838/platform/www/stocks/{row_id}
-            "#).as_str()).unwrap();
-            println!("HEAD: {}", result.to_string());
-            assert!(matches!(result, Structured(Soft(..))));
-
-            // delete the previously updated row
-            let result = interpreter.evaluate(format!(r#"
-                DELETE http://localhost:8838/platform/www/stocks/{row_id}
-            "#).as_str()).unwrap();
-            assert_eq!(result, Number(I64Value(1)));
-
-            // verify the deleted row is empty
-            let row = interpreter.evaluate(format!(r#"
-                GET http://localhost:8838/platform/www/stocks/{row_id}
-            "#).as_str()).unwrap();
-            assert_eq!(row, Structured(Soft(SoftStructure::empty())));
-        }
-
-        #[test]
-        fn test_www_serve_workflow_script() {
-            let mut interpreter = Interpreter::new();
-
-            // create the table
-            let result = interpreter.evaluate(r#"
-                // setup a listener on port 8848
-                www::serve(8848)
-
-                // create the table
-                nsd::save(
-                    "platform.http_workflow.stocks",
-                    Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
-                )
-                row_id = POST {
-                    url: http://localhost:8848/platform/http_workflow/stocks/0
-                    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
-                }
-                assert(row_id matches 0)
-                GET http://localhost:8848/platform/http_workflow/stocks/0
-            "#).unwrap();
-            assert_eq!(
-                result.to_code(),
-                r#"{exchange: "AMEX", last_sale: 11.77, symbol: "ABC"}"#
-            );
         }
     }
 }

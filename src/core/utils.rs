@@ -94,6 +94,21 @@ where
     }
 }
 
+pub fn extract_value_fn1_or_2<F>(
+    ms: Machine,
+    args: Vec<TypedValue>,
+    f: F,
+) -> std::io::Result<(Machine, TypedValue)>
+where
+    F: Fn(Machine, &TypedValue, Option<&TypedValue>) -> std::io::Result<(Machine, TypedValue)>,
+{
+    match args.as_slice() {
+        [value0] => f(ms, value0, None),
+        [value0, value1] => f(ms, value0, Some(value1)),
+        args => throw(TypeMismatch(ArgumentsMismatched(2, args.len())))
+    }
+}
+
 pub fn extract_value_fn2<F>(
     ms: Machine,
     args: Vec<TypedValue>,
@@ -220,6 +235,14 @@ pub fn pull_number(value: &TypedValue) -> std::io::Result<Numbers> {
     match value {
         Number(n) => Ok(n.clone()),
         other => throw(TypeMismatch(UnsupportedType(NumberType(F64Kind), other.get_type())))
+    }
+}
+
+pub fn pull_string_lit(expr: &Expression) -> std::io::Result<String> {
+    match expr {
+        Literal(CharValue(c)) => Ok(c.to_string()),
+        Literal(StringValue(s)) => Ok(s.clone()),
+        x => throw(TypeMismatch(StringExpected(x.to_code())))
     }
 }
 

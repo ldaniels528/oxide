@@ -76,6 +76,10 @@ impl ByteRowCollection {
             row_data: rows,
         }
     }
+    
+    pub fn get_watermark(&self) -> usize {
+        self.watermark
+    }
 
     /// Creates a new [ByteRowCollection] from the specified row data
     pub fn new(columns: Vec<Column>, capacity: usize) -> Self {

@@ -17,15 +17,17 @@ use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
 use crate::server::SystemInfoJs;
-use crate::structures::Row;
+use crate::structures::Structures::Soft;
+use crate::structures::{Row, SoftStructure, Structures};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, StringValue, Undefined};
+use crate::typed_values::TypedValue::{ErrorValue, StringValue, Structured, Undefined};
 use crate::websockets::OxideWebSocketServer;
 use crate::*;
 use actix::{Actor, Addr, StreamHandler};
 use actix_session::Session;
 use actix_web::dev::Server;
-use actix_web::{web, HttpRequest, HttpResponse, Responder};
+use actix_web::http::Method;
+use actix_web::{web, App, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws;
 use actix_web_actors::ws::WebsocketContext;
 use futures_util::stream::{SplitSink, SplitStream};
@@ -35,6 +37,7 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{stdout, Write};
+use std::ops::Deref;
 use std::thread;
 use std::thread::JoinHandle;
 use tokio::net::TcpStream;
@@ -84,6 +87,54 @@ impl RemoteCallResponse {
     pub fn get_message(&self) -> Option<String> { self.message.to_owned() }
 
     pub fn get_result(&self) -> Value { self.result.to_owned() }
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct UserAPI {
+    pub path: String,
+    pub methods: Vec<UserAPIMethod>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct UserAPIMethod {
+    pub method: APIMethods,
+    pub code: TypedValue
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum APIMethods {
+    DELETE,
+    GET,
+    HEAD,
+    PATCH,
+    POST,
+    PUT
+}
+
+impl APIMethods {
+    pub fn from_string(method: &str) -> std::io::Result<Self> {
+        Ok(match method {
+            "DELETE" => Self::DELETE,
+            "GET" => Self::GET,
+            "HEAD" => Self::HEAD,
+            "PATCH" => Self::PATCH,
+            "POST" => Self::POST,
+            "PUT" => Self::PUT,
+            other => return throw(Exact(format!("{other} is not a valid HTTP method")))
+        })
+    }
+
+    pub fn from_method(method: &Method) -> Option<Self> {
+        Some(match method.clone() {
+            Method::DELETE => Self::DELETE,
+            Method::GET => Self::GET,
+            Method::HEAD => Self::HEAD,
+            Method::PATCH => Self::PATCH,
+            Method::POST => Self::POST,
+            Method::PUT => Self::PUT,
+            _ => return None
+        })
+    }
 }
 
 #[macro_export]
@@ -331,6 +382,122 @@ pub async fn handle_sys_info_get(_session: Session) -> impl Responder {
     HttpResponse::Ok().json(SystemInfoJs::new())
 }
 
+fn extract_code_from_request(req: &HttpRequest) -> Option<String> {
+    req.query_string()
+        .split('&')
+        .find_map(|pair| {
+            let mut kv = pair.splitn(2, '=');
+            match (kv.next(), kv.next()) {
+                (Some("code"), Some(val)) => Some(urlencoding::decode(val).ok()?.to_string()),
+                _ => None,
+            }
+        })
+}
+
+/// handler function for executing remote procedure calls
+pub async fn handle_user_api(
+    req: HttpRequest,
+    body: web::Bytes,
+    session: Session,
+) -> impl Responder {
+    // find the user-defined API method for this request
+    let user_api_method = match find_user_api_method(&req) {
+        Ok(api_method) => api_method,
+        Err(e) => return HttpResponse::Ok().json(RemoteCallResponse::fail(e.to_string())),
+    };
+
+    // get the interpreter from the session
+    let mut interpreter = match get_session(&session) {
+        Ok(the_interpreter) => the_interpreter,
+        Err(e) => return HttpResponse::Ok().json(RemoteCallResponse::fail(e.to_string())),
+    };
+    
+    // gather the request query parameters
+    let query_map = req.query_string().split('&')
+        .filter_map(|pair| {
+            let mut kv = pair.splitn(2, '=');
+            Some((kv.next()?.to_string(), urlencoding::decode(kv.next()?).ok()?.to_string()))
+        })
+        .collect::<HashMap<String, String>>();
+    
+    // gather the request headers
+    let headers_map = req.headers().iter()
+        .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+        .map(|(k, v)| (k, TypedValue::wrap_value(v.as_str())
+            .unwrap_or_else(|_| StringValue(v))))
+        .collect::<Vec<_>>();
+
+    // populate the query parameters
+    for (name, value) in query_map {
+        let value = TypedValue::wrap_value(value.as_str())
+            .unwrap_or_else(|_| StringValue(value));
+        interpreter.with_variable(name.as_str(), value)
+    }
+
+    // populate the request headers
+    interpreter.with_variable("http_headers", Structured(Soft(SoftStructure::from_tuples(headers_map))));
+
+    // determine the user code to execute
+    let user_code = match user_api_method.code.clone() {
+        TypedValue::Function { params, body: code, .. } => {
+            match user_api_method.method {
+                APIMethods::POST => {
+                    println!("handle_user_api: body {body:?}");
+                    for param in params {
+                        let value = match serde_json::from_slice::<Value>(&body) {
+                            Ok(jvalue) => {
+                                println!("handle_user_api: jvalue {jvalue:?}");
+                                let tvalue = TypedValue::from_json(&jvalue);
+                                println!("handle_user_api: tvalue {tvalue}");
+                                tvalue
+                            },
+                            Err(e) => return HttpResponse::Ok().json(RemoteCallResponse::fail(e.to_string())),
+                        };
+                        interpreter.with_variable(param.get_name(), value)
+                    }
+                }
+                _ => {}
+            }
+            code.deref().clone()
+        },
+        other => Literal(other)
+    };
+
+    // execute the user code
+    //println!("handle_user_api: user_code {user_code}");
+    match interpreter.invoke(&user_code) {
+        Ok(result) => {
+            println!("handle_user_api: result {result}");
+            HttpResponse::Ok().json(result.to_json())
+        },
+        Err(err) => HttpResponse::Ok().json(RemoteCallResponse::fail(err.to_string())),
+    }
+}
+
+fn find_user_api_method(
+    req: &HttpRequest,
+) -> std::io::Result<UserAPIMethod> {
+    // lookup the user-defined APIs
+    let shared_data = get_shared_state(req)?;
+    let user_apis = shared_data.apis.to_owned();
+
+    // find the user-defined API for this request
+    let user_api = match user_apis.iter().find(|api| api.path == req.path()) {
+        Some(api) => api,
+        None => return throw(Exact(format!("No user-defined API found for path: {}", req.path()))),
+    };
+
+    // find the user-defined API method for this request
+    let method = req.method();
+    let api_method = match user_api.methods.iter()
+        .find(|api_meth| Some(api_meth.method.clone()) == APIMethods::from_method(method)) {
+        Some(user_api_meth) => user_api_meth,
+        None => return throw(Exact(format!("No user-defined API found for path: {}", req.path()))),
+    };
+    
+    Ok(api_method.clone())
+}
+
 pub async fn handle_websockets(
     req: HttpRequest, stream: web::Payload,
 ) -> impl Responder {
@@ -339,8 +506,31 @@ pub async fn handle_websockets(
 }
 
 pub fn start_http_server(port: u16) -> JoinHandle<()> {
+    start_http_server_with_user_apis(port, vec![])
+}
+
+pub fn start_http_server_with_user_apis(
+    port: u16,
+    apis: Vec<UserAPI>,
+) -> JoinHandle<()> {
     thread::spawn(move || {
-        let server = actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
+        let server = actix_web::HttpServer::new(move || { 
+            let mut web_cfg = web_routes!(SharedState::with_user_apis(apis.clone()));
+            for api in apis.clone() {
+                for api_method in api.methods {
+                    let path = api.path.as_str();
+                    web_cfg = match api_method.method {
+                        APIMethods::DELETE => web_cfg.route(path, web::delete().to(handle_user_api)),
+                        APIMethods::GET => web_cfg.route(path, web::get().to(handle_user_api)),
+                        APIMethods::HEAD => web_cfg.route(path, web::head().to(handle_user_api)),
+                        APIMethods::PATCH => web_cfg.route(path, web::patch().to(handle_user_api)),
+                        APIMethods::POST => web_cfg.route(path, web::post().to(handle_user_api)),
+                        APIMethods::PUT => web_cfg.route(path, web::put().to(handle_user_api))
+                    };
+                }
+            }
+            web_cfg
+        })
             .bind(format!("{}:{}", "0.0.0.0", port))
             .expect(format!("Can't bind to port {port}").as_str())
             .run();
@@ -452,12 +642,21 @@ pub fn row_uri(database: &str, schema: &str, name: &str, id: usize) -> String {
 /// Represents all the shared state of the application
 #[derive(Debug)]
 pub struct SharedState {
+    apis: Vec<UserAPI>,
     actor: Addr<DataframeActor>,
 }
 
 impl SharedState {
     pub fn new() -> Self {
         SharedState {
+            apis: vec![],
+            actor: DataframeActor::new().start(),
+        }
+    }
+
+    pub fn with_user_apis(apis: Vec<UserAPI>) -> Self {
+        SharedState {
+            apis,
             actor: DataframeActor::new().start(),
         }
     }

@@ -237,6 +237,17 @@ impl Numbers {
         }
     }
 
+    pub fn to_u32(&self) -> u32 {
+        match *self {
+            RowId(id) => id as u32,
+            F64Value(n) => n as u32,
+            I64Value(n) => n as u32,
+            I128Value(n) => n as u32,
+            NaNValue => 0u32,
+            U128Value(n) => n as u32,
+        }
+    }
+
     pub fn to_u64(&self) -> u64 {
         match *self {
             RowId(id) => id,

@@ -25,7 +25,7 @@ use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::{Array, Sequence};
-use crate::structures::{Row, Structure};
+use crate::structures::{Row, Structure, Structures};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use actix::ActorTryFutureExt;
@@ -488,7 +488,11 @@ impl RowCollection for TableFunction {
         };
         match ms.evaluate(&fx_call).map(|(_, v)| v)? {
             TypedValue::Structured(s) => {
-                let new_row = s.to_row().with_row_id(id);
+                let new_row = Structures::transform_row(
+                    &s.get_parameters(),
+                    &s.get_values(),
+                    &self.state.get_parameters(),
+                ).with_row_id(id);
                 self.state.overwrite_row(id, new_row)
             }
             value => throw(TypeMismatch(TypeMismatchErrors::UnsupportedType(StructureType(self.get_parameters()), value.get_type()))),

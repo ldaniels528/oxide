@@ -3,6 +3,8 @@
 //      Oxide REST Server
 ////////////////////////////////////////////////////////////////////
 
+extern crate core;
+
 use crate::interpreter::Interpreter;
 use crate::oxide_server::start_http_server;
 use crate::repl::REPLState;
@@ -13,6 +15,7 @@ use shared_lib::cnv_error;
 use std::env;
 use std::string::ToString;
 
+mod base62;
 mod blob_file_row_collection;
 mod blobs;
 mod byte_code_compiler;
@@ -55,6 +58,7 @@ mod table_scan;
 mod template;
 mod terminal;
 mod testdata;
+mod test_engine;
 mod token_slice;
 mod tokenizer;
 mod tokens;

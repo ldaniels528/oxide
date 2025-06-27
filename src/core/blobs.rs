@@ -13,7 +13,6 @@ use crate::field;
 use crate::namespaces::Namespace;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
-use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
@@ -91,10 +90,10 @@ impl BLOBStore {
         self.path.clone()
     }
 
-    pub fn insert_bytes(&self, bytes: Vec<u8>) -> std::io::Result<BLOBCellMetadata> {
+    pub fn insert_bytes(&self, bytes: &Vec<u8>) -> std::io::Result<BLOBMetadata> {
         let limit = self.file.metadata()?.len();
         let offset = limit;
-        let metadata = BLOBCellMetadata {
+        let metadata = BLOBMetadata {
             offset,
             allocated: Self::compute_allocated_size(bytes.len()),
             used: (HEADER_LEN + bytes.len()) as u64,
@@ -110,36 +109,24 @@ impl BLOBStore {
     pub fn insert_byte_table(
         &self,
         brc: &ByteRowCollection
-    ) -> std::io::Result<BLOBCellMetadata> {
-        let bytes = brc.to_bytes()?;
-        self.insert_bytes(bytes)
+    ) -> std::io::Result<BLOBMetadata> {
+        let bytes = brc.to_bytes();
+        self.insert_bytes(&bytes)
     }
 
-    pub fn insert_value<T>(&self, item: T) -> std::io::Result<BLOBCellMetadata>
+    pub fn insert_value<T>(&self, item: T) -> std::io::Result<BLOBMetadata>
     where
         T: serde::ser::Serialize,
     {
         match bincode::serialize(&item) {
-            Ok(bytes) => self.insert_bytes(bytes),
+            Ok(bytes) => self.insert_bytes(&bytes),
             Err(err) => throw(Exact(err.to_string()))
         }
-    }
-
-    pub fn read_at(
-        &self,
-        metadata: &BLOBCellMetadata,
-        offset: u64,
-        count: usize
-    ) -> std::io::Result<Vec<u8>> {
-        let mut buffer: Vec<u8> = vec![0u8; count];
-        let result = self.file.read_at(&mut buffer, HEADER_LEN as u64 + metadata.offset + offset)
-            .map(|_| buffer)?;
-        Ok(result)
     }
     
     pub fn read_blob_table(
         &self,
-        metadata: &BLOBCellMetadata,
+        metadata: &BLOBMetadata,
         params: &Vec<Parameter>
     ) -> std::io::Result<BLOBFileRowCollection> {
         Ok(BLOBFileRowCollection::new(
@@ -158,62 +145,81 @@ impl BLOBStore {
         self.read_blob_table(&metadata, params)
     }
 
+    /// Reads a raw blob of data from the blob store
+    pub fn read_block(
+        &self,
+        offset: u64
+    ) -> std::io::Result<(BLOBMetadata, Vec<u8>)> {
+        // read the metadata
+        let metadata = self.read_metadata(offset)?;
+
+        // read the byes indicated within the metadata
+        let mut data: Vec<u8> = self.read_bytes(&metadata)?;
+        Ok((metadata, data))
+    }
+
+
     pub fn read_byte_table(
         &self,
-        metadata: &BLOBCellMetadata,
+        metadata: &BLOBMetadata,
         params: &Vec<Parameter>
     ) -> std::io::Result<ByteRowCollection> {
         let bytes = self.read_bytes(metadata)?;
-        let bytes = bytes[0..metadata.get_data_len() as usize].to_vec();
         let columns = Column::from_parameters(params);
-        let record_size = Row::compute_record_size(&columns);
-        let watermark = bytes.len() / record_size;
-        let row_bytes = bytes.chunks(record_size)
-            .map(|chunk| chunk.to_vec())
-            .collect();
-        Ok(ByteRowCollection::from_bytes(columns, row_bytes, watermark))
+        let watermark = bytes.len();
+        Ok(ByteRowCollection::decode(columns, bytes, watermark))
     }
 
     /// Reads a raw blob of data from the blob store
-    pub fn read_bytes(&self, metadata: &BLOBCellMetadata) -> std::io::Result<Vec<u8>> {
+    pub fn read_bytes(&self, metadata: &BLOBMetadata) -> std::io::Result<Vec<u8>> {
+        // read the byes indicated within the metadata
+        let mut buffer: Vec<u8> = vec![0u8; metadata.get_data_len() as usize];
+        let _ = self.file.read_at(&mut buffer, metadata.offset + HEADER_LEN as u64)?;
+        Ok(buffer)
+    }
+
+    /// Reads a raw blob of data from the blob store
+    pub fn read_bytes_used(&self, metadata: &BLOBMetadata) -> std::io::Result<Vec<u8>> {
         // read the byes indicated within the metadata
         let mut buffer: Vec<u8> = vec![0u8; metadata.used as usize];
         let _ = self.file.read_at(&mut buffer, metadata.offset + HEADER_LEN as u64)?;
         Ok(buffer)
     }
-
+    
     /// Reads the header at the offset from the blob store
-    pub fn read_metadata(&self, offset: u64) -> std::io::Result<BLOBCellMetadata> {
+    pub fn read_metadata(&self, offset: u64) -> std::io::Result<BLOBMetadata> {
         let mut header_buf: Vec<u8> = vec![0u8; HEADER_LEN];
         let _ = self.file.read_at(&mut header_buf, offset)?;
-        bincode::deserialize::<BLOBCellMetadata>(&header_buf)
+        bincode::deserialize::<BLOBMetadata>(&header_buf)
             .map_err(|e| cnv_error!(e))
     }
 
+    pub fn read_partial(
+        &self,
+        metadata: &BLOBMetadata,
+        offset: u64,
+        count: usize
+    ) -> std::io::Result<Vec<u8>> {
+        let mut buffer: Vec<u8> = vec![0u8; count];
+        let result = self.file.read_at(&mut buffer, HEADER_LEN as u64 + metadata.offset + offset)
+            .map(|_| buffer)?;
+        Ok(result)
+    }
+    
     /// Reads an object of type [T] from the blob store
-    pub fn read_value<T>(&self, metadata: &BLOBCellMetadata) -> std::io::Result<T>
+    pub fn read_value<T>(&self, metadata: &BLOBMetadata) -> std::io::Result<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        let bytes = self.read_bytes(metadata)?;
+        let bytes = self.read_bytes_used(metadata)?;
         bincode::deserialize(&bytes).map_err(|e| cnv_error!(e))
-    }
-
-    pub fn write_at(
-        &self,
-        metadata: &BLOBCellMetadata,
-        offset: u64, 
-        bytes: &Vec<u8>
-    ) -> std::io::Result<i64> {
-        let _n_bytes = self.file.write_at(bytes.as_slice(), HEADER_LEN as u64 + metadata.offset + offset)?;
-        Ok(1)
     }
 
     pub fn update_bytes(
         &self,
-        metadata: &BLOBCellMetadata,
+        metadata: &BLOBMetadata,
         bytes: Vec<u8>,
-    ) -> std::io::Result<BLOBCellMetadata> {
+    ) -> std::io::Result<BLOBMetadata> {
         // create a new header with the new amount used
         let mut new_header = metadata.clone();
         new_header.used = bytes.len() as u64;
@@ -233,9 +239,9 @@ impl BLOBStore {
 
     pub fn update_value<T>(
         &self,
-        metadata: &BLOBCellMetadata,
+        metadata: &BLOBMetadata,
         item: T,
-    ) -> std::io::Result<BLOBCellMetadata>
+    ) -> std::io::Result<BLOBMetadata>
     where
         T: serde::ser::Serialize,
     {
@@ -244,35 +250,31 @@ impl BLOBStore {
             Err(err) => throw(Exact(err.to_string()))
         }
     }
+
+    pub fn write_partial(
+        &self,
+        metadata: &BLOBMetadata,
+        offset: u64,
+        bytes: &Vec<u8>
+    ) -> std::io::Result<i64> {
+        let _n_bytes = self.file.write_at(bytes.as_slice(), HEADER_LEN as u64 + metadata.offset + offset)?;
+        Ok(1)
+    }
 }
 
 pub const HEADER_LEN: usize = 24;
 
 /// BLOB Store: Cell Metadata
-#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
-pub struct BLOBCellMetadata {
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct BLOBMetadata {
     pub offset: u64,
     pub allocated: u64,
     pub used: u64,
 }
 
-impl BLOBCellMetadata {
+impl BLOBMetadata {
     pub fn get_data_len(&self) -> u64 {
         self.used - HEADER_LEN as u64
-    }
-}
-
-impl BLOBCellMetadata {
-    pub fn new(
-        offset: u64,
-        allocated: u64,
-        used: u64,
-    ) -> Self {
-        Self {
-            offset,
-            allocated,
-            used,
-        }
     }
 }
 
@@ -280,29 +282,81 @@ impl BLOBCellMetadata {
 #[cfg(test)]
 mod tests {
     use crate::blobs::BLOBStore;
+    use crate::byte_code_compiler::ByteCodeCompiler;
     use crate::byte_row_collection::ByteRowCollection;
+    use crate::dataframe::Dataframe::Binary;
+    use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
+    use crate::parameter::Parameter;
     use crate::row_collection::RowCollection;
     use crate::testdata::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::StringValue;
 
-    #[ignore]
+    #[test]
+    fn test_bytes() {
+        // create a new blob store
+        let ns = Namespace::new("blobs", "raw", "byte_data");
+        let bs = BLOBStore::open(&ns).unwrap();
+        println!("BLOBStore => {}", bs.get_path());
+        
+        // insert a message via insert_bytes(..)
+        let message = b"This is a binary message";
+        println!("message {:?}", message);
+        let metadata = bs.insert_bytes(&message.to_vec()).unwrap();
+        println!("metadata {:?}", metadata);
+
+        // read a message as read_bytes(..)
+        let bytes_message = bs.read_bytes(&metadata).unwrap();
+        println!("bytes_message {:?}", bytes_message);
+        assert_eq!(message.to_vec(), bytes_message);
+
+        // read a message via read_block(..)
+        let (block_metadata, block_message) = bs.read_block(metadata.offset).unwrap();
+        println!("block_metadata {:?}", block_metadata);
+        println!("block_message {:?}", block_message);
+        assert_eq!(message.to_vec(), block_message);
+    }
+
+    #[test]
+    fn test_raw_byte_table() {
+        // create a new blob store
+        let ns = Namespace::new("blobs", "raw", "byte_table");
+        let bs = BLOBStore::open(&ns).unwrap();
+        println!("BLOBStore => {}", bs.get_path());
+
+        // create a byte table
+        let (brc0, params) = create_binary_table();
+        println!("brc0.watermark {}", brc0.get_watermark());
+
+        // write the byte table
+        let bytes0 = ByteCodeCompiler::encode_df(&Binary(brc0.clone()));
+        println!("bytes0: {}", bytes0.len());
+        let metadata0 = bs.insert_bytes(&bytes0).unwrap();
+        println!("metadata0: {:?}", metadata0);
+
+        // read the byte table
+        let bytes1 = bs.read_bytes(&metadata0).unwrap();
+        println!("bytes1: {}", bytes1.len());
+        assert_eq!(bytes0, bytes1);
+        
+        let brc1 = ByteRowCollection::decode(
+            brc0.get_columns().clone(),
+            bytes1.clone(),
+            bytes1.len()
+        );
+        assert_eq!(brc0.get_rows(), brc1.get_rows())
+    }
+    
     #[test]
     fn test_byte_tables() {
         // create a new blob store
         let ns = Namespace::new("blobs", "byte", "tables");
         let bs = BLOBStore::open(&ns).unwrap();
-
+        println!("BLOBStore => {}", bs.get_path());
+        
         // create a byte table
-        let params = make_quote_parameters();
-        let brc0 = ByteRowCollection::from_parameters_and_rows(&params, &vec![
-            make_quote(0, "ABC", "AMEX", 12.33),
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 9.775),
-            make_quote(3, "GOTO", "OTC", 0.1442),
-            make_quote(4, "XYZ", "NYSE", 0.0289),
-        ]);
+        let (brc0, params) = create_binary_table();
 
         // write the byte table
         let key0 = bs.insert_byte_table(&brc0).unwrap();
@@ -312,26 +366,23 @@ mod tests {
         let brc1 = bs.read_byte_table(&key0, &params).unwrap();
         assert_eq!(brc0.get_rows(), brc1.get_rows())
     }
-
-    #[ignore]
+    
     #[test]
     fn test_blob_tables() {
         // create a new blob store
         let ns = Namespace::new("blobs", "blob_tables", "stocks");
         let bs = BLOBStore::open(&ns).unwrap();
-
+        println!("BLOBStore => {}", bs.get_path());
+        
         // create a table
-        let params = make_quote_parameters();
-        let brc0 = ByteRowCollection::from_parameters_and_rows(&params, &vec![
-            make_quote(0, "ABC", "AMEX", 12.33),
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 9.775),
-            make_quote(3, "GOTO", "OTC", 0.1442),
-            make_quote(4, "XYZ", "NYSE", 0.0289),
-        ]);
+        let (brc0, params) = create_binary_table();
+        let mrc = ModelRowCollection::from_columns_and_rows(
+            brc0.get_columns(),
+            &brc0.get_rows()
+        );
 
         // insert a new blob table
-        let key0 = bs.insert_byte_table(&brc0).unwrap();
+        let key0 = bs.insert_value(&mrc).unwrap();
         println!("key0: {:?}", key0);
 
         // read the blob table
@@ -344,6 +395,7 @@ mod tests {
         // create a new blob store
         let ns = Namespace::new("blobs", "crud", "data");
         let bs = BLOBStore::open(&ns).unwrap();
+        println!("BLOBStore => {}", bs.get_path());
 
         // insert a new blob
         let key0 = bs.insert_value(StringValue("Hello World".into())).unwrap();
@@ -363,4 +415,17 @@ mod tests {
         println!("value1: {:?}", value1);
         assert_eq!(value1, StringValue("The little brown fox ran down the road".into()));
     }
+    
+    fn create_binary_table() -> (ByteRowCollection, Vec<Parameter>) {
+        let params = make_quote_parameters();
+        let brc = ByteRowCollection::from_parameters_and_rows(&params, &vec![
+            make_quote(0, "ABC", "AMEX", 12.33),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 9.775),
+            make_quote(3, "GOTO", "OTC", 0.1442),
+            make_quote(4, "XYZ", "NYSE", 0.0289),
+        ]);
+        (brc, params)
+    }
+    
 }

@@ -451,6 +451,20 @@ mod tests {
         }
     }
 
+    /// Data structure tests
+    #[cfg(test)]
+    mod data_structure_tests {
+        use crate::testdata::verify_exact_code;
+
+        #[test]
+        fn test_array_zip() {
+            verify_exact_code(r#"
+                [1, 2, 3] <|> ['A', 'B', 'C']
+            "#, r#"[(1, 'A'), (2, 'B'), (3, 'C')]"#);
+        }
+        
+    }
+
     /// Declarative tests
     #[cfg(test)]
     mod declarative_tests {
@@ -808,52 +822,5 @@ mod tests {
             verify_exact_code("type_of(undefined)", "");
         }
     }
-
-    /// Verification/Unit-Testing tests
-    #[cfg(test)]
-    mod verification_tests {
-        use crate::testdata::verify_exact_table;
-
-        #[test]
-        fn test_basic_unit_test() {
-            verify_exact_table(r#"
-            Feature "Matches function" {
-                Scenario "Compare Array contents: Equal" {
-                    assert(
-                        [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
-                    )
-                }
-                Scenario "Compare Array contents: Not Equal" {
-                    assert(!(
-                        [ 1 "a" "b" "c" ] matches [ 0 "x" "y" "z" ]
-                    ))
-                }
-                Scenario "Compare JSON contents (in sequence)" {
-                    assert(
-                        { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
-                    )
-                }
-                Scenario "Compare JSON contents (out of sequence)" {
-                    assert(
-                        { scores: [82 78 99], id: "A1537" }
-                                matches
-                        { id: "A1537", scores: [82 78 99] }
-                    )
-                }
-            }"#, vec![
-                r#"|------------------------------------------------------------------------------------------------------------------------|"#,
-                r#"| id | level | item                                                                                    | passed | result |"#,
-                r#"|------------------------------------------------------------------------------------------------------------------------|"#,
-                r#"| 0  | 0     | Matches function                                                                        | true   | true   |"#,
-                r#"| 1  | 1     | Compare Array contents: Equal                                                           | true   | true   |"#,
-                r#"| 2  | 2     | assert [1, "a", "b", "c"] matches [1, "a", "b", "c"]                                    | true   | true   |"#,
-                r#"| 3  | 1     | Compare Array contents: Not Equal                                                       | true   | true   |"#,
-                r#"| 4  | 2     | assert !([1, "a", "b", "c"] matches [0, "x", "y", "z"])                                 | true   | true   |"#,
-                r#"| 5  | 1     | Compare JSON contents (in sequence)                                                     | true   | true   |"#,
-                r#"| 6  | 2     | assert {first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"}                | true   | true   |"#,
-                r#"| 7  | 1     | Compare JSON contents (out of sequence)                                                 | true   | true   |"#,
-                r#"| 8  | 2     | assert {scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}  | true   | true   |"#,
-                r#"|------------------------------------------------------------------------------------------------------------------------|"#]);
-        }
-    }
+    
 }

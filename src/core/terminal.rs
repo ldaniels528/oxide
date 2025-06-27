@@ -5,6 +5,7 @@
 
 use crate::compiler::Compiler;
 use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::{Model, TestReport};
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::numbers::Numbers::{F64Value, I64Value};
@@ -16,6 +17,7 @@ use crate::structures::Structure;
 use crate::structures::Structures::{Hard, Soft};
 use crate::structures::{HardStructure, Row, SoftStructure};
 use crate::table_renderer::TableRenderer;
+use crate::test_engine::TestEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use crate::utils::compute_time_millis;
@@ -194,6 +196,12 @@ pub fn build_output(
     let mut out: Vec<String> = vec![];
     out.push(build_output_header(pid, &result, execution_time)?);
     match result {
+        TableValue(TestReport(mrc, state)) => {
+            let mut report = TestEngine::generate_summary(&state);
+            report.push("".to_string());
+            report.extend(TestEngine::generate_report(Model(mrc)));
+            out.extend(report)
+        }
         TableValue(df) => {
             let rc: Box<dyn RowCollection> = Box::from(df);
             let lines = TableRenderer::from_table_with_ids(&rc)?;
@@ -204,6 +212,12 @@ pub fn build_output(
                 .split("\n")
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>());
+        }
+        StringValue(s) => {
+            let lines = s.split('\n')
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+            out.extend(lines)
         }
         z => out.push(z.unwrap_value())
     }
@@ -314,9 +328,16 @@ pub fn get_table_type(rc: &Dataframe) -> String {
 }
 
 pub fn limit_width(lines: Vec<String>, limit: usize) -> Vec<String> {
-    lines.iter()
-        .map(|s| if s.len() > limit { s[0..limit].to_string() } else { s.to_string() })
-        .collect::<Vec<_>>()
+    lines
+        .into_iter()
+        .map(|s| {
+            if s.chars().count() > limit {
+                s.chars().take(limit).collect()
+            } else {
+                s
+            }
+        })
+        .collect()
 }
 
 pub fn read_line_from(lines: Vec<String>) -> Box<dyn FnMut() -> std::io::Result<Option<String>>> {

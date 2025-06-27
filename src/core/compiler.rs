@@ -291,7 +291,7 @@ impl Compiler {
                 "DELETE" => self.parse_keyword_http(ts),
                 "do" => self.parse_keyword_do_while(nts),
                 "false" => Ok((FALSE, nts)),
-                "Feature" => self.parse_keyword_feature(nts),
+                "feature" => self.parse_keyword_feature(nts),
                 "fn" => self.parse_keyword_fn(nts),
                 "for" => self.parse_keyword_for(nts),
                 "GET" => self.parse_keyword_http(ts),
@@ -299,11 +299,8 @@ impl Compiler {
                 "HTTP" => self.parse_keyword_http(nts),
                 "if" => self.parse_keyword_if(nts),
                 "include" => self.parse_expression_1a(nts, Include),
+                "is_defined" => self.parse_expression_1a(nts, IsDefined),
                 "let" => self.parse_keyword_let(nts),
-                "limit" => throw(ExactNear(
-                    "`from` is expected before `limit`: from stocks limit 5".into(),
-                    nts.current(),
-                )),
                 "match" => self.parse_keyword_match(nts),
                 "mod" => self.parse_keyword_mod(nts),
                 "NaN" => Ok((Literal(Number(NaNValue)), nts)),
@@ -311,8 +308,9 @@ impl Compiler {
                 "PATCH" => self.parse_keyword_http(ts),
                 "POST" => self.parse_keyword_http(ts),
                 "PUT" => self.parse_keyword_http(ts),
-                "Scenario" => return self.parse_keyword_scenario(nts),
+                "scenario" => return self.parse_keyword_scenario(nts),
                 "select" => self.parse_keyword_select(nts),
+                "test" => self.parse_keyword_test(nts),
                 "throw" => self.parse_keyword_throw(nts),
                 "true" => Ok((TRUE, nts)),
                 "typedef" => self.parse_keyword_type_decl(nts),
@@ -430,14 +428,9 @@ impl Compiler {
     /// delete stocks where last_sale > 1.00
     /// ```
     fn parse_keyword_delete(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (model, ts) = self.compile_next(ts)?;
-        unwind_sql_update_graph(model, |from, condition, limit| {
-            Delete {
-                from: from.into(),
-                condition,
-                limit,
-            }
-        }).map(|expr| (expr, ts))
+        let (from, ts) = self.compile_next(ts)?;
+        println!("parse_keyword_delete: from {from:?}");
+        Ok((Delete { from: from.into() }, ts))
     }
 
     /// Parses do-while statement
@@ -471,6 +464,7 @@ impl Compiler {
                         .iter()
                         .map(|(name, expression)| Scenario {
                             title: Box::new(Literal(StringValue(name.to_owned()))),
+                            inherits: None,
                             verifications: match expression.to_owned() {
                                 CodeBlock(ops) => ops,
                                 z => vec![z],
@@ -490,29 +484,54 @@ impl Compiler {
         }
     }
 
+    /// Defines a test scenario
+    /// #### Examples
+    /// ```
+    /// scenario "Compare Array: Equal" {
+    ///     let count = 1
+    ///     assert [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+    ///     count += 1
+    /// }
+    /// ```
+    /// ```
+    /// scenario "Compare Array: Completed?" 
+    ///     inherits "Compare Array: Equal" {
+    ///         assert count == 2
+    /// }
+    /// ```
     fn parse_keyword_scenario(
         &self,
         ts: TokenSlice,
     ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
+        // get the scenario title (ex: scenario "Compare Array: Equal")
         let (title, ts) = self.compile_next(ts.clone())?;
+        // does it inherit state from a parent?
+        let (maybe_inherits, ts) = match ts.next() {
+            (Some(Atom { text, ..}), nts) if text == "inherits" => {
+                match self.compile_next(nts)? {
+                    (Literal(StringValue(parent)), ts) => (Some(parent), ts),
+                    _ => (None, ts)
+                }
+            }
+            _ => (None, ts)
+        };
+        // next should be a code block
         let ts = ts.expect("{")?;
         match self.next_operator_brackets_curly(ts)? {
-            (None, ts) => Ok((None, ts)),
+            (None, ts) => throw(ExactNear("Scope block expected".into(), ts.current())),
             (Some(code), ts) => match code {
                 CodeBlock(verifications) => Ok((
                     Some(Scenario {
-                        title: Box::new(title),
+                        title: title.into(),
+                        inherits: maybe_inherits,
                         verifications,
-                    }),
-                    ts,
-                )),
+                    }), ts)),
                 other => Ok((
                     Some(Scenario {
-                        title: Box::new(title),
+                        title: title.into(),
+                        inherits: maybe_inherits,
                         verifications: vec![other],
-                    }),
-                    ts,
-                )),
+                    }), ts)),
             },
         }
     }
@@ -722,10 +741,10 @@ impl Compiler {
                 Literal(StringValue(pkg)) => ops.push(UseOps::Everything(pkg)),
                 // use vm
                 Identifier(pkg) => ops.push(UseOps::Everything(pkg)),
-                // use www::serve | oxide::[eval, serve, version]
+                // use http::serve | oxide::[eval, serve, version]
                 ColonColon(a, b) => {
                     match (*a, *b) {
-                        // use www::serve
+                        // use http::serve
                         (Identifier(pkg), Identifier(func)) => {
                             ops.push(UseOps::Selection(pkg, vec![func]))
                         }
@@ -823,11 +842,61 @@ impl Compiler {
     fn parse_keyword_select(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (fields, ts) = self.next_expression_list(ts)?;
         let fields = fields.expect("At least one field is required");
-        let (from, ts) = self.next_keyword_expr("from", ts)?;
-        Ok((Select {
-            fields,
-            from: from.map(Box::new),
-        }, ts))
+        let ts = ts.expect("from")?;
+        let (from, ts) = self.compile_next(ts)?;
+        Ok((Select { fields, from: from.into() }, ts))
+    }
+
+    /// Builds a `test` declaration
+    /// #### Examples
+    /// ##### Test all features
+    /// ```
+    /// test
+    /// ```
+    /// ##### Test a specific feature
+    /// ```
+    /// test "Matches function"
+    /// ```
+    /// ##### Test a specific scenario within a features
+    /// ```
+    /// test "Compare Array contents: Equal" in "Matches function"
+    /// ```
+    /// ##### Test all matching features and scenarios
+    /// ```
+    /// test where feature_name matches "JSON(*.)"
+    ///     and scenario_name contains "Table"
+    /// ```
+    fn parse_keyword_test(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        use crate::expression::Conditions::In;
+        match self.compile_next(ts.clone()) {
+            // ex: test report
+            Ok((Identifier(name), ts)) if name == "report" =>
+                Ok((Test(Identifier(name).into()), ts)),
+            // ex: test "Matches function"
+            Ok((Literal(StringValue(test_name)), ts)) =>
+                Ok((Test(Literal(StringValue(test_name)).into()), ts)),
+            // ex: test "Compare Array contents: Equal" in "Matches function"
+            Ok((Condition(In(feature, scenario)), ts)) =>
+                Ok((Test(Condition(In(feature, scenario)).into()).into(), ts)),
+            // ex: test ...
+            _ => {
+                match ts.next() {
+                    (Some(Atom { text, ..}), tsb) if text == "where" => {
+                        match self.compile_next(tsb) {
+                            // ex: test where feature_name matches "JSON(*.)"
+                            //      and scenario_name contains "Table"
+                            Ok((Condition(cond), ts)) => {
+                                Ok((Test(Condition(cond).into()), ts))
+                            }
+                            // ex: test
+                            _ => Ok((Test(UNDEFINED.into()), ts))
+                        }
+                    }
+                    // ex: test
+                    _ => Ok((Test(UNDEFINED.into()), ts))
+                }
+            }
+        }
     }
 
     /// Builds a `throw` declaration
@@ -866,14 +935,8 @@ impl Compiler {
     /// Builds a language model from an UNDELETE statement:
     /// ex: undelete stocks where symbol == "BANG"
     fn parse_keyword_undelete(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (model, ts) = self.compile_next(ts)?;
-        unwind_sql_update_graph(model, |from, condition, limit| {
-            Undelete {
-                from: from.into(),
-                condition,
-                limit,
-            }
-        }).map(|expr| (expr, ts))
+        let (from, ts) = self.compile_next(ts)?;
+        Ok((Undelete { from: from.into() }, ts))
     }
     
     /// Builds a language model for a `when` expression
@@ -922,7 +985,16 @@ impl Compiler {
     }
 
     /// Expects a data type, function call or identifier
-    /// ex: String(32) | f(2, 3) | abc
+    /// #### Examples
+    /// ```
+    /// String(32)
+    /// ```
+    /// ```
+    /// f(2, 3)
+    /// ```
+    /// ```
+    /// abc
+    /// ```
     fn expect_function_call_or_type_or_identifier(
         &self,
         name: &str,
@@ -1098,7 +1170,7 @@ fn apply_operator_binary(
         ":" => apply_colon(a, b),
         "::" => Ok(ColonColon(aa, bb)),
         ":::" => Ok(ColonColonColon(aa, bb)),
-        "&&" => Ok(Condition(Conditions::And(aa, bb))),
+        "&&" | "and" => Ok(Condition(Conditions::And(aa, bb))),
         "contains" => Ok(Condition(Conditions::Contains(aa, bb))),
         "==" | "is" => Ok(Condition(Conditions::Equal(aa, bb))),
         "when" => Ok(Condition(Conditions::When(aa, bb))),
@@ -1110,7 +1182,7 @@ fn apply_operator_binary(
         "like" => Ok(Condition(Conditions::Like(aa, bb))),
         "matches" => Ok(Condition(Conditions::Matches(aa, bb))),
         "!=" | "isnt" => Ok(Condition(Conditions::NotEqual(aa, bb))),
-        "||" => Ok(Condition(Conditions::Or(aa, bb))),
+        "||" | "or" => Ok(Condition(Conditions::Or(aa, bb))),
         "÷" | "/" => Ok(Divide(aa, bb)),
         "." => Ok(Infix(aa, bb)),
         "-" => Ok(Minus(aa, bb)),
@@ -1136,6 +1208,7 @@ fn apply_operator_binary(
         "*=" => Ok(SetVariables(aa.clone(), Multiply(aa, bb).into())),
         "+=" => Ok(SetVariables(aa.clone(), Plus(aa, bb).into())),
         ":=" => Ok(SetVariablesExpr(aa, bb)),
+        "<|>" => Ok(Zip(aa, bb)),
         "group_by" => Ok(GroupBy { from: aa, columns: vec![b] }),
         "having" => Ok(Having { from: aa, condition: must_be_condition(bb.deref())? }),
         "limit" => Ok(Limit { from: aa, limit: bb }),
@@ -1153,7 +1226,7 @@ fn apply_operator_unary(
     match op.get().as_str() {
         "+" => Ok(a),
         "-" => Ok(Neg(a.into())),
-        "!" => Ok(Condition(Conditions::Not(a.into()))),
+        "!" | "not" => Ok(Condition(Conditions::Not(a.into()))),
         "&" => Ok(Referenced(a.into())),
         sym if exponents.contains(&sym) => {
             let expo = exponents.iter().position(|s| *s == sym ).unwrap();
@@ -1161,85 +1234,6 @@ fn apply_operator_unary(
         }
         sym => throw(CompilerError(CompileErrors::IllegalOperator(sym.into()), op.clone())),
     }
-}
-
-pub fn unwind_sql_query_graph<F, E>(
-    expr: Expression,
-    f: F
-) -> std::io::Result<E>
-where
-    F: Fn(Expression, Vec<Expression>, Option<Expression>, Option<Vec<Expression>>, Option<Box<Expression>>, Option<Vec<Expression>>, Option<Box<Expression>>) -> std::io::Result<E>,
-{
-    fn unwind<T, S>(
-        from: Expression,
-        fields: Vec<Expression>,
-        condition: Option<Expression>,
-        group_by: Option<Vec<Expression>>,
-        having: Option<Box<Expression>>,
-        order_by: Option<Vec<Expression>>,
-        limit: Option<Box<Expression>>,
-        f: T,
-    ) -> std::io::Result<S>
-    where
-        T: Fn(Expression, Vec<Expression>, Option<Expression>, Option<Vec<Expression>>, Option<Box<Expression>>, Option<Vec<Expression>>, Option<Box<Expression>>) -> std::io::Result<S>,
-    {
-        match from {
-            GroupBy { from, columns: group_by } =>
-                unwind(from.deref().clone(), fields, condition, Some(group_by), having, order_by, limit, f),
-            Having { from, condition } =>
-                unwind(from.deref().clone(), fields, Some(Condition(condition)), group_by, having, order_by, limit, f),
-            Limit { from, limit } =>
-                unwind(from.deref().clone(), fields, condition, group_by, having, order_by, Some(limit), f),
-            OrderBy { from, columns: order_by } =>
-                unwind(from.deref().clone(), fields, condition, group_by, having, Some(order_by), limit, f),
-            Select { fields, from, .. } => {
-                let from = match from {
-                    None => UNDEFINED,
-                    Some(expr) => expr.deref().clone()
-                };
-                unwind(from, fields, condition, group_by, having, order_by, limit, f)
-            }
-            Where { from, condition } =>
-                unwind(from.deref().clone(), fields, Some(Condition(condition)), group_by, having, order_by, limit, f),
-            _ => f(from, fields, condition, group_by, having, order_by, limit)
-        }
-    }
-    unwind(expr, vec![], None, None, None, None, None, f)
-}
-
-pub fn unwind_sql_update_graph<F, E>(
-    expr: Expression, 
-    f: F
-) -> std::io::Result<E>
-where
-    F: Fn(Expression, Option<Conditions>, Option<Box<Expression>>) -> E,
-{
-    fn unwind<T, S>(
-        from: Expression,
-        condition: Option<Conditions>,
-        limit: Option<Box<Expression>>,
-        f: T,
-    ) -> std::io::Result<S>
-    where
-        T: Fn(Expression, Option<Conditions>, Option<Box<Expression>>) -> S,
-    {
-        match from {
-            GroupBy { .. } =>
-                throw(Exact("group_by is not supported in this context".into())),
-            Having { .. } =>
-                throw(Exact("having is not supported in this context".into())),
-            Limit { from, limit } =>
-                unwind(from.deref().clone(), condition, Some(limit.clone()), f),
-            OrderBy { .. } =>
-                throw(Exact("order_by is not supported in this context".into())),
-            Select { .. } =>
-                throw(Exact("select is not supported in this context".into())),
-            Where { from, condition } =>
-                unwind(from.deref().clone(), Some(condition.clone()), limit, f),
-            _ => Ok(f(from, condition, limit))
-        }
-    }
-    unwind(expr, None, None, f)
 }
 
 fn convert_binary_literal_to_bytes(text: &str) -> std::io::Result<Vec<u8>> {
@@ -1294,14 +1288,14 @@ fn get_precedence(op: &Token, is_even: bool) -> i8 {
         "+" | "-" => 9,         // Addition / Subtraction
         "<<" | ">>" => 8,       // Bitwise Shift Left/Right
         "&" if is_even => 0,
-        "&" | "&&" => 7,        // Bitwise/Logical AND
-        "^" | "|" | "||" => 6,  // Bitwise XOR, Bitwise/Logical OR
+        "&" | "&&" | "and" => 7,        // Bitwise/Logical AND
+        "^" | "|" | "||" | "or" => 6,  // Bitwise XOR, Bitwise/Logical OR
         ".." | "..=" => 5,
         "::" | ":::" => 4,
         ":" => 3,
         "==" | "!=" | "<" | "<=" | ">" | ">=" => 2,
         "contains" | "in" | "is" | "isnt" | "like" | "matches" => 2,
-        "limit" | "order_by" | "when" | "where" => 1,
+        "group_by" | "having" | "limit" | "order_by" | "when" | "where" => 1,
         "->" | "=>" | "~>" | "<~" | "~>>" | "<<~" | "|>" | "|>>" => 1,
         "=" | ":=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" => 0,
         "?" | "!?" => 0,
@@ -1322,8 +1316,9 @@ fn is_operator(token: &Token, is_even: bool) -> bool {
 /// Indicates whether the token is a mnemonic operator.
 fn is_mnemonic_operator(token: &Token, _is_even: bool) -> bool {
     matches!(token.get().as_str(), 
-        "contains" | "in" | "is" | "isnt" | "like" |
-        /* "from" |*/ "group_by" | "having" | "limit" | "matches" | "order_by" | "when" | "where"
+       "and" | "contains" | "in" | "is" | "isnt" | "like" |
+       "group_by" | "having" | "limit" | "matches" |
+        "or" | "order_by" | "when" | "where"
     )
 }
 
@@ -1333,6 +1328,7 @@ fn is_unary_operator(token: &Token, is_even: bool) -> bool {
         | (token.is("+") && is_even)
         | (token.is("&") && is_even)
         | token.is("!")
+        | token.is("not")
         | get_exponent_symbols().contains(&token.get().as_str())
 }
 
@@ -1549,8 +1545,7 @@ mod tests {
                         BitwiseXor(
                             Literal(Number(I64Value(19))).into(),
                             Literal(Number(I64Value(13))).into(),
-                        )
-                        .into(),
+                        ).into(),
                     ),
                     Identifier("x".into()),
                 ]),
@@ -1566,8 +1561,7 @@ mod tests {
                     FunctionCall {
                         fx: Identifier("now".into()).into(),
                         args: vec![]
-                    }
-                    .into()
+                    }.into()
                 )
             )
         }
@@ -1592,7 +1586,6 @@ mod tests {
                     ColonColon(
                         Identifier("oxide".into()).into(),
                         Identifier("tools".into()).into(),
-                        
                     ).into(),
                     Identifier("compact".into()).into()
                 )
@@ -1609,8 +1602,7 @@ mod tests {
                     FunctionCall {
                         fx: Identifier("seconds".into()).into(),
                         args: vec![]
-                    }
-                    .into()
+                    }.into()
                 )
             )
         }
@@ -1717,8 +1709,8 @@ mod tests {
                 model,
                 DoWhile {
                     condition: Condition(LessThan(
-                        Box::new(Identifier("x".into())),
-                        Box::new(Literal(Number(I64Value(5)))),
+                        Identifier("x".into()).into(),
+                        Literal(Number(I64Value(5))).into(),
                     )).into(),
                     code: SetVariables(
                         Identifier("x".into()).into(),
@@ -1763,8 +1755,8 @@ mod tests {
         #[test]
         fn test_feature_with_a_scenario() {
             let code = Compiler::build(r#"
-                Feature "Karate translator" {
-                    Scenario "Translate Karate Scenario to Oxide Scenario" {
+                feature "Karate translator" {
+                    scenario "Translate Karate scenario to Oxide scenario" {
                         assert true, "Should be true"
                     }
                 }
@@ -1775,8 +1767,9 @@ mod tests {
                     title: Box::new(Literal(StringValue("Karate translator".to_string()))),
                     scenarios: vec![Scenario {
                         title: Box::new(Literal(StringValue(
-                            "Translate Karate Scenario to Oxide Scenario".to_string()
+                            "Translate Karate scenario to Oxide scenario".to_string()
                         ))),
+                        inherits: None,
                         verifications: vec![
                             Assert { 
                                 condition: TRUE.into(), 
@@ -1939,7 +1932,7 @@ mod tests {
         #[test]
         fn test_for_each_item_in_array() {
             verify_build(
-                "for item in [1, 5, 6, 11, 17] println(item)",
+                "for item in [1, 5, 6, 11, 17] yield item",
                 For {
                     construct: Condition(In(
                         Identifier("item".into()).into(),
@@ -1951,11 +1944,7 @@ mod tests {
                             Literal(Number(I64Value(17))),
                         ]).into()
                     )).into(),
-                    op: FunctionCall {
-                        fx: Identifier("println".into()).into(),
-                        args: vec![Identifier("item".into())],
-                    }
-                    .into(),
+                    op: Yield(Identifier("item".into()).into()).into(),
                 },
             );
         }
@@ -1990,8 +1979,7 @@ mod tests {
                     op: FunctionCall {
                         fx: Identifier("println".into()).into(),
                         args: vec![Identifier("i".into())],
-                    }
-                        .into(),
+                    }.into(),
                 },
             );
         }
@@ -2023,15 +2011,12 @@ mod tests {
                         ColonColon(
                             Identifier("util".into()).into(),
                             Identifier("md5".into()).into(),
-                        )
-                        .into(),
-                    )
-                    .into(),
+                        ).into(),
+                    ).into(),
                     ColonColon(
                         Identifier("util".into()).into(),
                         Identifier("hex".into()).into(),
-                    )
-                    .into(),
+                    ).into(),
                 ),
             );
         }
@@ -2049,8 +2034,7 @@ mod tests {
                 HTTP(HttpMethodCalls::DELETE(
                     Literal(StringValue(
                         "http://localhost:9000/comments?id=675af".into()
-                    ))
-                    .into()
+                    )).into()
                 ))
             );
         }
@@ -2068,8 +2052,7 @@ mod tests {
                 HTTP(HttpMethodCalls::GET(
                     Literal(StringValue(
                         "http://localhost:9000/comments?id=675af".into()
-                    ))
-                    .into()
+                    )).into()
                 ))
             );
         }
@@ -2143,8 +2126,7 @@ mod tests {
                             Literal(StringValue(
                                 "http://localhost:8080/machine/www/stocks".to_string()
                             ))
-                        ),
-                        (
+                        ), (
                             "body".to_string(),
                             Literal(StringValue("Hello World".to_string()))
                         ),
@@ -2171,8 +2153,7 @@ mod tests {
                             Literal(StringValue(
                                 "http://localhost:8080/machine/www/stocks".to_string()
                             ))
-                        ),
-                        (
+                        ), (
                             "body".to_string(),
                             Literal(StringValue("./demoes/language/include_file.ox".to_string()))
                         ),
@@ -2192,8 +2173,7 @@ mod tests {
                 HTTP(HttpMethodCalls::PUT(
                     Literal(StringValue(
                         "http://localhost:9000/quotes/AMD/NASDAQ".to_string()
-                    ))
-                    .into()
+                    )).into()
                 ))
             );
         }
@@ -2299,41 +2279,6 @@ mod tests {
                     Literal(StringValue("H.ll.".into())).into(),
                 ))
             );
-        }
-
-        #[ignore]
-        #[test]
-        fn test_match_statement() {
-            let model = Compiler::build(r#"
-                match code {
-                   100 => "Accepted"
-                   n => "Rejected"
-                }
-            "#).unwrap();
-            assert_eq!(
-                model,
-                MatchExpression(
-                    Identifier("code".into()).into(),
-                    vec![
-                        // 100 => "Accepted"
-                        ArrowFat(
-                            Condition(When(
-                                Identifier("n".into()).into(),
-                                Condition(Equal(
-                                    Identifier("n".into()).into(),
-                                    Literal(Number(I64Value(100))).into()
-                                )).into()
-                            )).into(),
-                            Literal(StringValue("Accepted".into())).into()
-                        ),
-                        // n => "Rejected"
-                        ArrowFat(
-                            Identifier("n".into()).into(),
-                            Literal(StringValue("Rejected".into())).into()
-                        ).into()
-                    ]
-                )
-            )
         }
 
         #[test]
@@ -3010,9 +2955,7 @@ mod tests {
             assert_eq!(
                 model,
                 Delete {
-                    from: Box::new(Identifier("stocks".into())),
-                    condition: None,
-                    limit: None,
+                    from: Box::new(Identifier("stocks".into()))
                 }
             )
         }
@@ -3027,12 +2970,16 @@ mod tests {
             assert_eq!(
                 model,
                 Delete {
-                    from: Box::new(Identifier("stocks".into())),
-                    condition: Some(GreaterOrEqual(
-                        Box::new(Identifier("last_sale".into())),
-                        Box::new(Literal(Number(F64Value(1.0)))),
-                    )),
-                    limit: Some(Box::new(Literal(Number(I64Value(100))))),
+                    from: Limit {
+                        limit: Box::new(Literal(Number(I64Value(100)))),
+                        from: Where {
+                            condition: GreaterOrEqual(
+                                Box::new(Identifier("last_sale".into())),
+                                Box::new(Literal(Number(F64Value(1.0)))),
+                            ),
+                            from: Identifier("stocks".into()).into(),
+                        }.into()
+                    }.into()
                 }
             )
         }
@@ -3045,14 +2992,14 @@ mod tests {
             assert_eq!(
                 model,
                 Limit {
-                    from: Box::new(Where {
+                    from: Where {
                         from: Identifier("stocks".into()).into(),
                         condition: GreaterOrEqual(
-                            Box::new(Identifier("last_sale".into())),
-                            Box::new(Literal(Number(F64Value(1.0)))),
+                            Identifier("last_sale".into()).into(),
+                            Literal(Number(F64Value(1.0))).into(),
                         ),
-                    }),
-                    limit: Box::new(Literal(Number(I64Value(20)))),
+                    }.into(),
+                    limit: Literal(Number(I64Value(20))).into(),
                 }
             );
         }
@@ -3082,7 +3029,7 @@ mod tests {
         }
 
         #[test]
-        fn test_select_from_variable() {
+        fn test_select_from() {
             let model = Compiler::build(r#"
                 select symbol, exchange, last_sale from stocks
             "#).unwrap();
@@ -3094,7 +3041,36 @@ mod tests {
                         Identifier("exchange".into()),
                         Identifier("last_sale".into())
                     ],
-                    from: Some(Box::new(Identifier("stocks".into()))),
+                    from: Identifier("stocks".into()).into(),
+                }
+            )
+        }
+
+        #[test]
+        fn test_select_from_where_limit() {
+            let model = Compiler::build(r#"
+                select symbol, exchange, last_sale 
+                from stocks
+                where last_sale >= 1.0 limit 10
+            "#).unwrap();
+            assert_eq!(
+                model,
+                Select {
+                    fields: vec![
+                        Identifier("symbol".into()),
+                        Identifier("exchange".into()),
+                        Identifier("last_sale".into())
+                    ],
+                    from: Limit {
+                        limit: Literal(Number(I64Value(10))).into(),
+                        from: Where {
+                            condition: GreaterOrEqual(
+                                Identifier("last_sale".into()).into(),
+                                Literal(Number(F64Value(1.0))).into(),
+                            ),
+                            from: Identifier("stocks".into()).into(),
+                        }.into(),
+                    }.into()
                 }
             )
         }
@@ -3108,8 +3084,6 @@ mod tests {
                 model,
                 Undelete {
                     from: Box::new(Identifier("stocks".into())),
-                    condition: None,
-                    limit: None,
                 }
             )
         }
@@ -3124,12 +3098,16 @@ mod tests {
             assert_eq!(
                 model,
                 Undelete {
-                    from: Box::new(Identifier("stocks".into())),
-                    condition: Some(GreaterOrEqual(
-                        Box::new(Identifier("last_sale".into())),
-                        Box::new(Literal(Number(F64Value(1.0)))),
-                    )),
-                    limit: Some(Box::new(Literal(Number(I64Value(100))))),
+                    from: Limit {
+                        limit: Box::new(Literal(Number(I64Value(100)))),
+                        from: Where {
+                            condition: GreaterOrEqual(
+                                Box::new(Identifier("last_sale".into())),
+                                Box::new(Literal(Number(F64Value(1.0)))),
+                            ),
+                            from: Identifier("stocks".into()).into(),
+                        }.into()
+                    }.into()
                 }
             )
         }

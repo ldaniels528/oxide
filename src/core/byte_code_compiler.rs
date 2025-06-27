@@ -65,7 +65,6 @@ impl ByteCodeCompiler {
     }
 
     pub fn encode_df(df: &Dataframe) -> Vec<u8> {
-        //Self::unwrap_as_result(bincode::serialize(df))
         let mut encoded = vec![];
         let columns = df.get_columns();
         for row in df.iter() {
@@ -212,7 +211,7 @@ mod tests {
     use super::*;
     use crate::dataframe::Dataframe::Model;
     use crate::expression::Conditions::{GreaterThan, LessOrEqual};
-    use crate::expression::Expression::{Condition, Identifier, If, Literal, Multiply, Plus, StructureExpression};
+    use crate::expression::Expression::{Condition, Identifier, If, Limit, Literal, Multiply, Plus, StructureExpression, Where};
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::{F64Value, I64Value};
     use crate::testdata::{make_quote, make_quote_columns};
@@ -250,13 +249,17 @@ mod tests {
 
     #[test]
     fn test_expression_delete() {
-        let model = Expression::Delete {
-            from: Box::new(Identifier("stocks".into())),
-            condition: Some(LessOrEqual(
-                Box::new(Identifier("last_sale".into())),
-                Box::new(Literal(Number(F64Value(1.0)))),
-            )),
-            limit: Some(Box::new(Literal(Number(I64Value(100))))),
+        let model = Limit {
+            limit: Literal(Number(I64Value(100))).into(),
+            from: Where {
+                condition: LessOrEqual(
+                    Identifier("last_sale".into()).into(),
+                    Literal(Number(F64Value(1.0))).into(),
+                ),
+                from: Expression::Delete {
+                    from: Identifier("stocks".into()).into(),
+                }.into()
+            }.into()
         };
         let byte_code = ByteCodeCompiler::encode(&model).unwrap();
         let actual = ByteCodeCompiler::decode(&byte_code);

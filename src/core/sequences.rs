@@ -76,7 +76,11 @@ impl Sequence for Sequences {
             Sequences::TheArray(array) => array.contains(item),
             Sequences::TheDataframe(df) =>
                 match item {
-                    Structured(s) => df.contains(&s.to_row()),
+                    Structured(s) => df.contains(&Structures::transform_row(
+                        &s.get_parameters(),
+                        &s.get_values(),
+                        &df.get_parameters()
+                    )),
                     _ => false
                 }
             Sequences::TheRange(a, b, incl) => is_in_range(item, a, b, *incl),
@@ -164,7 +168,11 @@ impl Sequence for Sequences {
             }
             Sequences::TheDataframe(df) =>
                 match value {
-                    Structured(s) => df.push_row(s.to_row()),
+                    Structured(s) => df.push_row(Structures::transform_row(
+                        &s.get_parameters(),
+                        &s.get_values(),
+                        &df.get_parameters()
+                    )),
                     other => ErrorValue(TypeMismatch(StructExpected("Struct".into(), other.to_code())))
                 }
             Sequences::TheRange(..) => self.to_array().push(value),

@@ -154,7 +154,6 @@ impl DataType {
     /// parses a datatype expression (e.g. "String(20)")
     pub fn from_str(param_type: &str) -> std::io::Result<DataType> {
         let model = Compiler::build(param_type)?;
-        println!("DataType::from_str: '{param_type}' -> {model:?}");
         Self::decipher_type(&model)
     }
     

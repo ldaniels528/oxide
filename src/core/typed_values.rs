@@ -259,8 +259,13 @@ impl TypedValue {
             (ArrayValue(items), item) => items.contains(item),
             (Number(a), Number(b)) => a.to_f64() == b.to_f64(),
             (Sequenced(items), item) => items.contains(item),
+            (StringValue(a), StringValue(b)) => a.contains(b),
             (Structured(s), StringValue(name)) => s.contains(name),
-            (TableValue(Model(mrc)), Structured(s)) => mrc.contains(&s.to_row()),
+            (TableValue(Model(mrc)), Structured(s)) => mrc.contains(&Structures::transform_row(
+                &s.get_parameters(),
+                &s.get_values(),
+                &mrc.get_parameters()
+            )),
             _ => false
         }
     }
@@ -936,7 +941,11 @@ impl Add for TypedValue {
                     Ok(mrc) => mrc,
                     Err(err) => return ErrorValue(Exact(err.to_string()))
                 };
-                match mrc.append_row(b.to_row()) {
+                match mrc.append_row(Structures::transform_row(
+                    &b.get_parameters(),
+                    &b.get_values(),
+                    &mrc.get_parameters()
+                )) {
                     ErrorValue(s) => ErrorValue(s),
                     _ => TableValue(Model(mrc)),
                 }
@@ -1379,6 +1388,13 @@ mod core_tests {
     #[test]
     fn test_strings() {
         verify_encode_decode(&StringValue("Hello".into()));
+    }
+
+    #[test]
+    fn test_string_contains() {
+        let a = StringValue("Compare Array contents: Equal".into());
+        let b = StringValue("Array".into());
+        assert!(a.contains(&b))
     }
 
     #[test]

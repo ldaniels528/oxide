@@ -23,8 +23,8 @@ const OPERATORS_2: [&str; 28] = [
 ];
 
 /// Triple-character operators
-const OPERATORS_3: [&str; 9] = [
-    "~>>", "<<~", "|>>", ":::", 
+const OPERATORS_3: [&str; 10] = [
+    "~>>", "<<~", "|>>", "<|>", ":::", 
     "..=", "&&=", "||=", "<<=", ">>=",
 ];
 

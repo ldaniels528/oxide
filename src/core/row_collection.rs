@@ -3,6 +3,7 @@
 // RowCollection module
 ////////////////////////////////////////////////////////////////////
 
+use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
 use crate::data_types::DataType::*;
@@ -669,12 +670,13 @@ pub trait RowCollection: Debug {
         Array::from(self.iter().map(|row| Structured(Hard(row.as_hard(&columns)))).collect())
     }
 
-    fn to_bytes(&self) -> std::io::Result<Vec<u8>> {
-        let mut bytes = Vec::with_capacity(self.len()? * self.get_record_size());
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut encoded = vec![];
+        let columns = self.get_columns();
         for row in self.iter() {
-            bytes.extend(row.encode()?)
+            encoded.extend(ByteCodeCompiler::encode_row(&row, columns));
         }
-        Ok(bytes)
+        encoded
     }
 
     /// Restores a deleted row by ID to an active state within the table
