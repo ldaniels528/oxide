@@ -689,6 +689,10 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             "#, '|'),
         ],
         Expression::Literal(..) => vec![],
+        Expression::Ls(..) => vec![
+            "ls".into(),
+            "ls where is_directory is true".into(),
+        ],
         Expression::MatchExpression(..) => vec![
             strip_margin(r#"
                 |let code = 100
@@ -849,12 +853,6 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                 |a ** b
             "#, '|'),
         ],
-        Expression::TypeDef(..) => vec![
-            strip_margin(r#"
-                |LabelString = typedef(String(80))
-                |LabelString
-            "#, '|')
-        ],
         Expression::TypeOf(..) => vec![
             "type_of([12, 76, 444])".into()
         ],
@@ -977,7 +975,6 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Structures", StructureExpression(vec![])),
         ("Throw", Throw(null.clone())),
         ("Tuples", TupleExpression(vec![])),
-        ("Type Definitions", TypeDef(null.clone())),
         ("Function Pipelines", ArrowVerticalBar(null.clone(), null.clone())),
         ("Function Pipelines (destructuring)", ArrowVerticalBar2x(null.clone(), null.clone())),
         ("Import/Use", Use(vec![])),

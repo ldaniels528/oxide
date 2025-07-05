@@ -118,9 +118,9 @@ impl Parameter {
 
     pub fn to_code(&self) -> String {
         let mut buf = self.get_name().to_string();
-        if let Some(typedef) = self.get_param_type() {
-            if !typedef.trim().is_empty() {
-                buf = format!("{}: {}", buf, typedef)
+        if let Some(type_decl) = self.get_param_type() {
+            if !type_decl.trim().is_empty() {
+                buf = format!("{}: {}", buf, type_decl)
             }
         }
         match self.get_default_value() {

@@ -9,7 +9,7 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Disk, Model, TestReport};
+use crate::dataframe::Dataframe::{DiskTable, ModelTable, TestReport};
 
 use crate::errors::Errors;
 use crate::expression::Expression;
@@ -43,11 +43,18 @@ pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Par
 }
 
 pub fn make_dataframe_ns(ns: Namespace, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
-    Ok(Disk(FileRowCollection::create_table(&ns, &columns)?))
+    Ok(DiskTable(FileRowCollection::create_table(&ns, &columns)?))
 }
 
 pub fn make_dataframe_config(columns: Vec<Parameter>) -> ObjectConfig {
     ObjectConfig::build_table(columns)
+}
+
+pub fn make_lines_from_table(table_value: TypedValue) -> Vec<String> {
+    match table_value {
+        TableValue(df) => TableRenderer::from_dataframe(&df),
+        _ => vec![]
+    }
 }
 
 pub fn make_quote(id: usize,
@@ -155,7 +162,7 @@ pub fn verify_exact_report_with(
         TableValue(TestReport(mrc, state)) => {
             let mut report = TestEngine::generate_summary(&state);
             report.push("".to_string());
-            report.extend(TestEngine::generate_report(Model(mrc)));
+            report.extend(TestEngine::generate_report(ModelTable(mrc)));
             report.iter()
                 .map(|s| s.replace("\"", "'"))
                 .collect::<Vec<_>>()

@@ -5,7 +5,7 @@
 
 use crate::columns::Column;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
@@ -34,6 +34,66 @@ use shared_lib::cnv_error;
 use std::fs::File;
 use std::io;
 use std::io::{stdout, Read, Write};
+
+use rustyline::completion::{Completer, Pair};
+use rustyline::{Context, Helper, Result};
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::history::FileHistory;
+use rustyline::validate::Validator;
+use crate::compiler::Compiler;
+
+/// Oxide REPL auto-completion config
+pub struct OxideCompleter {
+    keywords: Vec<String>,
+}
+
+impl OxideCompleter {
+    pub fn new() -> Self {
+        Self {
+            keywords: Compiler::get_keywords()
+        }
+    }
+}
+
+impl Completer for OxideCompleter {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let word_start = line[..pos]
+            .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .map_or(0, |i| i + 1);
+
+        let prefix = &line[word_start..pos];
+
+        let candidates = self
+            .keywords
+            .iter()
+            .filter(|kw| kw.starts_with(prefix))
+            .map(|kw| Pair {
+                display: kw.clone(),
+                replacement: kw.clone(),
+            })
+            .collect();
+
+        Ok((word_start, candidates))
+    }
+}
+
+impl Helper for OxideCompleter {}
+impl Hinter for OxideCompleter {
+    type Hint = String;
+    fn hint(&self, _line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
+        None
+    }
+}
+impl Highlighter for OxideCompleter {}
+impl Validator for OxideCompleter {}
 
 /// REPL application state
 pub struct REPLState {
@@ -80,6 +140,129 @@ impl REPLState {
     }
 }
 
+pub fn do_terminal_bash_like(
+    mut state: REPLState,
+    args: Vec<String>,
+) -> std::io::Result<()> {
+    use rustyline::error::ReadlineError;
+    use rustyline::{Config, Editor};
+    
+    // show title
+    let mut stdout = stdout();
+    show_title();
+    stdout.flush()?;
+
+    // setup system variables
+    state = setup_system_variables(state, args);
+    
+    // create the editor configuration
+    let config = Config::builder()
+        .completion_type(rustyline::CompletionType::List)
+        .build();
+    let completer = OxideCompleter::new();
+    let mut rl = Editor::<OxideCompleter, FileHistory>::with_config(config)
+        .map_err(|e| cnv_error!(e))?;
+    rl.set_helper(Some(completer));
+    
+    let mut buffer = String::new();
+    let mut prompt = state.get_prompt();
+    
+    loop {
+        let readline = rl.readline(prompt.as_str());
+        match readline {
+            Ok(raw_line) => {
+                let line = raw_line.trim();
+                if buffer.is_empty() && line == "q!" {
+                    break;
+                }
+
+                // update the buffer
+                buffer.push_str(line);
+                buffer.push('\n');
+
+                // if the statement is incomplete, keep buffering
+                if is_incomplete(&buffer) {
+                    prompt = "...> ".into();
+                    continue;
+                }
+
+                let trimmed = buffer.trim();
+                if !trimmed.is_empty() {
+                    // add the line to history
+                    rl.add_history_entry(trimmed).map_err(|e| cnv_error!(e))?;
+
+                    // evaluate the input
+                    state = handle_input(state, trimmed)?;
+
+                    // Reset for next input
+                    buffer.clear();
+                    prompt = state.get_prompt();
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("^D");
+                break;
+            }
+            Err(err) => {
+                eprintln!("REPL error: {:?}", err);
+                break;
+            }
+        }
+    }
+
+    println!("👋 Goodbye!");
+    Ok(())
+}
+
+fn is_incomplete(code: &str) -> bool {
+    let mut parens = 0;
+    let mut braces = 0;
+    let mut in_string = false;
+    let mut prev_char = '\0';
+    for c in code.chars() {
+        match c {
+            '"' if prev_char != '\\' => in_string = !in_string,
+            '(' if !in_string => parens += 1,
+            ')' if !in_string => parens -= 1,
+            '{' if !in_string => braces += 1,
+            '}' if !in_string => braces -= 1,
+            _ => {}
+        }
+        prev_char = c;
+    }
+
+    parens > 0 || braces > 0 || in_string
+}
+
+fn handle_input(mut state: REPLState, input: &str) -> std::io::Result<REPLState> {
+    let t0 = Local::now();
+    match state.interpreter.evaluate(input) {
+        Ok(result) => {
+            // compute the execution-time
+            let execution_time = compute_time_millis(Local::now() - t0);
+            // record the request in the history table
+            update_history(&state, input, execution_time).ok();
+            // process the result
+            let limit = state.interpreter.get("__COLUMNS__").map(|v| v.to_usize());
+            let raw_lines = build_output(state.counter, result, execution_time)?;
+            let lines = limit
+                .map(|n| limit_width(raw_lines.clone(), n))
+                .unwrap_or(raw_lines);
+            for line in lines {
+                println!("{}", line)
+            }
+        }
+        Err(err) => eprintln!("{}", err),
+    }
+    state.counter += 1;
+    Ok(state)
+}
+
+
 pub fn do_terminal(
     mut state: REPLState,
     args: Vec<String>,
@@ -116,26 +299,7 @@ fn do_terminal_input(
         "q!" => state.die(),
         input if input.is_empty() => {}
         input => {
-            let t0 = Local::now();
-            match state.interpreter.evaluate(input) {
-                Ok(result) => {
-                    // compute the execution-time
-                    let execution_time = compute_time_millis(Local::now() - t0);
-                    // record the request in the history table
-                    update_history(&state, input, execution_time).ok();
-                    // process the result
-                    let limit = state.interpreter.get("__COLUMNS__").map(|v| v.to_usize());
-                    let raw_lines = build_output(state.counter, result, execution_time)?;
-                    let lines = limit
-                        .map(|n| limit_width(raw_lines.clone(), n))
-                        .unwrap_or(raw_lines);
-                    for line in lines {
-                        println!("{}", line)
-                    }
-                }
-                Err(err) => eprintln!("{}", err),
-            }
-            state.counter += 1;
+            state = handle_input(state, input)?;
             stdout.flush()? 
         }
     }

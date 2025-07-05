@@ -167,6 +167,7 @@ impl TestEngine {
         }
     }
 
+    /// Generates a human-friendly output representing the report.
     pub fn generate_report(input: Dataframe) -> Vec<String> {
         let (horiz, vert, top, middle, bottom) = ('─', '│', '┌', '├', '└');
 

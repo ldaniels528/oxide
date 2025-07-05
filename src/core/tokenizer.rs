@@ -29,7 +29,7 @@ const OPERATORS_3: [&str; 10] = [
 ];
 
 /// Pseudo-numerical prefixes
-const PSEUDO_NUMERICAL: [&str; 4] = ["0x", "0v", "0b", "0o"];
+const PSEUDO_NUMERICAL: [&str; 4] = ["0x", "0H", "0b", "0o"];
 
 type NewToken = fn(String, usize, usize, usize, usize) -> Token;
 
@@ -243,7 +243,7 @@ fn next_pseudo_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Toke
         generate_token(&inputs, start, end, generator)
     }
 
-    // can start with '0x', '0b', '0o' or '0v'
+    // can start with '0x', '0b', '0o' or '0H'
     let symbol_len = 2;
     let start = *pos;
     let limit = start + symbol_len;
@@ -253,7 +253,7 @@ fn next_pseudo_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Toke
         match String::from_iter(&inputs[start..limit]).as_str() {
             "0b" => parse_digits(inputs, start, pos, Token::numeric, |c| "01_".contains(c)),
             "0o" => parse_digits(inputs, start, pos, Token::numeric, |c| "01234567_".contains(c)),
-            "0v" => parse_digits(inputs, start, pos, Token::binary_literal, |c| "0123456789_ABCDEFabcdef".contains(c)),
+            "0H" => parse_digits(inputs, start, pos, Token::binary_literal, |c| "0123456789_ABCDEFabcdef".contains(c)),
             "0x" => parse_digits(inputs, start, pos, Token::numeric, |c| "0123456789_ABCDEFabcdef".contains(c)),
             _ => None
         }
@@ -410,9 +410,9 @@ mod tests {
 
     #[test]
     fn test_binary_literal() {
-        assert_eq!(parse_fully("0vfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce ca"), vec![
+        assert_eq!(parse_fully("0Hfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce ca"), vec![
             Token::BinaryLiteral {
-                text: "0vfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce".into(),
+                text: "0Hfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce".into(),
                 start: 0,
                 end: 49,
                 line_number: 1,

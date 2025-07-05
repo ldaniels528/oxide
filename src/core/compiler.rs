@@ -13,13 +13,14 @@ use crate::errors::{throw, CompileErrors, SyntaxErrors};
 use crate::expression::Expression::*;
 use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::expression::*;
+use crate::machine::Machine;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{BinaryValue, CharValue, DateValue, Kind, Null, Number, StringValue, TableValue};
+use crate::typed_values::TypedValue::{ByteStringValue, CharValue, DateValue, Kind, Null, Number, StringValue, TableValue};
 use crate::utils::{expand_escapes, pull_identifier_name, pull_name};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -176,11 +177,20 @@ impl Compiler {
                     t if is_operator(t, is_even) => {
                         while let Some(top_op) = operators.last() {
                             if get_precedence(top_op, is_even) >= get_precedence(&t, is_even) {
-                                let b = output.pop().unwrap();
-                                let a = output.pop().unwrap();
-                                let result = apply_operator_binary(top_op, b, a)?;
-                                output.push(result);
-                                operators.pop();
+                                let b = output.pop();
+                                let a = output.pop();
+                                match (b, a) {
+                                    (Some(b), Some(a)) => {
+                                        let result = apply_operator_binary(top_op, b, a)?;
+                                        output.push(result);
+                                        operators.pop();
+                                    }
+                                    (b, a) => {
+                                        println!("Syntax error: b {b:?}, a {a:?}");
+                                       return throw(ExactNear("Syntax error".into(), ts.current()))
+                                    }
+                                }
+    
                             } else {
                                 break;
                             }
@@ -249,7 +259,7 @@ impl Compiler {
             // binary literals
             (Some(BinaryLiteral { text, .. }), ts) => {
                 let bytes = convert_binary_literal_to_bytes(&text)?;
-                Ok((Some(Literal(BinaryValue(bytes))), ts))
+                Ok((Some(Literal(ByteStringValue(bytes))), ts))
             },
             // variables
             (Some(Backticks { text, .. }), ts) => Ok((Some(Identifier(text)), ts)),
@@ -281,6 +291,17 @@ impl Compiler {
             _ => Ok((None, ts.clone())),
         }
     }
+
+    pub fn get_keywords() -> Vec<String> {
+        vec![
+            "assert", "DELETE", "delete", "do", "else", "exit",
+            "false", "feature", "fn", "for", "from", "GET", "HEAD", "HTTP",
+            "if", "in", "include", "is_defined", "let", "ls",
+            "match", "mod", "NaN", "null", "PATCH", "POST", "PUT", "print", "return",
+            "scenario", "select", "test", "throw", "true", "type_of",
+            "undefined", "undelete", "use", "when", "whenever", "while", "yield",
+        ].into_iter().map(String::from).collect::<Vec<String>>()
+    }
     
     /// Parses reserved words (i.e. keyword)
     fn next_keyword(&self, ts: TokenSlice) -> std::io::Result<(Option<Expression>, TokenSlice)> {
@@ -301,6 +322,7 @@ impl Compiler {
                 "include" => self.parse_expression_1a(nts, Include),
                 "is_defined" => self.parse_expression_1a(nts, IsDefined),
                 "let" => self.parse_keyword_let(nts),
+                "ls" => self.parse_keyword_ls(nts),
                 "match" => self.parse_keyword_match(nts),
                 "mod" => self.parse_keyword_mod(nts),
                 "NaN" => Ok((Literal(Number(NaNValue)), nts)),
@@ -313,7 +335,6 @@ impl Compiler {
                 "test" => self.parse_keyword_test(nts),
                 "throw" => self.parse_keyword_throw(nts),
                 "true" => Ok((TRUE, nts)),
-                "typedef" => self.parse_keyword_type_decl(nts),
                 "type_of" => self.parse_keyword_type_of(nts),
                 "undefined" => Ok((UNDEFINED, nts)),
                 "undelete" => self.parse_keyword_undelete(nts),
@@ -713,6 +734,25 @@ impl Compiler {
         }
     }
 
+    /// Builds a model for List system files expression
+    /// #### Examples
+    /// ##### List all files in the current directory
+    /// ```
+    /// ls
+    /// ```
+    /// ##### List all files in a specific directory
+    /// ```
+    /// ls("./Downloads")
+    /// ```
+    fn parse_keyword_ls(&self, ts0: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        let (path, ts) = if ts0.is("(") {
+            self.compile_next(ts0).map(|(expr, ts)| (Some(expr.into()), ts))?
+        } else { 
+            (None, ts0)
+        };
+        Ok((Ls(path), ts))
+    }
+
     /// Parses an use statement:
     /// #### Examples
     /// ```
@@ -908,16 +948,6 @@ impl Compiler {
         let (expr, ts) = self.compile_next(ts.clone())?;
         Ok((Throw(expr.into()), ts))
     }
-    
-    /// Builds a type declaration
-    /// #### Examples
-    /// ```
-    /// typedef(String(80))
-    /// ```
-    fn parse_keyword_type_decl(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (expr, ts) = self.compile_next(ts.clone())?;
-        Ok((TypeDef(expr.into()), ts))
-    }
 
     /// Builds a `type_of` declaration
     /// #### Examples
@@ -1030,7 +1060,7 @@ impl Compiler {
         match ts.next() {
             (Some(Atom { text: name, .. }), ts) => {
                 // next, check for type constraint
-                let (typedef, ts) = if ts.is(":") {
+                let (type_decl, ts) = if ts.is(":") {
                     self.expect_parameter_type_decl(ts.skip())?
                 } else {
                     (None, ts)
@@ -1040,13 +1070,14 @@ impl Compiler {
                 let (default_value, ts) = if ts.is("=") {
                     let ts = ts.skip();
                     let (expr, ts) = self.compile_next(ts)?;
-                    (expr.to_pure()?, ts)
+                    let (_, value) = Machine::evaluate_pure(&expr)?;
+                    (value, ts)
                 } else {
                     (Null, ts)
                 };
 
                 Ok((
-                    Parameter::new_with_default(name, typedef.unwrap_or(UnresolvedType), default_value),
+                    Parameter::new_with_default(name, type_decl.unwrap_or(UnresolvedType), default_value),
                     ts,
                 ))
             }
@@ -1291,7 +1322,7 @@ fn get_precedence(op: &Token, is_even: bool) -> i8 {
         "&" | "&&" | "and" => 7,        // Bitwise/Logical AND
         "^" | "|" | "||" | "or" => 6,  // Bitwise XOR, Bitwise/Logical OR
         ".." | "..=" => 5,
-        "::" | ":::" => 4,
+        "." | "::" | ":::" => 4,
         ":" => 3,
         "==" | "!=" | "<" | "<=" | ">" | ">=" => 2,
         "contains" | "in" | "is" | "isnt" | "like" | "matches" => 2,
@@ -2679,20 +2710,6 @@ mod tests {
                     Identifier("b".into()),
                     Identifier("c".into()),
                 ])
-            )
-        }
-
-        #[test]
-        fn test_typedef() {
-            let model = Compiler::build(
-                r#"
-                typedef(String(32))
-            "#,
-            )
-            .unwrap();
-            assert_eq!(
-                model,
-                TypeDef(Literal(Kind(FixedSizeType(StringType.into(), 32))).into())
             )
         }
 

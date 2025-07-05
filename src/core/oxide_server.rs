@@ -16,7 +16,6 @@ use crate::namespaces::Namespace;
 use crate::object_config::ObjectConfig;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
-use crate::server::SystemInfoJs;
 use crate::structures::Structures::Soft;
 use crate::structures::{Row, SoftStructure, Structures};
 use crate::typed_values::TypedValue;
@@ -45,6 +44,7 @@ use tokio::runtime::Runtime;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+use crate::platform::VERSION;
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct RemoteCallRequest {
@@ -87,6 +87,22 @@ impl RemoteCallResponse {
     pub fn get_message(&self) -> Option<String> { self.message.to_owned() }
 
     pub fn get_result(&self) -> Value { self.result.to_owned() }
+}
+
+// JSON representation of Oxide system information
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SystemInfoJs {
+    title: String,
+    version: String,
+}
+
+impl SystemInfoJs {
+    pub fn new() -> SystemInfoJs {
+        SystemInfoJs {
+            title: "Oxide".into(),
+            version: VERSION.into(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -679,6 +695,14 @@ mod tests {
     use tokio::runtime::Runtime;
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+
+    #[actix::test]
+    async fn test_create_system_info() {
+        assert_eq!(SystemInfoJs::new(), SystemInfoJs {
+            title: "Oxide".into(),
+            version: VERSION.into(),
+        })
+    }
 
     #[actix::test]
     async fn test_dataframe_config_lifecycle() {

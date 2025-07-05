@@ -9,7 +9,7 @@ use crate::data_types::DataType::*;
 use crate::sequences::{Array, Sequence};
 
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
@@ -41,8 +41,8 @@ use std::io::{Read, Write};
 use std::ops::Deref;
 
 pub const MAJOR_VERSION: u8 = 1;
-pub const MINOR_VERSION: u8 = 46;
-pub const VERSION: &str = "0.46";
+pub const MINOR_VERSION: u8 = 47;
+pub const VERSION: &str = "0.47";
 
 /// Represents an Oxide Platform Package
 pub trait Package {
@@ -93,7 +93,7 @@ impl PackageOps {
                 hm
             })
     }
-
+    
     pub fn decode(bytes: Vec<u8>) -> std::io::Result<PackageOps> {
         ByteCodeCompiler::unwrap_as_result(bincode::deserialize(bytes.as_slice()))
     }
@@ -289,7 +289,7 @@ impl PackageOps {
 
         // return a table (preferably) or an array
         if is_table {
-            Ok((ms, TableValue(Model({
+            Ok((ms, TableValue(ModelTable({
                 let mut dest_rows = vec![];
                 for item in new_arr {
                     let transformed_rows = match item {
@@ -316,7 +316,7 @@ impl PackageOps {
                 let columns = frc.get_columns();
                 match frc.read_active_rows() {
                     Err(err) => ErrorValue(Exact(err.to_string())),
-                    Ok(rows) => TableValue(Model(ModelRowCollection::from_columns_and_rows(
+                    Ok(rows) => TableValue(ModelTable(ModelRowCollection::from_columns_and_rows(
                         columns, &rows,
                     ))),
                 }
@@ -621,7 +621,7 @@ mod tests {
         assert_eq!(Tools(ToolsPkg::ToTable).to_code(), "tools::to_table(a)");
         // util
         assert_eq!(Utils(UtilsPkg::Base64).to_code(), "util::base64(a)");
-        assert_eq!(Utils(UtilsPkg::Binary).to_code(), "util::to_binary(a)");
+        assert_eq!(Utils(UtilsPkg::ToBinary).to_code(), "util::to_binary(a)");
         assert_eq!(Utils(UtilsPkg::Gzip).to_code(), "util::gzip(a)");
         assert_eq!(Utils(UtilsPkg::Gunzip).to_code(), "util::gunzip(a)");
         assert_eq!(Utils(UtilsPkg::Hex).to_code(), "util::hex(a)");

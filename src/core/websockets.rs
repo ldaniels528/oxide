@@ -175,9 +175,7 @@ mod tests {
         "#).await.unwrap();
         show_value(value.clone());
         let lines = match value {
-            TableValue(df) => {
-                TableRenderer::from_dataframe(&df)
-            }
+            TableValue(df) => TableRenderer::from_dataframe(&df),
             _ =>  vec![]
         };
         

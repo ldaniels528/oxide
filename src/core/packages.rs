@@ -7,7 +7,7 @@ use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Disk, EventSource, Model, TableFn};
+use crate::dataframe::Dataframe::{DiskTable, EventSource, ModelTable, TableFn};
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, TypeMismatchErrors};
@@ -51,6 +51,195 @@ const SECONDS: i64 = 1000 * MILLIS;
 const MINUTES: i64 = 60 * SECONDS;
 const HOURS: i64 = 60 * MINUTES;
 const DAYS: i64 = 24 * HOURS;
+
+/// Built-in package functions by type
+pub mod builtins {
+    use crate::errors::throw;
+    use crate::errors::Errors::Exact;
+    use crate::machine::Machine;
+    use crate::packages::{ArraysPkg, CalPkg, DurationsPkg, MathPkg, NsdPkg, StringsPkg, ToolsPkg, UtilsPkg, WwwPkg};
+    use crate::platform::Package;
+    use crate::typed_values::TypedValue;
+
+    pub fn arrays(
+        ms: Machine,
+        name: &str,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match name {
+            "filter" => ArraysPkg::Filter.evaluate(ms, args),
+            "is_empty" => ArraysPkg::IsEmpty.evaluate(ms, args),
+            "join" => StringsPkg::Join.evaluate(ms, args),
+            "len" => ArraysPkg::Len.evaluate(ms, args),
+            "map" => ArraysPkg::Map.evaluate(ms, args),
+            "pop" => ArraysPkg::Pop.evaluate(ms, args),
+            "push" => ArraysPkg::Push.evaluate(ms, args),
+            "reduce" => ArraysPkg::Reduce.evaluate(ms, args),
+            "reverse" => ArraysPkg::Reverse.evaluate(ms, args),
+            "to_string" => StringsPkg::ToString.evaluate(ms, args),
+            "to_table" => ToolsPkg::ToTable.evaluate(ms, args),
+            other => throw(Exact(format!("Function {} not found", other)))
+        }
+    }
+
+    pub fn byte_strings(
+        ms: Machine,
+        name: &str,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match name {
+            "filter" => ToolsPkg::Filter.evaluate(ms, args),
+            "gunzip" => UtilsPkg::Gunzip.evaluate(ms, args),
+            "gzip" => UtilsPkg::Gzip.evaluate(ms, args),
+            "hex" => UtilsPkg::Hex.evaluate(ms, args),
+            "map" => ToolsPkg::Map.evaluate(ms, args),
+            "to_string" => StringsPkg::ToString.evaluate(ms, args),
+            other => throw(Exact(format!("Function {} not found", other)))
+        }
+    }
+
+    pub fn dates(
+        ms: Machine,
+        name: &str,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match name {
+            "day_of" => CalPkg::DateDay.evaluate(ms, args),
+            "hour12" => CalPkg::DateHour12.evaluate(ms, args),
+            "hour24" => CalPkg::DateHour24.evaluate(ms, args),
+            "minute_of" => CalPkg::DateMinute.evaluate(ms, args),
+            "month_of" => CalPkg::DateMonth.evaluate(ms, args),
+            "second_of" => CalPkg::DateSecond.evaluate(ms, args),
+            "year_of" => CalPkg::DateYear.evaluate(ms, args),
+            "minus" => CalPkg::Minus.evaluate(ms, args),
+            "now" => CalPkg::Now.evaluate(ms, args),
+            "plus" => CalPkg::Plus.evaluate(ms, args),
+            "to_string" => StringsPkg::ToString.evaluate(ms, args),
+            other => throw(Exact(format!("Function {} not found", other)))
+        }
+    }
+
+    pub fn numbers(
+        ms: Machine,
+        name: &str,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match name {
+            "days" => DurationsPkg::Days.evaluate(ms, args),
+            "hours" => DurationsPkg::Hours.evaluate(ms, args),
+            "millis" => DurationsPkg::Millis.evaluate(ms, args),
+            "minutes" => DurationsPkg::Minutes.evaluate(ms, args),
+            "seconds" => DurationsPkg::Seconds.evaluate(ms, args),
+            "abs" => MathPkg::Abs.evaluate(ms, args),
+            "ceil" => MathPkg::Ceil.evaluate(ms, args),
+            "floor" => MathPkg::Floor.evaluate(ms, args),
+            "max" => MathPkg::Max.evaluate(ms, args),
+            "min" => MathPkg::Min.evaluate(ms, args),
+            "pow" => MathPkg::Pow.evaluate(ms, args),
+            "round" => MathPkg::Round.evaluate(ms, args),
+            "sqrt" => MathPkg::Sqrt.evaluate(ms, args),
+            "super_script" => StringsPkg::SuperScript.evaluate(ms, args),
+            "serve" => WwwPkg::Serve.evaluate(ms, args),
+            "to_binary" => UtilsPkg::ToBinary.evaluate(ms, args),
+            "to_string" => StringsPkg::ToString.evaluate(ms, args),
+            other => throw(Exact(format!("Function {} not found", other)))
+        }
+    }
+
+    pub fn strings(
+        ms: Machine,
+        name: &str,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match name {
+            "ends_with" => StringsPkg::EndsWith.evaluate(ms, args),
+            "filter" => ToolsPkg::Filter.evaluate(ms, args),
+            "format" => StringsPkg::Format.evaluate(ms, args),
+            "index_of" => StringsPkg::IndexOf.evaluate(ms, args),
+            "join" => StringsPkg::Join.evaluate(ms, args),
+            "len" => StringsPkg::Len.evaluate(ms, args),
+            "left" => StringsPkg::Left.evaluate(ms, args),
+            "map" => ToolsPkg::Map.evaluate(ms, args),
+            "right" => StringsPkg::Right.evaluate(ms, args),
+            "split" => StringsPkg::Split.evaluate(ms, args),
+            "starts_with" => StringsPkg::StartsWith.evaluate(ms, args),
+            "strip_margin" => StringsPkg::StripMargin.evaluate(ms, args),
+            "substring" => StringsPkg::Substring.evaluate(ms, args),
+            "to_chars" => StringsPkg::ToChars.evaluate(ms, args),
+            "to_lowercase" => StringsPkg::ToLowercase.evaluate(ms, args),
+            "to_string" => StringsPkg::ToString.evaluate(ms, args),
+            "to_uppercase" => StringsPkg::ToUppercase.evaluate(ms, args),
+            "trim" => StringsPkg::Trim.evaluate(ms, args),
+            "url_decode" => WwwPkg::URLDecode.evaluate(ms, args),
+            "url_encode" => WwwPkg::URLEncode.evaluate(ms, args),
+            other => throw(Exact(format!("Function {} not found", other)))
+        }
+    }
+    
+    pub fn structures(
+        ms: Machine,
+        name: &str,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match name {
+            "describe" => ToolsPkg::Describe.evaluate(ms, args),
+            "filter" => ToolsPkg::Filter.evaluate(ms, args),
+            "len" => ToolsPkg::Len.evaluate(ms, args),
+            "map" => ToolsPkg::Map.evaluate(ms, args),
+            "to_array" => ToolsPkg::ToArray.evaluate(ms, args),
+            "to_csv" => ToolsPkg::ToCSV.evaluate(ms, args),
+            "to_json" => ToolsPkg::ToJSON.evaluate(ms, args),
+            "to_string" => StringsPkg::ToString.evaluate(ms, args),
+            "to_table" => ToolsPkg::ToTable.evaluate(ms, args),
+            other => throw(Exact(format!("Function {} not found", other)))
+        }
+    }
+
+    pub fn tables(
+        ms: Machine,
+        name: &str,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match name {
+            "journal" => NsdPkg::Journal.evaluate(ms, args),
+            "replay" => NsdPkg::Replay.evaluate(ms, args),
+            "resize" => NsdPkg::Resize.evaluate(ms, args),
+            "compact" => ToolsPkg::Compact.evaluate(ms, args),
+            "describe" => ToolsPkg::Describe.evaluate(ms, args),
+            "fetch" => ToolsPkg::Fetch.evaluate(ms, args),
+            "filter" => ToolsPkg::Filter.evaluate(ms, args),
+            "len" => ToolsPkg::Len.evaluate(ms, args),
+            "map" => ToolsPkg::Map.evaluate(ms, args),
+            "pop" => ToolsPkg::Pop.evaluate(ms, args),
+            "push" => ToolsPkg::Push.evaluate(ms, args),
+            "reverse" => ToolsPkg::Reverse.evaluate(ms, args),
+            "row_id" => ToolsPkg::RowId.evaluate(ms, args),
+            "scan" => ToolsPkg::Scan.evaluate(ms, args),
+            "shuffle" => ToolsPkg::Shuffle.evaluate(ms, args),
+            "to_array" => ToolsPkg::ToArray.evaluate(ms, args),
+            "to_csv" => ToolsPkg::ToCSV.evaluate(ms, args),
+            "to_json" => ToolsPkg::ToJSON.evaluate(ms, args),
+            "to_string" => StringsPkg::ToString.evaluate(ms, args),
+            "to_table" => ToolsPkg::ToTable.evaluate(ms, args),
+            other => throw(Exact(format!("Function {} not found", other)))
+        }
+    }
+
+    pub fn tuples(
+        ms: Machine,
+        name: &str,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match name {
+            "filter" => ToolsPkg::Filter.evaluate(ms, args),
+            "map" => ToolsPkg::Map.evaluate(ms, args),
+            "to_array" => ToolsPkg::ToArray.evaluate(ms, args),
+            "to_string" => StringsPkg::ToString.evaluate(ms, args),
+            "to_table" => ToolsPkg::ToTable.evaluate(ms, args),
+            other => throw(Exact(format!("Function {} not found", other)))
+        }
+    }
+}
 
 /// Represents a Data Format
 pub enum DataFormats {
@@ -358,6 +547,7 @@ impl Package for AggPkg {
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum ArraysPkg {
     Filter,
+    IsEmpty,
     Len,
     Map,
     Pop,
@@ -428,6 +618,7 @@ impl Package for ArraysPkg {
     fn get_name(&self) -> String {
         match self {
             ArraysPkg::Filter => "filter".into(),
+            ArraysPkg::IsEmpty => "is_empty".into(),
             ArraysPkg::Len => "len".into(),
             ArraysPkg::Map => "map".into(),
             ArraysPkg::Pop => "pop".into(),
@@ -445,6 +636,7 @@ impl Package for ArraysPkg {
     fn get_description(&self) -> String {
         match self {
             ArraysPkg::Filter => "Filters an array based on a function".into(),
+            ArraysPkg::IsEmpty => "Returns true if the array is empty".into(),
             ArraysPkg::Len => "Returns the length of an array".into(),
             ArraysPkg::Map => "Transform an array based on a function".into(),
             ArraysPkg::Pop => "Removes and returns a value or object from an array".into(),
@@ -460,6 +652,14 @@ impl Package for ArraysPkg {
             ArraysPkg::Filter => vec![
                 strip_margin(r#"
                     |arrays::filter(1..7, n -> (n % 2) == 0)
+               "#, '|')
+            ],
+            ArraysPkg::IsEmpty => vec![
+                strip_margin(r#"
+                    |[1, 3, 5]::is_empty
+               "#, '|'),
+                strip_margin(r#"
+                    |[]::is_empty
                "#, '|')
             ],
             ArraysPkg::Len => vec![
@@ -530,6 +730,9 @@ impl Package for ArraysPkg {
                     BooleanType.into(),
                 ),
             ],
+            ArraysPkg::IsEmpty => vec![
+                ArrayType(UnresolvedType.into()),
+            ],
             ArraysPkg::Len => vec![
                 ArrayType(UnresolvedType.into())
             ],
@@ -558,12 +761,17 @@ impl Package for ArraysPkg {
 
     fn get_return_type(&self) -> DataType {
         match self {
+            // Array
             ArraysPkg::Filter
             | ArraysPkg::Map
             | ArraysPkg::Reverse
             | ArraysPkg::ToArray => ArrayType(UnresolvedType.into()),
+            // Number
             ArraysPkg::Len => NumberType(I64Kind),
-            ArraysPkg::Pop | ArraysPkg::Push => BooleanType,
+            // Boolean
+            ArraysPkg::IsEmpty
+            | ArraysPkg::Pop | ArraysPkg::Push => BooleanType,
+            // UnresolvedType
             ArraysPkg::Reduce => UnresolvedType,
         }
     }
@@ -575,6 +783,7 @@ impl Package for ArraysPkg {
     ) -> std::io::Result<(Machine, TypedValue)> {
         match self {
             ArraysPkg::Filter => extract_value_fn2(ms, args, ToolsPkg::do_tools_filter),
+            ArraysPkg::IsEmpty => extract_array_fn1(ms, args, |a| Boolean(a.is_empty())),
             ArraysPkg::Len => extract_array_fn1(ms, args, |a| Number(I64Value(a.len() as i64))),
             ArraysPkg::Map => extract_value_fn2(ms, args, ToolsPkg::do_tools_map),
             ArraysPkg::Pop => extract_value_fn1(ms, args, ArraysPkg::do_arrays_pop),
@@ -1009,6 +1218,25 @@ impl IoPkg {
         Ok((ms, Boolean(Path::new(path.as_str()).exists())))
     }
 
+    pub fn do_io_list_files(
+        ms: Machine,
+        path_value: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let path = pull_string(path_value)?;
+        let mut mrc = ModelRowCollection::from_parameters(&Self::get_io_files_parameters());
+        for entry in fs::read_dir(path)? {
+            let entry = entry?;
+            let path = entry.path();
+            mrc.append_row(Row::new(0, vec![
+                StringValue(path.display().to_string()),
+                Boolean(path.is_dir()),
+                Boolean(path.is_file()),
+                Boolean(path.is_symlink()),
+            ]));
+        }
+        Ok((ms, TableValue(ModelTable(mrc))))
+    }
+
     fn do_io_read_text_file(
         ms: Machine,
         path_v: &TypedValue,
@@ -1033,12 +1261,12 @@ impl IoPkg {
         Ok((ms, StringValue(input)))
     }
 
-    pub(crate) fn do_io_stdout(
+    pub fn do_io_stdout(
         ms: Machine,
         value: &TypedValue,
     ) -> std::io::Result<(Machine, TypedValue)> {
         let mut out = stdout();
-        out.write(format!("{}", value.unwrap_value()).as_bytes())?;
+        out.write(format!("{}\n", value.unwrap_value()).as_bytes())?;
         out.flush()?;
         Ok((ms, Boolean(true)))
     }
@@ -1051,6 +1279,15 @@ impl IoPkg {
             PackageOps::Io(IoPkg::StdErr),
             PackageOps::Io(IoPkg::StdIn),
             PackageOps::Io(IoPkg::StdOut),
+        ]
+    }
+
+    pub fn get_io_files_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("path", StringType),
+            Parameter::new("is_directory", BooleanType),
+            Parameter::new("is_file", BooleanType),
+            Parameter::new("is_symlink", BooleanType),
         ]
     }
 }
@@ -1095,8 +1332,7 @@ impl Package for IoPkg {
             ],
             IoPkg::FileExists => vec![r#"io::exists("quote.json")"#.to_string()],
             IoPkg::FileReadText => vec![
-                strip_margin(
-                r#"
+                strip_margin(r#"
                     |use io, util
                     |file = "temp_secret.txt"
                     |file:::create_file(md5("**keep**this**secret**"))
@@ -1419,7 +1655,7 @@ impl NsdPkg {
         let path = pull_string(path_v)?;
         let ns = Namespace::parse(path.as_str())?;
         let frc = FileRowCollection::open(&ns)?;
-        Ok((ms, TableValue(Disk(frc))))
+        Ok((ms, TableValue(DiskTable(frc))))
     }
 
     /// Rebuilds a dataframe by replaying its journal
@@ -1501,7 +1737,7 @@ impl NsdPkg {
                 let params = mrc.get_parameters();
                 let mut frc = FileRowCollection::create_table(&ns, &params)?;
                 frc.append_rows(mrc.get_rows())?;
-                Ok((ms, TableValue(Disk(frc))))
+                Ok((ms, TableValue(DiskTable(frc))))
             }
             x => throw(Exact(format!("Expected type near {}", x.to_code())))
         }
@@ -1837,7 +2073,7 @@ impl OxidePkg {
                 _ => {}
             }
         }
-        Ok((ms, TableValue(Model(mrc))))
+        Ok((ms, TableValue(ModelTable(mrc))))
     }
 
     fn do_oxide_history(
@@ -1874,7 +2110,7 @@ impl OxidePkg {
                     &OxidePkg::get_oxide_history_ns(),
                     OxidePkg::get_oxide_history_parameters(),
                 )?;
-                Ok((ms, TableValue(Disk(frc))))
+                Ok((ms, TableValue(DiskTable(frc))))
             }
             // history(11)
             [Number(pid)] => re_run(ms.to_owned(), pid.to_usize()),
@@ -1902,7 +2138,7 @@ impl OxidePkg {
                 ],
             ))?;
         }
-        Ok((ms, TableValue(Model(mrc))))
+        Ok((ms, TableValue(ModelTable(mrc))))
     }
     
     fn do_oxide_printf(ms: Machine, args: Vec<TypedValue>) -> std::io::Result<(Machine, TypedValue)> {
@@ -1923,7 +2159,7 @@ impl OxidePkg {
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Machine, TypedValue)> {
         let result = match args.as_slice() {
-            [BinaryValue(bytes)] => 
+            [ByteStringValue(bytes)] => 
                 Uuid::from_slice(bytes.as_slice()).map_err(|e| cnv_error!(e))?.as_u128(),
             [Number(U128Value(n))] => *n,
             [StringValue(s)] => Uuid::parse_str(s).map_err(|e| cnv_error!(e))?.as_u128(),
@@ -2197,7 +2433,7 @@ impl OsPkg {
                 return Ok((ms, ErrorValue(err)));
             }
         }
-        Ok((ms, TableValue(Model(mrc))))
+        Ok((ms, TableValue(ModelTable(mrc))))
     }
 
     pub(crate) fn get_contents() -> Vec<PackageOps> {
@@ -2312,7 +2548,11 @@ pub enum StringsPkg {
     StripMargin,
     Substring,
     SuperScript,
+    ToChars,
+    ToLowercase,
     ToString,
+    ToUppercase,
+    Trim,
 }
 
 impl StringsPkg {
@@ -2410,7 +2650,7 @@ impl StringsPkg {
 
     fn do_str_len(ms: Machine, string: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
         let s = pull_string(string)?;
-        Ok((ms, Number(I64Value(s.len() as i64))))
+        Ok((ms, Number(I64Value(s.chars().count() as i64))))
     }
 
     fn do_str_right(
@@ -2496,7 +2736,51 @@ impl StringsPkg {
         Ok((ms, StringValue(superscript(number.to_usize()))))
     }
 
-    pub(crate) fn get_contents() -> Vec<PackageOps> {
+    fn do_str_to_chars(
+        ms: Machine,
+        string_val: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, ArrayValue(Array::from(
+            pull_string(string_val)?.chars()
+                .map(|c| CharValue(c.to_owned()))
+                .collect()
+        ))))
+    }
+
+    fn do_str_to_lowercase(
+        ms: Machine,
+        string_val: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(string_val.unwrap_value().to_lowercase())))
+    }
+
+    fn do_str_to_string(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        let result = match value {
+            ByteStringValue(bytes) =>
+                String::from_utf8(bytes.to_vec())
+                    .unwrap_or_else(|_| format!("0H{}", bytes.iter()
+                        .map(|b| format!("{:02x}", b))
+                        .collect::<Vec<_>>().join(""))),
+            x => x.unwrap_value()
+        };
+        Ok((ms, StringValue(result)))
+    }
+
+    fn do_str_to_uppercase(
+        ms: Machine,
+        string_val: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(string_val.unwrap_value().to_uppercase())))
+    }
+
+    fn do_str_trim(
+        ms: Machine,
+        string_val: &TypedValue,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(string_val.unwrap_value().trim().to_string())))
+    }
+
+    pub fn get_contents() -> Vec<PackageOps> {
         vec![
             PackageOps::Strings(StringsPkg::EndsWith),
             PackageOps::Strings(StringsPkg::Format),
@@ -2510,7 +2794,10 @@ impl StringsPkg {
             PackageOps::Strings(StringsPkg::StripMargin),
             PackageOps::Strings(StringsPkg::Substring),
             PackageOps::Strings(StringsPkg::SuperScript),
+            PackageOps::Strings(StringsPkg::ToChars),
+            PackageOps::Strings(StringsPkg::ToLowercase),
             PackageOps::Strings(StringsPkg::ToString),
+            PackageOps::Strings(StringsPkg::ToUppercase),
         ]
     }
 }
@@ -2530,7 +2817,11 @@ impl Package for StringsPkg {
             StringsPkg::StripMargin => "strip_margin".into(),
             StringsPkg::Substring => "substring".into(),
             StringsPkg::SuperScript => "superscript".into(),
+            StringsPkg::ToChars => "to_chars".into(),
+            StringsPkg::ToLowercase => "to_lowercase".into(),
             StringsPkg::ToString => "to_string".into(),
+            StringsPkg::ToUppercase => "to_uppercase".into(),
+            StringsPkg::Trim => "trim".into(),
         }
     }
 
@@ -2539,21 +2830,25 @@ impl Package for StringsPkg {
     }
 
     fn get_description(&self) -> String {
-        match self {
-            StringsPkg::EndsWith => "Returns true if string `a` ends with string `b`".into(),
-            StringsPkg::Format => "Returns an argument-formatted string".into(),
-            StringsPkg::IndexOf => "Returns the index of string `b` in string `a`".into(),
-            StringsPkg::Join => "Combines an array into a string".into(),
-            StringsPkg::Left => "Returns n-characters from left-to-right".into(),
-            StringsPkg::Len => "Returns the number of characters contained in the string".into(),
-            StringsPkg::Right => "Returns n-characters from right-to-left".into(),
-            StringsPkg::Split => "Splits string `a` by delimiter string `b`".into(),
-            StringsPkg::StartsWith => "Returns true if string `a` starts with string `b`".into(),
-            StringsPkg::StripMargin => "Returns the string with all characters on each line are striped up to the margin character".into(),
-            StringsPkg::Substring => "Returns a substring of string `s` from `m` to `n`".into(),
-            StringsPkg::SuperScript => "Returns a superscript of a number `n`".into(),
-            StringsPkg::ToString => "Converts a value to its text-based representation".into(),
-        }
+        (match self {
+            StringsPkg::EndsWith => "Returns true if string `a` ends with string `b`",
+            StringsPkg::Format => "Returns an argument-formatted string",
+            StringsPkg::IndexOf => "Returns the index of string `b` in string `a`",
+            StringsPkg::Join => "Combines an array into a string",
+            StringsPkg::Left => "Returns n-characters from left-to-right",
+            StringsPkg::Len => "Returns the number of characters contained in the string",
+            StringsPkg::Right => "Returns n-characters from right-to-left",
+            StringsPkg::Split => "Splits string `a` by delimiter string `b`",
+            StringsPkg::StartsWith => "Returns true if string `a` starts with string `b`",
+            StringsPkg::StripMargin => "Returns the string with all characters on each line are striped up to the margin character",
+            StringsPkg::Substring => "Returns a substring of string `s` from `m` to `n`",
+            StringsPkg::SuperScript => "Returns a superscript of a number `n`",
+            StringsPkg::ToChars => "Returns an array of the characters of a String",
+            StringsPkg::ToLowercase => "Converts a value to lowercase text-based representation",
+            StringsPkg::ToString => "Converts a value to its text-based representation",
+            StringsPkg::ToUppercase => "Converts a value to uppercase text-based representation",
+            StringsPkg::Trim => "Trims whitespace from a string",
+        }).into()
     }
 
     fn get_examples(&self) -> Vec<String> {
@@ -2581,12 +2876,21 @@ impl Package for StringsPkg {
             )],
             StringsPkg::Substring => vec!["str::substring('Hello World', 0, 5)".into()],
             StringsPkg::SuperScript => vec!["str::superscript(5)".into()],
+            StringsPkg::ToChars => vec!["'Hello'::to_chars".into()],
+            StringsPkg::ToLowercase => vec!["'Hello'::to_lowercase".into()],
             StringsPkg::ToString => vec!["str::to_string(125.75)".into()],
+            StringsPkg::ToUppercase => vec!["'Hello'::to_uppercase".into()],
+            StringsPkg::Trim => vec!["' hello '::trim".into()],
         }
     }
 
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
+            // one-parameter (string)
+            StringsPkg::Len
+            | StringsPkg::ToLowercase
+            | StringsPkg::ToUppercase
+            | StringsPkg::Trim => vec![StringType],
             // two-parameter (string, string)
             StringsPkg::EndsWith
             | StringsPkg::Format
@@ -2597,7 +2901,6 @@ impl Package for StringsPkg {
             StringsPkg::IndexOf | StringsPkg::Left | StringsPkg::Right => {
                 vec![StringType, NumberType(I64Kind)]
             }
-            StringsPkg::Len => vec![StringType],
             // two-parameter (array, string)
             StringsPkg::Join => vec![
                 ArrayType(UnresolvedType.into()), StringType
@@ -2605,6 +2908,7 @@ impl Package for StringsPkg {
             // three-parameter (string, i64, i64)
             StringsPkg::Substring => vec![StringType, NumberType(I64Kind), NumberType(I64Kind)],
             StringsPkg::SuperScript => vec![NumberType(I64Kind)],
+            StringsPkg::ToChars => vec![],
             StringsPkg::ToString => vec![UnresolvedType],
         }
     }
@@ -2613,19 +2917,24 @@ impl Package for StringsPkg {
         match self {
             // Boolean
             StringsPkg::EndsWith | StringsPkg::StartsWith => BooleanType,
+            // String
             StringsPkg::Format
             | StringsPkg::Join
             | StringsPkg::Left
             | StringsPkg::Right
             | StringsPkg::StripMargin
             | StringsPkg::Substring
-            | StringsPkg::ToString => StringType,
+            | StringsPkg::SuperScript
+            | StringsPkg::ToLowercase
+            | StringsPkg::ToString
+            | StringsPkg::ToUppercase
+            | StringsPkg::Trim => StringType,
             // Number
             StringsPkg::IndexOf | StringsPkg::Len => NumberType(I64Kind),
-            // Array
+            // Array of String
             StringsPkg::Split => ArrayType(StringType.into()),
-            // String
-            StringsPkg::SuperScript => StringType,
+            // Array of Char
+            StringsPkg::ToChars => ArrayType(CharType.into()),
         }
     }
 
@@ -2647,9 +2956,11 @@ impl Package for StringsPkg {
             StringsPkg::StripMargin => extract_value_fn2(ms, args, Self::do_str_strip_margin),
             StringsPkg::Substring => extract_value_fn3(ms, args, Self::do_str_substring),
             StringsPkg::SuperScript => extract_value_fn1(ms, args, Self::do_str_superscript),
-            StringsPkg::ToString => {
-                extract_value_fn1(ms, args, |ms, v| Ok((ms, StringValue(v.unwrap_value()))))
-            }
+            StringsPkg::ToChars => extract_value_fn1(ms, args, Self::do_str_to_chars),
+            StringsPkg::ToLowercase => extract_value_fn1(ms, args, Self::do_str_to_lowercase),
+            StringsPkg::ToString => extract_value_fn1(ms, args, Self::do_str_to_string),
+            StringsPkg::ToUppercase => extract_value_fn1(ms, args, Self::do_str_to_uppercase),
+            StringsPkg::Trim => extract_value_fn1(ms, args, Self::do_str_trim),
         }
     }
 }
@@ -2669,6 +2980,7 @@ pub enum ToolsPkg {
     Reverse,
     RowId,
     Scan,
+    Shuffle,
     ToArray,
     ToCSV,
     ToJSON,
@@ -2697,13 +3009,9 @@ impl ToolsPkg {
         let df = table.to_dataframe()?;
         let columns = df.get_columns();
         let (row, _) = df.read_row(offset)?;
-        Ok((
-            ms,
-            TableValue(Model(ModelRowCollection::from_columns_and_rows(
-                columns,
-                &vec![row],
-            ))),
-        ))
+        Ok((ms, TableValue(ModelTable(ModelRowCollection::from_columns_and_rows(
+            columns, &vec![row],
+        )))))
     }
 
     pub fn do_tools_filter(
@@ -2726,7 +3034,7 @@ impl ToolsPkg {
                     TheArray(array) => PackageOps::apply_fn_over_array(ms, &array, function, filter),
                     TheDataframe(df) => PackageOps::apply_fn_over_table(ms, &df, function, filter),
                     TheRange(..) => Self::do_tools_filter(ms, &items.to_array(), function),
-                    TheTuple(..) => throw(TypeMismatch(SequenceExpected(items.get_type()))),
+                    TheTuple(..) => Self::do_tools_filter(ms, &items.to_array(), function),
                 }
             }
             z => throw(TypeMismatch(TypeMismatchErrors::FunctionExpected(
@@ -2778,11 +3086,9 @@ impl ToolsPkg {
                     })
                 }
                 TheRange(..) => Self::do_tools_map(ms, &items.to_array(), function),
-                TheTuple(..) => throw(TypeMismatch(SequenceExpected(items.get_type()))),
+                TheTuple(..) => Self::do_tools_map(ms, &items.to_array(), function),
             },
-            z => throw(TypeMismatch(TypeMismatchErrors::FunctionExpected(
-                z.to_code(),
-            ))),
+            z => throw(TypeMismatch(FunctionExpected(z.to_code()))),
         }
     }
 
@@ -2883,7 +3189,12 @@ impl ToolsPkg {
             .map(|row| df.get_columns().to_owned())
             .unwrap_or(Vec::new());
         let mrc = ModelRowCollection::from_columns_and_rows(&columns, &rows);
-        Ok((ms, TableValue(Model(mrc))))
+        Ok((ms, TableValue(ModelTable(mrc))))
+    }
+    
+    fn do_tools_shuffle(ms: Machine, tv_table: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        let mut df = tv_table.to_dataframe()?;
+        Ok((ms, Boolean(df.shuffle()?)))
     }
 
     fn do_tools_to_csv(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
@@ -2930,7 +3241,7 @@ impl ToolsPkg {
         let columns = rc.get_columns();
         let rows = rc.read_active_rows()?;
         let mrc = ModelRowCollection::from_columns_and_rows(columns, &rows);
-        Ok((ms, TableValue(Model(mrc))))
+        Ok((ms, TableValue(ModelTable(mrc))))
     }
 
     pub(crate) fn get_contents() -> Vec<PackageOps> {
@@ -2962,32 +3273,6 @@ impl ToolsPkg {
             Parameter::new("is_nullable", BooleanType),
         ]
     }
-
-    pub fn invoke(
-        name: &str,
-        ms: Machine,
-        args: Vec<TypedValue>,
-    ) -> std::io::Result<(Machine, TypedValue)> {
-        let pkg_op = match name {
-            "compact" => ToolsPkg::Compact,
-            "describe" => ToolsPkg::Describe,
-            "fetch" => ToolsPkg::Fetch,
-            "filter" => ToolsPkg::Filter,
-            "len" => ToolsPkg::Len,
-            "map" => ToolsPkg::Map,
-            "pop" => ToolsPkg::Pop,
-            "push" => ToolsPkg::Push,
-            "reverse" => ToolsPkg::Reverse,
-            "row_id" => ToolsPkg::RowId,
-            "scan" => ToolsPkg::Scan,
-            "to_array" => ToolsPkg::ToArray,
-            "to_csv" => ToolsPkg::ToCSV,
-            "to_json" => ToolsPkg::ToJSON,
-            "to_table" => ToolsPkg::ToTable,
-            other => return throw(Exact(format!("Function {} not found", other)))
-        };
-        pkg_op.evaluate(ms, args)
-    }
 }
 
 impl Package for ToolsPkg {
@@ -3005,6 +3290,7 @@ impl Package for ToolsPkg {
             ToolsPkg::Reverse => "reverse",
             ToolsPkg::RowId => "row_id",
             ToolsPkg::Scan => "scan",
+            ToolsPkg::Shuffle => "shuffle",
             ToolsPkg::ToArray => "to_array",
             ToolsPkg::ToCSV => "to_csv",
             ToolsPkg::ToJSON => "to_json",
@@ -3030,6 +3316,7 @@ impl Package for ToolsPkg {
             ToolsPkg::Reverse => "Returns a reverse copy of a table, string or array",
             ToolsPkg::RowId => "Returns the unique ID for the last retrieved row",
             ToolsPkg::Scan => "Returns existence metadata for a table",
+            ToolsPkg::Shuffle => "Shuffles a collection in random order",
             ToolsPkg::ToArray => "Converts a collection into an array",
             ToolsPkg::ToCSV => "Converts a collection to CSV format",
             ToolsPkg::ToJSON => "Converts a collection to JSON format",
@@ -3198,6 +3485,18 @@ impl Package for ToolsPkg {
                     |stocks:::scan()
                 "#, '|')
             ],
+            ToolsPkg::Shuffle => vec![
+                strip_margin(r#"
+                    |stocks = [
+                    |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
+                    |   { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+                    |   { symbol: "BIZ", exchange: "NYSE", last_sale: 9.775 },
+                    |   { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
+                    |   { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }
+                    |]
+                    |stocks:::shuffle()
+                "#, '|')                
+            ],
             ToolsPkg::ToArray => vec![
                 r#"tools::to_array("Hello")"#.into()
             ],
@@ -3258,6 +3557,7 @@ impl Package for ToolsPkg {
                 vec![UnresolvedType, UnresolvedType]
             }
             ToolsPkg::RowId => vec![],
+            ToolsPkg::Shuffle => vec![BooleanType],
             ToolsPkg::ToTable => vec![UnresolvedType],
         }
     }
@@ -3280,7 +3580,9 @@ impl Package for ToolsPkg {
             | ToolsPkg::ToArray => TableType(vec![]),
             // row|structure
             ToolsPkg::Pop => StructureType(vec![]),
-            ToolsPkg::Push => BooleanType,
+            // bool
+            ToolsPkg::Push 
+            | ToolsPkg::Shuffle => BooleanType,
         }
     }
 
@@ -3302,6 +3604,7 @@ impl Package for ToolsPkg {
             ToolsPkg::Reverse => extract_value_fn1(ms, args, Self::do_tools_reverse),
             ToolsPkg::RowId => extract_value_fn0(ms, args, Self::do_tools_row_id),
             ToolsPkg::Scan => extract_value_fn1(ms, args, Self::do_tools_scan),
+            ToolsPkg::Shuffle => extract_value_fn1(ms, args, Self::do_tools_shuffle),
             ToolsPkg::ToArray => extract_array_fn1(ms, args, |a| ArrayValue(a)),
             ToolsPkg::ToCSV => extract_value_fn1(ms, args, Self::do_tools_to_csv),
             ToolsPkg::ToJSON => extract_value_fn1(ms, args, Self::do_tools_to_json),
@@ -3313,8 +3616,8 @@ impl Package for ToolsPkg {
 /// Utils package
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum UtilsPkg {
+    Base62,
     Base64,
-    Binary,
     Gzip,
     Gunzip,
     Hex,
@@ -3322,11 +3625,14 @@ pub enum UtilsPkg {
     Round,
     To,
     ToASCII,
+    ToBinary,
     ToDate,
     ToF64,
     ToI64,
     ToI128,
     ToU128,
+    UnBase62,
+    UnBase64,
 }
 
 impl UtilsPkg {
@@ -3345,7 +3651,21 @@ impl UtilsPkg {
         }
     }
 
-    fn do_util_base64(ms: Machine, a: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+    fn do_util_base62_decode(ms: Machine, a: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        let v = base62::decode(a.to_bytes()).map_err(|e| cnv_error!(e))?;
+        Ok((ms, ByteStringValue(v.to_be_bytes().to_vec())))
+    }
+
+    fn do_util_base62_encode(ms: Machine, a: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(base62::encode(a.to_u128()))))
+    }
+
+    fn do_util_base64_decode(ms: Machine, a: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
+        let bytes = base64::decode(a.to_bytes()).map_err(|e| cnv_error!(e))?;
+        Ok((ms, ByteStringValue(bytes)))
+    }
+
+    fn do_util_base64_encode(ms: Machine, a: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
         Ok((ms, StringValue(base64::encode(a.to_bytes()))))
     }
 
@@ -3358,7 +3678,7 @@ impl UtilsPkg {
         use flate2::Compression;
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
         encoder.write_all(a.to_bytes().as_slice())?;
-        Ok((ms, BinaryValue(encoder.finish()?.to_vec())))
+        Ok((ms, ByteStringValue(encoder.finish()?.to_vec())))
     }
 
     fn do_util_gunzip(ms: Machine, a: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
@@ -3367,7 +3687,7 @@ impl UtilsPkg {
         let mut decoder = GzDecoder::new(bytes.as_slice());
         let mut output = Vec::new();
         decoder.read_to_end(&mut output)?;
-        Ok((ms, BinaryValue(output)))
+        Ok((ms, ByteStringValue(output)))
     }
 
     fn do_util_numeric_conv(
@@ -3388,7 +3708,7 @@ impl UtilsPkg {
 
     fn do_util_md5(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
         match md5::compute(value.to_bytes()) {
-            md5::Digest(bytes) => Ok((ms, BinaryValue(bytes.to_vec()))),
+            md5::Digest(bytes) => Ok((ms, ByteStringValue(bytes.to_vec()))),
         }
     }
 
@@ -3413,10 +3733,7 @@ impl UtilsPkg {
     }
 
     fn do_util_to_hex(ms: Machine, value: &TypedValue) -> std::io::Result<(Machine, TypedValue)> {
-        Ok((
-            ms,
-            StringValue(format!("{}", StringValue(hex::encode(value.to_bytes())))),
-        ))
+        Ok((ms, StringValue(format!("{}", StringValue(hex::encode(value.to_bytes()))))))
     }
     
     fn do_util_to_xxx(
@@ -3432,8 +3749,9 @@ impl UtilsPkg {
 
     pub(crate) fn get_contents() -> Vec<PackageOps> {
         vec![
+            PackageOps::Utils(UtilsPkg::Base62),
             PackageOps::Utils(UtilsPkg::Base64),
-            PackageOps::Utils(UtilsPkg::Binary),
+            PackageOps::Utils(UtilsPkg::ToBinary),
             PackageOps::Utils(UtilsPkg::Gzip),
             PackageOps::Utils(UtilsPkg::Gunzip),
             PackageOps::Utils(UtilsPkg::Hex),
@@ -3446,6 +3764,8 @@ impl UtilsPkg {
             PackageOps::Utils(UtilsPkg::ToI64),
             PackageOps::Utils(UtilsPkg::ToI128),
             PackageOps::Utils(UtilsPkg::ToU128),
+            PackageOps::Utils(UtilsPkg::UnBase62),
+            PackageOps::Utils(UtilsPkg::UnBase64),
         ]
     }
 }
@@ -3453,8 +3773,9 @@ impl UtilsPkg {
 impl Package for UtilsPkg {
     fn get_name(&self) -> String {
         (match self {
+            UtilsPkg::Base62 => "base62",
             UtilsPkg::Base64 => "base64",
-            UtilsPkg::Binary => "to_binary",
+            UtilsPkg::ToBinary => "to_binary",
             UtilsPkg::Gzip => "gzip",
             UtilsPkg::Gunzip => "gunzip",
             UtilsPkg::Hex => "hex",
@@ -3467,6 +3788,8 @@ impl Package for UtilsPkg {
             UtilsPkg::ToI64 => "to_i64",
             UtilsPkg::ToI128 => "to_i128",
             UtilsPkg::ToU128 => "to_u128",
+            UtilsPkg::UnBase62 => "unbase62",
+            UtilsPkg::UnBase64 => "unbase64",
         }).into()
     }
 
@@ -3476,8 +3799,9 @@ impl Package for UtilsPkg {
 
     fn get_description(&self) -> String {
         (match self {
+            UtilsPkg::Base62 => "Converts ASCII to Base62",
             UtilsPkg::Base64 => "Translates bytes into Base 64",
-            UtilsPkg::Binary => "Translates a numeric value into binary",
+            UtilsPkg::ToBinary => "Translates a numeric value into binary",
             UtilsPkg::Gzip => "Compresses bytes via gzip",
             UtilsPkg::Gunzip => "Decompresses bytes via gzip",
             UtilsPkg::Hex => "Translates bytes into hexadecimal",
@@ -3490,13 +3814,18 @@ impl Package for UtilsPkg {
             UtilsPkg::ToI64 => "Converts a value to i64",
             UtilsPkg::ToI128 => "Converts a value to i128",
             UtilsPkg::ToU128 => "Converts a value to u128",
+            UtilsPkg::UnBase62 => "Converts a Base62 string to binary",
+            UtilsPkg::UnBase64 => "Converts a Base64 string to binary",
         }).into()
     }
 
     fn get_examples(&self) -> Vec<String> {
         match self {
+            UtilsPkg::Base62 => vec![
+                "util::base62('Hello World')".into()
+            ],
             UtilsPkg::Base64 => vec!["util::base64('Hello World')".into()],
-            UtilsPkg::Binary => vec!["util::to_binary(0b1011 & 0b1101)".into()],
+            UtilsPkg::ToBinary => vec!["util::to_binary(0b1011 & 0b1101)".into()],
             UtilsPkg::Gzip => vec!["util::gzip('Hello World')".into()],
             UtilsPkg::Gunzip => vec!["util::gunzip(util::gzip('Hello World'))".into()],
             UtilsPkg::Hex => vec!["util::hex('Hello World')".into()],
@@ -3509,6 +3838,12 @@ impl Package for UtilsPkg {
             UtilsPkg::ToI64 => vec!["util::to_i64(88)".into()],
             UtilsPkg::ToI128 => vec!["util::to_i128(88)".into()],
             UtilsPkg::ToU128 => vec!["util::to_u128(88)".into()],
+            UtilsPkg::UnBase62 => vec![
+                "util::unbase62(util::base62('Hello World'))::to_string".into()
+            ],
+            UtilsPkg::UnBase64 => vec![
+                "util::unbase64(util::base64('Hello World'))::to_string".into()
+            ],
         }
     }
 
@@ -3522,8 +3857,13 @@ impl Package for UtilsPkg {
 
     fn get_return_type(&self) -> DataType {
         match self {
-            UtilsPkg::Gzip | UtilsPkg::Gunzip => BinaryType,
-            UtilsPkg::MD5 => FixedSizeType(BinaryType.into(), 16),
+            UtilsPkg::Base62
+            | UtilsPkg::Base64
+            | UtilsPkg::ToBinary
+            | UtilsPkg::ToASCII
+            | UtilsPkg::Hex => StringType,
+            UtilsPkg::Gzip | UtilsPkg::Gunzip => ByteStringType,
+            UtilsPkg::MD5 => FixedSizeType(ByteStringType.into(), 16),
             UtilsPkg::Round => NumberType(F64Kind),
             UtilsPkg::ToDate => DateTimeType,
             UtilsPkg::To => UnresolvedType,
@@ -3531,9 +3871,7 @@ impl Package for UtilsPkg {
             UtilsPkg::ToI64 => NumberType(I64Kind),
             UtilsPkg::ToI128 => NumberType(I128Kind),
             UtilsPkg::ToU128 => NumberType(U128Kind),
-            UtilsPkg::Base64 | UtilsPkg::Binary | UtilsPkg::ToASCII | UtilsPkg::Hex => {
-                StringType
-            }
+            UtilsPkg::UnBase62 | UtilsPkg::UnBase64 => ByteStringType,
         }
     }
 
@@ -3543,8 +3881,9 @@ impl Package for UtilsPkg {
         args: Vec<TypedValue>,
     ) -> std::io::Result<(Machine, TypedValue)> {
         match self {
-            UtilsPkg::Base64 => extract_value_fn1(ms, args, Self::do_util_base64),
-            UtilsPkg::Binary => extract_value_fn1(ms, args, Self::do_util_binary),
+            UtilsPkg::Base62 => extract_value_fn1(ms, args, Self::do_util_base62_encode),
+            UtilsPkg::Base64 => extract_value_fn1(ms, args, Self::do_util_base64_encode),
+            UtilsPkg::ToBinary => extract_value_fn1(ms, args, Self::do_util_binary),
             UtilsPkg::Gzip => extract_value_fn1(ms, args, Self::do_util_gzip),
             UtilsPkg::Gunzip => extract_value_fn1(ms, args, Self::do_util_gunzip),
             UtilsPkg::Hex => extract_value_fn1(ms, args, Self::do_util_to_hex),
@@ -3557,6 +3896,8 @@ impl Package for UtilsPkg {
             UtilsPkg::ToI64 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
             UtilsPkg::ToI128 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
             UtilsPkg::ToU128 => self.adapter_pf_fn1(ms, args, Self::do_util_numeric_conv),
+            UtilsPkg::UnBase62 => extract_value_fn1(ms, args, Self::do_util_base62_decode),
+            UtilsPkg::UnBase64 => extract_value_fn1(ms, args, Self::do_util_base64_decode),
         }
     }
 }
@@ -3885,8 +4226,7 @@ mod tests {
 
         #[test]
         fn test_cal_now() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 cal::now()
             "#,
                 |n| matches!(n, DateValue(..)),
@@ -3895,8 +4235,7 @@ mod tests {
 
         #[test]
         fn test_cal_day_of() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 use cal
                 now():::day_of
             "#,
@@ -3906,8 +4245,7 @@ mod tests {
 
         #[test]
         fn test_cal_hour24() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 use cal
                 now():::hour24
             "#,
@@ -3917,8 +4255,7 @@ mod tests {
 
         #[test]
         fn test_cal_hour12() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 use cal
                 now():::hour12
             "#,
@@ -3928,8 +4265,7 @@ mod tests {
 
         #[test]
         fn test_cal_minute_of() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 use cal
                 now():::minute_of
             "#,
@@ -3939,8 +4275,7 @@ mod tests {
 
         #[test]
         fn test_cal_month_of() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 use cal
                 now():::month_of
             "#,
@@ -3950,8 +4285,7 @@ mod tests {
 
         #[test]
         fn test_cal_second_of() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 use cal
                 now():::second_of
             "#,
@@ -3961,8 +4295,7 @@ mod tests {
 
         #[test]
         fn test_cal_year_of() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 use cal
                 now():::year_of
             "#,
@@ -3972,8 +4305,7 @@ mod tests {
 
         #[test]
         fn test_cal_minus() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 use cal, durations
                 cal::minus(now(), 3:::days)
             "#,
@@ -3983,8 +4315,7 @@ mod tests {
 
         #[test]
         fn test_cal_plus() {
-            verify_exact_value_where(
-                r#"
+            verify_exact_value_where(r#"
                 use cal, durations
                 cal::plus(now(), 30:::days)
             "#,
@@ -4004,8 +4335,7 @@ mod tests {
 
         #[test]
         fn test_durations_days() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use durations
                 3:::days
             "#,
@@ -4015,8 +4345,7 @@ mod tests {
 
         #[test]
         fn test_durations_hours() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use durations
                 8:::hours
             "#,
@@ -4026,8 +4355,7 @@ mod tests {
 
         #[test]
         fn test_durations_hours_f64() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use durations
                 0.5:::hours
             "#,
@@ -4037,8 +4365,7 @@ mod tests {
 
         #[test]
         fn test_durations_millis() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use durations
                 1000:::millis
             "#,
@@ -4048,8 +4375,7 @@ mod tests {
 
         #[test]
         fn test_durations_minutes() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use durations
                 30:::minutes
             "#,
@@ -4059,8 +4385,7 @@ mod tests {
 
         #[test]
         fn test_durations_seconds() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use durations
                 20:::seconds
             "#,
@@ -4477,7 +4802,7 @@ mod tests {
                 file = "temp_secret.txt"
                 file:::create_file(md5("**keep**this**secret**"))
                 file:::read_text_file()
-            "#, StringValue("0v47338bd5f35bbb239092c36e30775b4a".into()))
+            "#, StringValue("0H47338bd5f35bbb239092c36e30775b4a".into()))
         }
 
         #[test]
@@ -4582,7 +4907,7 @@ mod tests {
     /// Package "nsd" tests
     #[cfg(test)]
     mod nsd_tests {
-        use crate::dataframe::Dataframe::Disk;
+        use crate::dataframe::Dataframe::DiskTable;
         use crate::interpreter::Interpreter;
         use crate::numbers::Numbers::I64Value;
         use crate::testdata::{verify_exact_code_with, verify_exact_table_with, verify_exact_value_whence, verify_exact_value_where, verify_exact_value_with};
@@ -4744,7 +5069,7 @@ mod tests {
                     exchange: String(8),
                     last_sale: f64
                 ))
-            "#, |df| matches!(df, TableValue(Disk(..))))
+            "#, |df| matches!(df, TableValue(DiskTable(..))))
         }
 
         #[test]
@@ -4947,7 +5272,7 @@ mod tests {
         #[test]
         fn test_oxide_uuid_from_binary() {
             verify_exact_value(
-                r#"oxide::uuid(0vfeeddeadbeefdeaffadecafebabeface)"#,
+                r#"oxide::uuid(0Hfeeddeadbeefdeaffadecafebabeface)"#,
                 UUIDValue(0xfeeddead_beef_deaf_fade_cafebabeface))
         }
 
@@ -5873,8 +6198,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_array_with_tuples_qualified() {
-            verify_exact_code(
-                r#"
+            verify_exact_code(r#"
                  tools::to_array(("a", "b", "c"))
             "#,
                 r#"["a", "b", "c"]"#,
@@ -5883,33 +6207,31 @@ mod tests {
 
         #[test]
         fn test_tools_to_array_with_strings_qualified() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                  tools::to_array("Hello")
             "#,
                 ArrayValue(Array::from(vec![
-                    StringValue("H".into()),
-                    StringValue("e".into()),
-                    StringValue("l".into()),
-                    StringValue("l".into()),
-                    StringValue("o".into()),
+                    CharValue('H'.into()),
+                    CharValue('e'.into()),
+                    CharValue('l'.into()),
+                    CharValue('l'.into()),
+                    CharValue('o'.into()),
                 ])),
             );
         }
 
         #[test]
         fn test_tools_to_array_with_strings_postfix() {
-            verify_exact_value(
-                r#"
+            verify_exact_value(r#"
                 use tools
                 "World":::to_array()
             "#,
                 ArrayValue(Array::from(vec![
-                    StringValue("W".into()),
-                    StringValue("o".into()),
-                    StringValue("r".into()),
-                    StringValue("l".into()),
-                    StringValue("d".into()),
+                    CharValue('W'.into()),
+                    CharValue('o'.into()),
+                    CharValue('r'.into()),
+                    CharValue('l'.into()),
+                    CharValue('d'.into()),
                 ])),
             );
         }
@@ -5919,8 +6241,7 @@ mod tests {
             // fully qualified
             let mut interpreter = Interpreter::new();
             let result = interpreter
-                .evaluate(
-                    r#"
+                .evaluate(r#"
                  tools::to_array(tools::to_table([
                      { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                      { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
@@ -6014,8 +6335,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_table_with_arrays() {
-            verify_exact_table(
-                r#"
+            verify_exact_table(r#"
                 tools::to_table(['cat', 'dog', 'ferret', 'mouse'])
             "#,
                 vec![
@@ -6033,8 +6353,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_table_with_hard_structures() {
-            verify_exact_table(
-                r#"
+            verify_exact_table(r#"
                 tools::to_table(Struct::new(
                     symbol: String(8) = "ABC",
                     exchange: String(8) = "NYSE",
@@ -6053,8 +6372,7 @@ mod tests {
 
         #[test]
         fn test_tools_to_table_with_soft_and_hard_structures() {
-            verify_exact_table(
-                r#"
+            verify_exact_table(r#"
                 stocks = tools::to_table([
                     { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
                     { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
@@ -6089,12 +6407,20 @@ mod tests {
     #[cfg(test)]
     mod util_tests {
         use super::*;
-        use crate::data_types::DataType::BinaryType;
+        use crate::data_types::DataType::ByteStringType;
         use crate::interpreter::Interpreter;
         use crate::platform::PackageOps;
         use crate::testdata::*;
         use crate::typed_values::TypedValue::*;
         use PackageOps::*;
+
+        #[test]
+        fn test_util_base62() {
+            verify_exact_value(
+                "util::base62('Hello World')",
+                StringValue("73XpUgyMwkGr29M".into()),
+            )
+        }
 
         #[test]
         fn test_util_base64() {
@@ -6109,7 +6435,7 @@ mod tests {
             verify_exact_value(r#"
                 compressed = util::gzip('Hello World')
                 util::gunzip(compressed)
-            "#, BinaryValue(b"Hello World".to_vec()))
+            "#, ByteStringValue(b"Hello World".to_vec()))
         }
 
         #[test]
@@ -6124,13 +6450,13 @@ mod tests {
         fn test_util_md5() {
             verify_exact_code(
                 "util::md5('Hello World')",
-                "0vb10a8db164e0754105b7a99be72e3fe5",
+                "0Hb10a8db164e0754105b7a99be72e3fe5",
             )
         }
 
         #[test]
         fn test_util_md5_type() {
-            verify_data_type("util::md5(a)", FixedSizeType(BinaryType.into(), 16));
+            verify_data_type("util::md5(a)", FixedSizeType(ByteStringType.into(), 16));
         }
 
         #[test]
@@ -6149,6 +6475,14 @@ mod tests {
         }
 
         #[test]
+        fn test_util_to_string_number() {
+            verify_exact_code(r#"
+                use util
+                "8":::to(i64())
+            "#, r#"8"#)
+        }
+
+        #[test]
         fn test_util_to_string_array() {
             verify_exact_code(r#"
                 use util
@@ -6160,8 +6494,8 @@ mod tests {
         fn test_util_to_string_binary() {
             verify_exact_code(r#"
                 use util
-                "Hello there":::to(Binary())
-            "#, "0v48656c6c6f207468657265")
+                "Hello there":::to(ByteString())
+            "#, "0H48656c6c6f207468657265")
         }
 
         #[test]
@@ -6213,6 +6547,28 @@ mod tests {
                 interpreter.get("to_u128"),
                 Some(PlatformOp(PackageOps::Utils(UtilsPkg::ToU128)))
             );
+        }
+
+        #[test]
+        fn test_util_unbase62() {
+            verify_exact_value(r#"
+                util::unbase62(util::base62('Hello World'))
+            "#, ByteStringValue(b"\0\0\0\0\0Hello World".into()));
+            
+            verify_exact_value(r#"
+                util::unbase62(util::base62('little brown fox'))
+            "#, ByteStringValue(b"little brown fox".into()));
+        }
+
+        #[test]
+        fn test_util_unbase64() {
+            verify_exact_value(r#"
+                util::unbase64(util::base64('Hello World'))
+            "#, ByteStringValue(b"Hello World".into()));
+            
+            verify_exact_value(
+                "util::unbase64(util::base64('little brown fox'))",
+                ByteStringValue(b"little brown fox".into()));
         }
     }
 

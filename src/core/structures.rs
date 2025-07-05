@@ -9,7 +9,7 @@ use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::data_types::DataType::StructureType;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::Exact;
 use crate::expression::Conditions;
@@ -17,6 +17,7 @@ use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
+use crate::row_collection::RowCollection;
 use crate::sequences::{Array, Tuple};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
@@ -103,6 +104,13 @@ pub trait Structure {
             })
     }
 
+    /// Returns a vector of tuples
+    fn to_name_value_tuples(&self) -> Vec<TypedValue>{
+        self.to_name_values().iter()
+            .map(|(name, value)| TupleValue(vec![StringValue(name.into()), value.clone()]))
+            .collect::<Vec<TypedValue>>()
+    }
+
     fn to_pretty_json(&self) -> std::io::Result<String> {
         let value = self.to_json();
         serde_json::to_string_pretty(&value).map_err(|e| cnv_error!(e))
@@ -137,10 +145,15 @@ pub enum Structures {
 }
 
 impl Structures {
+    pub fn is_pure(&self) -> bool {
+        let values = self.get_values();
+        values.iter().all(|v| v.is_pure())
+    }
+    
     pub fn to_dataframe(&self) -> Dataframe {
         match self {
             Self::Firm(row, params) => row.to_dataframe(params),
-            s => Model(ModelRowCollection::from_parameters_and_rows(
+            s => ModelTable(ModelRowCollection::from_parameters_and_rows(
                 &s.get_parameters(),
                 &vec![Row::new(0, s.get_values())])),
         }
@@ -654,6 +667,11 @@ impl Row {
 
     pub fn get_id(&self) -> usize { self.id }
 
+    pub fn is_pure(&self) -> bool {
+        let values = self.get_values();
+        values.iter().all(|v| v.is_pure())
+    }
+
     pub fn matches(
         &self,
         machine: &Machine,
@@ -719,7 +737,7 @@ impl Row {
     }
 
     pub fn to_dataframe(&self, params: &Vec<Parameter>) -> Dataframe {
-        Model(ModelRowCollection::from_parameters_and_rows(params, &vec![self.clone()]))
+        ModelTable(ModelRowCollection::from_parameters_and_rows(params, &vec![self.clone()]))
     }
 
     /// Transforms the row into JSON format
@@ -919,7 +937,7 @@ mod tests {
     mod common_tests {
         use crate::columns::Column;
         use crate::compiler::Compiler;
-        use crate::dataframe::Dataframe::Model;
+        use crate::dataframe::Dataframe::ModelTable;
         use crate::errors::Errors::Exact;
         use crate::interpreter::Interpreter;
         use crate::model_row_collection::ModelRowCollection;
@@ -1050,7 +1068,7 @@ mod tests {
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
             )
-            stock::symbol
+            stock.symbol
         "#, StringValue("ABC".into()));
         }
 
@@ -1062,8 +1080,8 @@ mod tests {
                 exchange: String = "NYSE",
                 last_sale: f64 = 23.67
             )
-            stock::last_sale = 24.11
-            stock::last_sale
+            stock.last_sale = 24.11
+            stock.last_sale
         "#, Number(F64Value(24.11)));
         }
 
@@ -1077,18 +1095,18 @@ mod tests {
                 last_sale: f64 = 23.67
             )
             mod stock {
-                fn is_this_you(symbol) -> symbol is self::symbol
+                fn is_this_you(symbol) -> symbol is self.symbol
             }
             "#, "true");
 
             // verify the positive case
             interpreter = verify_exact_code_with(interpreter,r#"
-                stock::is_this_you('ABC')
+                stock.is_this_you('ABC')
             "#, "true");
 
             // verify the negative case
             verify_exact_code_with(interpreter,r#"
-                stock::is_this_you('XYZ')
+                stock.is_this_you('XYZ')
             "#, "false");
         }
 
@@ -1146,7 +1164,7 @@ mod tests {
         fn test_soft_structure_field() {
             verify_exact_code(r#"
             stock = { symbol:"AAA", price:123.45 }
-            stock::symbol
+            stock.symbol
         "#, "\"AAA\"".into());
         }
 
@@ -1154,8 +1172,8 @@ mod tests {
         fn test_soft_structure_field_assignment() {
             verify_exact_code(r#"
             stock = { symbol:"AAA", price:123.45 }
-            stock::price = 124.11
-            stock::price
+            stock.price = 124.11
+            stock.price
         "#, "124.11");
         }
 
@@ -1167,18 +1185,18 @@ mod tests {
                     symbol:"ABC",
                     price:123.45,
                     last_sale: 23.67,
-                    is_this_you: (symbol -> symbol == self::symbol)
+                    is_this_you: (symbol -> symbol == self.symbol)
                 }
             "#, "true");
 
             // verify the positive case
             interpreter = verify_exact_code_with(interpreter,r#"
-                stock::is_this_you('ABC')
+                stock.is_this_you('ABC')
             "#, "true");
 
             // verify the negative case
             verify_exact_code_with(interpreter,r#"
-                stock::is_this_you('XYZ')
+                stock.is_this_you('XYZ')
             "#, "false");
         }
 
@@ -1192,18 +1210,18 @@ mod tests {
                     last_sale: 23.67
                 }
                 mod stock {
-                    fn is_this_you(symbol) -> symbol == self::symbol
+                    fn is_this_you(symbol) -> symbol == self.symbol
                 }
             "#, "true");
             
             // verify the positive case
             interpreter = verify_exact_code_with(interpreter,r#"
-                stock::is_this_you('ABC')
+                stock.is_this_you('ABC')
             "#, "true");
 
             // verify the negative case
             verify_exact_code_with(interpreter,r#"
-                stock::is_this_you('XYZ')
+                stock.is_this_you('XYZ')
             "#, "false");
         }
 
@@ -1303,7 +1321,7 @@ mod tests {
             mod abc {
                 fn hello(name) -> str::format("hello {}", name)
             }
-            abc::hello('world')
+            abc.hello('world')
         "#, StringValue("hello world".into()));
         }
     }

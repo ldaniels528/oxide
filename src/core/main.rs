@@ -15,7 +15,6 @@ use shared_lib::cnv_error;
 use std::env;
 use std::string::ToString;
 
-mod base62;
 mod blob_file_row_collection;
 mod blobs;
 mod byte_code_compiler;
@@ -50,7 +49,6 @@ mod repl;
 mod row_collection;
 mod row_metadata;
 mod sequences;
-mod server;
 mod sprintf;
 mod structures;
 mod table_renderer;
@@ -110,7 +108,8 @@ fn main() -> std::io::Result<()> {
         .init();
 
     // start the REPL 
-    repl::do_terminal(REPLState::new(), env::args().collect(), || read_line_from_stdin())
+    //repl::do_terminal(REPLState::new(), env::args().collect(), || read_line_from_stdin())
+    repl::do_terminal_bash_like(REPLState::new(), env::args().collect())
 }
 
 // Start the Oxide terminal (embedded or remote server)

@@ -321,7 +321,7 @@ true
 <pre>HEAD http://localhost:8855/readme/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "80", content-type: "application/json", date: "Fri, 27 Jun 2025 18:15:22 GMT"}
+{content-length: "80", content-type: "application/json", date: "Thu, 03 Jul 2025 19:58:44 GMT"}
 
 </pre>
 <h5>example⁵</h5>

@@ -95,6 +95,7 @@ pub enum TypeMismatchErrors {
     StructsOneOrMoreExpected,
     TableExpected(String),
     TupleExpected(String),
+    TypeIdentifierExpected(String),
     UnexpectedResult(String),
     UnrecognizedTypeName(String),
     UnsupportedType(DataType, DataType),
@@ -150,6 +151,8 @@ impl Display for TypeMismatchErrors {
                 format!("{a} is not a Table"),
             TypeMismatchErrors::TupleExpected(a) =>
                 format!("{a} is not a Tuple"),
+            TypeMismatchErrors::TypeIdentifierExpected(a) =>
+                format!("{a} is not a Type identifier"),
             TypeMismatchErrors::UnexpectedResult(result) =>
                 format!("Unexpected result near {result}"),
             TypeMismatchErrors::UnrecognizedTypeName(name) =>
@@ -177,6 +180,7 @@ pub enum Errors {
     Exact(String),
     ExactNear(String, Token),
     HashTableOverflow(usize, String),
+    IdentifierNotFound(String),
     IncompatibleParameters(Vec<Parameter>),
     IndexOutOfRange(String, usize, usize),
     InstantiationError(DataType),
@@ -214,6 +218,8 @@ impl Display for Errors {
                         token.get_line_number(), token.get_column_number()),
             Errors::HashTableOverflow(rid, value) =>
                 format!("Hash table overflow detected (rid: {rid}, key: {value})"),
+            Errors::IdentifierNotFound(name) => 
+                format!("Identifier '{name}' not found"),
             Errors::IncompatibleParameters(params) =>
                 format!("Incompatible parameters: {}", Parameter::render(params)),
             Errors::IndexOutOfRange(name, idx, len) =>

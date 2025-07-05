@@ -7,7 +7,7 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::{ArrayType, NumberType, TableType, UnresolvedType};
 use crate::data_types::DataType::{FixedSizeType, TupleType};
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::{Exact, TypeMismatch, UnsupportedFeature};
 use crate::errors::TypeMismatchErrors::StructExpected;
@@ -68,7 +68,16 @@ pub enum Sequences {
     TheTuple(Vec<TypedValue>),
 }
 
-impl Sequences {}
+impl Sequences {
+    pub fn is_pure(&self) -> bool {
+        match self {
+            Self::TheArray(a) => a.iter().all(|i| i.is_pure()),
+            Self::TheDataframe(_) => false,
+            Self::TheRange(a, b, _) => a.is_pure() && b.is_pure(),
+            Self::TheTuple(items) => items.iter().all(|i| i.is_pure())
+        }
+    }
+}
 
 impl Sequence for Sequences {
     fn contains(&self, item: &TypedValue) -> bool {

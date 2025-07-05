@@ -220,7 +220,7 @@ impl QueryEngine {
         
         // return the table
         match container {
-            Identifier(name) => Ok((ms.with_variable(name, TableValue(Model(mrc))), Boolean(true))),
+            Identifier(name) => Ok((ms.with_variable(name, TableValue(ModelTable(mrc))), Boolean(true))),
             other => throw(Exact(other.to_code()))
         }
     }
@@ -366,7 +366,7 @@ impl QueryEngine {
                 // perform the summarization of each dataframe by key
                 let mut partitions = vec![];
                 for mrc in sink.values() {
-                   let (_ms, mdf) = Self::perform_summarization(ms.clone(), Model(mrc.to_owned()), fields.clone(), None, true)?;
+                   let (_ms, mdf) = Self::perform_summarization(ms.clone(), ModelTable(mrc.to_owned()), fields.clone(), None, true)?;
                     partitions.push(mdf)
                 }
                 
@@ -419,7 +419,7 @@ impl QueryEngine {
         let mrc = ModelRowCollection::from_parameters_and_rows(&params, &vec![
             Row::new(0, agg_values)
         ]);
-        Ok((ms, Model(mrc)))
+        Ok((ms, ModelTable(mrc)))
     }
     
     /// Evaluates a transformation query
@@ -465,7 +465,7 @@ impl QueryEngine {
                 mrc.append_row(row);
             }
         }
-        Ok((ms, Model(mrc)))
+        Ok((ms, ModelTable(mrc)))
     }
     
     fn do_table_limit(
@@ -483,7 +483,7 @@ impl QueryEngine {
                 }
                 row_id += 1;
             }
-            Ok((ms, Model(dest)))
+            Ok((ms, ModelTable(dest)))
         } else {
             Ok((ms, src))
         }
@@ -547,7 +547,7 @@ impl QueryEngine {
                 }
             }
         }
-        Ok((ms0.clone(), Model(rc1)))
+        Ok((ms0.clone(), ModelTable(rc1)))
     }
     
     fn build_aggregation_parameters(
@@ -587,7 +587,7 @@ impl QueryEngine {
                             _ => false
                         }
                     }
-                    expr => expr.to_pure().is_ok()
+                    expr => expr.is_pure()
                 }
             _ => false
         })
@@ -818,7 +818,7 @@ impl QueryEngine {
 /// Oxide QL tests
 #[cfg(test)]
 mod tests {
-    use crate::dataframe::Dataframe::Model;
+    use crate::dataframe::Dataframe::ModelTable;
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
     use crate::testdata::*;
@@ -898,7 +898,7 @@ mod tests {
                 exchange: String(8),
                 last_sale: f64
             )
-        "#, TableValue(Model(ModelRowCollection::with_rows(
+        "#, TableValue(ModelTable(ModelRowCollection::with_rows(
             make_quote_columns(), Vec::new(),
         ))))
     }
@@ -946,16 +946,15 @@ mod tests {
         interpreter = verify_exact_table_with(interpreter, r#"
             (faces * suits) limit 5
         "#, vec![
-            "|--------------------|",
-            "| id | face | suit   |",
-            "|--------------------|",
-            "| 0  | 2    | ♥\u{fe0f} |",
-            "| 1  | 2    | ♦\u{fe0f} |",
-            "| 2  | 2    | ♣\u{fe0f} |",
-            "| 3  | 2    | ♠\u{fe0f} |",
-            "| 4  | 3    | ♥\u{fe0f} |",
-            "|--------------------|"
-        ]);
+            "|------------------|", 
+            "| id | face | suit |", 
+            "|------------------|", 
+            "| 0  | 2    | ♥\u{fe0f}   |", 
+            "| 1  | 2    | ♦\u{fe0f}   |", 
+            "| 2  | 2    | ♣\u{fe0f}   |",
+            "| 3  | 2    | ♠\u{fe0f}   |", 
+            "| 4  | 3    | ♥\u{fe0f}   |", 
+            "|------------------|"]);
     }
 
     #[test]
@@ -1451,8 +1450,8 @@ mod tests {
             "|-----------------------------------------------------------------------|",
             "| id | symbol | exchange | price   | symbol_md5                         |",
             "|-----------------------------------------------------------------------|",
-            "| 0  | ABC    | AMEX     | 11.77   | 0v902fbdd2b1df0c4f70b4a5d23525e932 |",
-            "| 1  | GOTO   | OTC      | 24.1428 | 0v4b8bb3c94a9676b5f34ace4d7102e5b9 |",
+            "| 0  | ABC    | AMEX     | 11.77   | 0H902fbdd2b1df0c4f70b4a5d23525e932 |",
+            "| 1  | GOTO   | OTC      | 24.1428 | 0H4b8bb3c94a9676b5f34ace4d7102e5b9 |",
             "|-----------------------------------------------------------------------|"]);
     }
 

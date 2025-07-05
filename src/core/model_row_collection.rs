@@ -246,7 +246,7 @@ impl RowCollection for ModelRowCollection {
 mod tests {
     use crate::byte_code_compiler::ByteCodeCompiler;
     use crate::columns::Column;
-    use crate::dataframe::Dataframe::Model;
+    use crate::dataframe::Dataframe::ModelTable;
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::I64Value;
     use crate::row_collection::RowCollection;
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn test_encode_decode() {
         let (mrc, phys_columns) = create_data_set();
-        let encoded = ByteCodeCompiler::encode_df(&Model(mrc.clone()));
+        let encoded = ByteCodeCompiler::encode_df(&ModelTable(mrc.clone()));
         assert_eq!(ModelRowCollection::decode(phys_columns, encoded), mrc)
     }
 

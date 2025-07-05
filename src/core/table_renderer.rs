@@ -119,7 +119,7 @@ pub fn tabulate_cells(
 
     // compute the width for each cell
     let cell_widths = cells.iter().map(|cell| {
-        cell.iter().map(|s| s.len()).collect::<Vec<usize>>()
+        cell.iter().map(|s| s.chars().count()).collect::<Vec<usize>>()
     }).collect::<Vec<Vec<usize>>>();
 
     // compute the width for each column
@@ -154,7 +154,7 @@ pub fn tabulate_table(
 
 pub fn tabulate_cell(s: &String, width: usize) -> String {
     let mut t = s.to_string();
-    while t.len() < width { t += " " }
+    while t.chars().count() < width { t += " " }
     t
 }
 

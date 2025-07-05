@@ -8,7 +8,7 @@ use crate::compiler;
 use crate::compiler::Compiler;
 use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::Errors::{Exact, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, UnrecognizedTypeName};
 use crate::errors::{throw, Errors, SyntaxErrors};
@@ -26,6 +26,7 @@ use crate::sequences::Array;
 use crate::structures::Structures::Hard;
 use crate::structures::{HardStructure, Structure};
 use crate::typed_values::TypedValue;
+use crate::typed_values::TypedValue::{ArrayValue, ByteStringValue, CharValue, DateValue, ErrorValue, Number, Structured, TableValue, TupleValue};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
@@ -38,7 +39,8 @@ const PTR_LEN: usize = 8;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DataType {
     ArrayType(Box<DataType>),
-    BinaryType,
+    ByteStringType,
+    BlobType(Box<DataType>),
     BooleanType,
     CharType,
     DateTimeType,
@@ -92,7 +94,8 @@ impl DataType {
         use crate::typed_values::TypedValue::*;
         match self {
             ArrayType(..) => ArrayValue(Array::new()),
-            Self::BinaryType => BinaryValue(Vec::new()),
+            Self::ByteStringType => ByteStringValue(Vec::new()),
+            BlobType(..) => ByteCodeCompiler::decode_value(buffer),
             Self::BooleanType => ByteCodeCompiler::decode_u8(buffer, offset, |b| Boolean(b == 1)),
             Self::CharType => {
                 std::str::from_utf8(&buffer[offset..offset+4].to_vec()).ok()
@@ -108,7 +111,7 @@ impl DataType {
             Self::ErrorType => ErrorValue(Exact(ByteCodeCompiler::decode_string(buffer, offset, 255).to_string())),
             FixedSizeType(data_type, size) => match data_type.deref() {
                 StringType => StringValue(ByteCodeCompiler::decode_string(buffer, offset, *size).to_string()),
-                TableType(params) => TableValue(Dataframe::Model(ModelRowCollection::from_bytes(params, buffer.to_vec()))),
+                TableType(params) => TableValue(Dataframe::ModelTable(ModelRowCollection::from_bytes(params, buffer.to_vec()))),
                 _ => data_type.decode(buffer, offset)
             },
             FunctionType(params, returns) => Function { 
@@ -120,7 +123,7 @@ impl DataType {
             PlatformOpsType(pf) => PlatformOp(pf.to_owned()),
             Self::StringType => StringValue(ByteCodeCompiler::decode_string(buffer, offset, 255)),
             StructureType(params) => Structured(Hard(HardStructure::from_parameters(params.to_vec()))),
-            TableType(params) => TableValue(Dataframe::Model(ModelRowCollection::from_bytes(params, buffer.to_vec()))),
+            TableType(params) => TableValue(Dataframe::ModelTable(ModelRowCollection::from_bytes(params, buffer.to_vec()))),
             TupleType(params) => TupleValue(params.iter().map(|dt| dt.decode(buffer, offset)).collect()),
             Self::UnresolvedType => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec()),
             Self::UUIDType => ByteCodeCompiler::decode_u8x16(buffer, offset, |b| UUIDValue(u128::from_be_bytes(b))),
@@ -166,7 +169,8 @@ impl DataType {
         use crate::data_types::DataType::*;
         let width: usize = match self {
             ArrayType(..) => PTR_LEN,
-            Self::BinaryType => PTR_LEN,
+            Self::ByteStringType => PTR_LEN,
+            BlobType(..) => PTR_LEN,
             Self::BooleanType => 1,
             Self::CharType => 4,
             Self::DateTimeType => 8,
@@ -174,7 +178,7 @@ impl DataType {
             Self::ErrorType => 256,
             FixedSizeType(data_type, size) =>
                 match data_type.deref() {
-                    BinaryType | StringType =>
+                    ByteStringType | StringType =>
                         match size {
                             size => *size + size.to_be_bytes().len(),
                             0 => PTR_LEN
@@ -198,7 +202,8 @@ impl DataType {
         use crate::typed_values::TypedValue::*;
         match self {
             ArrayType(..) => ArrayValue(Array::new()),
-            Self::BinaryType => BinaryValue(vec![]),
+            Self::ByteStringType => ByteStringValue(vec![]),
+            BlobType(..) => ErrorValue(Exact("Type cannot be instantiated".into())),
             Self::BooleanType => Boolean(false),
             Self::CharType => CharValue('\0'),
             Self::DateTimeType => DateValue(Local::now().timestamp_millis()),
@@ -216,18 +221,58 @@ impl DataType {
             StructureType(params) =>
                 Structured(Hard(HardStructure::from_parameters(params.to_vec()))),
             TableType(params) =>
-                TableValue(Model(ModelRowCollection::from_parameters(params))),
+                TableValue(ModelTable(ModelRowCollection::from_parameters(params))),
             TupleType(dts) => TupleValue(dts.iter()
                 .map(|dt| dt.get_default_value()).collect()),
             Self::UnresolvedType => Null,
             Self::UUIDType => UUIDValue(Uuid::new_v4().as_u128())
         }
     }
+    
+    pub fn instantiate(
+        &self,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<TypedValue> {
+        match self {
+            ArrayType(..) => Ok(ArrayValue(Array::from(args))),
+            ByteStringType => Ok(ByteStringValue(args.iter().map(|v| v.to_u8()).collect())),
+            BlobType(data_type) => throw(Exact("Type cannot be instantiated".into())),
+            BooleanType => Ok(self.get_default_value()),
+            CharType => match args.as_slice() {
+                [] => Ok(self.get_default_value()),
+                [item] => Ok(item.to_char()
+                    .map(|c| CharValue(c))
+                    .unwrap_or(self.get_default_value())),
+                items => throw(TypeMismatch(ArgumentsMismatched(1, items.len()))),
+            }
+            DateTimeType => match args.as_slice() {
+                [] => Ok(self.get_default_value()),
+                [item] => Ok(DateValue(item.to_i64())),
+                items => throw(TypeMismatch(ArgumentsMismatched(1, items.len()))),
+            }
+            EnumType(..) => Ok(Number(I64Value(0))),
+            ErrorType => match args.as_slice() {
+                [] => Ok(self.get_default_value()),
+                [item] => Ok(ErrorValue(Exact(item.to_string()))),
+                items => throw(TypeMismatch(ArgumentsMismatched(1, items.len()))),
+            }
+            FixedSizeType(data_type, ..) => Ok(data_type.instantiate(args)?),
+            FunctionType(_, _) => Ok(self.get_default_value()),
+            NumberType(..) => Ok(self.get_default_value()),
+            PlatformOpsType(_) => Ok(self.get_default_value()),
+            StringType => Ok(self.get_default_value()),
+            StructureType(..) => Ok(self.get_default_value()),
+            TableType(..) => Ok(self.get_default_value()),
+            TupleType(..) => Ok(self.get_default_value()),
+            UnresolvedType => throw(Exact("Type cannot be instantiated".into())),
+            UUIDType => Ok(self.get_default_value()),
+        }
+    }
 
     pub fn is_compatible(&self, other: &DataType) -> bool {
         match (self, other) {
             (ArrayType(..), ArrayType(..)) |
-            (BinaryType, BinaryType) |
+            (ByteStringType, ByteStringType) |
             (StringType, StringType) |
             (UnresolvedType, _) | (_, UnresolvedType) => true,
             (EnumType(a), EnumType(b)) => Parameter::are_compatible(a, b),
@@ -293,7 +338,8 @@ impl DataType {
         }
         match self {
             ArrayType(data_type) => format!("Array({})", data_type.to_code()),
-            Self::BinaryType => "Binary".into(), // UTF8
+            Self::ByteStringType => "ByteString".into(), // UTF8
+            BlobType(data_type) => format!("Blob({})", data_type.to_code()),
             Self::BooleanType => "Boolean".into(),
             Self::CharType => "Char".into(),
             Self::DateTimeType => "Date".into(),
@@ -407,7 +453,7 @@ fn decipher_model_function_call(
         Identifier(name) =>
             match name.as_str() {
                 "Array" => expect_type(args, |data_type| ArrayType(data_type.into())),
-                "Binary" => expect_size(args, BinaryType),
+                "ByteString" => expect_size(args, ByteStringType),
                 "Enum" => expect_params(args, |params| EnumType(params)),
                 "fn" => expect_params(args, |params| FunctionType(params, UnresolvedType.into())),
                 "String" => expect_size(args, StringType),
@@ -432,6 +478,7 @@ fn decipher_model_tuple(items: &Vec<Expression>) -> std::io::Result<DataType> {
 fn decipher_model_identifier(name: &str) -> std::io::Result<DataType> {
     match name {
         "Array" => Ok(ArrayType(UnresolvedType.into())),
+        "ByteString" => Ok(ByteStringType),
         "Boolean" => Ok(BooleanType),
         "Char" => Ok(CharType),
         "Date" => Ok(DateTimeType),
@@ -536,7 +583,7 @@ mod tests {
 
         #[test]
         fn test_binary() {
-            verify_type_construction("Binary(5566)", FixedSizeType(BinaryType.into(), 5566));
+            verify_type_construction("ByteString(5566)", FixedSizeType(ByteStringType.into(), 5566));
         }
 
         #[test]
@@ -633,19 +680,19 @@ mod tests {
             verify_type_construction("u128", NumberType(U128Kind));
         }
 
-        fn verify_type_construction(typedef: &str, data_type: DataType) {
-            let dt: DataType = DataType::from_str(typedef)
+        fn verify_type_construction(type_decl: &str, data_type: DataType) {
+            let dt: DataType = DataType::from_str(type_decl)
                 .expect(format!("Failed to parse type {}", data_type).as_str());
             assert_eq!(dt, data_type);
-            assert_eq!(data_type.to_code(), typedef);
-            assert_eq!(format!("{}", data_type), typedef.to_string())
+            assert_eq!(data_type.to_code(), type_decl);
+            assert_eq!(format!("{}", data_type), type_decl.to_string())
         }
     }
 
     /// Default-value Unit tests
     mod defaults_tests {
         use crate::data_types::DataType::*;
-        use crate::dataframe::Dataframe::Model;
+        use crate::dataframe::Dataframe::ModelTable;
         use crate::model_row_collection::ModelRowCollection;
         use crate::number_kind::NumberKind::*;
         use crate::numbers::Numbers::*;
@@ -655,8 +702,8 @@ mod tests {
         #[test]
         fn test_get_default_value_binary() {
             assert!(matches!(
-                FixedSizeType(BinaryType.into(), 128).get_default_value(),
-                BinaryValue(..)
+                FixedSizeType(ByteStringType.into(), 128).get_default_value(),
+                ByteStringValue(..)
             ));
         }
 
@@ -710,7 +757,7 @@ mod tests {
         fn test_get_default_value_table() {
             assert_eq!(
                 TableType(make_quote_parameters()).get_default_value(),
-                TableValue(Model(ModelRowCollection::new(make_quote_columns()))));
+                TableValue(ModelTable(ModelRowCollection::new(make_quote_columns()))));
         }
     }
 
@@ -719,7 +766,7 @@ mod tests {
     mod instantiation_tests {
         use crate::compiler::Compiler;
         use crate::data_types::DataType::{FixedSizeType, NumberType, StringType};
-        use crate::dataframe::Dataframe::Model;
+        use crate::dataframe::Dataframe::ModelTable;
         use crate::errors::Errors;
         use crate::model_row_collection::ModelRowCollection;
         use crate::number_kind::NumberKind::F64Kind;
@@ -730,7 +777,7 @@ mod tests {
         use crate::structures::Structures::Hard;
         use crate::testdata::{make_quote_columns, verify_exact_value, verify_exact_value_where};
         use crate::typed_values::TypedValue;
-        use crate::typed_values::TypedValue::{ArrayValue, BinaryValue, Boolean, DateValue, ErrorValue, Number, StringValue, Structured, TableValue, TupleValue};
+        use crate::typed_values::TypedValue::{ArrayValue, ByteStringValue, Boolean, DateValue, ErrorValue, Number, StringValue, Structured, TableValue, TupleValue};
 
         #[test]
         fn test_array() {
@@ -740,10 +787,10 @@ mod tests {
         }
 
         #[test]
-        fn test_binary() {
+        fn test_byte_string() {
             verify_exact_value(r#"
-                Binary::new()
-            "#, BinaryValue(vec![]));
+                ByteString::new()
+            "#, ByteStringValue(vec![]));
         }
         
         #[test]
@@ -828,7 +875,7 @@ mod tests {
         fn test_table() {
             verify_exact_value(r#"
                 Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
-            "#, TableValue(Model(ModelRowCollection::new(make_quote_columns()))));
+            "#, TableValue(ModelTable(ModelRowCollection::new(make_quote_columns()))));
         }
 
         #[test]

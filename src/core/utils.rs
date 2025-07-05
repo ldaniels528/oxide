@@ -6,7 +6,7 @@
 use crate::data_types::DataType;
 use crate::data_types::DataType::NumberType;
 use crate::dataframe::Dataframe;
-use crate::errors::Errors::{Exact, SyntaxError, TypeMismatch};
+use crate::errors::Errors::{Exact, IndexOutOfRange, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, SyntaxErrors};
 use crate::expression::Conditions::{AssumedBoolean, False, True};
@@ -26,6 +26,21 @@ pub fn compute_time_millis(dt: TimeDelta) -> f64 {
     match dt.num_nanoseconds() {
         Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
         None => dt.num_milliseconds().to_f64().unwrap_or(0.)
+    }
+}
+
+pub fn elem_at<T>(
+    type_name: &str,
+    items: T,
+    index: TypedValue,
+    len: fn(&T) -> std::io::Result<usize>,
+    get: fn(&T, usize) -> std::io::Result<TypedValue>,
+) -> std::io::Result<TypedValue> {
+    let (idx, size) = (index.to_usize(), len(&items)?);
+    if idx < size {
+        get(&items, idx)
+    } else {
+        throw(IndexOutOfRange(type_name.to_string(), idx, size))
     }
 }
 

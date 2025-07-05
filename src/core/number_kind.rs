@@ -4,8 +4,14 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::byte_code_compiler::ByteCodeCompiler;
+use crate::data_types::DataType::NumberType;
+use crate::errors::Errors::TypeMismatch;
+use crate::errors::{throw, TypeMismatchErrors};
+use crate::number_kind::NumberKind::F64Kind;
 use crate::numbers::Numbers;
+use crate::typed_values::TypedValue;
 use serde::{Deserialize, Serialize};
+use shared_lib::cnv_error;
 
 // Represents a numeric type or kind of value
 #[repr(u8)]
@@ -28,6 +34,23 @@ impl NumberKind {
             I128Kind | U128Kind => 16,
             NaNKind => 0,
         }
+    }
+
+    pub fn convert_from(&self, value: &TypedValue) -> std::io::Result<Numbers> {
+        let result = match value {
+            TypedValue::StringValue(s) => {
+                match self {
+                    NumberKind::F64Kind => Numbers::F64Value(s.parse().map_err(|e| cnv_error!(e))?),
+                    NumberKind::I64Kind => Numbers::I64Value(s.parse().map_err(|e| cnv_error!(e))?),
+                    NumberKind::I128Kind => Numbers::I128Value(s.parse().map_err(|e| cnv_error!(e))?),
+                    NumberKind::RowIdKind => Numbers::RowId(s.parse().map_err(|e| cnv_error!(e))?),
+                    NumberKind::U128Kind => Numbers::U128Value(s.parse().map_err(|e| cnv_error!(e))?),
+                    NumberKind::NaNKind => Numbers::NaNValue,
+                }
+            }
+            z => return throw(TypeMismatch(TypeMismatchErrors::UnsupportedType(NumberType(F64Kind), z.get_type())))
+        };
+        Ok(result)
     }
 
     /// decodes the typed value based on the supplied data type and buffer

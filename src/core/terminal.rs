@@ -5,7 +5,7 @@
 
 use crate::compiler::Compiler;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Model, TestReport};
+use crate::dataframe::Dataframe::{ModelTable, TestReport};
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::numbers::Numbers::{F64Value, I64Value};
@@ -199,7 +199,7 @@ pub fn build_output(
         TableValue(TestReport(mrc, state)) => {
             let mut report = TestEngine::generate_summary(&state);
             report.push("".to_string());
-            report.extend(TestEngine::generate_report(Model(mrc)));
+            report.extend(TestEngine::generate_report(ModelTable(mrc)));
             out.extend(report)
         }
         TableValue(df) => {
@@ -481,7 +481,7 @@ mod tests {
         start_http_server(port);
         let mut state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
         let result = state.interpreter.evaluate(r#"
-            tools::describe(oxide::help())
+            oxide::help()::describe()
         "#).await.unwrap();
 
         let lines = build_output(12, result, 13.2).unwrap();
