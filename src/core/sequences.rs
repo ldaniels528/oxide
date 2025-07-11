@@ -4,10 +4,10 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType;
-use crate::data_types::DataType::{ArrayType, NumberType, TableType, UnresolvedType};
+use crate::data_types::DataType::{ArrayType, NumberType, RuntimeResolvedType, TableType};
 use crate::data_types::DataType::{FixedSizeType, TupleType};
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::{Exact, TypeMismatch, UnsupportedFeature};
 use crate::errors::TypeMismatchErrors::StructExpected;
@@ -68,7 +68,16 @@ pub enum Sequences {
     TheTuple(Vec<TypedValue>),
 }
 
-impl Sequences {}
+impl Sequences {
+    pub fn is_pure(&self) -> bool {
+        match self {
+            Self::TheArray(a) => a.iter().all(|i| i.is_pure()),
+            Self::TheDataframe(df) => df.is_pure(),
+            Self::TheRange(a, b, _) => a.is_pure() && b.is_pure(),
+            Self::TheTuple(items) => items.iter().all(|i| i.is_pure())
+        }
+    }
+}
 
 impl Sequence for Sequences {
     fn contains(&self, item: &TypedValue) -> bool {
@@ -230,7 +239,7 @@ impl Sequence for Sequences {
 // Array class
 ////////////////////////////////////////////////////////////////////
 
-/// Represents an elastic array of values
+/// Represents an elastic array of [TypedValue]s
 #[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize)]
 pub struct Array {
     the_array: Vec<TypedValue>,
@@ -243,9 +252,7 @@ impl Array {
     ////////////////////////////////////////////////////////////////////
 
     /// Constructs an [Array] from a vector of [TypedValue]s
-    pub fn from(
-        items: Vec<TypedValue>,
-    ) -> Self {
+    pub fn from(items: Vec<TypedValue>) -> Self {
         Self {
             the_array: items,
         }
@@ -284,7 +291,7 @@ impl Array {
                 }
             });
         match kinds.as_slice() {
-            [] => UnresolvedType,
+            [] => RuntimeResolvedType,
             [kind] => kind.clone(),
             kinds => DataType::best_fit(kinds.to_vec())
         }

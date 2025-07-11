@@ -15,14 +15,13 @@ use shared_lib::cnv_error;
 use std::env;
 use std::string::ToString;
 
-mod base62;
 mod blob_file_row_collection;
 mod blobs;
+mod builtins;
 mod byte_code_compiler;
 mod byte_row_collection;
 mod columns;
 mod compiler;
-mod cursor;
 mod dataframe;
 mod dataframe_actor;
 mod data_types;
@@ -43,14 +42,12 @@ mod object_config;
 mod oxide_server;
 mod packages;
 mod parameter;
-mod platform;
 mod query_engine;
 mod readme;
 mod repl;
 mod row_collection;
 mod row_metadata;
 mod sequences;
-mod server;
 mod sprintf;
 mod structures;
 mod table_renderer;
@@ -110,7 +107,8 @@ fn main() -> std::io::Result<()> {
         .init();
 
     // start the REPL 
-    repl::do_terminal(REPLState::new(), env::args().collect(), || read_line_from_stdin())
+    //repl::do_terminal(REPLState::new(), env::args().collect(), || read_line_from_stdin())
+    repl::do_terminal_bash_like(REPLState::new(), env::args().collect())
 }
 
 // Start the Oxide terminal (embedded or remote server)

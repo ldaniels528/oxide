@@ -5,7 +5,7 @@
 
 use crate::columns::Column;
 use crate::data_types::DataType;
-use crate::data_types::DataType::UnresolvedType;
+use crate::data_types::DataType::RuntimeResolvedType;
 
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Null;
@@ -26,7 +26,7 @@ impl Parameter {
     ////////////////////////////////////////////////////////////////////
 
     pub fn add(name: impl Into<String>) -> Self {
-        Self::new(name, UnresolvedType)
+        Self::new(name, RuntimeResolvedType)
     }
 
     pub fn are_compatible(
@@ -118,9 +118,9 @@ impl Parameter {
 
     pub fn to_code(&self) -> String {
         let mut buf = self.get_name().to_string();
-        if let Some(typedef) = self.get_param_type() {
-            if !typedef.trim().is_empty() {
-                buf = format!("{}: {}", buf, typedef)
+        if let Some(type_decl) = self.get_param_type() {
+            if !type_decl.trim().is_empty() {
+                buf = format!("{}: {}", buf, type_decl)
             }
         }
         match self.get_default_value() {

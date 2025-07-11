@@ -164,7 +164,7 @@ mod tests {
         let value = wsc.evaluate(r#"
             let stocks = nsd::save(
                 "ws.script.stocks",
-                Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
             )
             [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 },
              { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -175,9 +175,7 @@ mod tests {
         "#).await.unwrap();
         show_value(value.clone());
         let lines = match value {
-            TableValue(df) => {
-                TableRenderer::from_dataframe(&df)
-            }
+            TableValue(df) => TableRenderer::from_dataframe(&df),
             _ =>  vec![]
         };
         

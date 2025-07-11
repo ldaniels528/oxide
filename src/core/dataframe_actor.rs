@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::columns::Column;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Disk;
+use crate::dataframe::Dataframe::DiskTable;
 use crate::file_row_collection::FileRowCollection;
 use crate::namespaces::Namespace;
 use crate::object_config::ObjectConfig;
@@ -69,7 +69,7 @@ impl DataframeActor {
     fn get_or_load_dataframe(&mut self, ns: &Namespace) -> std::io::Result<&mut Dataframe> {
         match self.resources.entry(ns.id()) {
             Entry::Occupied(v) => Ok(v.into_mut()),
-            Entry::Vacant(x) => Ok(x.insert(Disk(FileRowCollection::open(ns)?)))
+            Entry::Vacant(x) => Ok(x.insert(DiskTable(FileRowCollection::open(ns)?)))
         }
     }
 

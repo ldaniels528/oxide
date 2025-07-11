@@ -10,7 +10,7 @@
 
 </pre>
 <h5>example²</h5>
-<pre>tools::to_table({ name: 'Tom' })</pre>
+<pre>{ name: 'Tom' }::to_table()</pre>
 <h5>results</h5>
 <pre>
 |-----------|
@@ -53,7 +53,7 @@ a + b + c</pre>
 <h5>example⁴</h5>
 <pre>// Arrays can be transformed via the 'arrays' package
 
-arrays::reverse([1, 4, 2, 8, 5, 7])</pre>
+[1, 4, 2, 8, 5, 7]::reverse()</pre>
 <h5>results</h5>
 <pre>
 [7, 5, 8, 2, 4, 1]
@@ -221,7 +221,7 @@ true
 <h5>example¹</h5>
 <pre>stocks = nsd::save(
    "expressions.read_next_row.stocks",
-   Table::new(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date))
+   Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: DateTime))::new
 )
 rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
 rows ~> stocks
@@ -238,7 +238,7 @@ last_row</pre>
 <h5>example¹</h5>
 <pre>stocks = nsd::save(
    "expressions.into.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 rows = [
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -267,12 +267,12 @@ do {
 <hr>
 <h4>▶️ Function Pipelines (destructuring)</h4>
 <h5>example¹</h5>
-<pre>use tools::reverse
-result = 'Hello' |> reverse
+<pre>fn inverse(a) -> 1.0 / a
+result = 5 |> inverse
 result</pre>
 <h5>results</h5>
 <pre>
-"olleH"
+0.2
 
 </pre>
 <h5>example²</h5>
@@ -292,7 +292,7 @@ result</pre>
 <h5>example¹</h5>
 <pre>stocks = nsd::save(
    "readme.www.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 http::serve(8855)</pre>
 <h5>results</h5>
@@ -321,7 +321,7 @@ true
 <pre>HEAD http://localhost:8855/readme/www/stocks/0</pre>
 <h5>results</h5>
 <pre>
-{content-length: "80", content-type: "application/json", date: "Fri, 27 Jun 2025 18:15:22 GMT"}
+{content-length: "80", content-type: "application/json", date: "Fri, 11 Jul 2025 17:44:00 GMT"}
 
 </pre>
 <h5>example⁵</h5>
@@ -399,8 +399,7 @@ fact(6)</pre>
 <hr>
 <h4>▶️ Implicit Method Call</h4>
 <h5>example¹</h5>
-<pre>use durations
-8:::hours()</pre>
+<pre>8::hours()</pre>
 <h5>results</h5>
 <pre>
 28800000
@@ -409,12 +408,11 @@ fact(6)</pre>
 <hr>
 <h4>▶️ Import/Use</h4>
 <h5>example¹</h5>
-<pre>use tools
-stocks = to_table([
+<pre>stocks = [
    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-])
+]::to_table()
 stocks</pre>
 <h5>results</h5>
 <pre>
@@ -457,7 +455,7 @@ false
 <hr>
 <h4>▶️ Iteration</h4>
 <h5>example¹</h5>
-<pre>for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) 
+<pre>for row in ['apple', 'berry', 'kiwi', 'lime']::to_table() 
     yield row::value</pre>
 <h5>results</h5>
 <pre>
@@ -557,9 +555,7 @@ match code {
 <hr>
 <h4>▶️ Method Call</h4>
 <h5>example¹</h5>
-<pre>tools::to_table([
-    'apple', 'berry', 'kiwi', 'lime'
-])</pre>
+<pre>['apple', 'berry', 'kiwi', 'lime']::to_table()</pre>
 <h5>results</h5>
 <pre>
 |------------|
@@ -589,7 +585,7 @@ j</pre>
 <pre>// Ranges may be exclusive
 
 range = 1..5
-tools::reverse(range)</pre>
+range::reverse()</pre>
 <h5>results</h5>
 <pre>
 [4, 3, 2, 1]
@@ -599,7 +595,7 @@ tools::reverse(range)</pre>
 <pre>// Ranges may be inclusive
 
 range = 1..=5
-tools::reverse(range)</pre>
+range::reverse()</pre>
 <h5>results</h5>
 <pre>
 [5, 4, 3, 2, 1]
@@ -744,16 +740,6 @@ a ** b</pre>
 <h5>results</h5>
 <pre>
 (2, 16, 216)
-
-</pre>
-<hr>
-<h4>▶️ Type Definitions</h4>
-<h5>example¹</h5>
-<pre>LabelString = typedef(String(80))
-LabelString</pre>
-<h5>results</h5>
-<pre>
-String(80)
 
 </pre>
 <hr>
