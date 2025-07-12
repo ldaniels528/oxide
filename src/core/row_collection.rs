@@ -7,7 +7,7 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
 use crate::data_types::DataType::*;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::Errors::{Exact, InvalidNamespace, TypeMismatch};
 use crate::errors::TypeMismatchErrors::TableExpected;
 use crate::errors::{throw, Errors};
@@ -27,6 +27,7 @@ use crate::structures::{Row, Structure};
 use crate::table_scan::{TableScanPlan, TableScanTypes};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::fs::File;
@@ -147,7 +148,7 @@ pub trait RowCollection: Debug {
                 Boolean(true),
             ]));
         }
-        TableValue(Model(mrc))
+        TableValue(ModelTable(mrc))
     }
 
     fn examine_range(&self, range: std::ops::Range<usize>) -> TypedValue {
@@ -174,7 +175,7 @@ pub trait RowCollection: Debug {
             let meta = meta.with_allocated(true);
             row_data.push((row, meta));
         }
-        TableValue(Model(ModelRowCollection::with_rows(columns, row_data)))
+        TableValue(ModelTable(ModelRowCollection::with_rows(columns, row_data)))
     }
 
     /// Reads active and inactive (deleted) rows
@@ -556,7 +557,7 @@ pub trait RowCollection: Debug {
     fn reverse_table_value(&self) -> TypedValue {
         use TypedValue::{ErrorValue, TableValue};
         let mrc = ModelRowCollection::with_rows(self.get_columns().to_owned(), Vec::new());
-        self.fold_right(TableValue(Model(mrc)), |tv, row| {
+        self.fold_right(TableValue(ModelTable(mrc)), |tv, row| {
             match tv {
                 ErrorValue(message) => return ErrorValue(message),
                 TableValue(mut df) =>
@@ -663,6 +664,40 @@ pub trait RowCollection: Debug {
                     TableScanTypes::CompleteScan,
                 )),
         }
+    }
+    
+    fn shuffle(&mut self) -> std::io::Result<bool> {
+        let mut src_row_id = 0;
+        let eof = self.get_eof()?;
+        
+        fn get_random_dest_id(src_row_id: usize, eof:  usize) -> usize {
+            let mut rng = rand::thread_rng();
+            let dst_row_id = rng.gen_range(0..eof);
+            if src_row_id == dst_row_id {
+                get_random_dest_id(src_row_id, eof)
+            } else { dst_row_id }
+        }
+        
+        while src_row_id <= eof {
+            match self.read_one(src_row_id)? {
+                Some(src_row) => {
+                    let dst_row_id = get_random_dest_id(src_row_id, eof);
+                    match self.read_one(dst_row_id)? {
+                        Some(dst_row) => {
+                            self.overwrite_row(dst_row_id, src_row)?;
+                            self.overwrite_row(src_row_id, dst_row)?;
+                        }
+                        None => {
+                            self.overwrite_row(dst_row_id, src_row)?;
+                            self.overwrite_row_metadata(src_row_id, RowMetadata::new(false))?;
+                        }
+                    }
+                }
+                None => {}
+            }
+            src_row_id += 1;
+        }
+        Ok(true)
     }
 
     fn to_array(&self) -> Array {
@@ -779,6 +814,7 @@ mod tests {
     use crate::expression::Expression::{Identifier, Literal};
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::hybrid_row_collection::HybridRowCollection;
+    use crate::interpreter::Interpreter;
     use crate::journaling::EventSourceRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
@@ -972,7 +1008,7 @@ mod tests {
         ]);
 
         // perform: table0 + table1
-        let mrc_ab = TableValue(Model(mrc_a)) + TableValue(Model(mrc_b));
+        let mrc_ab = TableValue(ModelTable(mrc_a)) + TableValue(ModelTable(mrc_b));
         let rows = match mrc_ab {
             TableValue(rcv) => rcv.get_rows(),
             _ => Vec::new()
@@ -1704,6 +1740,39 @@ mod tests {
     }
 
     #[test]
+    fn test_shuffle() {
+        let mut intepreter = Interpreter::new();
+        intepreter = verify_exact_code_with(intepreter, r#"
+            let stocks = nsd::save(
+                "row_collection.shuffle.stocks",
+                |--------------------------------|
+                | symbol | exchange  | last_sale |
+                |--------------------------------|
+                | ABC    | AMEX      | 11.77     |
+                | UNO    | OTC       | 0.2456    |
+                | BIZ    | NYSE      | 23.66     |
+                | GOTO   | OTC       | 0.1428    |
+                | BKP    | OTHER_OTC | 0.1421    |
+                | XYZ    | NYSE      | 55.11     |
+                | SHOE   | NASDAQ    | 1.8765    |
+                | RTE    | AMEX      | 23.89     |
+                | RAT    | OTC       | 0.0014    |
+                | DNC    | OTC       | 0.0375    |
+                |--------------------------------|                
+            );
+            stocks::shuffle
+        "#, "true");
+
+        let stocks = intepreter.evaluate(r#"
+            stocks
+        "#).unwrap();
+
+        for s in make_lines_from_table(stocks) {
+            println!("{s}")
+        }
+    }
+
+    #[test]
     fn test_find_previous() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             assert_eq!(5, rc.append_rows(vec![
@@ -1857,19 +1926,19 @@ mod tests {
     }
 
     fn verify_dataframe_binary_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let brc = Dataframe::Binary(ByteRowCollection::from_bytes(columns.to_owned(), Vec::new(), 0));
+        let brc = Dataframe::BinaryTable(ByteRowCollection::from_bytes(columns.to_owned(), Vec::new(), 0));
         test_variant(kind, Box::new(brc), columns)
     }
 
     fn verify_dataframe_file_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
         let ns = Namespace::new("disk", name, "stocks");
         let params = Parameter::from_columns(&columns);
-        let frc = Dataframe::Disk(FileRowCollection::create_table(&ns, &params).unwrap());
+        let frc = Dataframe::DiskTable(FileRowCollection::create_table(&ns, &params).unwrap());
         test_variant(kind, Box::new(frc), columns.to_owned())
     }
 
     fn verify_dataframe_model_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let mrc = Dataframe::Model(ModelRowCollection::with_rows(columns.to_owned(), Vec::new()));
+        let mrc = Dataframe::ModelTable(ModelRowCollection::with_rows(columns.to_owned(), Vec::new()));
         test_variant(kind, Box::new(mrc), columns)
     }
 

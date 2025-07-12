@@ -8,8 +8,8 @@ use std::fmt::{Debug, Display, Formatter};
 use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::errors::Errors::ColumnNotFoundInColumns;
+use crate::packages::PackageOps;
 use crate::parameter::Parameter;
-use crate::platform::PackageOps;
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
 
@@ -87,6 +87,7 @@ pub enum TypeMismatchErrors {
     IdentifierExpected(String),
     OutcomeExpected(String),
     NamespaceExpected(String),
+    NumericValueExpected(String),
     ParameterExpected(String),
     QueryableExpected(String),
     SequenceExpected(DataType),
@@ -95,6 +96,7 @@ pub enum TypeMismatchErrors {
     StructsOneOrMoreExpected,
     TableExpected(String),
     TupleExpected(String),
+    TypeIdentifierExpected(String),
     UnexpectedResult(String),
     UnrecognizedTypeName(String),
     UnsupportedType(DataType, DataType),
@@ -130,6 +132,8 @@ impl Display for TypeMismatchErrors {
                 format!("Function expected, but found {}", other),
             TypeMismatchErrors::IdentifierExpected(other) =>
                 format!("Identifier expected, but found {}", other),
+            TypeMismatchErrors::NumericValueExpected(expr) =>
+                format!("Expected a numeric near {expr}"),
             TypeMismatchErrors::NamespaceExpected(expr) =>
                 format!("Expected a namespace (e.g. ns(\"a.b.c\")) near {expr}"),
             TypeMismatchErrors::OutcomeExpected(expr) =>
@@ -150,6 +154,8 @@ impl Display for TypeMismatchErrors {
                 format!("{a} is not a Table"),
             TypeMismatchErrors::TupleExpected(a) =>
                 format!("{a} is not a Tuple"),
+            TypeMismatchErrors::TypeIdentifierExpected(a) =>
+                format!("{a} is not a Type identifier"),
             TypeMismatchErrors::UnexpectedResult(result) =>
                 format!("Unexpected result near {result}"),
             TypeMismatchErrors::UnrecognizedTypeName(name) =>
@@ -176,7 +182,9 @@ pub enum Errors {
     Empty,
     Exact(String),
     ExactNear(String, Token),
+    FunctionNotFound(String),
     HashTableOverflow(usize, String),
+    IdentifierNotFound(String),
     IncompatibleParameters(Vec<Parameter>),
     IndexOutOfRange(String, usize, usize),
     InstantiationError(DataType),
@@ -212,8 +220,12 @@ impl Display for Errors {
             Errors::ExactNear(message, token) =>
                 format!("{message} on line {} column {}",
                         token.get_line_number(), token.get_column_number()),
+            Errors::FunctionNotFound(name) =>
+                format!("Function '{name}' not found"),
             Errors::HashTableOverflow(rid, value) =>
                 format!("Hash table overflow detected (rid: {rid}, key: {value})"),
+            Errors::IdentifierNotFound(name) => 
+                format!("Identifier '{name}' not found"),
             Errors::IncompatibleParameters(params) =>
                 format!("Incompatible parameters: {}", Parameter::render(params)),
             Errors::IndexOutOfRange(name, idx, len) =>

@@ -5,7 +5,7 @@
 
 use crate::compiler::Compiler;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Model, TestReport};
+use crate::dataframe::Dataframe::{ModelTable, TestReport};
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::numbers::Numbers::{F64Value, I64Value};
@@ -23,6 +23,7 @@ use crate::typed_values::TypedValue::*;
 use crate::utils::compute_time_millis;
 use crate::websockets::OxideWebSocketClient;
 use chrono::Local;
+use crossterm::style::Stylize;
 use crossterm::terminal;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
@@ -199,7 +200,7 @@ pub fn build_output(
         TableValue(TestReport(mrc, state)) => {
             let mut report = TestEngine::generate_summary(&state);
             report.push("".to_string());
-            report.extend(TestEngine::generate_report(Model(mrc)));
+            report.extend(TestEngine::generate_report(ModelTable(mrc)));
             out.extend(report)
         }
         TableValue(df) => {
@@ -238,9 +239,9 @@ pub fn build_output_header(
             let kind = match other {
                 Structured(Hard(hs)) => get_hard_type(hs),
                 Structured(Soft(ss)) => get_soft_type(ss),
-                v => v.get_type_name()
+                v => v.get_type_decl()
             };
-            format!("returned type `{}` in {execution_time:.1} ms", kind)
+            format!("returned type `{}` in {execution_time:.1} ms", kind).reverse().to_string()
         }
     };
     Ok(format!("{pid}: {label}"))
@@ -426,7 +427,7 @@ async fn setup_system_variables(mut state: TerminalState, args: Vec<String>) -> 
 }
 
 pub fn show_title() {
-    use crate::platform::VERSION;
+    use crate::packages::VERSION;
     println!("Welcome to Oxide v{VERSION}\n");
 }
 
@@ -481,7 +482,7 @@ mod tests {
         start_http_server(port);
         let mut state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
         let result = state.interpreter.evaluate(r#"
-            tools::describe(oxide::help())
+            oxide::help()::describe()
         "#).await.unwrap();
 
         let lines = build_output(12, result, 13.2).unwrap();
@@ -540,14 +541,14 @@ mod tests {
         let lines = build_output_header(12, &result, 0.1).unwrap();
         assert_eq!(
             lines,
-            "12: returned type `String(11)` in 0.1 ms")
+            "12: \u{1b}[7mreturned type `String(11)` in 0.1 ms\u{1b}[0m")
     }
 
     #[test]
     fn test_build_output_header_table() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            tools::describe(oxide::help())
+            oxide::help()::describe()
         "#).unwrap();
 
         let lines = build_output_header(12, &result, 13.2).unwrap();

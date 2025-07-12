@@ -1,6 +1,6 @@
 stocks := nsd::save(
     "interpreter.include.stocks",
-    Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+    Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 }
