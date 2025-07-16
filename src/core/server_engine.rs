@@ -14,14 +14,14 @@ use crate::expression::Expression::Literal;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::object_config::ObjectConfig;
+use crate::packages::VERSION;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
-use crate::server::SystemInfoJs;
 use crate::structures::Structures::Soft;
-use crate::structures::{Row, SoftStructure, Structures};
+use crate::structures::{Row, SoftStructure, Structure, Structures};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{ErrorValue, StringValue, Structured, Undefined};
-use crate::websockets::OxideWebSocketServer;
+use crate::web_engine::{WebSocketSystemServer, WebSocketUserServer};
 use crate::*;
 use actix::{Actor, Addr, StreamHandler};
 use actix_session::Session;
@@ -46,6 +46,46 @@ use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
+/// API Methods
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum APIMethods {
+    DELETE,
+    GET,
+    HEAD,
+    PATCH,
+    POST,
+    PUT,
+    WS
+}
+
+impl APIMethods {
+    pub fn from_string(method: &str) -> std::io::Result<Self> {
+        Ok(match method {
+            "DELETE" => Self::DELETE,
+            "GET" => Self::GET,
+            "HEAD" => Self::HEAD,
+            "PATCH" => Self::PATCH,
+            "POST" => Self::POST,
+            "PUT" => Self::PUT,
+            "WS" => Self::WS,
+            other => return throw(Exact(format!("{other} is not a valid HTTP method")))
+        })
+    }
+
+    pub fn from_method(method: &Method) -> Option<Self> {
+        Some(match method.clone() {
+            Method::DELETE => Self::DELETE,
+            Method::GET => Self::GET,
+            Method::HEAD => Self::HEAD,
+            Method::PATCH => Self::PATCH,
+            Method::POST => Self::POST,
+            Method::PUT => Self::PUT,
+            _ => return None
+        })
+    }
+}
+
+/// Remote Call Request
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct RemoteCallRequest {
     code: String,
@@ -59,6 +99,7 @@ impl RemoteCallRequest {
     pub fn get_code(&self) -> &String { &self.code }
 }
 
+/// Remote Call Response
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct RemoteCallResponse {
     result: Value,
@@ -89,6 +130,46 @@ impl RemoteCallResponse {
     pub fn get_result(&self) -> Value { self.result.to_owned() }
 }
 
+/// Represents all the shared state of the application
+#[derive(Debug)]
+pub struct SharedState {
+    apis: Vec<UserAPI>,
+    actor: Addr<DataframeActor>,
+}
+
+impl SharedState {
+    pub fn new() -> Self {
+        SharedState {
+            apis: vec![],
+            actor: DataframeActor::new().start(),
+        }
+    }
+
+    pub fn with_user_apis(apis: Vec<UserAPI>) -> Self {
+        SharedState {
+            apis,
+            actor: DataframeActor::new().start(),
+        }
+    }
+}
+
+// JSON representation of Oxide system information
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SystemInfoJs {
+    title: String,
+    version: String,
+}
+
+impl SystemInfoJs {
+    pub fn new() -> SystemInfoJs {
+        SystemInfoJs {
+            title: "Oxide".into(),
+            version: VERSION.into(),
+        }
+    }
+}
+
+/// User API
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct UserAPI {
     pub path: String,
@@ -101,48 +182,12 @@ pub struct UserAPIMethod {
     pub code: TypedValue
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum APIMethods {
-    DELETE,
-    GET,
-    HEAD,
-    PATCH,
-    POST,
-    PUT
-}
-
-impl APIMethods {
-    pub fn from_string(method: &str) -> std::io::Result<Self> {
-        Ok(match method {
-            "DELETE" => Self::DELETE,
-            "GET" => Self::GET,
-            "HEAD" => Self::HEAD,
-            "PATCH" => Self::PATCH,
-            "POST" => Self::POST,
-            "PUT" => Self::PUT,
-            other => return throw(Exact(format!("{other} is not a valid HTTP method")))
-        })
-    }
-
-    pub fn from_method(method: &Method) -> Option<Self> {
-        Some(match method.clone() {
-            Method::DELETE => Self::DELETE,
-            Method::GET => Self::GET,
-            Method::HEAD => Self::HEAD,
-            Method::PATCH => Self::PATCH,
-            Method::POST => Self::POST,
-            Method::PUT => Self::PUT,
-            _ => return None
-        })
-    }
-}
-
 #[macro_export]
 macro_rules! web_routes {
     ($shared_state: expr) => {
         actix_web::App::new()
             .app_data(web::Data::new($shared_state))
-            .service(web::resource("/ws").to(handle_websockets))
+            .service(web::resource("/ws").to(handle_system_websockets))
             .route("/{database}/{schema}/{name}/{a}/{b}", web::get().to(handle_row_range_get))
             .route("/{database}/{schema}/{name}/{id}", web::delete().to(handle_row_delete))
             .route("/{database}/{schema}/{name}/{id}", web::get().to(handle_row_get))
@@ -157,6 +202,34 @@ macro_rules! web_routes {
             .route("/info", web::get().to(handle_sys_info_get))
             .route("/rpc", web::post().to(handle_rpc_post))
     }
+}
+
+/// Converts a graph of [Structures] into a vector of [UserAPI]s
+pub fn convert_to_user_api_config(
+    value: &TypedValue
+) -> std::io::Result<Vec<UserAPI>> {
+
+    /// Extracts a [Structures] from a [TypedValue]
+    fn extract_structure(value: &TypedValue) -> std::io::Result<Structures> {
+        match value {
+            Structured(ss) => Ok(ss.clone()),
+            other => throw(Exact(format!("Structure expected near {}", other.to_code())))
+        }
+    }
+
+    // perform the transformation
+    let mut user_apis = vec![];
+    let ss0 = extract_structure(value)?;
+    for (path, graph) in ss0.to_name_values() {
+        let ss1 = extract_structure(&graph)?;
+        let mut methods = vec![];
+        for (method_str, code) in ss1.to_name_values() {
+            let method = APIMethods::from_string(method_str.as_str())?;
+            methods.push(UserAPIMethod  { method, code });
+        }
+        user_apis.push(UserAPI { path, methods })
+    }
+    Ok(user_apis)
 }
 
 fn get_session(session: &Session) -> Result<Interpreter, Box<dyn Error>> {
@@ -227,7 +300,7 @@ pub async fn handle_config_get(
 }
 
 /// handler function for creating a configuration by namespace (database, schema, name)
-// ex: http://localhost:8080/dataframes/create/quotes
+/// ex: http://localhost:8080/dataframes/create/quotes
 pub async fn handle_config_post(
     req: HttpRequest,
     data: web::Json<ObjectConfig>,
@@ -382,18 +455,6 @@ pub async fn handle_sys_info_get(_session: Session) -> impl Responder {
     HttpResponse::Ok().json(SystemInfoJs::new())
 }
 
-fn extract_code_from_request(req: &HttpRequest) -> Option<String> {
-    req.query_string()
-        .split('&')
-        .find_map(|pair| {
-            let mut kv = pair.splitn(2, '=');
-            match (kv.next(), kv.next()) {
-                (Some("code"), Some(val)) => Some(urlencoding::decode(val).ok()?.to_string()),
-                _ => None,
-            }
-        })
-}
-
 /// handler function for executing remote procedure calls
 pub async fn handle_user_api(
     req: HttpRequest,
@@ -412,13 +473,10 @@ pub async fn handle_user_api(
         Err(e) => return HttpResponse::Ok().json(RemoteCallResponse::fail(e.to_string())),
     };
     
-    // gather the request query parameters
-    let query_map = req.query_string().split('&')
-        .filter_map(|pair| {
-            let mut kv = pair.splitn(2, '=');
-            Some((kv.next()?.to_string(), urlencoding::decode(kv.next()?).ok()?.to_string()))
-        })
-        .collect::<HashMap<String, String>>();
+    // parse and populate the query parameters
+    for (name, value) in parse_query_string(&req) {
+        interpreter.with_variable(name.as_str(), value)
+    }
     
     // gather the request headers
     let headers_map = req.headers().iter()
@@ -426,14 +484,7 @@ pub async fn handle_user_api(
         .map(|(k, v)| (k, TypedValue::wrap_value(v.as_str())
             .unwrap_or_else(|_| StringValue(v))))
         .collect::<Vec<_>>();
-
-    // populate the query parameters
-    for (name, value) in query_map {
-        let value = TypedValue::wrap_value(value.as_str())
-            .unwrap_or_else(|_| StringValue(value));
-        interpreter.with_variable(name.as_str(), value)
-    }
-
+    
     // populate the request headers
     interpreter.with_variable("http_headers", Structured(Soft(SoftStructure::from_tuples(headers_map))));
 
@@ -442,15 +493,9 @@ pub async fn handle_user_api(
         TypedValue::Function { params, body: code, .. } => {
             match user_api_method.method {
                 APIMethods::POST => {
-                    println!("handle_user_api: body {body:?}");
                     for param in params {
                         let value = match serde_json::from_slice::<Value>(&body) {
-                            Ok(jvalue) => {
-                                println!("handle_user_api: jvalue {jvalue:?}");
-                                let tvalue = TypedValue::from_json(&jvalue);
-                                println!("handle_user_api: tvalue {tvalue}");
-                                tvalue
-                            },
+                            Ok(jvalue) => TypedValue::from_json(&jvalue),
                             Err(e) => return HttpResponse::Ok().json(RemoteCallResponse::fail(e.to_string())),
                         };
                         interpreter.with_variable(param.get_name(), value)
@@ -490,7 +535,8 @@ fn find_user_api_method(
     // find the user-defined API method for this request
     let method = req.method();
     let api_method = match user_api.methods.iter()
-        .find(|api_meth| Some(api_meth.method.clone()) == APIMethods::from_method(method)) {
+        .find(|api_meth| api_meth.method == APIMethods::WS 
+            || Some(api_meth.method.clone()) == APIMethods::from_method(method)) {
         Some(user_api_meth) => user_api_meth,
         None => return throw(Exact(format!("No user-defined API found for path: {}", req.path()))),
     };
@@ -498,11 +544,26 @@ fn find_user_api_method(
     Ok(api_method.clone())
 }
 
-pub async fn handle_websockets(
+pub async fn handle_system_websockets(
     req: HttpRequest, stream: web::Payload,
 ) -> impl Responder {
-    info!("received ws <- {}", req.peer_addr().unwrap());
-    ws::start(OxideWebSocketServer::new(), &req, stream)
+    let query_map = parse_query_string(&req);
+    ws::start(WebSocketSystemServer::new(query_map), &req, stream)
+}
+
+pub async fn handle_user_websockets(
+    req: HttpRequest, stream: web::Payload,
+) -> impl Responder {
+    // find the user-defined API method for this request
+    match find_user_api_method(&req) {
+        Ok(api_method) => {
+            ws::start(WebSocketUserServer::new(api_method), &req, stream)
+        }
+        Err(e) => {
+            println!("Failed to find user-defined API method: {}", e);
+            Err(actix_web::error::ErrorBadRequest(e.to_string()))
+        }
+    }
 }
 
 pub fn start_http_server(port: u16) -> JoinHandle<()> {
@@ -525,7 +586,8 @@ pub fn start_http_server_with_user_apis(
                         APIMethods::HEAD => web_cfg.route(path, web::head().to(handle_user_api)),
                         APIMethods::PATCH => web_cfg.route(path, web::patch().to(handle_user_api)),
                         APIMethods::POST => web_cfg.route(path, web::post().to(handle_user_api)),
-                        APIMethods::PUT => web_cfg.route(path, web::put().to(handle_user_api))
+                        APIMethods::PUT => web_cfg.route(path, web::put().to(handle_user_api)),
+                        APIMethods::WS => web_cfg.service(web::resource(path).to(handle_user_websockets)),
                     };
                 }
             }
@@ -627,49 +689,42 @@ async fn update_row_by_id(
     update_row!(actor, ns, Row::from_json(&columns, &data.0).with_row_id(id))
 }
 
-pub fn ns_uri(database: &str, schema: &str, name: &str) -> String {
+fn ns_uri(database: &str, schema: &str, name: &str) -> String {
     format!("/{}/{}/{}", database, schema, name)
 }
 
-pub fn range_uri(database: &str, schema: &str, name: &str, a: usize, b: usize) -> String {
+fn range_uri(database: &str, schema: &str, name: &str, a: usize, b: usize) -> String {
     format!("/{}/{}/{}/{}/{}", database, schema, name, a, b)
 }
 
-pub fn row_uri(database: &str, schema: &str, name: &str, id: usize) -> String {
+fn parse_query_string(req: &HttpRequest) -> Vec<(String, TypedValue)> {
+    req.query_string().split('&')
+        .filter_map(|pair| {
+            let mut kv = pair.splitn(2, '=');
+            let name = kv.next()?.to_string();
+            let raw_value = urlencoding::decode(kv.next()?).ok()?.to_string();
+            let value = TypedValue::wrap_value(raw_value.as_str())
+                .unwrap_or_else(|_| StringValue(raw_value));
+            Some((name, value))
+        })
+        .collect::<Vec<(String, TypedValue)>>()
+}
+
+fn row_uri(database: &str, schema: &str, name: &str, id: usize) -> String {
     format!("/{}/{}/{}/{}", database, schema, name, id)
-}
-
-/// Represents all the shared state of the application
-#[derive(Debug)]
-pub struct SharedState {
-    apis: Vec<UserAPI>,
-    actor: Addr<DataframeActor>,
-}
-
-impl SharedState {
-    pub fn new() -> Self {
-        SharedState {
-            apis: vec![],
-            actor: DataframeActor::new().start(),
-        }
-    }
-
-    pub fn with_user_apis(apis: Vec<UserAPI>) -> Self {
-        SharedState {
-            apis,
-            actor: DataframeActor::new().start(),
-        }
-    }
 }
 
 /// Unit tests
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::VERSION;
+    use crate::data_types::DataType::{NumberType, RuntimeResolvedType, StringType};
+    use crate::expression::Expression::{Identifier, TypeOf};
+    use crate::number_kind::NumberKind::F64Kind;
+    use crate::packages::VERSION;
     use crate::testdata::make_quote_parameters;
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::StringValue;
+    use crate::typed_values::TypedValue::{Function, StringValue};
     use actix_web::test;
     use futures_util::stream::SplitSink;
     use futures_util::{SinkExt, StreamExt};
@@ -679,6 +734,93 @@ mod tests {
     use tokio::runtime::Runtime;
     use tokio_tungstenite::tungstenite::Message;
     use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
+
+    #[test]
+    async fn test_convert_to_user_api_config() {
+        let mut interpreter = Interpreter::new();
+        let config = interpreter.evaluate(r#"
+                {
+                    "/api/orders" : {
+                        "GET" : (order_id -> {
+                           type_of(order_id)
+                        })
+                    }
+                     "/api/contests" : {
+                        "GET" : (order_id -> {
+                           type_of(order_id)
+                        })
+                        "POST" : ((symbol: String, exchange: String, lastSale: f64) -> {
+                            type_of(symbol)
+                        })
+                        "PUT" : (form -> {
+                            type_of(form)
+                        })
+                    }
+                }
+            "#).unwrap();
+        let cfg = convert_to_user_api_config(&config).unwrap();
+        assert_eq!(cfg, vec![
+            UserAPI {
+                path: "/api/orders".into(),
+                methods: vec![
+                    UserAPIMethod {
+                        method: APIMethods::GET,
+                        code: Function {
+                            params: vec![
+                                Parameter::new("order_id", RuntimeResolvedType),
+                            ],
+                            body: TypeOf(Identifier("order_id".into()).into()).into(),
+                            returns: RuntimeResolvedType
+                        }
+                    }
+                ]
+            },
+            UserAPI {
+                path: "/api/contests".into(),
+                methods: vec![
+                    UserAPIMethod {
+                        method: APIMethods::GET,
+                        code: Function {
+                            params: vec![
+                                Parameter::new("order_id", RuntimeResolvedType),
+                            ],
+                            body: TypeOf(Identifier("order_id".into()).into()).into(),
+                            returns: RuntimeResolvedType
+                        }
+                    }, UserAPIMethod {
+                        method: APIMethods::POST,
+                        code: Function {
+                            params: vec![
+                                Parameter::new("symbol", StringType),
+                                Parameter::new("exchange", StringType),
+                                Parameter::new("lastSale", NumberType(F64Kind)),
+                            ],
+                            body: TypeOf(Identifier("symbol".into()).into()).into(),
+                            returns: RuntimeResolvedType
+                        }
+                    },
+                    UserAPIMethod {
+                        method: APIMethods::PUT,
+                        code: Function {
+                            params: vec![
+                                Parameter::new("form", RuntimeResolvedType),
+                            ],
+                            body: TypeOf(Identifier("form".into()).into()).into(),
+                            returns: RuntimeResolvedType
+                        }
+                    }
+                ]
+            }
+        ])
+    }
+
+    #[actix::test]
+    async fn test_create_system_info() {
+        assert_eq!(SystemInfoJs::new(), SystemInfoJs {
+            title: "Oxide".into(),
+            version: VERSION.into(),
+        })
+    }
 
     #[actix::test]
     async fn test_dataframe_config_lifecycle() {

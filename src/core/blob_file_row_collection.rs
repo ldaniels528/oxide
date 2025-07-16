@@ -183,7 +183,7 @@ impl RowCollection for  BLOBFileRowCollection {
 mod tests {
     use crate::blob_file_row_collection::BLOBFileRowCollection;
     use crate::blobs::BLOBStore;
-    use crate::dataframe::Dataframe::Blob;
+    use crate::dataframe::Dataframe::BlobTable;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::row_collection::RowCollection;
@@ -207,7 +207,7 @@ mod tests {
         // insert the table into the BLOB store
         let key0 = bs.insert_value(&mrc0).unwrap();
         let blob_rc = BLOBFileRowCollection::new(bs, &params, key0);
-        let lines = TableRenderer::from_dataframe(&Blob(blob_rc));
+        let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
         assert_eq!(lines, vec![
             "|-------------------------------|", 
             "| symbol | exchange | last_sale |", 
@@ -239,7 +239,7 @@ mod tests {
             make_quote(3, "GOTO", "OTC", 0.1442),
             make_quote(4, "XYZ", "NYSE", 0.0289),
         ]).unwrap();
-        let lines = TableRenderer::from_dataframe(&Blob(blob_rc));
+        let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
         assert_eq!(lines, vec![
             "|-------------------------------|", 
             "| symbol | exchange | last_sale |", 

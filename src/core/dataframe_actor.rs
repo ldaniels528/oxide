@@ -8,11 +8,12 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use actix::prelude::*;
+use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::columns::Column;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Disk;
+use crate::dataframe::Dataframe::DiskTable;
 use crate::file_row_collection::FileRowCollection;
 use crate::namespaces::Namespace;
 use crate::object_config::ObjectConfig;
@@ -34,8 +35,8 @@ impl DataframeActor {
         }
     }
 
-    fn append_row(&mut self, ns: &Namespace, row: Row) -> std::io::Result<usize> {
-        Ok(self.get_or_load_dataframe(ns)?.append_row(row).to_usize())
+    fn append_row(&mut self, ns: &Namespace, row: Row) -> std::io::Result<u64> {
+        self.get_or_load_dataframe(ns)?.append_row(row)
     }
 
     fn create_table(&mut self, ns: Namespace, cfg: ObjectConfig) -> std::io::Result<&mut Dataframe> {
@@ -69,7 +70,7 @@ impl DataframeActor {
     fn get_or_load_dataframe(&mut self, ns: &Namespace) -> std::io::Result<&mut Dataframe> {
         match self.resources.entry(ns.id()) {
             Entry::Occupied(v) => Ok(v.into_mut()),
-            Entry::Vacant(x) => Ok(x.insert(Disk(FileRowCollection::open(ns)?)))
+            Entry::Vacant(x) => Ok(x.insert(DiskTable(FileRowCollection::open(ns)?)))
         }
     }
 

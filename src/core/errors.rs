@@ -8,8 +8,8 @@ use std::fmt::{Debug, Display, Formatter};
 use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::errors::Errors::ColumnNotFoundInColumns;
+use crate::packages::PackageOps;
 use crate::parameter::Parameter;
-use crate::platform::PackageOps;
 use crate::tokens::Token;
 use serde::{Deserialize, Serialize};
 
@@ -87,14 +87,17 @@ pub enum TypeMismatchErrors {
     IdentifierExpected(String),
     OutcomeExpected(String),
     NamespaceExpected(String),
+    NumericValueExpected(String),
     ParameterExpected(String),
     QueryableExpected(String),
     SequenceExpected(DataType),
     StringExpected(String),
-    StructExpected(String, String),
+    StructIsnt(String, String),
+    StructExpected(String),
     StructsOneOrMoreExpected,
     TableExpected(String),
     TupleExpected(String),
+    TypeIdentifierExpected(String),
     UnexpectedResult(String),
     UnrecognizedTypeName(String),
     UnsupportedType(DataType, DataType),
@@ -130,6 +133,8 @@ impl Display for TypeMismatchErrors {
                 format!("Function expected, but found {}", other),
             TypeMismatchErrors::IdentifierExpected(other) =>
                 format!("Identifier expected, but found {}", other),
+            TypeMismatchErrors::NumericValueExpected(expr) =>
+                format!("Expected a numeric near {expr}"),
             TypeMismatchErrors::NamespaceExpected(expr) =>
                 format!("Expected a namespace (e.g. ns(\"a.b.c\")) near {expr}"),
             TypeMismatchErrors::OutcomeExpected(expr) =>
@@ -142,7 +147,9 @@ impl Display for TypeMismatchErrors {
                 format!("Expected a sequence, found a {}", data_type.to_code()),
             TypeMismatchErrors::StringExpected(expr) =>
                 format!("Expected a String near {expr}"),
-            TypeMismatchErrors::StructExpected(name, expr) =>
+            TypeMismatchErrors::StructExpected(expr) =>
+                format!("A Struct was expected near {expr}"),
+            TypeMismatchErrors::StructIsnt(name, expr) =>
                 format!("{name} is not a Struct ({expr})"),
             TypeMismatchErrors::StructsOneOrMoreExpected =>
                 String::from("At least one Struct is required."),
@@ -150,6 +157,8 @@ impl Display for TypeMismatchErrors {
                 format!("{a} is not a Table"),
             TypeMismatchErrors::TupleExpected(a) =>
                 format!("{a} is not a Tuple"),
+            TypeMismatchErrors::TypeIdentifierExpected(a) =>
+                format!("{a} is not a Type identifier"),
             TypeMismatchErrors::UnexpectedResult(result) =>
                 format!("Unexpected result near {result}"),
             TypeMismatchErrors::UnrecognizedTypeName(name) =>
@@ -176,7 +185,9 @@ pub enum Errors {
     Empty,
     Exact(String),
     ExactNear(String, Token),
+    FunctionNotFound(String),
     HashTableOverflow(usize, String),
+    IdentifierNotFound(String),
     IncompatibleParameters(Vec<Parameter>),
     IndexOutOfRange(String, usize, usize),
     InstantiationError(DataType),
@@ -212,8 +223,12 @@ impl Display for Errors {
             Errors::ExactNear(message, token) =>
                 format!("{message} on line {} column {}",
                         token.get_line_number(), token.get_column_number()),
+            Errors::FunctionNotFound(name) =>
+                format!("Function '{name}' not found"),
             Errors::HashTableOverflow(rid, value) =>
                 format!("Hash table overflow detected (rid: {rid}, key: {value})"),
+            Errors::IdentifierNotFound(name) => 
+                format!("Identifier '{name}' not found"),
             Errors::IncompatibleParameters(params) =>
                 format!("Incompatible parameters: {}", Parameter::render(params)),
             Errors::IndexOutOfRange(name, idx, len) =>
@@ -335,7 +350,9 @@ mod tests {
                "Type Mismatch: Expected a queryable near reset");
         verify(TypeMismatch(StringExpected("reset".into())),
                "Type Mismatch: Expected a String near reset");
-        verify(TypeMismatch(StructExpected("count".into(), "i64".into())),
+        verify(TypeMismatch(StructExpected("count".into())),
+               "Type Mismatch: A Struct was expected near count");
+        verify(TypeMismatch(StructIsnt("count".into(), "i64".into())),
                "Type Mismatch: count is not a Struct (i64)");
         verify(TypeMismatch(TableExpected("stocks".into())),
                "Type Mismatch: stocks is not a Table");

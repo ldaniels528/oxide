@@ -4,21 +4,21 @@
 ////////////////////////////////////////////////////////////////////
 
 use crate::data_types::DataType;
-use crate::data_types::DataType::{ArrayType, NumberType, TableType, UnresolvedType};
+use crate::data_types::DataType::{ArrayType, NumberType, RuntimeResolvedType, TableType};
 use crate::data_types::DataType::{FixedSizeType, TupleType};
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::{Exact, TypeMismatch, UnsupportedFeature};
 use crate::errors::TypeMismatchErrors::StructExpected;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::I64Kind;
-use crate::numbers::Numbers::I64Value;
+use crate::numbers::Numbers::{I64Value, U64Value};
 use crate::row_collection::RowCollection;
 use crate::structures::Structures::{Firm, Hard};
 use crate::structures::{Structure, Structures};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, Boolean, ErrorValue, Number, Structured, TupleValue, Undefined};
+use crate::typed_values::TypedValue::{ArrayValue, Boolean, ErrorValue, Number, Structured, TableValue, TupleValue, Undefined};
 use log::error;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -68,7 +68,16 @@ pub enum Sequences {
     TheTuple(Vec<TypedValue>),
 }
 
-impl Sequences {}
+impl Sequences {
+    pub fn is_pure(&self) -> bool {
+        match self {
+            Self::TheArray(a) => a.iter().all(|i| i.is_pure()),
+            Self::TheDataframe(df) => df.is_pure(),
+            Self::TheRange(a, b, _) => a.is_pure() && b.is_pure(),
+            Self::TheTuple(items) => items.iter().all(|i| i.is_pure())
+        }
+    }
+}
 
 impl Sequence for Sequences {
     fn contains(&self, item: &TypedValue) -> bool {
@@ -168,12 +177,16 @@ impl Sequence for Sequences {
             }
             Sequences::TheDataframe(df) =>
                 match value {
-                    Structured(s) => df.push_row(Structures::transform_row(
-                        &s.get_parameters(),
-                        &s.get_values(),
-                        &df.get_parameters()
-                    )),
-                    other => ErrorValue(TypeMismatch(StructExpected("Struct".into(), other.to_code())))
+                    Structured(s) => 
+                       match df.push_row(Structures::transform_row(
+                            &s.get_parameters(),
+                            &s.get_values(),
+                            &df.get_parameters(),
+                        )) {
+                           Ok(_) => TableValue(df.clone()),
+                           Err(err) => ErrorValue(Exact(err.to_string()))
+                       }
+                    other => ErrorValue(TypeMismatch(StructExpected(other.to_code())))
                 }
             Sequences::TheRange(..) => self.to_array().push(value),
             Sequences::TheTuple(tuple) => {
@@ -230,7 +243,7 @@ impl Sequence for Sequences {
 // Array class
 ////////////////////////////////////////////////////////////////////
 
-/// Represents an elastic array of values
+/// Represents an elastic array of [TypedValue]s
 #[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize)]
 pub struct Array {
     the_array: Vec<TypedValue>,
@@ -243,9 +256,7 @@ impl Array {
     ////////////////////////////////////////////////////////////////////
 
     /// Constructs an [Array] from a vector of [TypedValue]s
-    pub fn from(
-        items: Vec<TypedValue>,
-    ) -> Self {
+    pub fn from(items: Vec<TypedValue>) -> Self {
         Self {
             the_array: items,
         }
@@ -284,7 +295,7 @@ impl Array {
                 }
             });
         match kinds.as_slice() {
-            [] => UnresolvedType,
+            [] => RuntimeResolvedType,
             [kind] => kind.clone(),
             kinds => DataType::best_fit(kinds.to_vec())
         }

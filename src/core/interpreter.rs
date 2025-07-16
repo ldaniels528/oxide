@@ -203,6 +203,12 @@ mod tests {
         }
 
         #[test]
+        fn test_contains_with_binary_string() {
+            verify_exact_value("0Bdeadbeefcafebabe contains 0xbe", Boolean(true));
+            verify_exact_value("0Bdeadbeefcafebabe contains 0xcc", Boolean(false));
+        }
+
+        #[test]
         fn test_contains_with_range_exclusive() {
             verify_exact_value("(1..20) contains 19", Boolean(true));
             verify_exact_value("(1..20) contains 20", Boolean(false));
@@ -212,6 +218,30 @@ mod tests {
         fn test_contains_with_range_inclusive() {
             verify_exact_value("(1..=20) contains 20", Boolean(true));
             verify_exact_value("(1..=20) contains 21", Boolean(false));
+        }
+
+        #[test]
+        fn test_contains_with_string() {
+            verify_exact_value(r#""🔥🎁💎🎉" contains '🎁'"#, Boolean(true));
+            verify_exact_value(r#""🔥🎁💎🎉" contains '🔮'"#, Boolean(false));
+        }
+
+        #[test]
+        fn test_contains_with_structure() {
+            verify_exact_value(r#"{ first: "Tom", last: "Lane" } contains "first""#, Boolean(true));
+            verify_exact_value(r#"{ first: "Tom", last: "Lane" } contains "middle""#, Boolean(false));
+        }
+
+        #[test]
+        fn test_in_array() {
+            verify_exact_value("8 in [1, 4, 2, 8, 5, 7]", Boolean(true));
+            verify_exact_value("3 in [1, 4, 2, 8, 5, 7]", Boolean(false));
+        }
+
+        #[test]
+        fn test_in_binary_string() {
+            verify_exact_value("0xbe in 0Bdeadbeefcafebabe", Boolean(true));
+            verify_exact_value("0xcc in 0Bdeadbeefcafebabe", Boolean(false));
         }
 
         #[test]
@@ -279,6 +309,27 @@ mod tests {
         use crate::typed_values::TypedValue::*;
 
         #[test]
+        fn test_for_each_byte_in_a_binary_string() {
+            verify_exact_code(r#"
+                for b in 0Bdeadbeeffacebade yield b
+            "#, "[0xde, 0xad, 0xbe, 0xef, 0xfa, 0xce, 0xba, 0xde]");
+        }
+
+        #[test]
+        fn test_for_each_char_in_a_string() {
+            verify_exact_code(r#"
+                for c in "Hello World" yield c
+            "#, "['H', 'e', 'l', 'l', 'o', ' ', 'W', 'o', 'r', 'l', 'd']");
+        }
+
+        #[test]
+        fn test_for_each_unicode_char_in_a_string() {
+            verify_exact_code(r#"
+                for c in "🔥🎁💎🎉" yield c
+            "#, "['🔥', '🎁', '💎', '🎉']");
+        }
+
+        #[test]
         fn test_for_each_item_in_an_array() {
             verify_exact_code(r#"
                 for item in [1, 5, 6, 11, 17] yield item / 2.0
@@ -302,13 +353,22 @@ mod tests {
         }
 
         #[test]
+        fn test_for_each_pair_field_in_a_structure() {
+            verify_exact_code(r#"
+                for (key, value) in {symbol: "ABC", exchange: "NYSE", last_sale: 23.77} 
+                    yield (value, key)
+            "#, r#"[("ABC", "symbol"), ("NYSE", "exchange"), (23.77, "last_sale")]"#);
+        }
+
+
+        #[test]
         fn test_for_each_row_field_in_a_table() {
             verify_exact_code(r#"
-                for row in tools::to_table([
+                for row in [
                     {symbol: "ABC", exchange: "NYSE", last_sale: 23.77},
                     {symbol: "BOX", exchange: "AMEX", last_sale: 123.43},
                     {symbol: "GMO", exchange: "NASD", last_sale: 5.007}
-                ]) yield row::last_sale
+                ]::to_table() yield row.last_sale
             "#, r#"[23.77, 123.43, 5.007]"#);
         }
 
@@ -316,9 +376,9 @@ mod tests {
         fn test_for_each_row_in_a_table() {
             verify_exact_table(r#"
                 let results =
-                    for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime'])
-                        yield { fruit: row::value }
-                tools::to_table(results)
+                    for row in ['apple', 'berry', 'kiwi', 'lime']::to_table()
+                        yield { fruit: row.value }
+                results::to_table()
             "#, vec![
                 "|------------|",
                 "| id | fruit |", 
@@ -328,6 +388,34 @@ mod tests {
                 "| 2  | kiwi  |", 
                 "| 3  | lime  |", 
                 "|------------|"]);
+        }
+
+        #[test]
+        fn test_for_each_row_in_a_table_yield_row_id() {
+            verify_exact_table(r#"
+                stocks =   
+                    |--------------------------------|
+                    | symbol | exchange  | last_sale |
+                    |--------------------------------|
+                    | GIF    | NYSE      | 11.75     |
+                    | TRX    | NASDAQ    | 32.96     |
+                    | SHMN   | OTCBB     | 5.02      |
+                    | XCD    | OTCBB     | 1.37      |
+                    | DRMQ   | OTHER_OTC | 0.02      |
+                    | JTRQ   | OTHER_OTC | 0.0001    |
+                    |--------------------------------|
+                for row in stocks yield (__row_id__, row.last_sale)
+            "#, vec![
+                "|------------------|", 
+                "| id | value       |", 
+                "|------------------|", 
+                "| 0  | (0, 11.75)  |", 
+                "| 1  | (1, 32.96)  |", 
+                "| 2  | (2, 5.02)   |", 
+                "| 3  | (3, 1.37)   |", 
+                "| 4  | (4, 0.02)   |", 
+                "| 5  | (5, 0.0001) |", 
+                "|------------------|"]);
         }
 
         #[test]
@@ -468,7 +556,15 @@ mod tests {
     /// Declarative tests
     #[cfg(test)]
     mod declarative_tests {
-        use crate::testdata::verify_exact_code;
+        use crate::testdata::{verify_exact_code, verify_exact_value_where};
+        use crate::typed_values::TypedValue;
+
+        #[test]
+        fn test_list_files() {
+            verify_exact_value_where(r#"
+                ls where is_directory is true
+            "#, |v| matches!(v, TypedValue::TableValue(..)));
+        }
 
         #[test]
         fn test_whenever_is_triggered() {
@@ -509,6 +605,293 @@ mod tests {
                 }
                 x + y
             "#, "1");
+        }
+    }
+
+    /// Demo tests
+    #[cfg(test)]
+    mod demo_tests {
+        use crate::interpreter::Interpreter;
+        use crate::testdata::{verify_exact_code_with, verify_exact_table_with};
+
+        //#[ignore]
+        #[test]
+        fn test_demo_blackjack() {
+            // deck = nsd::load("games.blackjack.deck")
+            // player = nsd::load("games.blackjack.player")
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                use agg, nsd, oxide, util
+                
+                // define a type to represent a card deck/hand
+                Cards = Table(face: String(2), suit: String(2))
+                
+                // create the card faces & suits
+                faces = select face: value from ((2..=10)::map(n -> n::to_string()) ++ ["J", "Q", "K", "A"])::to_table()
+                suits = select suit: value from ["♥️", "♦️", "♣️", "♠️"]::to_table()
+                
+                // create the deck, player-hand and dealer-hand
+                deck = nsd::save("games.blackjack.deck", Cards::new())
+                player = nsd::save("games.blackjack.player", Cards::new())
+                dealer = nsd::save("games.blackjack.dealer", Cards::new())
+            "#, "true");
+
+            // verify the `suits` collection
+            interpreter = verify_exact_table_with(interpreter, r#"
+                suits
+            "#, vec![
+                "|-----------|", 
+                "| id | suit |", 
+                "|-----------|", 
+                "| 0  | ♥️   |", 
+                "| 1  | ♦️   |", 
+                "| 2  | ♣️   |", 
+                "| 3  | ♠️   |", 
+                "|-----------|"]);
+            
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn show_title() -> {
+                  println(
+                        "| 👑BLACKJACK DEMO v0.1👑
+                         |        _             _                                 _
+                         |  _ __ | | __ _ _   _(_)_ __   __ _    ___ __ _ _ __ __| |___
+                         | | '_ \| |/ _` | | | | | '_ \ / _` |  / __/ _` | '__/ _` / __|
+                         | | |_) | | (_| | |_| | | | | | (_| | | (_| (_| | | | (_| \__ \
+                         | | .__/|_|\__,_|\__, |_|_| |_|\__, |  \___\__,_|_|  \__,_|___/
+                         | |_|            |___/         |___/
+                         |"::strip_margin('|'))
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn card_face_up(face, suit) -> {
+                    let faceL = if(face::len() < 2, face + " ", face)
+                    let faceR = if(face::len() < 2, " " + face, face);
+                    [
+                        "┌─────────┐",
+                sprintf("│ %s   %s │", faceL, suit),
+                        "│         │",
+                sprintf("│   %s    │", suit),
+                        "│         │",
+                sprintf("│ %s   %s │", suit, faceR),
+                        "└─────────┘"
+                    ]
+                }
+            "#, "true");
+
+            // verify the `card_face_up` function
+            interpreter = verify_exact_table_with(interpreter, r#"
+                card_face_up("A", "♥️")
+            "#, vec![
+                "|------------------|",
+                "| id | value       |",
+                "|------------------|",
+                "| 0  | ┌─────────┐ |",
+                "| 1  | │ A    ♥️ │ |",
+                "| 2  | │         │ |",
+                "| 3  | │   ♥️    │ |",
+                "| 4  | │         │ |",
+                "| 5  | │ ♥️    A │ |",
+                "| 6  | └─────────┘ |",
+                "|------------------|"]);            
+            
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn card_face_down() -> [
+                    "┌─────────┐",
+                    "│▒░▒░▒░▒░▒│",
+                    "│░▒░▒░▒░▒░│",
+                    "│▒░▒░▒░▒░▒│",
+                    "│░▒░▒░▒░▒░│",
+                    "│▒░▒░▒░▒░▒│",
+                    "└─────────┘"
+                ]
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn compute_score(hand, aceScore: i64) -> {
+                    let rows =
+                        select
+                            score: sum(match face {
+                                "A" => aceScore
+                                face when face:::to(i64) in 2..9 => face:::to(i64)
+                                _ => 10
+                            })
+                        from hand;
+                    let row = rows[0];
+                    row.score
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn compute_card_score(hand) -> {
+                    let v11 = compute_score(hand, 11)
+                    if(v11 <= 21, v11, compute_score(hand, 1))
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn hit(hand) -> {
+                    deck::shuffle()
+                    card <~ deck
+                    card ~> hand
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn show_hand(hand) -> {
+                    let lines = []
+                    isVisible = true
+                    for card in hand {
+                        let _card = if(isVisible is true, card_face_up(card.face, card.suit), card_face_down())
+                        lines = if(lines::len() == 0, _card, (lines <|> _card)::map(a -> a::to_array::join(" ")))
+                    }
+                
+                    // add a face down card in the last position
+                    if (hand == dealer) {
+                        _card = card_face_down()
+                        lines = if(lines::len() == 0, _card, (lines <|> _card)::map(a -> a::to_array::join(" ")))
+                    }
+                
+                    // write to STDOUT
+                    println((lines::join('\n')) + '\n')
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn create_gamestate() -> {
+                    {
+                        name: (__realname__::split(" "))[0],
+                        money: 1000.0,
+                        bet: 25.0,
+                        bet_factor: 1.0,
+                        dealer_score: 0,
+                        player_score: 0,
+                        level: 1,
+                        loop: 0,
+                        is_jousting: true,
+                        is_alive: true,
+                        show_cards: false
+                    }
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn game_over(gamestate) -> {
+                    update_gamestate(gamestate)
+                    if (gamestate.dealer_score == gamestate.player_score)
+                        round_completed(gamestate, '🤝Draw.', 0)
+                    else if (gamestate.player_score == 21)
+                        round_completed(gamestate, '👍You Win!! - Player BlackJack!', 1.5 * bet)
+                    else if (gamestate.dealer_score == 21)
+                        round_completed(gamestate, '👎You Lose - Dealer BlackJack!', -bet)
+                    else if (gamestate.dealer_score > 21)
+                        round_completed(gamestate, sprintf('👍You Win!! - Dealer Busts: %d', gamestate.dealer_score), bet)
+                    else if (gamestate.player_score > 21)
+                        round_completed(gamestate, sprintf('👎You Lose - Player Busts: %d', gamestate.player_score), -bet)
+                    else if (gamestate.player_score > gamestate.dealer_score)
+                        round_completed(gamestate, sprintf('👍You Win!! - %d vs. %d', gamestate.player_score, gamestate.dealer_score), -bet)
+                    else round_completed(gamestate, sprintf('👎You Lose - %d vs. %d', gamestate.dealer_score, gamestate.player_score), -bet)
+                    gamestate.level += 1
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn update_gamestate(gamestate) -> {
+                    gamestate.dealer_score = (compute_card_score(dealer) ? 0)
+                    gamestate.player_score = (compute_card_score(player) ? 0)
+                    gamestate
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn prompt_user(gamestate) -> {
+                    println(sprintf("Choose %s[H]it, [S]tand or [Q]uit? ", if(gamestate.loop == 0, "[D]ouble-down, ", "")))
+                    choice = io::stdin()::trim::to_uppercase
+                    if ((choice::starts_with("D") is true) && (loop == 0)) gamestate.bet_factor = 2.0
+                    else if(choice::starts_with("H")) { hit(player); gamestate.show_cards = true }
+                    else if(choice::starts_with("Q")) { gamestate.is_jousting = false; gamestate.is_alive = false }
+                    else if(choice::starts_with("S")) gamestate.is_jousting = false
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn dealer_intelligence(gamestate, finish) -> {
+                    update_gamestate(gamestate)
+                    let modified = false
+                    if((gamestate.player_score <= 21) && (gamestate.dealer_score < gamestate.player_score)) {
+                        let cost =
+                            if (finish) while (gamestate.player_score > gamestate.dealer_score) hit(dealer)
+                            else if(gamestate.player_score > gamestate.dealer_score) hit(dealer)
+                        modified = modified || (cost.inserted > 0)
+                    }
+                    modified
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn round_completed(gamestate, message: String, betDelta: f64) -> {
+                    println(sprintf('%s\n', message))
+                    gamestate.money += gamestate.bet_factor * betDelta
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn show_game_table(gamestate) -> {
+                    println(sprintf("DEALER - %d/21", gamestate.dealer_score))
+                    show_hand(dealer)
+                    println(sprintf("YOU (%s) - %s%d/21",
+                        gamestate.name,
+                        if(gamestate.bet_factor == 2.0, "2x ", ""),
+                        gamestate.player_score))
+                    show_hand(player)
+                }
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                fn show_separator(gamestate) -> {
+                    separator = ("※" * 120)
+                    println('\n' + separator)
+                    println(sprintf(" Player: %s \t Credit: $%.2f \t Bet: $%.2f \t Round: %d",
+                         gamestate.name, gamestate.money, gamestate.bet, gamestate.level))
+                    println(separator + '\n')
+                }
+            "#, "true");
+
+            // let tv = interpreter.evaluate("hand").unwrap();
+            // for s in make_lines_from_table(tv) {
+            //     println!("{s}")
+            // }
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                show_title()
+            
+                // setup the basic game state
+                gamestate = create_gamestate();
+                
+                // reset and shuffle the deck
+                (faces * suits)::to_table ~>> deck
+            "#, "52");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                deck::shuffle()
+            "#, "true");
+            
+            interpreter = verify_exact_code_with(interpreter, r#"
+                // put some cards into the hands of the player and dealer
+                for hand in [dealer, player] {
+                    hand::resize(0)
+                    hit(hand)
+                }
+            "#, "1");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                gamestate.is_jousting = true
+                gamestate.bet_factor = 1.0
+            "#, "true");
+
+            interpreter = verify_exact_code_with(interpreter, r#"
+                show_separator(gamestate)
+            "#, "true");
         }
     }
 
@@ -604,7 +987,8 @@ mod tests {
         #[test]
         fn test_functional_pipeline() {
             verify_exact_code(r#"
-                "Hello" |> tools::reverse
+                let f = s -> s::reverse
+                "Hello" |> f
             "#, "\"olleH\"");
         }
 
@@ -632,11 +1016,10 @@ mod tests {
         fn test_functional_sugar_with_filter_map() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter, r#"
-                use arrays
                 let arr = [1, 2, 3, 4]
                 arr
-                    :::filter(x -> (x % 2) == 0)
-                    :::map(x -> x * 10)
+                    ::filter(x -> (x % 2) == 0)
+                    ::map(x -> x * 10)
             "#, "[20, 40]");
         }
 
@@ -664,7 +1047,7 @@ mod tests {
     #[cfg(test)]
     mod infix_tests {
         use crate::interpreter::Interpreter;
-        use crate::testdata::{verify_exact_code, verify_exact_code_with};
+        use crate::testdata::{verify_exact_code, verify_exact_code_with, verify_exact_unwrapped_with};
 
         #[test]
         fn test_infix_field_access() {
@@ -687,25 +1070,30 @@ mod tests {
         fn test_infix_function_call() {
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with(interpreter,r#"
-            stock = Struct::new(
+            stock = Struct(
                 symbol: String(8) = "ABC",
                 exchange: String(8) = "NYSE",
                 last_sale: f64 = 23.67
-            )
+            )::new
             mod stock {
-                fn contains_symbol(symbol) -> symbol is self::symbol
+                fn contains_symbol(symbol) -> symbol is self.symbol
             }
             "#, "true");
+
+            // verify the structure
+            interpreter = verify_exact_unwrapped_with(interpreter,r#"
+                stock
+            "#, r#"{"contains_symbol":{"code":"symbol == self.symbol","params":[{"data_type":"RuntimeResolvedType","default_value":"Null","name":"symbol"}],"returns":"Boolean"},"exchange":"NYSE","last_sale":23.67,"symbol":"ABC"}"#);
+
+            // verify the negative case
+            interpreter = verify_exact_code_with(interpreter,r#"
+                stock.contains_symbol("XYZ")
+            "#, "false");
 
             // verify the positive case
             interpreter = verify_exact_code_with(interpreter,r#"
                 stock.contains_symbol("ABC")
             "#, "true");
-
-            // verify the negative case
-            verify_exact_code_with(interpreter,r#"
-                stock.contains_symbol("XYZ")
-            "#, "false");
         }
     }
 
@@ -715,6 +1103,14 @@ mod tests {
         use crate::errors::Errors::Exact;
         use crate::testdata::{verify_exact_code, verify_exact_value};
         use crate::typed_values::TypedValue::ErrorValue;
+
+        #[test]
+        fn test_user_defined_type() {
+            verify_exact_code(r#"
+                Cards = Table(face: String(2), suit: String(2))  
+                type_of(Cards::new())
+            "#, "Table(face: String(2), suit: String(2))")
+        }
 
         #[test]
         fn test_type_of_array_bool() {
@@ -744,7 +1140,7 @@ mod tests {
 
         #[test]
         fn test_type_of_date() {
-            verify_exact_code("type_of(cal::now())", "Date");
+            verify_exact_code("type_of(2025-07-06T21:00:29.412Z)", "DateTime");
         }
 
         #[test]
@@ -787,7 +1183,7 @@ mod tests {
         #[test]
         fn test_type_of_table() {
             verify_exact_code(
-                r#"type_of(Table::new(symbol: String(8), exchange: String(8), last_sale: f64))"#,
+                r#"type_of(Table(symbol: String(8), exchange: String(8), last_sale: f64)::new)"#,
                 "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
             );
         }
@@ -796,7 +1192,7 @@ mod tests {
         fn test_type_of_tuple() {
             verify_exact_code(
                 "type_of(('ABC', 123.2, 2025-01-13T03:25:47.350Z))", 
-                "(String(3), f64, Date)"
+                "(String(3), f64, DateTime)"
             );
         }
 

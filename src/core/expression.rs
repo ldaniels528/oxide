@@ -3,26 +3,25 @@
 // Expression class
 ////////////////////////////////////////////////////////////////////
 
+use crate::builtins::Builtins;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
-use crate::errors::throw;
-use crate::errors::Errors::TypeMismatch;
-use crate::errors::TypeMismatchErrors::{ConstantValueExpected, UnsupportedType};
 use crate::expression::Expression::*;
 use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::machine;
 use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers::I64Value;
+use crate::packages::Package;
+use crate::packages::{IoPkg, PackageOps};
 use crate::parameter::Parameter;
-use crate::platform::{Package, PackageOps};
 use crate::row_collection::RowCollection;
-use crate::sequences::{Array, Sequence};
-use crate::structures::Structures::{Firm, Soft};
-use crate::structures::{SoftStructure, Structure};
+use crate::sequences::Sequence;
+use crate::structures::Structure;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, Boolean, ErrorValue, Function, Number, PlatformOp, StringValue, Structured, Undefined};
+use crate::typed_values::TypedValue::{Boolean, Function, Number, PlatformOp, StringValue};
+use crate::utils::maybe_a_or_b;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
@@ -56,6 +55,28 @@ pub enum Conditions {
 }
 
 impl Conditions {
+    pub fn is_pure(&self) -> bool {
+        match self {
+            Conditions::And(a, b) => is_pure_a_and_b(a, b),
+            Conditions::AssumedBoolean(a) => a.is_pure(),
+            Conditions::Contains(a, b) => is_pure_a_and_b(a, b),
+            Conditions::Equal(a, b) => is_pure_a_and_b(a, b),
+            Conditions::False => true,
+            Conditions::GreaterOrEqual(a, b) => is_pure_a_and_b(a, b),
+            Conditions::GreaterThan(a, b) => is_pure_a_and_b(a, b),
+            Conditions::In(a, b) => is_pure_a_and_b(a, b),
+            Conditions::LessOrEqual(a, b) => is_pure_a_and_b(a, b),
+            Conditions::LessThan(a, b) => is_pure_a_and_b(a, b),
+            Conditions::Like(a, b) => is_pure_a_and_b(a, b),
+            Conditions::Matches(a, b) => is_pure_a_and_b(a, b),
+            Conditions::Not(a) => a.is_pure(),
+            Conditions::NotEqual(a, b) => is_pure_a_and_b(a, b),
+            Conditions::Or(a, b) => is_pure_a_and_b(a, b),
+            Conditions::True => true,
+            Conditions::When(a, b) => is_pure_a_and_b(a, b),
+        }
+    }
+
     /// Returns a string representation of this object
     pub fn to_code(&self) -> String {
         Expression::decompile_cond(self)
@@ -163,6 +184,15 @@ pub enum Ranges {
     Exclusive(Box<Expression>, Box<Expression>),
 }
 
+impl Ranges {
+    pub fn is_pure(&self) -> bool {
+        match self {
+            Inclusive(a, b) => is_pure_a_and_b(a, b),
+            Exclusive(a, b) => is_pure_a_and_b(a, b),
+        }
+    }
+}
+
 /// Represents an enumeration of Expression variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Expression {
@@ -176,6 +206,7 @@ pub enum Expression {
     ArrowSkinnyLeft(Box<Expression>, Box<Expression>),
     ArrowVerticalBar(Box<Expression>, Box<Expression>),
     ArrowVerticalBar2x(Box<Expression>, Box<Expression>),
+    As(Box<Expression>, Box<Expression>),
     Assert { condition: Box<Expression>, message: Option<Box<Expression>> },
     BitwiseAnd(Box<Expression>, Box<Expression>),
     BitwiseOr(Box<Expression>, Box<Expression>),
@@ -208,6 +239,7 @@ pub enum Expression {
     Infix(Box<Expression>, Box<Expression>),
     IsDefined(Box<Expression>),
     Literal(TypedValue),
+    Ls(Option<Box<Expression>>),
     MatchExpression(Box<Expression>, Vec<Expression>),
     Minus(Box<Expression>, Box<Expression>),
     Module(String, Vec<Expression>),
@@ -233,7 +265,6 @@ pub enum Expression {
     Test(Box<Expression>),
     Throw(Box<Expression>),
     TupleExpression(Vec<Expression>),
-    TypeDef(Box<Expression>),
     TypeOf(Box<Expression>),
     Use(Vec<UseOps>),
     WhenEver {
@@ -250,6 +281,7 @@ pub enum Expression {
     // SQL models
     ////////////////////////////////////////////////////////////////////
     Delete { from: Box<Expression> },
+    Deselect { from: Box<Expression>, fields: Vec<Expression> },
     GroupBy { from: Box<Expression>, columns: Vec<Expression> },
     Having { from: Box<Expression>, condition: Conditions },
     Limit { from: Box<Expression>, limit: Box<Expression> },
@@ -287,6 +319,8 @@ impl Expression {
                 format!("{} |> {}", Self::decompile(a), Self::decompile(b)),
             ArrowVerticalBar2x(a, b) =>
                 format!("{} |>> {}", Self::decompile(a), Self::decompile(b)),
+            As(a, b) =>
+                format!("{} as {}", Self::decompile(a), Self::decompile(b)),
             Assert { condition, message } =>
                 match message {
                     Some(msg) => format!("assert {}, {} ", Self::decompile(condition), Self::decompile(msg)),
@@ -338,6 +372,10 @@ impl Expression {
                 format!("{}.{}", Self::decompile(a), Self::decompile(b)),
             IsDefined(a) => format!("is_defined({})", Self::decompile(a)),
             Literal(value) => value.to_code(),
+            Ls(maybe_path) => match maybe_path {
+                None => "ls".into(),
+                Some(path) => format!("ls({})", Self::decompile(path))
+            }
             MatchExpression(a, b) =>
                 format!("match {} {}", Self::decompile(a), Self::decompile(&ArrayExpression(b.clone()))),
             Minus(a, b) =>
@@ -397,7 +435,6 @@ impl Expression {
             }),
             Throw(message) => format!("throw({})", Self::decompile(message)),
             TupleExpression(args) => format!("({})", Self::decompile_list(args)),
-            TypeDef(expr) => format!("typedef({})", expr.to_code()),
             TypeOf(expr) => format!("type_of({})", expr.to_code()),
             Identifier(name) => name.to_string(),
             WhenEver { condition, code } => 
@@ -413,6 +450,8 @@ impl Expression {
             ////////////////////////////////////////////////////////////////////
             Delete { from } =>
                 format!("delete {}", Self::decompile(from)),
+            Deselect { fields, from } =>
+                format!("deselect {} from {}", Self::decompile_list(fields), Self::decompile(from)),
             GroupBy { from, columns } =>
                 format!("{} group_by {}", Self::decompile(from), Self::decompile_list(columns)),
             Having { from, condition } =>
@@ -531,10 +570,11 @@ impl Expression {
             ArrowCurvyRight(..) => BooleanType,
             ArrowCurvyRight2x(..) => NumberType(I64Kind),
             ArrowFat(_, b) => Self::infer_with_hints(b, hints),
-            ArrowSkinnyLeft(..) => UnresolvedType,
+            ArrowSkinnyLeft(..) => RuntimeResolvedType,
             ArrowSkinnyRight(_, b) =>  Self::infer_with_hints(b, hints),
             ArrowVerticalBar(_, b) => Self::infer_with_hints(b, hints),
             ArrowVerticalBar2x(_, b) => Self::infer_with_hints(b, hints),
+            As(_, datatype) => Self::infer_with_hints(datatype, hints),
             Assert { .. } => BooleanType,
             BitwiseAnd(a, b) => Self::infer_a_or_b(a, b, hints),
             BitwiseOr(a, b) => Self::infer_a_or_b(a, b, hints),
@@ -544,30 +584,33 @@ impl Expression {
             Coalesce(a, b) => Self::infer_a_or_b(a, b, hints),
             CoalesceErr(a, b) => Self::infer_a_or_b(a, b, hints),
             CodeBlock(ops) => ops.last().map(|op| Self::infer_with_hints(op, hints))
-                .unwrap_or(UnresolvedType),
-            // platform functions: cal::now()
+                .unwrap_or(RuntimeResolvedType),
+            // platform functions: cal::plus(..)
             ColonColon(a, b) =>
                 match (a.deref(), b.deref()) {
                     (Identifier(package), FunctionCall { fx, .. }) =>
                         match fx.deref() {
                             Identifier(name) =>
-                                PackageOps::find_function(package, name)
+                                maybe_a_or_b(
+                                    PackageOps::find_function(package, name),
+                                    Builtins::new().lookup_by_name(package, name),
+                                )
                                     .map(|pf| pf.get_return_type())
-                                    .unwrap_or(UnresolvedType),
-                            _ => UnresolvedType
+                                    .unwrap_or(RuntimeResolvedType),
+                            _ => RuntimeResolvedType
                         }
-                    _ => UnresolvedType
+                    _ => RuntimeResolvedType
                 }
-            ColonColonColon(..) => UnresolvedType,
+            ColonColonColon(..) => RuntimeResolvedType,
             Zip(a, b) => Self::infer_a_or_b(a, b, hints),
             Condition(..) => BooleanType,
             Divide(a, b) => Self::infer_a_or_b(a, b, hints),
             DoWhile { code, .. } => Self::infer_with_hints(code, hints),
-            ElementAt(..) => UnresolvedType,
+            ElementAt(..) => RuntimeResolvedType,
             Feature { .. } => BooleanType,
             For { op, .. } => Self::infer_with_hints(op, hints),
             FunctionCall { fx, .. } => Self::infer_with_hints(fx, hints),
-            HTTP { .. } => UnresolvedType,
+            HTTP { .. } => RuntimeResolvedType,
             If { a: true_v, b: Some(false_v), .. } => Self::infer_a_or_b(true_v, false_v, hints),
             If { a: true_v, .. } => Self::infer_with_hints(true_v, hints),
             Include(..) => BooleanType,
@@ -579,15 +622,16 @@ impl Expression {
                 Identifier(name) => {
                     match hints.iter().find(|hint| hint.get_name() == name) {
                         Some(param) => param.get_data_type(),
-                        None => UnresolvedType
+                        None => RuntimeResolvedType
                     }
                 }
-                _ => UnresolvedType
+                _ => RuntimeResolvedType
             }
             IsDefined(..) => BooleanType,
             Literal(Function { body, .. }) => Self::infer_with_hints(body, hints),
             Literal(PlatformOp(pf)) => pf.get_return_type(),
             Literal(v) => v.get_type(),
+            Ls(..) => TableType(IoPkg::get_io_files_parameters()),
             MatchExpression(_, cases) => DataType::best_fit(
                 cases.iter()
                     .map(|op| Self::infer_with_hints(op, hints))
@@ -624,7 +668,6 @@ impl Expression {
             TupleExpression(values) => TupleType(values.iter()
                 .map(|p| Self::infer_with_hints(p, hints))
                 .collect::<Vec<_>>()),
-            TypeDef(expr) => Self::infer_with_hints(expr, hints),
             TypeOf(expr) => Self::infer_with_hints(expr, hints),
             Use(..) => BooleanType,
             Identifier(name) =>
@@ -633,23 +676,24 @@ impl Expression {
                     _ =>
                         match hints.iter().find(|hint| hint.get_name() == name) {
                             Some(param) => param.get_data_type(),
-                            None => UnresolvedType
+                            None => RuntimeResolvedType
                         }
                 }
             WhenEver { code, .. } => Self::infer_with_hints(code, hints),
             While { code, .. } => Self::infer_with_hints(code, hints),
-            Yield(..) => ArrayType(UnresolvedType.into()),
+            Yield(..) => ArrayType(RuntimeResolvedType.into()),
             ////////////////////////////////////////////////////////////////////
             // SQL models
             ////////////////////////////////////////////////////////////////////
-            Delete { .. } => NumberType(NumberKind::I64Kind),
-            GroupBy { .. } => TableType(vec![]),
-            Having { .. } => TableType(vec![]),
-            Limit { .. } => TableType(vec![]),
-            OrderBy { .. } => TableType(vec![]),
-            Select { .. } => TableType(vec![]),
-            Undelete { .. } => NumberType(NumberKind::I64Kind),
-            Where { .. } => TableType(vec![]),
+            Delete { .. }
+            | Undelete { .. } => NumberType(NumberKind::I64Kind),
+            Deselect { .. }
+            | GroupBy { .. }
+            | Having { .. }
+            | Limit { .. }
+            | OrderBy { .. }
+            | Select { .. }
+            | Where { .. } => TableType(vec![]),
         }
     }
     
@@ -689,6 +733,87 @@ impl Expression {
         matches!(self, CodeBlock(..) | If { .. } | Return(..) | While { .. })
     }
 
+    pub fn is_pure(&self) -> bool {
+        match self {
+            ArrayExpression(items) => is_pure_all(items),
+            ArrowCurvyLeft(_, _) => false,
+            ArrowCurvyLeft2x(_, _) => false,
+            ArrowCurvyRight(_, _) => false,
+            ArrowCurvyRight2x(_, _) => false,
+            ArrowFat(_, _) => false,
+            ArrowSkinnyRight(_, _) => false,
+            ArrowSkinnyLeft(_, _) => false,
+            ArrowVerticalBar(_, _) => false,
+            ArrowVerticalBar2x(_, _) => false,
+            As(a, _) => a.is_pure(),
+            Assert { condition, message } =>
+                condition.is_pure() && is_pure_opt(message),
+            BitwiseAnd(a, b) => is_pure_a_and_b(a, b),
+            BitwiseOr(a, b) => is_pure_a_and_b(a, b),
+            BitwiseShiftLeft(a, b) => is_pure_a_and_b(a, b),
+            BitwiseShiftRight(a, b) => is_pure_a_and_b(a, b),
+            BitwiseXor(a, b) => is_pure_a_and_b(a, b),
+            Coalesce(a, b) => is_pure_a_and_b(a, b),
+            CoalesceErr(a, b) => is_pure_a_and_b(a, b),
+            CodeBlock(items) => is_pure_all(items),
+            ColonColon(_, _) => false,
+            ColonColonColon(_, _) => false,
+            Condition(c) => c.is_pure(),
+            Divide(a, b) => is_pure_a_and_b(a, b),
+            DoWhile { condition, code } => is_pure_a_and_b(condition, code),
+            ElementAt(a, b) => is_pure_a_and_b(a, b),
+            Feature { .. } => false,
+            For { construct, op } => is_pure_a_and_b(construct, op),
+            FunctionCall { fx, args } => fx.is_pure() && is_pure_all(args),
+            HTTP(_) => false,
+            Identifier(_) => false,
+            If { condition, a, b } =>
+                is_pure_a_and_b(condition, a) && is_pure_opt(b),
+            Include(_) => false,
+            Infix(_, _) => false,
+            IsDefined(a) => a.is_pure(),
+            Literal(v) => v.is_pure(),
+            Ls(_) => false,
+            MatchExpression(a, b) => a.is_pure() && is_pure_all(b),
+            Minus(a, b) => is_pure_a_and_b(a, b),
+            Module(_, items) => is_pure_all(items),
+            Modulo(a, b) => is_pure_a_and_b(a, b),
+            Multiply(a, b) => is_pure_a_and_b(a, b),
+            NamedValue(_, b) => b.is_pure(),
+            Neg(a) => a.is_pure(),
+            Parameters(p) => p.iter().all(|p| p.get_default_value().is_pure()),
+            Plus(a, b) => is_pure_a_and_b(a, b),
+            PlusPlus(a, b) => is_pure_a_and_b(a, b),
+            Pow(a, b) => is_pure_a_and_b(a, b),
+            Range(r) => r.is_pure(),
+            Referenced(a) => a.is_pure(),
+            Return(a) => a.is_pure(),
+            Scenario { .. } => false,
+            SetVariables(_, b) => b.is_pure(),
+            SetVariablesExpr(_, b) => b.is_pure(),
+            StructureExpression(pairs) => pairs.iter().all(|(_, e)| e.is_pure()),
+            Test(_) => false,
+            Throw(a) => a.is_pure(),
+            TupleExpression(items) => is_pure_all(items),
+            TypeOf(a) => a.is_pure(),
+            Use(_) => false,
+            WhenEver { .. } => false,
+            While { condition, code } => is_pure_a_and_b(condition, code),
+            Yield(a) => a.is_pure(),
+            Zip(a, b) => is_pure_a_and_b(a, b),
+            // SQL models
+            Delete { from } => from.is_pure(),
+            Deselect { from, fields } => from.is_pure() && is_pure_all(fields),
+            GroupBy { from, .. } => from.is_pure(),
+            Having { from, condition, .. } => from.is_pure() && condition.is_pure(),
+            Limit { from, limit } => is_pure_a_and_b(from, limit),
+            OrderBy { from, .. } => from.is_pure(),
+            Select { from, fields } => from.is_pure() && is_pure_all(fields),
+            Undelete { from } => from.is_pure(),
+            Where { from, condition } => from.is_pure() && condition.is_pure(),
+        }
+    }
+
     /// Indicates whether the expression is a referential expression
     pub fn is_referential(&self) -> bool {
         matches!(self, Identifier(..))
@@ -698,95 +823,7 @@ impl Expression {
     pub fn to_code(&self) -> String {
         Self::decompile(self)
     }
-
-    fn purify(items: &Vec<Expression>) -> std::io::Result<TypedValue> {
-        let mut new_items = Vec::new();
-        for item in items {
-            new_items.push(item.to_pure()?);
-        }
-        Ok(ArrayValue(Array::from(new_items)))
-    }
-
-    /// Attempts to resolve the [Expression] as a [TypedValue]
-    pub fn to_pure(&self) -> std::io::Result<TypedValue> {
-        match self {
-            NamedValue(_, expr) => expr.to_pure(),
-            ArrayExpression(items) => Self::purify(items),
-            BitwiseAnd(a, b) => Ok(a.to_pure()? & b.to_pure()?),
-            BitwiseOr(a, b) => Ok(a.to_pure()? | b.to_pure()?),
-            BitwiseXor(a, b) => Ok(a.to_pure()? ^ b.to_pure()?),
-            BitwiseShiftLeft(a, b) => Ok(a.to_pure()? << b.to_pure()?),
-            BitwiseShiftRight(a, b) => Ok(a.to_pure()? >> b.to_pure()?),
-            Condition(kind) => match kind {
-                Conditions::And(a, b) =>
-                    Ok(Boolean(a.to_pure()?.is_true() && b.to_pure()?.is_true())),
-                Conditions::AssumedBoolean(a) => a.to_pure(),
-                Conditions::False => Ok(Boolean(false)),
-                Conditions::GreaterOrEqual(a, b) =>
-                    Ok(Boolean(a.to_pure()?.is_true() >= b.to_pure()?.is_true())),
-                Conditions::GreaterThan(a, b) =>
-                    Ok(Boolean(a.to_pure()?.is_true() > b.to_pure()?.is_true())),
-                Conditions::LessOrEqual(a, b) =>
-                    Ok(Boolean(a.to_pure()?.is_true() <= b.to_pure()?.is_true())),
-                Conditions::LessThan(a, b) =>
-                    Ok(Boolean(a.to_pure()?.is_true() < b.to_pure()?.is_true())),
-                Conditions::Not(a) =>
-                    Ok(Boolean(!a.to_pure()?.is_true())),
-                Conditions::NotEqual(a, b) =>
-                    Ok(Boolean(a.to_pure()?.is_true() != b.to_pure()?.is_true())),
-                Conditions::Or(a, b) =>
-                    Ok(Boolean(a.to_pure()?.is_true() || b.to_pure()?.is_true())),
-                Conditions::True => Ok(Boolean(true)),
-                z => throw(TypeMismatch(ConstantValueExpected(z.to_code())))
-            }
-            Divide(a, b) => Ok(a.to_pure()? / b.to_pure()?),
-            ElementAt(a, b) => {
-                let index = b.to_pure()?.to_usize();
-                Ok(match a.to_pure()? {
-                    TypedValue::ArrayValue(arr) => arr.get_or_else(index, Undefined),
-                    TypedValue::ErrorValue(err) => ErrorValue(err),
-                    TypedValue::Null => TypedValue::Null,
-                    TypedValue::Structured(s) => {
-                        let items = s.get_values();
-                        if index >= items.len() { Undefined } else { items[index].clone() }
-                    }
-                    TypedValue::TableValue(df) => df.read_one(index)?
-                        .map(|row| Structured(Firm(row, df.get_parameters())))
-                        .unwrap_or(Undefined),
-                    TypedValue::Undefined => Undefined,
-                    z => return throw(TypeMismatch(UnsupportedType(UnresolvedType, z.get_type())))
-                })
-            }
-            StructureExpression(items) => {
-                let mut new_items = Vec::new();
-                for (name, expr) in items {
-                    new_items.push((name.to_string(), expr.to_pure()?))
-                }
-                Ok(Structured(Soft(SoftStructure::from_tuples(new_items))))
-            }
-            Literal(value) => Ok(value.clone()),
-            Minus(a, b) => Ok(a.to_pure()? - b.to_pure()?),
-            Modulo(a, b) => Ok(a.to_pure()? % b.to_pure()?),
-            Multiply(a, b) => Ok(a.to_pure()? * b.to_pure()?),
-            Neg(expr) => expr.to_pure().map(|v| -v),
-            Plus(a, b) => Ok(a.to_pure()? + b.to_pure()?),
-            Pow(a, b) => Ok(a.to_pure()?.pow(&b.to_pure()?)
-                .unwrap_or(Undefined)),
-            Range(Exclusive(a, b)) =>
-                Ok(ArrayValue(Array::from(TypedValue::exclusive_range(
-                    a.to_pure()?,
-                    b.to_pure()?,
-                    Number(I64Value(1)),
-                )))),
-            Range(Inclusive(a, b)) =>
-                Ok(ArrayValue(Array::from(TypedValue::inclusive_range(
-                    a.to_pure()?,
-                    b.to_pure()?,
-                    Number(I64Value(1)),
-                )))),
-            z => throw(TypeMismatch(ConstantValueExpected(z.to_code())))
-        }
-    }
+    
 }
 
 impl Display for Expression {
@@ -1054,7 +1091,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(20)))),
             Box::new(Literal(Number(I64Value(3)))),
         );
-        assert_eq!(model.to_pure().unwrap(), Number(I64Value(0)));
+        assert_eq!(to_pure(&model), Number(I64Value(0)));
         assert_eq!(Expression::decompile(&model), "20 & 3")
     }
 
@@ -1064,7 +1101,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(20)))),
             Box::new(Literal(Number(I64Value(3)))),
         );
-        assert_eq!(model.to_pure().unwrap(), Number(I64Value(23)));
+        assert_eq!(to_pure(&model), Number(I64Value(23)));
         assert_eq!(Expression::decompile(&model), "20 | 3")
     }
 
@@ -1074,7 +1111,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(20)))),
             Box::new(Literal(Number(I64Value(3)))),
         );
-        assert_eq!(model.to_pure().unwrap(), Number(I64Value(160)));
+        assert_eq!(to_pure(&model), Number(I64Value(160)));
         assert_eq!(Expression::decompile(&model), "20 << 3")
     }
 
@@ -1084,7 +1121,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(20)))),
             Box::new(Literal(Number(I64Value(3)))),
         );
-        assert_eq!(model.to_pure().unwrap(), Number(I64Value(2)));
+        assert_eq!(to_pure(&model), Number(I64Value(2)));
         assert_eq!(Expression::decompile(&model), "20 >> 3")
     }
 
@@ -1094,7 +1131,7 @@ mod expression_tests {
             Box::new(Literal(Number(I64Value(20)))),
             Box::new(Literal(Number(I64Value(3)))),
         );
-        assert_eq!(model.to_pure().unwrap(), Number(I64Value(23)));
+        assert_eq!(to_pure(&model), Number(I64Value(23)));
         assert_eq!(Expression::decompile(&model), "20 ^ 3")
     }
 
@@ -1109,13 +1146,17 @@ mod expression_tests {
         };
         assert_eq!(Expression::decompile(&model), "f(2, 3)")
     }
-    
+
+    fn to_pure(expr: &Expression) -> TypedValue {
+        Machine::evaluate_pure(expr).unwrap().1
+    }
 }
 
 /// pure expression unit tests
 #[cfg(test)]
 mod pure_expression_tests {
     use crate::compiler::Compiler;
+    use crate::machine::Machine;
     use crate::numbers::Numbers::{F64Value, I64Value};
     use crate::sequences::Array;
     use crate::typed_values::TypedValue;
@@ -1213,8 +1254,21 @@ mod pure_expression_tests {
 
     fn verify_pure(code: &str, expected: TypedValue) {
         let expr = Compiler::build(code).unwrap();
-        assert_eq!(expr.to_pure().unwrap(), expected)
+        let (_, actual) = Machine::evaluate_pure(&expr).unwrap();
+        assert_eq!(actual, expected)
     }
+}
+
+fn is_pure_a_and_b(a: &Expression, b: &Expression) -> bool {
+    a.is_pure() && b.is_pure()
+}
+
+fn is_pure_all(items: &Vec<Expression>) -> bool {
+    items.iter().all(|item| item.is_pure())
+}
+
+fn is_pure_opt(maybe_expr: &Option<Box<Expression>>) -> bool {
+    maybe_expr.is_none() || maybe_expr.iter().all(|e| e.is_pure())
 }
 
 /// inference unit tests
@@ -1325,7 +1379,7 @@ mod inference_tests {
         verify_data_type(r#"
             let stock = { symbol: "TED", exchange: "AMEX", last_sale: 13.37 }
             stock.last_sale
-        "#, UnresolvedType);
+        "#, RuntimeResolvedType);
     }
 
     #[test]
@@ -1371,10 +1425,5 @@ mod inference_tests {
     #[test]
     fn test_infer_row_id() {
         verify_data_type("__row_id__", NumberType(I64Kind));
-    }
-
-    #[test]
-    fn test_infer_tools_row_id() {
-        verify_data_type("tools::row_id()", NumberType(I64Kind));
     }
 }

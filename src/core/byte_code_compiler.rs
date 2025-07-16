@@ -6,7 +6,7 @@
 use crate::columns::Column;
 use crate::dataframe::Dataframe;
 
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::Exact;
 use crate::expression::Expression::Literal;
@@ -203,13 +203,25 @@ impl ByteCodeCompiler {
         buf.extend(bytes);
         buf
     }
+
+    pub fn vec_to_u128(bytes: Vec<u8>) -> Option<u128> {
+        if bytes.len() > 16 {
+            return None; // u128 can only hold 16 bytes
+        }
+
+        let mut buf = [0u8; 16];
+        let start = 16 - bytes.len();
+        buf[start..].copy_from_slice(&bytes);
+
+        Some(u128::from_be_bytes(buf))
+    }
 }
 
 /// Unit tests
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dataframe::Dataframe::Model;
+    use crate::dataframe::Dataframe::ModelTable;
     use crate::expression::Conditions::{GreaterThan, LessOrEqual};
     use crate::expression::Expression::{Condition, Identifier, If, Limit, Literal, Multiply, Plus, StructureExpression, Where};
     use crate::model_row_collection::ModelRowCollection;
@@ -220,7 +232,7 @@ mod tests {
     #[test]
     fn test_table_codec() {
         let phys_columns = make_quote_columns();
-        let expected = TableValue(Model(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
+        let expected = TableValue(ModelTable(ModelRowCollection::from_columns_and_rows(&phys_columns, &vec![
             make_quote(0, "ABC", "AMEX", 11.77),
             make_quote(1, "UNO", "OTC", 0.2456),
             make_quote(2, "BIZ", "NYSE", 23.66),

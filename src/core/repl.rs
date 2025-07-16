@@ -5,18 +5,18 @@
 
 use crate::columns::Column;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::{F64Value, I64Value};
-use crate::oxide_server::SharedState;
 use crate::packages::OxidePkg;
+use crate::packages::PackageOps;
 use crate::parameter::Parameter;
-use crate::platform::PackageOps;
 use crate::repl;
 use crate::row_collection::RowCollection;
 use crate::sequences::Array;
+use crate::server_engine::SharedState;
 use crate::structures::Row;
 use crate::structures::Structures::{Hard, Soft};
 use crate::structures::{HardStructure, SoftStructure, Structure};
@@ -34,6 +34,66 @@ use shared_lib::cnv_error;
 use std::fs::File;
 use std::io;
 use std::io::{stdout, Read, Write};
+
+use crate::compiler::Compiler;
+use rustyline::completion::{Completer, Pair};
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::history::FileHistory;
+use rustyline::validate::Validator;
+use rustyline::{Context, Helper, Result};
+
+/// Oxide REPL auto-completion config
+pub struct OxideCompleter {
+    keywords: Vec<String>,
+}
+
+impl OxideCompleter {
+    pub fn new() -> Self {
+        Self {
+            keywords: Compiler::get_keywords()
+        }
+    }
+}
+
+impl Completer for OxideCompleter {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let word_start = line[..pos]
+            .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .map_or(0, |i| i + 1);
+
+        let prefix = &line[word_start..pos];
+
+        let candidates = self
+            .keywords
+            .iter()
+            .filter(|kw| kw.starts_with(prefix))
+            .map(|kw| Pair {
+                display: kw.clone(),
+                replacement: kw.clone(),
+            })
+            .collect();
+
+        Ok((word_start, candidates))
+    }
+}
+
+impl Helper for OxideCompleter {}
+impl Hinter for OxideCompleter {
+    type Hint = String;
+    fn hint(&self, _line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
+        None
+    }
+}
+impl Highlighter for OxideCompleter {}
+impl Validator for OxideCompleter {}
 
 /// REPL application state
 pub struct REPLState {
@@ -80,6 +140,127 @@ impl REPLState {
     }
 }
 
+pub fn do_terminal_bash_like(
+    mut state: REPLState,
+    args: Vec<String>,
+) -> std::io::Result<()> {
+    use rustyline::error::ReadlineError;
+    use rustyline::{Config, Editor};
+    
+    // show title
+    let mut stdout = stdout();
+    show_title();
+    stdout.flush()?;
+
+    // setup system variables
+    state = setup_system_variables(state, args);
+    
+    // create the editor configuration
+    let config = Config::builder()
+        .completion_type(rustyline::CompletionType::List)
+        .build();
+    let completer = OxideCompleter::new();
+    let mut rl = Editor::<OxideCompleter, FileHistory>::with_config(config)
+        .map_err(|e| cnv_error!(e))?;
+    rl.set_helper(Some(completer));
+    
+    let mut buffer = String::new();
+    let mut prompt = state.get_prompt();
+    
+    loop {
+        let readline = rl.readline(prompt.as_str());
+        match readline {
+            Ok(raw_line) => {
+                let line = raw_line.trim();
+                if buffer.is_empty() && line == "q!" {
+                    break;
+                }
+
+                // update the buffer
+                buffer.push_str(line);
+                buffer.push('\n');
+
+                // if the statement is incomplete, keep buffering
+                if is_incomplete(&buffer) {
+                    prompt = "...> ".into();
+                    continue;
+                }
+
+                let trimmed = buffer.trim();
+                if !trimmed.is_empty() {
+                    // add the line to history
+                    rl.add_history_entry(trimmed).map_err(|e| cnv_error!(e))?;
+
+                    // evaluate the input
+                    state = handle_input(state, trimmed)?;
+
+                    // Reset for next input
+                    buffer.clear();
+                    prompt = state.get_prompt();
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("^D");
+                break;
+            }
+            Err(err) => {
+                eprintln!("REPL error: {:?}", err);
+                break;
+            }
+        }
+    }
+
+    println!("👋 Goodbye!");
+    Ok(())
+}
+
+fn is_incomplete(code: &str) -> bool {
+    let mut parens = 0;
+    let mut braces = 0;
+    let mut in_string = false;
+    let mut prev_char = '\0';
+    for c in code.chars() {
+        match c {
+            '"' if prev_char != '\\' => in_string = !in_string,
+            '(' if !in_string => parens += 1,
+            ')' if !in_string => parens -= 1,
+            '{' if !in_string => braces += 1,
+            '}' if !in_string => braces -= 1,
+            _ => {}
+        }
+        prev_char = c;
+    }
+
+    parens > 0 || braces > 0 || in_string
+}
+
+fn handle_input(mut state: REPLState, input: &str) -> std::io::Result<REPLState> {
+    let t0 = Local::now();
+    match state.interpreter.evaluate(input) {
+        Ok(result) => {
+            // compute the execution-time
+            let execution_time = compute_time_millis(Local::now() - t0);
+            // process the result
+            let limit = state.interpreter.get("__COLUMNS__").map(|v| v.to_usize());
+            let raw_lines = build_output(state.counter, result, execution_time)?;
+            let lines = limit
+                .map(|n| limit_width(raw_lines.clone(), n))
+                .unwrap_or(raw_lines);
+            for line in lines {
+                println!("{}", line)
+            }
+        }
+        Err(err) => eprintln!("{}", err),
+    }
+    state.counter += 1;
+    Ok(state)
+}
+
+
 pub fn do_terminal(
     mut state: REPLState,
     args: Vec<String>,
@@ -116,26 +297,7 @@ fn do_terminal_input(
         "q!" => state.die(),
         input if input.is_empty() => {}
         input => {
-            let t0 = Local::now();
-            match state.interpreter.evaluate(input) {
-                Ok(result) => {
-                    // compute the execution-time
-                    let execution_time = compute_time_millis(Local::now() - t0);
-                    // record the request in the history table
-                    update_history(&state, input, execution_time).ok();
-                    // process the result
-                    let limit = state.interpreter.get("__COLUMNS__").map(|v| v.to_usize());
-                    let raw_lines = build_output(state.counter, result, execution_time)?;
-                    let lines = limit
-                        .map(|n| limit_width(raw_lines.clone(), n))
-                        .unwrap_or(raw_lines);
-                    for line in lines {
-                        println!("{}", line)
-                    }
-                }
-                Err(err) => eprintln!("{}", err),
-            }
-            state.counter += 1;
+            state = handle_input(state, input)?;
             stdout.flush()? 
         }
     }
@@ -177,8 +339,8 @@ fn setup_system_variables(mut state: REPLState, args: Vec<String>) -> REPLState 
 
 /// Starts the listener server
 async fn start_server(args: Vec<String>) -> std::io::Result<()> {
-    use crate::oxide_server::*;
-    use crate::platform::{MAJOR_VERSION, MINOR_VERSION};
+    use crate::server_engine::*;
+    use crate::packages::{MAJOR_VERSION, MINOR_VERSION};
     use crate::web_routes;
     use actix_web::web;
     use actix_web::web::Data;
@@ -198,34 +360,12 @@ async fn start_server(args: Vec<String>) -> std::io::Result<()> {
     Ok(())
 }
 
-fn update_history(
-    state: &REPLState,
-    input: &str,
-    processing_time: f64,
-) -> std::io::Result<TypedValue> {
-    let mut frc = FileRowCollection::open_or_create(
-        &OxidePkg::get_oxide_history_ns(),
-        OxidePkg::get_oxide_history_parameters(),
-    )?;
-    let result = frc.append_row(Row::new(
-        0,
-        vec![
-            Number(I64Value(state.session_id)),
-            Number(I64Value(state.user_id)),
-            Number(F64Value(processing_time)),
-            StringValue(cleanup(input)),
-        ],
-    ));
-    Ok(result)
-}
-
 /// Unit tests
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::repl::REPLState;
     use crate::terminal::{read_line_from, run_script};
-    use std::cmp::max;
     use std::fs;
 
     #[test]
@@ -260,16 +400,12 @@ mod tests {
     #[test]
     fn test_build_output_header_string() {
         let mut interpreter = Interpreter::new();
-        let result = interpreter
-            .evaluate(
-                r#"
+        let result = interpreter.evaluate(r#"
             "Hello World"
-        "#,
-            )
-            .unwrap();
+        "#).unwrap();
 
-        let lines = build_output_header(12, &result, 0.1).unwrap();
-        assert_eq!(lines, "12: returned type `String(11)` in 0.1 ms")
+        let header = build_output_header(12, &result, 0.1).unwrap();
+        assert_eq!(header, "12: \u{1b}[7mreturned type `String(11)` in 0.1 ms\u{1b}[0m")
     }
 
     #[test]
@@ -278,7 +414,7 @@ mod tests {
         let result = interpreter
             .evaluate(
                 r#"
-            tools::describe(oxide::help())
+            oxide::help()::describe()
         "#,
             )
             .unwrap();
@@ -296,7 +432,7 @@ mod tests {
         let result = interpreter
             .evaluate(
                 r#"
-            tools::describe(oxide::help())
+            oxide::help()::describe()
         "#,
             )
             .unwrap();
@@ -396,22 +532,5 @@ mod tests {
     #[test]
     fn test_show_title() {
         show_title()
-    }
-
-    #[test]
-    fn test_update_history() {
-        let state = REPLState::new();
-        let _ = update_history(&state, "oxide::help()", 3.5).unwrap();
-        let mut frc = FileRowCollection::open_or_create(
-            &OxidePkg::get_oxide_history_ns(),
-            OxidePkg::get_oxide_history_parameters(),
-        )
-        .unwrap();
-        let count = frc.len().unwrap() as i64;
-        let last = max(count - 1, -1);
-        let row_id = last as usize;
-        let row = frc.read_one(row_id).unwrap();
-        assert!(row.is_some());
-        frc.resize(row_id).unwrap();
     }
 }

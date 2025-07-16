@@ -16,8 +16,8 @@ use crate::expression::{Conditions, Expression};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::I64Value;
+use crate::packages::PackageOps;
 use crate::parameter::Parameter;
-use crate::platform::PackageOps;
 use crate::row_collection::RowCollection;
 use crate::sequences::Sequence;
 use crate::structures::Structure;
@@ -50,12 +50,14 @@ impl QueryEngine {
                 let (from, condition, limit) = Self::unwind_update_graph(expression.clone())?;
                 Self::eval_undelete_rows(ms, from, condition, limit)
             }
-            _ =>
+            expr => {
+                let is_deselect = matches!(expr, Deselect { .. });
                 Self::unwind_query_graph(
                     expression.clone(),
                     |from, fields, condition, group_by, having, order_by, limit| {
-                        Self::eval_query(ms, from, fields, condition, group_by, having, order_by, limit)
+                        Self::eval_query(ms, from, fields, condition, group_by, having, order_by, limit, is_deselect)
                     })
+            }
         }
     }
     
@@ -136,9 +138,13 @@ impl QueryEngine {
         maybe_group_by: Option<Vec<Expression>>,
         having: Option<Conditions>,
         maybe_order_by: Option<Vec<Expression>>,
-        maybe_limit: Option<Box<Expression>>
+        maybe_limit: Option<Box<Expression>>,
+        is_deselect: bool,
     ) -> std::io::Result<(Machine, TypedValue)> {
         let (ms, df0) = ms.evaluate_as_dataframe(&from)?;
+        let fields = if is_deselect {
+            Self::get_fields_for_deselection(&df0, &fields)
+        } else { fields };
         let (ms, df1) =
             if maybe_group_by.is_some() {
                 Self::perform_aggregation(ms, df0, fields, condition, maybe_group_by, having, maybe_order_by, maybe_limit)?
@@ -148,6 +154,29 @@ impl QueryEngine {
                 Self::perform_transformation(ms, df0, fields, condition, maybe_order_by, maybe_limit)?
             };
         Ok((ms, TableValue(df1)))
+    }
+    
+    fn get_fields_for_deselection(
+        df: &Dataframe,
+        deselect_fields: &Vec<Expression>
+    ) -> Vec<Expression> {
+        use std::collections::HashSet;
+        
+        // determine the columns to exclude
+        let mut excluded = HashSet::new();
+        for field in deselect_fields.iter() {
+            match field {
+                Identifier(name) => { excluded.insert(name.clone()); },
+                _ => {}
+            }
+        }
+        
+        // generate the new fields list
+        let mut new_fields = df.get_parameters().iter()
+            .filter(|p| !excluded.contains(p.get_name()))
+            .map(|p| Identifier(p.get_name().to_string()))
+            .collect::<Vec<_>>();
+        new_fields
     }
     
     /// Pulls a row (retrieves then deletes it) from a table structure 
@@ -220,7 +249,7 @@ impl QueryEngine {
         
         // return the table
         match container {
-            Identifier(name) => Ok((ms.with_variable(name, TableValue(Model(mrc))), Boolean(true))),
+            Identifier(name) => Ok((ms.with_variable(name, TableValue(ModelTable(mrc))), Boolean(true))),
             other => throw(Exact(other.to_code()))
         }
     }
@@ -366,7 +395,7 @@ impl QueryEngine {
                 // perform the summarization of each dataframe by key
                 let mut partitions = vec![];
                 for mrc in sink.values() {
-                   let (_ms, mdf) = Self::perform_summarization(ms.clone(), Model(mrc.to_owned()), fields.clone(), None, true)?;
+                   let (_ms, mdf) = Self::perform_summarization(ms.clone(), ModelTable(mrc.to_owned()), fields.clone(), None, true)?;
                     partitions.push(mdf)
                 }
                 
@@ -419,7 +448,7 @@ impl QueryEngine {
         let mrc = ModelRowCollection::from_parameters_and_rows(&params, &vec![
             Row::new(0, agg_values)
         ]);
-        Ok((ms, Model(mrc)))
+        Ok((ms, ModelTable(mrc)))
     }
     
     /// Evaluates a transformation query
@@ -462,10 +491,10 @@ impl QueryEngine {
         let condition = condition.unwrap_or(True);
         for row in src.iter() {
             if ms.with_row(src.get_columns(), &row).is_true(&condition)?.1 {
-                mrc.append_row(row);
+                mrc.append_row(row)?;
             }
         }
-        Ok((ms, Model(mrc)))
+        Ok((ms, ModelTable(mrc)))
     }
     
     fn do_table_limit(
@@ -479,11 +508,11 @@ impl QueryEngine {
             while row_id < cut_off {
                 match src.read_one(row_id)? {
                     None => {}
-                    Some(row) => { dest.append_row(row); }
+                    Some(row) => { dest.append_row(row)?; }
                 }
                 row_id += 1;
             }
-            Ok((ms, Model(dest)))
+            Ok((ms, ModelTable(dest)))
         } else {
             Ok((ms, src))
         }
@@ -520,7 +549,7 @@ impl QueryEngine {
                     .collect::<Vec<_>>()
                     .join("$");
                 let mut mrc = sink.entry(key).or_insert(ModelRowCollection::new(columns.clone()));
-                mrc.append_row(row);
+                mrc.append_row(row)?;
             }
         }
         Ok((ms, sink))
@@ -547,7 +576,7 @@ impl QueryEngine {
                 }
             }
         }
-        Ok((ms0.clone(), Model(rc1)))
+        Ok((ms0.clone(), ModelTable(rc1)))
     }
     
     fn build_aggregation_parameters(
@@ -587,7 +616,7 @@ impl QueryEngine {
                             _ => false
                         }
                     }
-                    expr => expr.to_pure().is_ok()
+                    expr => expr.is_pure()
                 }
             _ => false
         })
@@ -772,7 +801,9 @@ impl QueryEngine {
             T: Fn(Expression, Vec<Expression>, Option<Conditions>, Option<Vec<Expression>>, Option<Conditions>, Option<Vec<Expression>>, Option<Box<Expression>>) -> std::io::Result<S>,
         {
             match from {
-                Delete {from } =>
+                Delete { from } =>
+                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit, f),
+                Deselect { fields, from } =>
                     unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit, f),
                 GroupBy { from, columns: group_by } =>
                     unwind(from.deref().clone(), fields, condition, Some(group_by), having, order_by, limit, f),
@@ -784,7 +815,7 @@ impl QueryEngine {
                     unwind(from.deref().clone(), fields, condition, group_by, having, Some(order_by), limit, f),
                 Select { fields, from } =>
                     unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit, f),
-                Undelete {from } =>
+                Undelete { from } =>
                     unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit, f),
                 Where { from, condition } =>
                     unwind(from.deref().clone(), fields, Some(condition), group_by, having, order_by, limit, f),
@@ -818,7 +849,7 @@ impl QueryEngine {
 /// Oxide QL tests
 #[cfg(test)]
 mod tests {
-    use crate::dataframe::Dataframe::Model;
+    use crate::dataframe::Dataframe::ModelTable;
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
     use crate::testdata::*;
@@ -893,12 +924,12 @@ mod tests {
     #[test]
     fn test_table_new() {
         verify_exact_value(r#"
-            Table::new(
+            Table(
                 symbol: String(8),
                 exchange: String(8),
                 last_sale: f64
-            )
-        "#, TableValue(Model(ModelRowCollection::with_rows(
+            )::new
+        "#, TableValue(ModelTable(ModelRowCollection::with_rows(
             make_quote_columns(), Vec::new(),
         ))))
     }
@@ -936,26 +967,24 @@ mod tests {
     fn test_table_product() {
         let mut interpreter = Interpreter::new();
         interpreter = verify_exact_code_with(interpreter, r#"
-            use str, tools
             faces = select face: value from (
-                (2..=10):::map(n -> n:::to_string()) ++ ["J", "Q", "K", "A"]
-            ):::to_table()
-            suits = select suit: value from ["♥️", "♦️", "♣️", "♠️"]:::to_table()
+                (2..=10)::map(n -> n::to_string()) ++ ["J", "Q", "K", "A"]
+            )::to_table()
+            suits = select suit: value from ["♥️", "♦️", "♣️", "♠️"]::to_table()
         "#, "true");
 
         interpreter = verify_exact_table_with(interpreter, r#"
-            (faces * suits) limit 5
+            faces * suits limit 5
         "#, vec![
-            "|--------------------|",
-            "| id | face | suit   |",
-            "|--------------------|",
-            "| 0  | 2    | ♥\u{fe0f} |",
-            "| 1  | 2    | ♦\u{fe0f} |",
-            "| 2  | 2    | ♣\u{fe0f} |",
-            "| 3  | 2    | ♠\u{fe0f} |",
-            "| 4  | 3    | ♥\u{fe0f} |",
-            "|--------------------|"
-        ]);
+            "|------------------|", 
+            "| id | face | suit |", 
+            "|------------------|", 
+            "| 0  | 2    | ♥️   |", 
+            "| 1  | 2    | ♦️   |", 
+            "| 2  | 2    | ♣️   |",
+            "| 3  | 2    | ♠️   |", 
+            "| 4  | 3    | ♥️   |", 
+            "|------------------|"]);
     }
 
     #[test]
@@ -1029,7 +1058,7 @@ mod tests {
         interpreter = verify_exact_code_with(interpreter, r#"
             stocks = nsd::save(
                 "query_engine.crud.stocks",
-                Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
             )
         "#, "true");
 
@@ -1087,6 +1116,31 @@ mod tests {
             "| 5  | TRX    | NASDAQ   | 7.9311    |",
             "|------------------------------------|"
         ]);
+    }
+
+    #[test]
+    fn test_table_deselect_from_variable() {
+        verify_exact_table(r#"
+            // define a new table
+            let stocks = 
+                |--------------------------------------|
+                | symbol | exchange | last_sale | rank |
+                |--------------------------------------|
+                | BOOM   | NYSE     | 113.76    | 1    |
+                | ABC    | AMEX     | 24.98     | 2    |
+                | JET    | NASDAQ   | 64.24     | 3    |
+                |--------------------------------------|
+             
+            // filter out rank
+            deselect rank from stocks
+        "#, vec![
+            "|------------------------------------|",
+            "| id | symbol | exchange | last_sale |",
+            "|------------------------------------|",
+            "| 0  | BOOM   | NYSE     | 113.76    |",
+            "| 1  | ABC    | AMEX     | 24.98     |",
+            "| 2  | JET    | NASDAQ   | 64.24     |",
+            "|------------------------------------|"]);
     }
     
     #[test]
@@ -1451,8 +1505,8 @@ mod tests {
             "|-----------------------------------------------------------------------|",
             "| id | symbol | exchange | price   | symbol_md5                         |",
             "|-----------------------------------------------------------------------|",
-            "| 0  | ABC    | AMEX     | 11.77   | 0v902fbdd2b1df0c4f70b4a5d23525e932 |",
-            "| 1  | GOTO   | OTC      | 24.1428 | 0v4b8bb3c94a9676b5f34ace4d7102e5b9 |",
+            "| 0  | ABC    | AMEX     | 11.77   | 0B902fbdd2b1df0c4f70b4a5d23525e932 |",
+            "| 1  | GOTO   | OTC      | 24.1428 | 0B4b8bb3c94a9676b5f34ace4d7102e5b9 |",
             "|-----------------------------------------------------------------------|"]);
     }
 
@@ -1462,19 +1516,19 @@ mod tests {
             // create a new table
             stocks = nsd::save(
                 "query_engine.embedded_a.stocks",
-                Table::new(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date))
+                Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: DateTime))::new
             )
             
             // describe the table
             stocks::describe()
         "#, vec![
-            "|-------------------------------------------------------------------------------------------|",
-            "| id | name     | type                                        | default_value | is_nullable |",
-            "|-------------------------------------------------------------------------------------------|",
-            "| 0  | symbol   | String(8)                                   | null          | true        |",
-            "| 1  | exchange | String(8)                                   | null          | true        |",
-            "| 2  | history  | Table(last_sale: f64, processed_time: Date) | null          | true        |",
-            "|-------------------------------------------------------------------------------------------|"])
+            "|-----------------------------------------------------------------------------------------------|", 
+            "| id | name     | type                                            | default_value | is_nullable |", 
+            "|-----------------------------------------------------------------------------------------------|", 
+            "| 0  | symbol   | String(8)                                       | null          | true        |", 
+            "| 1  | exchange | String(8)                                       | null          | true        |", 
+            "| 2  | history  | Table(last_sale: f64, processed_time: DateTime) | null          | true        |", 
+            "|-----------------------------------------------------------------------------------------------|"])
     }
 
     #[test]
@@ -1483,7 +1537,7 @@ mod tests {
             // create a new table
             stocks = nsd::save(
                 "query_engine.embedded_b.stocks",
-                Table::new(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date))
+                Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: DateTime))::new
             )
             
             // insert some data
@@ -1505,15 +1559,15 @@ mod tests {
             // create a new table
             stocks = nsd::save(
                 "query_engine.embedded_c.stocks",
-                Table::new(symbol: String(8), exchange: String(8), history: Table(last_sale: f64))
+                Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64))::new
             )
             
             // insert some data
-            [{ symbol: "BIZ", exchange: "NYSE", history: tools::to_table({ last_sale: 23.66 }) },
-             { symbol: "GOTO", exchange: "OTC", history: tools::to_table([
+            [{ symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66 }::to_table() },
+             { symbol: "GOTO", exchange: "OTC", history: [
                     { last_sale: 0.051 }, 
                     { last_sale: 0.048 }
-                ])
+                ]::to_table()
              }] ~> stocks
             stocks
         "#, vec![
@@ -1531,15 +1585,15 @@ mod tests {
         interpreter = verify_exact_code_with(interpreter, r#"
             let stocks = nsd::save(
                 "query_engine.examples.stocks",
-                Table::new(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date))
+                Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: DateTime))::new
             )
         "#, "true");
         
         // write a row to the `stocks` table
         interpreter = verify_exact_code_with(interpreter, r#"
-            { symbol: "BIZ", exchange: "NYSE", history: tools::to_table([
+            { symbol: "BIZ", exchange: "NYSE", history: [
                 { last_sale: 11.67, processed_time: 2025-01-13T03:25:47.350Z }
-            ])} ~> stocks
+            ]::to_table()} ~> stocks
         "#, "1");
 
         // verify the contents of `stocks`
@@ -1572,9 +1626,9 @@ mod tests {
 
         // write another row to the `stocks` table
         interpreter = verify_exact_code_with(interpreter, r#"
-            { symbol: "ABY", exchange: "NYSE", history: tools::to_table([
+            { symbol: "ABY", exchange: "NYSE", history: [
                 { last_sale: 78.33, processed_time: 2025-01-13T03:25:47.392Z }
-            ])} ~> stocks
+            ]::to_table()} ~> stocks
         "#, "1");
 
         // { symbol: "BIZ", exchange: "NYSE", history: [{ last_sale: 11.67, processed_time: 2025-01-13T03:25:47.350Z }] }

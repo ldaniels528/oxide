@@ -9,6 +9,7 @@ use chrono::{Datelike, Local, TimeZone, Timelike};
 use crossterm::style::Stylize;
 use futures_util::SinkExt;
 use isahc::{Body, ReadResponseExt, Request, RequestExt, Response};
+use itertools::Itertools;
 use log::{error, info};
 use regex::Error;
 use serde::{Deserialize, Serialize};
@@ -28,14 +29,14 @@ use uuid::Uuid;
 
 use crate::columns::Column;
 use crate::compiler::Compiler;
-use crate::cursor::Cursor;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
-use crate::sequences::{is_in_range, Array, Sequence};
+use crate::sequences::{is_in_range, Array, Sequence, Sequences};
 
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Disk, Model, TestReport};
+use crate::dataframe::Dataframe::{DiskTable, ModelTable, TestReport};
 
+use crate::builtins::Builtins;
 use crate::errors::Errors::*;
 use crate::errors::SyntaxErrors::IllegalExpression;
 use crate::errors::TypeMismatchErrors::*;
@@ -51,9 +52,9 @@ use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers::*;
 use crate::object_config::{HashIndexConfig, ObjectConfig};
-use crate::packages::{ToolsPkg, UtilsPkg};
+use crate::packages::{ArraysPkg, IoPkg, StringsPkg, ToolsPkg, UtilsPkg};
+use crate::packages::{Package, PackageOps};
 use crate::parameter::Parameter;
-use crate::platform::{Package, PackageOps};
 use crate::query_engine::QueryEngine;
 use crate::row_collection::RowCollection;
 use crate::sequences::Sequences::{TheArray, TheDataframe, TheRange, TheTuple};
@@ -65,35 +66,26 @@ use crate::test_engine::TestEngine;
 use crate::testdata::verify_exact_table_with;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use crate::utils::{lift_condition, pull_array, pull_bool, pull_identifier_name, pull_name, pull_number, pull_string, pull_string_lit, pull_vec};
-use crate::{compiler, query_engine};
+use crate::utils::*;
+use crate::web_engine::WebEngine;
+use crate::{compiler, packages, query_engine};
 use shared_lib::cnv_error;
 
 pub const ROW_ID: &str = "__row_id__";
 pub const FX_SELF: &str = "__self__";
 
-/// Represents the state of the machine.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Machine {
-    observations: Vec<Observations>,
-    variables: HashMap<String, TypedValue>,
-}
-
+/// Observables
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Observations {
     VariableObservation { condition: Conditions, code: Expression },
 }
 
-impl Ord for Machine {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.observations.cmp(&other.observations)
-    }
-}
-
-impl PartialOrd for Machine {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.observations.partial_cmp(&other.observations)
-    }
+/// Represents the state of the machine.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Machine {
+    builtins: Builtins,
+    observations: Vec<Observations>,
+    variables: HashMap<String, TypedValue>,
 }
 
 impl Machine {
@@ -104,21 +96,27 @@ impl Machine {
 
     /// (lowest-level constructor) creates a new state machine
     fn build(
+        builtins: Builtins,
         observations: Vec<Observations>,
         variables: HashMap<String, TypedValue>,
     ) -> Self {
-        Self { observations, variables }
+        Machine { 
+            builtins,
+            observations, 
+            variables 
+        }
     }
 
     /// creates a new completely empty state machine
     pub fn empty() -> Self {
-        Self::build(Vec::new(), HashMap::new())
+        Self::build(Builtins::new(), Vec::new(), HashMap::new())
     }
 
     /// creates a new state machine prepopulated with platform packages
     pub fn new() -> Self {
-        PackageOps::build_packages().iter()
-            .fold(Self::empty(), |ms, (name, list)| {
+        let ms0 = Self::empty();
+        ms0.builtins.build_packages().iter()
+            .fold(ms0, |ms, (name, list)| {
                 ms.with_module(name, list.to_owned())
             })
     }
@@ -127,6 +125,9 @@ impl Machine {
     /// and default imports and/or constants
     pub fn new_platform() -> Self {
         Self::new()
+            .with_variable("__platform__", StringValue(whoami::platform().to_string()))
+            .with_variable("__realname__", StringValue(whoami::realname()))
+            .with_variable("__username__", StringValue(whoami::username()))
             .with_variable("𝑒", Number(F64Value(std::f64::consts::E)))
             .with_variable("π", Number(F64Value(std::f64::consts::PI)))
             .with_variable("γ", Number(F64Value(0.577215664901532860606512090082402431_f64)))
@@ -166,6 +167,7 @@ impl Machine {
             ArrowSkinnyRight(a, b) => self.exec_arrow_skinny_right(a, b),
             ArrowVerticalBar(a, b) => self.exec_function_pipeline(a, b, false),
             ArrowVerticalBar2x(a, b) => self.exec_function_pipeline(a, b, true),
+            As(value, data_type) => self.exec_cast_value_as(value, data_type),
             Assert { condition, message } =>  self.exec_assert(condition, message),
             BitwiseAnd(a, b) => self.eval_inline_2(a, b, |aa, bb| aa & bb),
             BitwiseOr(a, b) => self.eval_inline_2(a, b, |aa, bb| aa | bb),
@@ -179,21 +181,22 @@ impl Machine {
             ColonColonColon(a, b) => self.exec_colon_colon_colon(a, b),
             Condition(condition) => self.evaluate_condition(condition),
             Divide(a, b) => self.eval_inline_2(a, b, |aa, bb| aa / bb),
-            DoWhile { condition, code } => self.exec_while(condition, code),
+            DoWhile { condition, code } => self.exec_do_while(condition, code),
             ElementAt(a, b) => self.exec_index_of_collection(a, b),
             Feature { title, scenarios } => TestEngine::add_feature(self, title, scenarios),
             For { construct, op } => self.exec_for_construct(construct, op),
             FunctionCall { fx, args } => self.exec_function_call(fx, args),
-            HTTP(method_call) => self.exec_http(method_call),
+            HTTP(..) => WebEngine::evaluate(self, expression),
             Identifier(name) => self.exec_get_variable(name),
             If { condition, a, b } => self.exec_if_then_else(condition, a, b),
             Include(path) => self.exec_include(path),
             Infix(a, b) => self.exec_infix(a, b),
             IsDefined(a) => self.exec_is_defined(a),
             Literal(value) => Ok((self.to_owned(), value.to_owned())),
+            Ls(path) => self.exec_ls(path),
             MatchExpression(src, cases) => self.exec_match(src, cases),
             Minus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa - bb),
-            Module(name, ops) => self.exec_structure_module(name, ops),
+            Module(name, ops) => self.exec_module_structure(name, ops),
             Modulo(a, b) => self.eval_inline_2(a, b, |aa, bb| aa % bb),
             Multiply(a, b) => self.eval_inline_2(a, b, |aa, bb| aa * bb),
             NamedValue(name, expr) => {
@@ -209,14 +212,20 @@ impl Machine {
             Range(Inclusive(a, b)) => self.eval_inline_2(a, b, |aa, bb| aa.range_inclusive(&bb).unwrap_or(Undefined)),
             Referenced(a) => self.exec_referenced(a),
             Return(a) => self.evaluate(a),
-            Scenario { .. } => throw(Exact("scenario should not be called directly".to_string())),
+            Scenario { title, inherits, verifications } =>
+                TestEngine::add_feature(self, title, &vec![
+                    Scenario {
+                        title: title.clone(),
+                        inherits: inherits.clone(),
+                        verifications: verifications.clone()
+                    }
+                ]),
             SetVariables(vars, values) => self.exec_set_variables(vars, values),
             SetVariablesExpr(vars, values) => self.exec_set_variables_expr(vars, values),
             StructureExpression(items) => self.exec_structure_soft(items),
             Test(expr) => TestEngine::evaluate_feature(self, expr),
             Throw(expr) => self.exec_throw(expr),
             TupleExpression(args) => self.exec_tuple(args),
-            TypeDef(expr) => self.exec_type_def(expr),
             TypeOf(expr) => self.exec_type_of(expr),
             Use(ops) => self.exec_uses(ops),
             WhenEver { condition, code } => self.exec_when_statement(condition, code),
@@ -226,9 +235,9 @@ impl Machine {
             ////////////////////////////////////////////////////////////////////
             // SQL models
             ////////////////////////////////////////////////////////////////////
-            Delete { .. } | GroupBy { .. } | Having { .. }
-            | Limit { .. } | OrderBy { .. } | Select { .. }
-            | Undelete { .. } | Where { .. } =>
+            Delete { .. } | Deselect { .. } | GroupBy { .. } 
+            | Having { .. } | Limit { .. } | OrderBy { .. } 
+            | Select { .. } | Undelete { .. } | Where { .. } =>
                 QueryEngine::evaluate(self, expression),
         }
     }
@@ -273,10 +282,22 @@ impl Machine {
     /// evaluates the specified [Expression]; returning a [Dataframe] result.
     pub fn evaluate_as_dataframe(
         &self,
-        expr: &Expression,
+        expression: &Expression,
     ) -> std::io::Result<(Self, Dataframe)> {
-        let (ms, value) = self.evaluate(expr)?;
+        let (ms, value) = self.evaluate(expression)?;
         Ok((ms, value.to_dataframe()?))
+    }
+
+    /// evaluates the specified [Expression]; returning a [Dataframe] result.
+    pub fn evaluate_as_datatype(
+        &self,
+        expression: &Expression,
+    ) -> std::io::Result<(Self, DataType)> {
+        let (ms, value) = self.evaluate(expression)?;
+        match value {
+            Kind(datatype) => Ok((ms, datatype)),
+            other => throw(TypeMismatch(TypeIdentifierExpected(other.to_code())))
+        }
     }
 
     /// evaluates the specified [Expression]; returning a [String] result.
@@ -348,6 +369,18 @@ impl Machine {
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
+    pub fn evaluate_or_else(
+        &self,
+        maybe_expr: &Option<Box<Expression>>,
+        f: fn(&Machine) -> TypedValue
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match maybe_expr {
+            Some(expr) => self.evaluate(expr),
+            None => Ok((self.to_owned(), f(self))),
+        }
+    }
+
+    /// evaluates the specified [Expression]; returning a [TypedValue] result.
     pub fn evaluate_or_undef(&self, expr: &Option<Box<Expression>>) -> std::io::Result<(Self, TypedValue)> {
         match expr {
             None => Ok((self.to_owned(), Undefined)),
@@ -366,6 +399,15 @@ impl Machine {
                 .unwrap_or(Undefined))
             .collect::<Vec<TypedValue>>();
         Ok((machine, ArrayValue(Array::from(values))))
+    }
+
+    pub fn evaluate_pure(
+        expression: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match expression {
+            expr if expr.is_pure() => Self::new_platform().evaluate(expr),
+            expr => throw(Exact(format!("Pure expression was expected near {}", expr.to_code())))
+        }
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
@@ -393,15 +435,7 @@ impl Machine {
         Ok((ms, pull_bool(&result)?))
     }
 
-    pub fn is_true_expr(
-        &self,
-        conditions: &Expression,
-    ) -> std::io::Result<(Self, bool)> {
-        let (ms, result) = self.evaluate(&conditions)?;
-        Ok((ms, pull_bool(&result)?))
-    }
-
-    /// Evaluates a curvy left arrow (<~)
+    /// Pops (retrieves and removes) a record from a table using LIFO mechanics.
     /// #### fetches a record from a table
     /// ```
     /// { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 } ~> stocks
@@ -416,7 +450,7 @@ impl Machine {
         QueryEngine::eval_pull_row(&self, dest, src)
     }
 
-    /// Evaluates a curvy left x2 arrow (<<~)
+    /// Pops (retrieves and removes) record(s) from a table using LIFO mechanics.
     /// #### fetches all remaining records from a table
     /// ```
     /// { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 } ~>> stocks
@@ -431,7 +465,7 @@ impl Machine {
         QueryEngine::eval_pull_rows(&self, dest, src)
     }
 
-    /// Evaluates a curvy right arrow (~>), which appends record(s) to a table
+    /// Appends record(s) to a table.
     /// #### Examples
     /// ##### insert a row into the table
     /// ```
@@ -451,7 +485,7 @@ impl Machine {
         QueryEngine::eval_push_rows(self, source, target, false)
     }
 
-    /// Evaluates a curvy right x2 arrow (~>>), which overwrites record(s) in a table
+    /// Overwrites record(s) in a table.
     /// #### Examples
     /// ##### overwrites all rows of a table
     /// ```
@@ -471,7 +505,7 @@ impl Machine {
         QueryEngine::eval_push_rows(self, source, target, true)
     }
 
-    /// Evaluates a fat arrow (=>)
+    /// Evaluates match-case expression
     /// #### Examples
     /// ```
     /// x when x == 1 => stocks
@@ -499,18 +533,23 @@ impl Machine {
 
     /// Creates a function definition
     /// #### Examples
+    /// ##### Full signature with parameter and return types.
     /// ```
     /// fn product(a: i64, b: i64): i64 -> a * b
     /// ```
+    /// ##### Return type inferred, parameters still typed.
     /// ```
     /// fn product(a: i64, b: i64) -> a * b
     /// ```
+    /// ##### Fully inferred types — great for scripting.
     /// ```
     /// fn product(a, b) -> a * b
     /// ```
+    /// ##### First-class anonymous function assigned to identifier.
     /// ```
     /// product = (a, b) -> a * b
     /// ```
+    /// ##### Default argument value (b = 1) supported
     /// ```
     /// power = (a, b = 1) -> a * b
     /// ```
@@ -563,6 +602,16 @@ impl Machine {
             _ => throw(Exact(format!("Expression must be a boolean: {}", expr.to_code())))
         }
     }
+    
+    fn exec_cast_value_as(
+        &self,
+        value_expr: &Expression,
+        type_expr: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, value) = self.evaluate(value_expr)?;
+        let (ms, datatype) = ms.evaluate_as_datatype(type_expr)?;
+        Ok((ms, value.convert_to(&datatype)?))
+    }
 
     fn exec_coalesce_error(
         &self,
@@ -575,115 +624,155 @@ impl Machine {
         }
     }
 
-    /// Executes a method call or field assignment
+    /// Executes a native method call 
     /// #### Examples
+    /// #### Method call
     /// ```
-    /// str::left("hello", 5)
+    /// hello"::left("5)
     /// ```
+    /// #### Instantiation 
     /// ```
-    /// stock::is_this_you('ABC')
-    /// ```
-    /// ```
-    /// stock::last_sale = 24.11
+    /// let Stock = Struct(symbol: String(8), exchange: String(8), last_sale: f64)
+    /// Stock::new("ABC", "NYSE", 37.37)
     /// ```
     fn exec_colon_colon(
         &self,
         container: &Expression,
         field: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        // is this an instantiation?
-        let ms = self.clone();
         match field {
-            // ex: Error::new("Process failed")
+            // is this an instantiation?
+            // ex: Table(face: String(2), suit: String(2))::new
             FunctionCall { fx, args } if pull_identifier_name(fx)? == "new" => {
-                // `Error::new("Process failed")` becomes `Error("Process failed")`
-                let data_type = DataType::decipher_type(&FunctionCall {
-                    fx: container.clone().into(),
-                    args: args.to_vec()
-                })?;
-                let inst = data_type.get_default_value();
+                self.exec_colon_colon_new(container, args)
+            }
+            // ex: DateTime::new
+            Identifier(name) if name == "new" => 
+                self.exec_colon_colon_new(container, &vec![]),
+            // must be a platform function. 
+            // ex: stocks::replay()
+            _ => self.exec_colon_colon_builtins(container, field)
+        }
+    }
+
+    /// Evaluates a type instantiation
+    /// #### Examples
+    /// ##### System-defined types
+    /// ```
+    /// Table(face: String(2), suit: String(2))::new
+    /// ```
+    /// ##### User-defined types
+    /// ```
+    /// Cards = Table(face: String(2), suit: String(2))
+    /// Cards::new()
+    /// ```
+    fn exec_colon_colon_new(
+        &self,
+        container: &Expression,
+        args: &Vec<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        // evaluate the arguments
+        let (ms, inst_args) = self.evaluate_as_vec(args)?;
+        
+        // evaluate the class
+        match ms.evaluate(container)? {
+            (ms, Kind(data_type)) => {
+                let inst = data_type.instantiate(inst_args)?;
                 Ok((ms, inst))
             }
-            // must be a platform function. ex: nsd::replay(stocks)
-            _ => {
+            (ms, _) => {
+                let data_type = DataType::decipher_type(container)?;
+                let inst = data_type.instantiate(inst_args)?;
+                Ok((ms, inst))
+            }
+        }
+    }
+
+    /// Enables integrated support for package functions for specific data types:
+    /// #### Examples
+    /// ##### Many platform functions are treated as built-in/native functions
+    /// ```
+    /// "Hello World"::index_of("World")
+    /// ```
+    /// ##### Parentheses are optional for parameterless native functions
+    /// ```
+    /// stocks::to_json
+    /// ```
+    fn exec_colon_colon_builtins(
+        &self,
+        container: &Expression,
+        field: &Expression
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let (ms, host) = self.evaluate(&container)?;
+        let (fx_name, fx_args) = match field {
+            // label::trim()
+            FunctionCall { fx, args } => 
+                match fx.deref() {
+                    Identifier(fx_name) => {
+                        let mut fx_args = vec![host.clone()];
+                        let (_ms, args) = self.evaluate_as_vec(args)?;
+                        fx_args.extend(args);
+                        (fx_name.clone(), fx_args)
+                    }
+                    z => return throw(Exact(format!("Illegal function '{}' for {}", z.to_code(), host)))
+                }
+            // label::trim
+            Identifier(fx_name) => (fx_name.clone(), vec![host.clone()]),
+            z => return throw(Exact(format!("Illegal function '{}' for {}", z.to_code(), host)))
+        };
+        match self.builtins.lookup_by_value(&host, fx_name.as_str()) {
+            None => {
                 let container_name = pull_identifier_name(container)?;
-                match ms.get(container_name.as_str()) {
-                    Some(Structured(structure)) => 
-                        self.exec_colon_colon_structure(&container_name, Box::from(structure), field),
-                    Some(TableValue(df)) =>
-                        self.exec_colon_colon_table_tools(&container_name, df, field),
-                    // error cases
-                    None => throw(Exact(format!("Variable '{}' was not found", container_name))),
-                    Some(ErrorValue(err)) => throw(err),
-                    Some(x) if matches!(x, Null | Undefined) => 
-                        throw(Exact(format!("Cannot evaluate {}::{}", x, field.to_code()))),
-                    Some(z) => throw(Exact(format!("Illegal structure {}", z.to_code())))
+                match self.get(container_name.as_str()) {
+                    Some(Structured(structure)) =>
+                        self.exec_structure_method_or_property(&container_name, structure, field, false),
+                    _ => throw(Exact(format!("Illegal function '{}' for {}", fx_name, host)))
                 }
             }
+            Some(fx) => fx.evaluate(ms, fx_args)
         }
     }
 
     /// Enables support for structure method calls and field assignments
     /// #### Examples
+    /// ##### Method invocations
     /// ```
-    /// math::compute(5, 8)
+    /// math.compute(5, 8)
+    /// "Hello World"::index_of('W')
+    /// "Hello"::trim
     /// ```
+    /// ##### Property assignments
     /// ```
-    /// stock::last_sale = 24.11
+    /// stock.last_sale = 24.11
     /// ```
-    fn exec_colon_colon_structure(
+    /// ##### Property invocations
+    /// ```
+    /// stock.last_sale
+    /// ```
+    fn exec_structure_method_or_property(
         &self,
         container_name: &str,
-        structure: Box<dyn Structure>,
+        structure: Structures,
         field: &Expression,
+        allow_assignment: bool,
     ) -> std::io::Result<(Self, TypedValue)> {
         let ms = self.clone();
         match field {
-            // math::compute(5, 8)
+            // "Hello World"::index_of('W') | user_dao.create(item)
             FunctionCall { fx, args } => structure.pollute(ms).exec_function_call(fx, args),
-            // stock::last_sale = 24.11
-            SetVariables(var_expr, value_expr) => {
+            // stock.last_sale = 24.11
+            SetVariables(var_expr, value_expr) if allow_assignment => {
                 match var_expr.deref() {
                     Identifier(name) => {
                         let (ms, value) = ms.evaluate(value_expr)?;
                         Ok((ms.with_variable(container_name, Structured(structure.update_by_name(name, value))), Boolean(true)))
                     }
-                    z => throw(Exact(format!("Illegal field '{}' for structure {}",
-                                             z.to_code(), container_name)))
+                    z => throw(Exact(format!("Illegal field '{}' for structure {}", z.to_code(), container_name)))
                 }
             }
-            // stock::symbol
+            // "Hello"::trim | stock.symbol
             Identifier(name) => Ok((ms, structure.get(name))),
-            z => throw(Exact(format!("Illegal field '{}' for structure {}",
-                                     z.to_code(), container_name)))
-        }
-    }
-
-    /// Enables integrated support for the "tools" package for tables
-    /// #### Examples
-    /// ```
-    /// stocks::reverse()
-    /// ```
-    fn exec_colon_colon_table_tools(
-        &self,
-        container_name: &str,
-        df: Dataframe,
-        field: &Expression
-    ) -> std::io::Result<(Self, TypedValue)> {
-        match field {
-            // stocks::describe()
-            FunctionCall { fx, args } => {
-                match fx.deref() {
-                    Identifier(name) => {
-                        let (ms, args) = self.evaluate_as_vec(args)?;
-                        let mut f_args = vec![TableValue(df)];
-                        f_args.extend(args);
-                        ToolsPkg::invoke(name, ms, f_args)
-                    }
-                    z => throw(Exact(format!("Illegal function '{}' for table {}", z.to_code(), container_name)))
-                }
-            }
-            z => throw(Exact(format!("Illegal field '{}' for table {}", z.to_code(), container_name)))
+            z => throw(Exact(format!("Illegal field '{}' for structure {}", z.to_code(), container_name)))
         }
     }
 
@@ -842,10 +931,11 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let mut ms = self.clone();
         let (_, array_value) = ms.evaluate(items)?;
-        let array = pull_array(&array_value.to_array())?;
+        let array = pull_array(&array_value.to_array()?)?;
         let mut index = 0;
         let mut result = Undefined;
         while index < array.len() {
+            ms = ms.with_variable(ROW_ID, Number(U64Value(index as u64)));
             // get the value at `index`
             let value = array.get_or_else(index, Undefined);
             // deconstruct the value (e.g. (a, b) ~> a = ?, b = ?)
@@ -890,8 +980,8 @@ impl Machine {
     /// ```
     /// // arrays, tuples and structures can be deconstructed into arguments
     /// 
-    /// fn add(a, b) => a + b
-    /// fn inverse(a) => 1.0 / a
+    /// fn add(a, b) -> a + b
+    /// fn inverse(a) -> 1.0 / a
     /// (2, 3) |>> add |> inverse
     /// ```
     fn exec_function_pipeline(
@@ -903,8 +993,7 @@ impl Machine {
         let args = match is_destructure {
             true => match expr {
                 ArrayExpression(args) => args.clone(),
-                StructureExpression(items) =>
-                    items.iter().map(|(_, v)| v.clone()).collect(),
+                StructureExpression(items) => items.iter().map(|(_, v)| v.clone()).collect(),
                 TupleExpression(args) => args.clone(),
                 item => vec![item.clone()]
             },
@@ -923,7 +1012,7 @@ impl Machine {
     ) -> Self {
         if params.len() > args.len() {
             println!("Argument mismatch (params: {}, args: {:?})", Parameter::render(&params), args);
-            assert_eq!(params.len(), args.len());
+            //assert_eq!(params.len(), args.len());
         }
         params.iter().zip(args.iter())
             .fold(self.to_owned(), |ms, (c, v)|
@@ -939,16 +1028,13 @@ impl Machine {
                           fx: &Expression,
                           args: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
-        match self.evaluate_as_array(args)? {
-            (ms, ArrayValue(args)) =>
-                match ms.evaluate(fx)? {
-                    (ms, Function { params, body, .. }) =>
-                        ms.exec_function_arguments(params, args.get_values())
-                            .evaluate(&body),
-                    (ms, PlatformOp(pf)) => pf.evaluate(ms, args.get_values()),
-                    (_, z) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
-                }
-            (_, other) => throw(TypeMismatch(FunctionArgsExpected(other.to_code()))),
+        let (ms, args) = self.evaluate_as_vec(args)?;
+        match ms.evaluate(fx)? {
+            (ms, Function { params, body, .. }) =>
+                ms.exec_function_arguments(params, args)
+                    .evaluate(&body),
+            (ms, PlatformOp(pf)) => pf.evaluate(ms, args),
+            (_, z) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
         }
     }
 
@@ -963,133 +1049,6 @@ impl Machine {
             None => return throw(Exact(format!("Variable '{}' not found", name))),
         };
         Ok((self.clone(), result))
-    }
-
-    fn exec_http(&self, call: &HttpMethodCalls) -> std::io::Result<(Self, TypedValue)> {
-        // fn create_form(structure: Box<dyn Structure>) -> Form {
-        //     structure.to_name_values().iter().fold(Form::new(), |form, (name, value)| {
-        //         form.part(name.to_owned(), Part::text(value.unwrap_value()))
-        //     })
-        // }
-
-        fn extract_string_tuples(value: TypedValue) -> std::io::Result<Vec<(String, String)>> {
-            extract_value_tuples(value)
-                .map(|values| values.iter()
-                    .map(|(k, v)| (k.to_string(), v.unwrap_value()))
-                    .collect())
-        }
-
-        fn extract_value_tuples(value: TypedValue) -> std::io::Result<Vec<(String, TypedValue)>> {
-            match value {
-                Structured(structure) => Ok(structure.to_name_values()),
-                z => throw(TypeMismatch(UnsupportedType(StructureType(vec![]), z.get_type()))),
-            }
-        }
-
-        // evaluate the URL or configuration object
-        match self.evaluate(&call.get_url_or_config())? {
-            // GET http://localhost:9000/quotes/AAPL/NYSE
-            (ms, StringValue(url)) =>
-                ms.exec_http_request(call, url.to_string(), None, Vec::new()),
-            // POST {
-            //     url: http://localhost:8080/machine/append/stocks
-            //     body: stocks
-            //     headers: { "Content-Type": "application/json" }
-            // }
-            (ms, Structured(config)) => {
-                let url = config.get("url");
-                let maybe_body = config.get_opt("body")
-                    .map(|body| body.unwrap_value());
-                let headers = match config.get_opt("headers") {
-                    None => Vec::new(),
-                    Some(headers) => extract_string_tuples(headers)?
-                };
-                ms.exec_http_request(call, url.unwrap_value(), maybe_body, headers)
-            }
-            // unsupported expression
-            (_ms, other) =>
-                throw(TypeMismatch(StructExpected(other.to_code(), other.to_code())))
-        }
-    }
-
-    fn exec_http_request(
-        &self,
-        method_call: &HttpMethodCalls,
-        url: String,
-        body: Option<String>,
-        headers: Vec<(String, String)>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let mut builder = match method_call {
-            HttpMethodCalls::CONNECT(..) => Request::connect(url),
-            HttpMethodCalls::DELETE(..) => Request::delete(url),
-            HttpMethodCalls::GET(..) => Request::get(url),
-            HttpMethodCalls::HEAD(..) => Request::head(url),
-            HttpMethodCalls::OPTIONS(..) => Request::options(url),
-            HttpMethodCalls::PATCH(..) => Request::patch(url),
-            HttpMethodCalls::POST(..) => Request::post(url),
-            HttpMethodCalls::PUT(..) => Request::put(url),
-            HttpMethodCalls::TRACE(..) => Request::trace(url),
-        };
-
-        // enrich and submit the request
-        for (key, value) in headers {
-            builder = builder.header(&key, &value);
-        }
-        let response = if let Some(body) = body {
-            builder = builder.header("Content-Type", "application/json");
-            builder
-                .body(body)
-                .map_err(|e| cnv_error!(e))?
-                .send()
-                .map_err(|e| cnv_error!(e))?
-        } else {
-            builder = builder.header("Content-Type", "application/json");
-            builder
-                .body(())
-                .map_err(|e| cnv_error!(e))?
-                .send()
-                .map_err(|e| cnv_error!(e))?
-        };
-        self.exec_http_response(response, method_call.is_header_only())
-            .map(|result| (self.clone(), result))
-    }
-
-    /// Converts a [Response] to a [TypedValue]
-    fn exec_http_response(
-        &self,
-        mut response: Response<Body>,
-        is_header_only: bool,
-    ) -> std::io::Result<TypedValue> {
-        if response.status().is_success() {
-            if is_header_only {
-                let mut key_values = vec![];
-                for (h_key, h_val) in response.headers().iter() {
-                    let value = match h_val.to_str() {
-                        Ok(s) => StringValue(s.into()),
-                        Err(e) => {
-                            eprintln!("exec_http_response: {}", e.to_string());
-                            ErrorValue(Exact(e.to_string()))
-                        }
-                    };
-                    key_values.push((h_key.to_string(), value))
-                }
-                Ok(Structured(Soft(SoftStructure::ordered(key_values))))
-            } else {
-                let body = response.text().map_err(|e| cnv_error!(e))?;
-                match Compiler::build(body.as_str()) {
-                    Ok(expr) => {
-                        Ok(match self.evaluate(&expr) {
-                            Ok((_, Undefined)) => Structured(Soft(SoftStructure::empty())),
-                            Ok((_, value)) => value,
-                            Err(_) => StringValue(body)
-                        })
-                    }
-                    _ => Ok(StringValue(body))
-                }
-            }
-        } else {
-            throw(Exact(format!("Request failed with status: {}", response.status())))
-        }
     }
 
     /// Evaluates an if-then-else expression
@@ -1175,47 +1134,35 @@ impl Machine {
         }
     }
 
+    /// Evaluates a user-defined method or property
+    /// #### Examples
+    /// ##### Evaluate a user-defined method
+    /// ```
+    /// user_dao.create(item)
+    /// ```
+    /// ##### Evaluate a user-defined property
+    /// ```
+    /// user_vo.name
+    /// ```
+    /// ##### Mutate a user-defined property
+    /// ```
+    /// user_vo.name = "Fred Jenkins"
+    /// ```
     fn exec_infix(
         &self,
         container: &Expression,
         field: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        match field {
-            // function call: stocks.lookup("TALLY")
-            FunctionCall { .. } => 
-                match self.evaluate(container)? {
-                    (ms, Structured(structure)) => {
-                       let ms1 = structure.pollute(ms.clone());
-                        ms1.evaluate(field).map(|(_ms, result)| (ms, result))
-                    }
-                    (_, z) => throw(Exact(format!("Expected a structure near {}", z)))
+        match container {
+            Identifier(container_name) =>
+                match self.get(container_name.as_str()) {
+                    None => throw(TypeMismatch(IdentifierExpected(container_name.into()))),
+                    Some(ErrorValue(err)) => throw(err),
+                    Some(Structured(structure)) =>
+                        self.exec_structure_method_or_property(&container_name, structure, field, true),
+                    Some(z) => throw(TypeMismatch(IdentifierExpected(z.to_string()))),
                 }
-            // field assignment: stock.last_sale = 24.11
-            SetVariables(var_expr, value_expr) => 
-                match self.evaluate(container)? {
-                    (ms, Structured(structure)) =>
-                        match var_expr.deref() {
-                            Identifier(name) => {
-                                let (ms, value) = ms.evaluate(value_expr)?;
-                                Ok((ms.with_variable(
-                                    &pull_identifier_name(container)?,
-                                    Structured(structure.update_by_name(name, value))), Boolean(true)))
-                            }
-                            z => throw(Exact(format!("Illegal field '{}' for structure {}", z, container)))
-                        }
-                    (_, z) => throw(Exact(format!("Expected a structure near {}", z)))
-                }
-            // field access: stock.last_sale
-            Identifier(field_name) => 
-                match self.evaluate(container)? {
-                    (ms, Structured(st)) =>
-                        match st.get_opt(field_name.as_str()) {
-                            None => Ok((ms, Undefined)),
-                            Some(value) => Ok((ms, value)),
-                        }
-                    (_, z) => throw(Exact(format!("Expected a structure near {}", z)))
-                }
-            z => throw(Exact(format!("Illegal field '{}' for {}", z, container)))
+            z => throw(Exact(format!("Illegal field '{}' for structure {}", z, container)))
         }
     }
     
@@ -1229,48 +1176,46 @@ impl Machine {
         }
     }
 
-    /// Evaluates the index of a collection (array, string or table)
+    /// Evaluates the index of a collection (array, string, structure or table)
     fn exec_index_of_collection(
         &self,
         collection_expr: &Expression,
         index_expr: &Expression,
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (machine, index) = self.evaluate(index_expr)?;
-        let (machine, collection) = machine.evaluate(collection_expr)?;
+        let (ms, index) = self.evaluate(index_expr)?;
+        let (ms, collection) = ms.evaluate(collection_expr)?;
         let value = match collection {
-            ArrayValue(items) => {
-                let idx = index.to_usize();
-                if idx < items.len() { items.get_or_else(idx, Undefined) } else {
-                    ErrorValue(IndexOutOfRange("Array".to_string(), idx, items.len()))
-                }
+            ArrayValue(array) => {
+                elem_at("Value", array, index,
+                        |a| Ok(a.len()), |a, i| Ok(a[i].clone()))?
+            }
+            ByteStringValue(bytes) => {
+                elem_at("Byte", bytes, index,
+                        |bv| Ok(bv.len()), |bv, i| Ok(Number(U8Value(bv[i].clone()))))?
             }
             StringValue(string) => {
-                let idx = index.to_usize();
-                if idx < string.len() { StringValue(string[idx..idx].to_string()) } else { ErrorValue(IndexOutOfRange("String".to_string(), idx, string.len())) }
+                elem_at("Char", string, index,
+                        |s| Ok(s.chars().count()), |s, i| Ok(CharValue(s.chars().nth(i).unwrap())))?
             }
             Structured(structure) => {
-                let idx = index.to_usize();
-                let values = structure.get_values();
-                if idx < values.len() { values[idx].to_owned() } else { ErrorValue(IndexOutOfRange("Structure element".to_string(), idx, values.len())) }
+                elem_at("Property", structure, index,
+                        |s| Ok(s.len()), |s, i| Ok(s.get_values()[i].clone()))?
             }
             TableValue(df) => {
-                let id = index.to_usize();
-                match df.read_one(id)? {
-                    Some(row) => Structured(Firm(row, df.get_parameters())),
-                    None => Structured(Firm(Row::create(id, df.get_columns()), df.get_parameters()))
-                }
+                elem_at("Row", df, index, |df| df.len(), |df, id| df.read_one(id)
+                    .map(|row| match row {
+                        Some(row) => Structured(Firm(row, df.get_parameters())),
+                        None => Structured(Firm(Row::create(id, df.get_columns()), df.get_parameters()))
+                    }))?
             }
             TupleValue(values) => {
-                let idx = index.to_usize();
-                if idx < values.len() { values[idx].to_owned() } else { ErrorValue(IndexOutOfRange("Tuple element".to_string(), idx, values.len())) }
+                elem_at("Value", values, index, 
+                        |tv| Ok(tv.len()), |tv, i| Ok(tv[i].clone()))?
             }
             other =>
-                ErrorValue(TypeMismatch(UnsupportedType(
-                    UnresolvedType,
-                    other.get_type(),
-                )))
+                ErrorValue(TypeMismatch(UnsupportedType(RuntimeResolvedType, other.get_type())))
         };
-        Ok((machine, value))
+        Ok((ms, value))
     }
 
     fn exec_like(
@@ -1290,6 +1235,28 @@ impl Machine {
             (a, b) =>
                 Ok((ms, ErrorValue(SyntaxError(SyntaxErrors::TypeIdentifierExpected(format!("{} like {}", a.to_code(), b.to_code()))))))
         }
+    }
+    
+    /// Evaluates a list system files expression
+    /// #### Examples
+    /// ##### List files in the current directory
+    /// ```
+    /// ls
+    /// ```
+    /// ##### List subdirectories in the current directory
+    /// ```
+    /// ls where is_directory is true
+    /// ```
+    /// ##### List all files in a specific directory
+    /// ```
+    /// ls("../Downloads")
+    /// ```
+    fn exec_ls(
+        &self,
+        maybe_path: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, path) = self.evaluate_or_else(maybe_path, |_| StringValue(".".into()))?;
+        IoPkg::do_io_list_files(ms, &path)
     }
 
     /// Evaluates a match expression
@@ -1373,11 +1340,54 @@ impl Machine {
                             }
                         z => ErrorValue(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
                     },
-                z => ErrorValue(TypeMismatch(StructExpected(name.to_string(), z.to_code())))
+                z => ErrorValue(TypeMismatch(StructIsnt(name.to_string(), z.to_code())))
             });
         Ok((self.with_variable(name, result), Boolean(true)))
     }
 
+    fn exec_module_structure(
+        &self,
+        name: &str,
+        ops: &Vec<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        match self.get(name) {
+            Some(Structured(structure)) => self.exec_module_structure_impl(name, structure, ops),
+            Some(v) => throw(TypeMismatch(StructIsnt(name.into(), v.to_code()))),
+            None => self.exec_module_alone(name, ops)
+        }
+    }
+
+    fn exec_module_structure_impl(
+        &self,
+        name: &str,
+        structure: Structures,
+        ops: &Vec<Expression>,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let result = ops.iter()
+            .fold(Structured(structure), |tv, op| match tv {
+                ErrorValue(msg) => ErrorValue(msg),
+                Structured(structure) =>
+                    match op {
+                        // name = "Hello World"
+                        SetVariables(var_expr, value_expr) =>
+                            match var_expr.deref() {
+                                Identifier(name) =>
+                                    match self.evaluate(value_expr) {
+                                        Ok((_, value)) => Structured(structure.update_by_name(name, value)),
+                                        Err(err) => ErrorValue(Exact(err.to_string()))
+                                    }
+                                other => ErrorValue(Exact(format!("Decomposition is not allowed near {}", other.to_code())))
+                            }
+                        z => ErrorValue(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
+                    },
+                z => ErrorValue(TypeMismatch(StructIsnt(name.to_string(), z.to_code())))
+            });
+        match result {
+            ErrorValue(err) => throw(err),
+            result => Ok((self.with_variable(name, result), Boolean(true)))
+        }
+    }
+    
     /// evaluates the specified [Expression]; returning a negative [TypedValue] result.
     fn exec_negate(&self, expr: &Expression) -> std::io::Result<(Self, TypedValue)> {
         self.evaluate(expr).map(|(ms, result)| (ms, result.neg()))
@@ -1405,13 +1415,13 @@ impl Machine {
     /// // create a table with an embedded table
     /// let stocks = nsd::save(
     ///     "machine.examples.stocks",
-    ///     Table::new(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date))
+    ///     Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: DateTime))::new
     /// )
     /// { symbol: "BIZ", exchange: "NYSE", history: [] } ~> stocks
     /// 
     /// // get a reference to the embedded table
     /// let history = &stocks(0, 2)
-    /// { last_sale: 11.67, processed_time: cal::now() } ~> history
+    /// { last_sale: 11.67, processed_time: DateTime::new() } ~> history
     /// stocks
     /// 
     /// // { symbol: "BIZ", exchange: "NYSE", history: [{ last_sale: 11.67, processed_time: 2025-01-13T03:25:47.350Z }] }
@@ -1552,8 +1562,8 @@ impl Machine {
                     }
                     z => throw(Exact(format!("Expected an Array near {}", z)))
                 }
-            // stock::last_sale = 24.11
-            ColonColon(container, variable) => {
+            // stock.last_sale = 24.11
+            Infix(container, variable) => {
                 let container_name = pull_identifier_name(container.deref())?;
                 let variable_name = pull_identifier_name(variable.deref())?;
                 match ms.get(container_name.as_str()) {
@@ -1592,49 +1602,6 @@ impl Machine {
             z => throw(Exact(format!("Expected an Array, Tuple or variable near {}", z)))
         }
     }
-    
-    fn exec_structure_module(
-        &self,
-        name: &str,
-        ops: &Vec<Expression>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        match self.get(name) {
-            Some(Structured(structure)) => self.exec_structure_module_impl(name, structure, ops),
-            Some(v) => throw(TypeMismatch(StructExpected(name.into(), v.to_code()))),
-            None => self.exec_module_alone(name, ops)
-        }
-    }
-
-    fn exec_structure_module_impl(
-        &self,
-        name: &str,
-        structure: Structures,
-        ops: &Vec<Expression>,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        let result = ops.iter()
-            .fold(Structured(structure), |tv, op| match tv {
-                ErrorValue(msg) => ErrorValue(msg),
-                Structured(structure) =>
-                    match op {
-                        // name = "Hello World"
-                        SetVariables(var_expr, value_expr) =>
-                            match var_expr.deref() {
-                                Identifier(name) =>
-                                    match self.evaluate(value_expr) {
-                                        Ok((_, value)) => Structured(structure.update_by_name(name, value)),
-                                        Err(err) => ErrorValue(Exact(err.to_string()))
-                                    }
-                                other => ErrorValue(Exact(format!("Decomposition is not allowed near {}", other.to_code())))
-                            }
-                        z => ErrorValue(SyntaxError(SyntaxErrors::IllegalExpression(z.to_code())))
-                    },
-                z => ErrorValue(TypeMismatch(StructExpected(name.to_string(), z.to_code())))
-            });
-        match result {
-            ErrorValue(err) => throw(err),
-            result => Ok((self.with_variable(name, result), Boolean(true)))
-        }
-    }
 
     fn exec_structure_soft(
         &self,
@@ -1663,18 +1630,6 @@ impl Machine {
         ops: &Vec<Expression>,
     ) -> std::io::Result<(Self, TypedValue)> {
         self.evaluate_as_vec(ops).map(|(ms, values)| (ms, TupleValue(values)))
-    }
-
-    /// Declares a type definition expression
-    /// #### Example
-    /// ```
-    /// stock_type = typedef(Table(symbol: String(8), exchange: String(8), last_sale: f64)
-    /// ```
-    fn exec_type_def(
-        &self,
-        expr: &Expression,
-    ) -> std::io::Result<(Self, TypedValue)> {
-        Ok((self.clone(), Kind(DataType::decipher_type(expr)?)))
     }
 
     /// Returns the type of value
@@ -1789,9 +1744,7 @@ impl Machine {
                     match ms.is_true(condition).map(|(_, yes)| yes) {
                         Ok(true) => {
                             match ms.evaluate(code) {
-                                Ok((ms1, _result)) => {
-                                    ms = ms1;
-                                }
+                                Ok((ms1, _result)) => ms = ms1,
                                 Err(_) => {}
                             }
                         }
@@ -1883,7 +1836,7 @@ impl Machine {
     pub fn set(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.to_owned();
         variables.insert(name.to_string(), value);
-        Self::build(self.observations.to_owned(), variables)
+        Self::build(self.builtins.to_owned(), self.observations.to_owned(), variables)
     }
 
     pub fn with_module(
@@ -1909,7 +1862,7 @@ impl Machine {
     ) -> Self {
         let mut observations = self.observations.clone();
         observations.push(VariableObservation { condition, code });
-        Self::build(observations, self.variables.clone())
+        Self::build(self.builtins.to_owned(), observations, self.variables.clone())
     }
 
     pub fn with_row(&self, columns: &Vec<Column>, row: &Row) -> Self {
@@ -1921,7 +1874,19 @@ impl Machine {
     pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
         let mut variables = self.variables.to_owned();
         variables.insert(name.to_string(), value);
-        Self::build(self.observations.to_owned(), variables)
+        Self::build(self.builtins.to_owned(), self.observations.to_owned(), variables)
+    }
+}
+
+impl Ord for Machine {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.observations.cmp(&other.observations)
+    }
+}
+
+impl PartialOrd for Machine {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.observations.partial_cmp(&other.observations)
     }
 }
 
@@ -2093,11 +2058,11 @@ mod tests {
     #[cfg(test)]
     mod function_tests {
         use super::*;
-        use crate::data_types::DataType::UnresolvedType;
+        use crate::data_types::DataType::RuntimeResolvedType;
 
         #[test]
         fn test_anonymous_function() {
-            // define a function call: (n => n + 5)(3)
+            // define a function call: (n -> n + 5)(3)
             let model = FunctionCall {
                 fx: Box::new(
                     Literal(Function {
@@ -2120,12 +2085,12 @@ mod tests {
                 .evaluate(&model)
                 .unwrap();
             assert_eq!(result, Number(I64Value(8)));
-            assert_eq!(model.to_code(), "(fn(n: i64): i64 => n + 5)(3)")
+            assert_eq!(model.to_code(), "((n: i64): i64 -> n + 5)(3)")
         }
 
         #[test]
         fn test_named_function() {
-            // define a function: (a, b) => a + b
+            // define a function: (a, b) -> a + b
             let fx = Function {
                 params: vec![
                     Parameter::new("a", NumberType(I64Kind)),
@@ -2136,10 +2101,10 @@ mod tests {
                 ), Box::new(
                     Identifier("b".into())
                 ))),
-                returns: UnresolvedType,
+                returns: RuntimeResolvedType,
             };
 
-            // publish the function in scope: fn add(a, b) => a + b
+            // publish the function in scope: fn add(a, b) -> a + b
             let machine = Machine::empty();
             let (machine, result) = machine.evaluate_scope(&vec![
                 SetVariables(
@@ -2162,7 +2127,7 @@ mod tests {
                 .evaluate(&model)
                 .unwrap();
             assert_eq!(result, Number(I64Value(5)));
-            assert_eq!(model.to_code(), "(fn(a: i64, b: i64) => a + b)(2, 3)")
+            assert_eq!(model.to_code(), "((a: i64, b: i64) -> a + b)(2, 3)")
         }
 
         #[test]
@@ -2192,7 +2157,7 @@ mod tests {
 
         #[test]
         fn test_function_recursion() {
-            // f = (fn(n: i64) => if(n <= 1) 1 else n * f(n - 1))
+            // f = ((n: i64) -> if(n <= 1) 1 else n * f(n - 1))
             let model = Function {
                 params: vec![
                     Parameter::new("n", NumberType(I64Kind))

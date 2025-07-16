@@ -6,7 +6,7 @@
 use crate::columns::Column;
 use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Disk;
+use crate::dataframe::Dataframe::DiskTable;
 use crate::errors::Errors::{Exact, TypeMismatch};
 use crate::errors::{throw, TypeMismatchErrors};
 use crate::expression::Expression;
@@ -95,7 +95,7 @@ impl EventSourceRowCollection {
             Number(I64Value(column_id as i64)),
             StringValue(action.to_string()),
             StringValue(value.to_code()),
-            DateValue(Local::now().timestamp_millis()),
+            DateTimeValue(Local::now().timestamp_millis()),
         ])
     }
 
@@ -124,7 +124,7 @@ impl Eq for EventSourceRowCollection {}
 
 impl Journaling for EventSourceRowCollection {
     fn get_journal(&self) -> Dataframe {
-        Disk(self.events.clone())
+        DiskTable(self.events.clone())
     }
 
     fn replay(&mut self) -> std::io::Result<TypedValue> {
@@ -374,8 +374,8 @@ impl TableFunction {
                 Ok(Self::new(
                     columns,
                     code,
-                    Dataframe::Disk(journal),
-                    Dataframe::Disk(state),
+                    Dataframe::DiskTable(journal),
+                    Dataframe::DiskTable(state),
                     ms0,
                 ))
             }
@@ -543,7 +543,7 @@ mod tests {
         #[test]
         fn test_events_crud() {
             // 1. create an event-sourced table:
-            //  table stocks (symbol: String(8), exchange: String(8), last_sale: Date):::{
+            //  table stocks (symbol: String(8), exchange: String(8), last_sale: DateTime):::{
             //      journaling: true
             //  }
             let mut jrc = EventSourceRowCollection::new(
@@ -655,7 +655,7 @@ mod tests {
     mod table_function_tests {
         use crate::compiler::Compiler;
         use crate::data_types::DataType::NumberType;
-        use crate::dataframe::Dataframe::Model;
+        use crate::dataframe::Dataframe::ModelTable;
         use crate::journaling::{Journaling, TableFunction};
         use crate::machine::Machine;
         use crate::model_row_collection::ModelRowCollection;
@@ -770,8 +770,8 @@ mod tests {
                 Compiler::build(r#"
                  { symbol: symbol, exchange: exchange, last_sale: last_sale * 2.0, rank: __row_id__ + 1 }
                 "#).unwrap(),
-                Model(ModelRowCollection::from_parameters(&params)),
-                Model(ModelRowCollection::from_parameters(&{
+                ModelTable(ModelRowCollection::from_parameters(&params)),
+                ModelTable(ModelRowCollection::from_parameters(&{
                     let mut new_params = params.clone();
                     new_params.push(Parameter::new("rank", NumberType(I64Kind)));
                     new_params

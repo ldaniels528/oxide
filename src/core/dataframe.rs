@@ -32,12 +32,12 @@ use std::sync::Arc;
 /// DataFrame is a logical representation of a table
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Dataframe {
-    Binary(ByteRowCollection),
-    Blob(BLOBFileRowCollection),
-    Disk(FileRowCollection),
+    BinaryTable(ByteRowCollection),
+    BlobTable(BLOBFileRowCollection),
+    DiskTable(FileRowCollection),
     EventSource(EventSourceRowCollection),
-    Hybrid(HybridRowCollection),
-    Model(ModelRowCollection),
+    HybridTable(HybridRowCollection),
+    ModelTable(ModelRowCollection),
     TestReport(ModelRowCollection, TestState),
     TableFn(Box<TableFunction>),
 }
@@ -50,7 +50,7 @@ impl Dataframe {
         let config = ObjectConfig::build_table(params.clone());
         config.save(&ns)?;
         let file = Arc::new(FileRowCollection::table_file_create(ns)?);
-        Ok(Self::Disk(FileRowCollection::new(columns, file, path.as_str())))
+        Ok(Self::DiskTable(FileRowCollection::new(columns, file, path.as_str())))
     }
 
     /// deletes rows from the table based on a condition
@@ -90,7 +90,7 @@ impl Dataframe {
             let row = Row::new(id, items.to_owned());
             rows.push(row)
         }
-        Dataframe::Model(ModelRowCollection::from_parameters_and_rows(&params, &rows))
+        Dataframe::ModelTable(ModelRowCollection::from_parameters_and_rows(&params, &rows))
     }
 
     fn get_parameters_and_values(cells: &Vec<Vec<String>>) -> (Vec<Parameter>, Vec<Vec<TypedValue>>) {
@@ -215,18 +215,18 @@ impl Dataframe {
         let columns = Column::from_parameters(&params);
 
         // create a new table with the combine columns
-        let mut mrc = Self::Model(ModelRowCollection::new(columns));
+        let mut mrc = Self::ModelTable(ModelRowCollection::new(columns));
         for df in dataframes { merge(&mut mrc, &df); }
         mrc
     }
 
-    pub fn intersect(&self, that: &Dataframe) -> Dataframe {
+    pub fn intersect(&self, that: &Dataframe) -> std::io::Result<Dataframe> {
         fn make_key(row: &Row) -> String {
             row.get_values().iter().map(|v| v.unwrap_value())
                 .collect::<Vec<_>>()
                 .join("|")
         }
-        fn do_intersect(df_a: &Dataframe, df_b: &Dataframe) -> Dataframe {
+        fn do_intersect(df_a: &Dataframe, df_b: &Dataframe) -> std::io::Result<Dataframe> {
             // cache the data from the smaller table
             let mut hm = HashMap::new();
             for row_b in df_b.iter() {
@@ -237,16 +237,24 @@ impl Dataframe {
             let mut mrc = ModelRowCollection::new(df_a.get_columns().clone());
             for row_a in df_a.iter() {
                 if hm.contains_key(&make_key(&row_a)) {
-                    mrc.append_row(row_a);
+                    mrc.append_row(row_a)?;
                 }
             }
-            Dataframe::Model(mrc)
+            Ok(Dataframe::ModelTable(mrc))
         }
         
         if self.len().unwrap_or(0) > that.len().unwrap_or(0) {
             do_intersect(self, that)
         } else {
             do_intersect(that, self)
+        }
+    }
+
+    pub fn is_pure(&self) -> bool {
+        match self {
+            Dataframe::BinaryTable(brc) => brc.iter().all(|row| row.is_pure()),
+            Dataframe::ModelTable(mrc) => mrc.iter().all(|row| row.is_pure()),
+            _ => false
         }
     }
 
@@ -264,19 +272,7 @@ impl Dataframe {
                 mrc.append_row(Row::new(0, values));
             }
         }
-        Self::Model(mrc)
-    }
-
-    pub fn union(&self, that: &Dataframe) -> Dataframe {
-        let mut mrc = ModelRowCollection::new(self.get_columns().clone());
-        mrc.append_rows(self.get_rows()).ok();
-        mrc.append_rows(that.get_rows()).ok();
-        Self::Model(mrc)
-    }
-
-    pub fn to_model(self) -> ModelRowCollection {
-        let (rows, columns) = (self.get_rows(), self.get_columns());
-        ModelRowCollection::from_columns_and_rows(columns, &rows)
+        Self::ModelTable(mrc)
     }
     
     pub fn sort_by_columns(
@@ -306,10 +302,10 @@ impl Dataframe {
         let mut sorted = ModelRowCollection::with_rows(self.get_columns().clone(), vec![]);
         for (i, mut row) in rows.into_iter().enumerate() {
             row.with_row_id(i);
-            sorted.append_row(row);
+            sorted.append_row(row)?;
         }
 
-        Ok(Self::Model(sorted))
+        Ok(Self::ModelTable(sorted))
     }
 
     pub fn sublist(&self, start: usize, end: usize) -> Self {
@@ -325,7 +321,19 @@ impl Dataframe {
             }
             row_id += 1;
         }
-        Dataframe::Model(mrc)
+        Dataframe::ModelTable(mrc)
+    }
+
+    pub fn to_model(self) -> ModelRowCollection {
+        let (rows, columns) = (self.get_rows(), self.get_columns());
+        ModelRowCollection::from_columns_and_rows(columns, &rows)
+    }
+
+    pub fn union(&self, that: &Dataframe) -> Dataframe {
+        let mut mrc = ModelRowCollection::new(self.get_columns().clone());
+        mrc.append_rows(self.get_rows()).ok();
+        mrc.append_rows(that.get_rows()).ok();
+        Self::ModelTable(mrc)
     }
 
     /// updates rows that match the supplied criteria
@@ -361,12 +369,12 @@ impl Dataframe {
 impl RowCollection for Dataframe {
     fn get_columns(&self) -> &Vec<Column> {
         match self {
-            Self::Binary(df) => df.get_columns(),
-            Self::Disk(df) => df.get_columns(),
-            Self::Blob(df) => df.get_columns(),
+            Self::BinaryTable(df) => df.get_columns(),
+            Self::DiskTable(df) => df.get_columns(),
+            Self::BlobTable(df) => df.get_columns(),
             Self::EventSource(df) => df.get_columns(),
-            Self::Hybrid(df) => df.get_columns(),
-            Self::Model(df) => df.get_columns(),
+            Self::HybridTable(df) => df.get_columns(),
+            Self::ModelTable(df) => df.get_columns(),
             Self::TestReport(df, ..) => df.get_columns(),
             Self::TableFn(df) => df.get_columns(),
         }
@@ -374,12 +382,12 @@ impl RowCollection for Dataframe {
 
     fn get_record_size(&self) -> usize {
         match self {
-            Self::Binary(df) => df.get_record_size(),
-            Self::Disk(df) => df.get_record_size(),
-            Self::Blob(df) => df.get_record_size(),
+            Self::BinaryTable(df) => df.get_record_size(),
+            Self::DiskTable(df) => df.get_record_size(),
+            Self::BlobTable(df) => df.get_record_size(),
             Self::EventSource(df) => df.get_record_size(),
-            Self::Hybrid(df) => df.get_record_size(),
-            Self::Model(df) => df.get_record_size(),
+            Self::HybridTable(df) => df.get_record_size(),
+            Self::ModelTable(df) => df.get_record_size(),
             Self::TestReport(df, ..) => df.get_record_size(),
             Self::TableFn(df) => df.get_record_size(),
         }
@@ -387,12 +395,12 @@ impl RowCollection for Dataframe {
 
     fn get_rows(&self) -> Vec<Row> {
         match self {
-            Self::Binary(df) => df.get_rows(),
-            Self::Disk(df) => df.get_rows(),
-            Self::Blob(df) => df.get_rows(),
+            Self::BinaryTable(df) => df.get_rows(),
+            Self::DiskTable(df) => df.get_rows(),
+            Self::BlobTable(df) => df.get_rows(),
             Self::EventSource(df) => df.get_rows(),
-            Self::Hybrid(df) => df.get_rows(),
-            Self::Model(df) => df.get_rows(),
+            Self::HybridTable(df) => df.get_rows(),
+            Self::ModelTable(df) => df.get_rows(),
             Self::TestReport(df, ..) => df.get_rows(),
             Self::TableFn(df) => df.get_rows(),
         }
@@ -400,12 +408,12 @@ impl RowCollection for Dataframe {
 
     fn len(&self) -> std::io::Result<usize> {
         match self {
-            Self::Binary(df) => df.len(),
-            Self::Disk(df) => df.len(),
-            Self::Blob(df) => df.len(),
+            Self::BinaryTable(df) => df.len(),
+            Self::DiskTable(df) => df.len(),
+            Self::BlobTable(df) => df.len(),
             Self::EventSource(df) => df.len(),
-            Self::Hybrid(df) => df.len(),
-            Self::Model(df) => df.len(),
+            Self::HybridTable(df) => df.len(),
+            Self::ModelTable(df) => df.len(),
             Self::TestReport(df, ..) => df.len(),
             Self::TableFn(df) => df.len(),
         }
@@ -413,12 +421,12 @@ impl RowCollection for Dataframe {
 
     fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> std::io::Result<i64> {
         match self {
-            Self::Binary(df) => df.overwrite_field(id, column_id, new_value),
-            Self::Disk(df) => df.overwrite_field(id, column_id, new_value),
-            Self::Blob(df) => df.overwrite_field(id, column_id, new_value),
+            Self::BinaryTable(df) => df.overwrite_field(id, column_id, new_value),
+            Self::DiskTable(df) => df.overwrite_field(id, column_id, new_value),
+            Self::BlobTable(df) => df.overwrite_field(id, column_id, new_value),
             Self::EventSource(df) => df.overwrite_field(id, column_id, new_value),
-            Self::Hybrid(df) => df.overwrite_field(id, column_id, new_value),
-            Self::Model(df) => df.overwrite_field(id, column_id, new_value),
+            Self::HybridTable(df) => df.overwrite_field(id, column_id, new_value),
+            Self::ModelTable(df) => df.overwrite_field(id, column_id, new_value),
             Self::TestReport(df, ..) => df.overwrite_field(id, column_id, new_value),
             Self::TableFn(df) => df.overwrite_field(id, column_id, new_value),
         }
@@ -426,12 +434,12 @@ impl RowCollection for Dataframe {
 
     fn overwrite_field_metadata(&mut self, id: usize, column_id: usize, metadata: FieldMetadata) -> std::io::Result<i64> {
         match self {
-            Self::Binary(df) => df.overwrite_field_metadata(id, column_id, metadata),
-            Self::Disk(df) => df.overwrite_field_metadata(id, column_id, metadata),
-            Self::Blob(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::BinaryTable(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::DiskTable(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::BlobTable(df) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::EventSource(df) => df.overwrite_field_metadata(id, column_id, metadata),
-            Self::Hybrid(df) => df.overwrite_field_metadata(id, column_id, metadata),
-            Self::Model(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::HybridTable(df) => df.overwrite_field_metadata(id, column_id, metadata),
+            Self::ModelTable(df) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::TestReport(df, ..) => df.overwrite_field_metadata(id, column_id, metadata),
             Self::TableFn(df) => df.overwrite_field_metadata(id, column_id, metadata),
         }
@@ -439,12 +447,12 @@ impl RowCollection for Dataframe {
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         match self {
-            Self::Binary(df) => df.overwrite_row(id, row),
-            Self::Disk(df) => df.overwrite_row(id, row),
-            Self::Blob(df) => df.overwrite_row(id, row),
+            Self::BinaryTable(df) => df.overwrite_row(id, row),
+            Self::DiskTable(df) => df.overwrite_row(id, row),
+            Self::BlobTable(df) => df.overwrite_row(id, row),
             Self::EventSource(df) => df.overwrite_row(id, row),
-            Self::Hybrid(df) => df.overwrite_row(id, row),
-            Self::Model(df) => df.overwrite_row(id, row),
+            Self::HybridTable(df) => df.overwrite_row(id, row),
+            Self::ModelTable(df) => df.overwrite_row(id, row),
             Self::TestReport(df, ..) => df.overwrite_row(id, row),
             Self::TableFn(df) => df.overwrite_row(id, row),
         }
@@ -452,12 +460,12 @@ impl RowCollection for Dataframe {
 
     fn overwrite_row_metadata(&mut self, id: usize, metadata: RowMetadata) -> std::io::Result<i64> {
         match self {
-            Self::Binary(df) => df.overwrite_row_metadata(id, metadata),
-            Self::Disk(df) => df.overwrite_row_metadata(id, metadata),
-            Self::Blob(df) => df.overwrite_row_metadata(id, metadata),
+            Self::BinaryTable(df) => df.overwrite_row_metadata(id, metadata),
+            Self::DiskTable(df) => df.overwrite_row_metadata(id, metadata),
+            Self::BlobTable(df) => df.overwrite_row_metadata(id, metadata),
             Self::EventSource(df) => df.overwrite_row_metadata(id, metadata),
-            Self::Hybrid(df) => df.overwrite_row_metadata(id, metadata),
-            Self::Model(df) => df.overwrite_row_metadata(id, metadata),
+            Self::HybridTable(df) => df.overwrite_row_metadata(id, metadata),
+            Self::ModelTable(df) => df.overwrite_row_metadata(id, metadata),
             Self::TestReport(df, ..) => df.overwrite_row_metadata(id, metadata),
             Self::TableFn(df) => df.overwrite_row_metadata(id, metadata),
         }
@@ -465,12 +473,12 @@ impl RowCollection for Dataframe {
 
     fn read_field(&self, id: usize, column_id: usize) -> std::io::Result<TypedValue> {
         match self {
-            Self::Binary(df) => df.read_field(id, column_id),
-            Self::Disk(df) => df.read_field(id, column_id),
-            Self::Blob(df) => df.read_field(id, column_id),
+            Self::BinaryTable(df) => df.read_field(id, column_id),
+            Self::DiskTable(df) => df.read_field(id, column_id),
+            Self::BlobTable(df) => df.read_field(id, column_id),
             Self::EventSource(df) => df.read_field(id, column_id),
-            Self::Hybrid(df) => df.read_field(id, column_id),
-            Self::Model(df) => df.read_field(id, column_id),
+            Self::HybridTable(df) => df.read_field(id, column_id),
+            Self::ModelTable(df) => df.read_field(id, column_id),
             Self::TestReport(df, ..) => df.read_field(id, column_id),
             Self::TableFn(df) => df.read_field(id, column_id),
         }
@@ -478,12 +486,12 @@ impl RowCollection for Dataframe {
 
     fn read_field_metadata(&self, id: usize, column_id: usize) -> std::io::Result<FieldMetadata> {
         match self {
-            Self::Binary(df) => df.read_field_metadata(id, column_id),
-            Self::Disk(df) => df.read_field_metadata(id, column_id),
-            Self::Blob(df) => df.read_field_metadata(id, column_id),
+            Self::BinaryTable(df) => df.read_field_metadata(id, column_id),
+            Self::DiskTable(df) => df.read_field_metadata(id, column_id),
+            Self::BlobTable(df) => df.read_field_metadata(id, column_id),
             Self::EventSource(df) => df.read_field_metadata(id, column_id),
-            Self::Hybrid(df) => df.read_field_metadata(id, column_id),
-            Self::Model(df) => df.read_field_metadata(id, column_id),
+            Self::HybridTable(df) => df.read_field_metadata(id, column_id),
+            Self::ModelTable(df) => df.read_field_metadata(id, column_id),
             Self::TestReport(df, ..) => df.read_field_metadata(id, column_id),
             Self::TableFn(df) => df.read_field_metadata(id, column_id),
         }
@@ -491,12 +499,12 @@ impl RowCollection for Dataframe {
 
     fn read_row(&self, id: usize) -> std::io::Result<(Row, RowMetadata)> {
         match self {
-            Self::Binary(df) => df.read_row(id),
-            Self::Disk(df) => df.read_row(id),
-            Self::Blob(df) => df.read_row(id),
+            Self::BinaryTable(df) => df.read_row(id),
+            Self::DiskTable(df) => df.read_row(id),
+            Self::BlobTable(df) => df.read_row(id),
             Self::EventSource(df) => df.read_row(id),
-            Self::Hybrid(df) => df.read_row(id),
-            Self::Model(df) => df.read_row(id),
+            Self::HybridTable(df) => df.read_row(id),
+            Self::ModelTable(df) => df.read_row(id),
             Self::TestReport(df, ..) => df.read_row(id),
             Self::TableFn(df) => df.read_row(id),
         }
@@ -504,12 +512,12 @@ impl RowCollection for Dataframe {
 
     fn read_row_metadata(&self, id: usize) -> std::io::Result<RowMetadata> {
         match self {
-            Self::Binary(df) => df.read_row_metadata(id),
-            Self::Disk(df) => df.read_row_metadata(id),
-            Self::Blob(df) => df.read_row_metadata(id),
+            Self::BinaryTable(df) => df.read_row_metadata(id),
+            Self::DiskTable(df) => df.read_row_metadata(id),
+            Self::BlobTable(df) => df.read_row_metadata(id),
             Self::EventSource(df) => df.read_row_metadata(id),
-            Self::Hybrid(df) => df.read_row_metadata(id),
-            Self::Model(df) => df.read_row_metadata(id),
+            Self::HybridTable(df) => df.read_row_metadata(id),
+            Self::ModelTable(df) => df.read_row_metadata(id),
             Self::TestReport(df, ..) => df.read_row_metadata(id),
             Self::TableFn(df) => df.read_row_metadata(id),
         }
@@ -517,12 +525,12 @@ impl RowCollection for Dataframe {
 
     fn resize(&mut self, new_size: usize) -> std::io::Result<bool> {
         match self {
-            Self::Binary(df) => df.resize(new_size),
-            Self::Disk(df) => df.resize(new_size),
-            Self::Blob(df) => df.resize(new_size),
+            Self::BinaryTable(df) => df.resize(new_size),
+            Self::DiskTable(df) => df.resize(new_size),
+            Self::BlobTable(df) => df.resize(new_size),
             Self::EventSource(df) => df.resize(new_size),
-            Self::Hybrid(df) => df.resize(new_size),
-            Self::Model(df) => df.resize(new_size),
+            Self::HybridTable(df) => df.resize(new_size),
+            Self::ModelTable(df) => df.resize(new_size),
             Self::TestReport(df, ..) => df.resize(new_size),
             Self::TableFn(df) => df.resize(new_size),
         }
@@ -535,7 +543,8 @@ mod tests {
     use crate::byte_row_collection::ByteRowCollection;
     use crate::data_types::DataType::{FixedSizeType, NumberType, StringType};
     use crate::dataframe::Dataframe;
-    use crate::dataframe::Dataframe::Model;
+    use crate::dataframe::Dataframe::ModelTable;
+    use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
     use crate::number_kind::NumberKind::{F64Kind, I64Kind};
     use crate::numbers::Numbers::{F64Value, I64Value};
@@ -549,6 +558,21 @@ mod tests {
     use crate::typed_values::TypedValue::{Null, Number, StringValue};
 
     #[test]
+    fn test_dataframe_literal_is_pure() {
+        let mut interpreter = Interpreter::new();
+        let value = interpreter.evaluate(r#"
+            |--------------------------------------|
+            | symbol | exchange | last_sale | rank |
+            |--------------------------------------|
+            | BOOM   | NYSE     | 113.76    | 1    |
+            | ABC    | AMEX     | 24.98     | 2    |
+            | JET    | NASDAQ   | 64.24     | 3    |
+            |--------------------------------------|            
+        "#).unwrap();
+        assert!(value.is_pure())
+    }
+
+    #[test]
     fn test_to_model() {
         let df = create_dataframe();
         let mrc = df.clone().to_model();
@@ -559,16 +583,16 @@ mod tests {
     #[test]
     fn test_get_combined_parameters() {
         let dfs = vec![
-            Model(ModelRowCollection::from_parameters(&vec![
+            ModelTable(ModelRowCollection::from_parameters(&vec![
                 Parameter::new("symbol", StringType),
                 Parameter::new("exchange", StringType)
             ])),
-            Model(ModelRowCollection::from_parameters(&vec![
+            ModelTable(ModelRowCollection::from_parameters(&vec![
                 Parameter::new("symbol", StringType),
                 Parameter::new("exchange", StringType),
                 Parameter::new("last_sale", NumberType(F64Kind))
             ])),
-            Model(ModelRowCollection::from_parameters(&vec![
+            ModelTable(ModelRowCollection::from_parameters(&vec![
                 Parameter::new("symbol", StringType),
                 Parameter::new("last_sale", NumberType(F64Kind)),
                 Parameter::new("beta", NumberType(F64Kind))
@@ -632,13 +656,13 @@ mod tests {
     #[test]
     fn test_combine_tables() {
         let dfs = vec![
-            Model(ModelRowCollection::from_parameters_and_rows(&vec![
+            ModelTable(ModelRowCollection::from_parameters_and_rows(&vec![
                 Parameter::new("symbol", StringType),
                 Parameter::new("exchange", StringType)
             ], &vec![
                 Row::new(0, vec![StringValue("ABC".into()), StringValue("AMEX".into())]),
             ])),
-            Model(ModelRowCollection::from_parameters_and_rows(&vec![
+            ModelTable(ModelRowCollection::from_parameters_and_rows(&vec![
                 Parameter::new("symbol", StringType),
                 Parameter::new("exchange", StringType),
                 Parameter::new("last_sale", NumberType(F64Kind))
@@ -646,7 +670,7 @@ mod tests {
                 make_quote(1, "UNO", "OTC", 0.2456),
                 make_quote(2, "BIZ", "NYSE", 23.66),
             ])),
-            Model(ModelRowCollection::from_parameters_and_rows(&vec![
+            ModelTable(ModelRowCollection::from_parameters_and_rows(&vec![
                 Parameter::new("symbol", StringType),
                 Parameter::new("market", StringType),
                 Parameter::new("beta", NumberType(F64Kind))
@@ -685,7 +709,7 @@ mod tests {
     }
 
     fn create_dataframe() -> Dataframe {
-        Dataframe::Binary(ByteRowCollection::from_columns_and_rows(make_quote_columns(), vec![
+        Dataframe::BinaryTable(ByteRowCollection::from_columns_and_rows(make_quote_columns(), vec![
             make_quote(0, "AAB", "NYSE", 22.44),
             make_quote(1, "XYZ", "NASDAQ", 66.67),
             make_quote(2, "SSO", "NYSE", 123.44),

@@ -7,7 +7,7 @@ use crate::expression::Expression::*;
 use crate::expression::Ranges::Exclusive;
 use crate::expression::{Conditions, Expression, HttpMethodCalls};
 use crate::interpreter::Interpreter;
-use crate::platform::{Package, PackageOps};
+use crate::packages::{Package, PackageOps};
 use crate::row_collection::RowCollection;
 use crate::structures::Structure;
 use crate::table_renderer::TableRenderer;
@@ -29,14 +29,6 @@ fn generate_readme(file: File) -> std::io::Result<File> {
     // println!("generate run tests...");
     // let mut file = generate_run_tests(file)?;
 
-    println!("generate operators...");    
-    let operators_header = strip_margin(r#"
-        |<a name="operators"></a>
-        |### 🧮 Binary Operators Reference
-    "#, '|');
-    writeln!(file, "{operators_header}")?;
-    let mut file = generate_operators(file)?;
-
     println!("generate language examples...");
     let lang_header = strip_margin(r#"
         |<a name="core_examples"></a>
@@ -44,6 +36,14 @@ fn generate_readme(file: File) -> std::io::Result<File> {
     "#, '|');
     writeln!(file, "{lang_header}")?;
     let mut file = generate_language_examples(file)?;
+
+    println!("generate operators...");
+    let operators_header = strip_margin(r#"
+        |<a name="operators"></a>
+        |### 🧮 Binary Operators Reference
+    "#, '|');
+    writeln!(file, "{operators_header}")?;
+    let mut file = generate_operators(file)?;
 
     println!("generate platform examples...");
     let plat_header = strip_margin(r#"
@@ -85,7 +85,7 @@ fn generate_title(mut file: File) -> std::io::Result<File> {
 Write less, do more. Concise expressions, intuitive chaining, and minimal boilerplate make Oxide a joy to use.
 
 ## 🧰 **Batteries Included**
-Built-in modules like `cal`, `io`, `math`, `str`, `www`, and more cover the essentials—without reaching for external libraries.
+Built-in modules like `io`, `math`, `http`, and more cover the essentials—without reaching for external libraries.
 
 ## 🔗 **Composable Pipelines**
 Use `:::` to build seamless transformation pipelines—perfect for chaining, mapping, filtering, and data shaping.
@@ -108,22 +108,19 @@ GET https://api.example.com/users
 
 ### 🧮 Transform Arrays and Maps
 ```oxide
-use arrays
 users = [ { name: 'Tom' }, { name: 'Sara' } ]
-names = users:::map(u -> u::name)
+names = users::map(u -> u.name)
 ```
 
 ### 🕒 Work with Dates and Durations
 ```oxide
-use cal, durations
-cal::plus(now(), 30:::days())
+DateTime::new::plus(30::days)
 ```
 
 ### 🔄 Compose Data Pipelines
 ```oxide
-use arrays
 let arr = [1, 2, 3, 4]
-arr:::filter(x -> (x % 2) == 0):::map(x -> x * 10)
+arr::filter(x -> (x % 2) == 0)::map(x -> x * 10)
 ```
 
 ---
@@ -164,7 +161,7 @@ cargo test
 
 The remainder of this document showcases categorized usage examples across Oxide's standard modules including:
 
-- `arrays`, `cal`, `durations`, `io`, `math`, `os`, `oxide`, `str`, `tools`, `util`, and `www`.
+- `io`, `math`, `os`, `oxide` and `http`.
 
 To improve navigation, consider splitting the examples into separate markdown files or auto-generating docs from code annotations using a tool like `mdBook`, `Docusaurus`, or a custom Rust doc generator.
 "##.as_bytes())?;
@@ -317,7 +314,7 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
 }
 
 fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
-    for op in PackageOps::get_contents() {
+    for op in PackageOps::get_all_packages() {
         for (n, example) in op.get_examples().iter().enumerate() {
             if !example.is_empty() {
                 println!("[+] {}::{}", op.get_package_name(), op.get_name());
@@ -443,14 +440,14 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |// Arrays can be transformed via the 'arrays' package
                 |
-                |arrays::reverse([1, 4, 2, 8, 5, 7])
+                |[1, 4, 2, 8, 5, 7]::reverse()
             "#, '|')
         ],
         Expression::ArrowCurvyLeft(..) => vec![
             strip_margin(r#"
                 |stocks = nsd::save(
                 |   "expressions.read_next_row.stocks",
-                |   Table::new(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: Date))
+                |   Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: DateTime))::new
                 |)
                 |rows = [{ symbol: "BIZ", exchange: "NYSE" }, { symbol: "GOTO", exchange: "OTC" }]
                 |rows ~> stocks
@@ -464,7 +461,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                 |stocks = nsd::save(
                 |   "expressions.into.stocks",
-                |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                |   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
                 |)
                 |rows = [
                 |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
@@ -481,8 +478,8 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         Expression::ArrowVerticalBar(..) => vec![],
         Expression::ArrowVerticalBar2x(..) => vec![
             strip_margin(r#"
-               |use tools::reverse
-               |result = 'Hello' |> reverse
+               |fn inverse(a) -> 1.0 / a
+               |result = 5 |> inverse
                |result
                "#, '|'),
             strip_margin(r#"
@@ -493,6 +490,11 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                |result = (2, 3) |>> add |> inverse
                |result
                "#, '|')
+        ],
+        Expression::As(..) => vec![
+            strip_margin(r#"
+                    |1752258567888 as DateTime
+                "#, '|')
         ],
         Expression::Assert { .. } => vec![
             strip_margin(r#"
@@ -536,14 +538,11 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::ColonColon(..) => vec![
             strip_margin(r#"
-                |tools::to_table([
-                |    'apple', 'berry', 'kiwi', 'lime'
-                |])
+                |['apple', 'berry', 'kiwi', 'lime']::to_table()
             "#, '|')],
         Expression::ColonColonColon(..) => vec![
             strip_margin(r#"
-                |use durations
-                |8:::hours()
+                |8::hours()
             "#, '|')],
         Expression::Condition(..) => vec![
             strip_margin(r#"
@@ -612,7 +611,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::For { .. } => vec![
             strip_margin(r#"
-                |for row in tools::to_table(['apple', 'berry', 'kiwi', 'lime']) 
+                |for row in ['apple', 'berry', 'kiwi', 'lime']::to_table() 
                 |    yield row::value
             "#, '|')
         ],
@@ -621,7 +620,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             strip_margin(r#"
                     |stocks = nsd::save(
                     |   "readme.www.stocks",
-                    |   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+                    |   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
                     |)
                     |http::serve(8855)
                     "#, '|'),
@@ -689,6 +688,10 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             "#, '|'),
         ],
         Expression::Literal(..) => vec![],
+        Expression::Ls(..) => vec![
+            "ls".into(),
+            "ls where is_directory is true".into(),
+        ],
         Expression::MatchExpression(..) => vec![
             strip_margin(r#"
                 |let code = 100
@@ -737,7 +740,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::NamedValue(..) => vec![
             "name: 'Tom'".into(),
-            "tools::to_table({ name: 'Tom' })".into()
+            "{ name: 'Tom' }::to_table()".into()
         ],
         Expression::Neg(..) => vec![
             strip_margin(r#"
@@ -759,13 +762,13 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                 |// Ranges may be exclusive
                 |
                 |range = 1..5
-                |tools::reverse(range)
+                |range::reverse()
             "#, '|'),
         strip_margin(r#"
                 |// Ranges may be inclusive
                 |
                 |range = 1..=5
-                |tools::reverse(range)
+                |range::reverse()
             "#, '|')
         ],
         Expression::Referenced(..) => vec![],
@@ -849,23 +852,16 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                 |a ** b
             "#, '|'),
         ],
-        Expression::TypeDef(..) => vec![
-            strip_margin(r#"
-                |LabelString = typedef(String(80))
-                |LabelString
-            "#, '|')
-        ],
         Expression::TypeOf(..) => vec![
             "type_of([12, 76, 444])".into()
         ],
         Expression::Use(..) => vec![
             strip_margin(r#"
-                |use tools
-                |stocks = to_table([
+                |stocks = [
                 |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                 |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                 |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-                |])
+                |]::to_table()
                 |stocks
             "#, '|')
         ],
@@ -911,18 +907,21 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::Yield(..) => vec![
             strip_margin(r#"
-                for(i = 0, i < 5, i = i + 1) yield i * 2
+                |for(i = 0, i < 5, i = i + 1) yield i * 2
             "#, '|')
         ],
         Expression::Zip(..) => vec![
             strip_margin(r#"
-                | [1, 2, 3] <|> ['A','B','C']
+                |[1, 2, 3] <|> ['A','B','C']
             "#, '|')
         ],
         ////////////////////////////////////////////////////////////////////
         // SQL models
         ////////////////////////////////////////////////////////////////////
         Delete { .. } => vec![],
+        Deselect { .. } => vec![
+            "deselect age from { name: 'Tom', age: 37, sex: 'M' }".into()
+        ],
         Undelete { .. } => vec![],
         GroupBy { .. } => vec![],
         Having { ..} => vec![],
@@ -977,7 +976,7 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Structures", StructureExpression(vec![])),
         ("Throw", Throw(null.clone())),
         ("Tuples", TupleExpression(vec![])),
-        ("Type Definitions", TypeDef(null.clone())),
+        ("Type Detection", TypeOf(null.clone())),
         ("Function Pipelines", ArrowVerticalBar(null.clone(), null.clone())),
         ("Function Pipelines (destructuring)", ArrowVerticalBar2x(null.clone(), null.clone())),
         ("Import/Use", Use(vec![])),
@@ -1009,7 +1008,6 @@ fn print_text_block(mut file: File, lines: Vec<String>) -> std::io::Result<File>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use itertools::Itertools;
     use std::fs::OpenOptions;
 
     #[test]
@@ -1024,27 +1022,6 @@ mod tests {
     }
     
     #[test]
-    fn test_platform_examples() {
-        for op in PackageOps::get_contents() {
-            println!("[+] {}::{}", op.get_package_name(), op.get_name());
-            
-            for (n, example) in op.get_examples().iter().enumerate() {
-                if !example.is_empty() {
-                    let example_lines = example.split("\n")
-                        .collect::<Vec<_>>()
-                        .iter()
-                        .map(|s| format!("    [~] {}", s))
-                        .join("\n");
-                    println!("{}", example_lines);
-                    let lines = generate_example_results(example).unwrap();
-                    println!("    [*] Completed");
-                }
-            }
-        }
-    }
-
-    #[ignore]
-    #[test]
     fn test_generate_language_examples() {
         let mut file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
@@ -1055,8 +1032,7 @@ mod tests {
         file = generate_language_examples(file).unwrap();
         file.flush().unwrap();
     }
-
-    #[ignore]
+    
     #[test]
     fn test_generate_platform_examples() {
         let mut file = OpenOptions::new()
@@ -1068,8 +1044,7 @@ mod tests {
         file = generate_platform_examples(file).unwrap();
         file.flush().unwrap();
     }
-
-    #[ignore]
+    
     #[test]
     fn test_generate_readme() {
         let file = OpenOptions::new()
@@ -1085,11 +1060,4 @@ mod tests {
         }
     }
 
-    #[ignore]
-    #[test]
-    fn test_generate_docs() {
-        test_generate_language_examples();
-        test_generate_platform_examples();
-        test_generate_readme();
-    }
 }

@@ -5,7 +5,7 @@
 
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::{FunctionType, UnresolvedType};
+use crate::data_types::DataType::{FunctionType, RuntimeResolvedType};
 use crate::dataframe::Dataframe;
 use crate::errors::Errors::{CompilerError, Exact, ExactNear, SyntaxError};
 use crate::errors::SyntaxErrors::IllegalExpression;
@@ -13,14 +13,15 @@ use crate::errors::{throw, CompileErrors, SyntaxErrors};
 use crate::expression::Expression::*;
 use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::expression::*;
+use crate::machine::Machine;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::*;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{BinaryValue, CharValue, DateValue, Kind, Null, Number, StringValue, TableValue};
-use crate::utils::{expand_escapes, pull_identifier_name, pull_name};
+use crate::typed_values::TypedValue::{ByteStringValue, CharValue, DateTimeValue, Kind, Null, Number, StringValue, TableValue};
+use crate::utils::{expand_escapes, pull_identifier_name, pull_name, string_to_uuid_value};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
@@ -176,11 +177,20 @@ impl Compiler {
                     t if is_operator(t, is_even) => {
                         while let Some(top_op) = operators.last() {
                             if get_precedence(top_op, is_even) >= get_precedence(&t, is_even) {
-                                let b = output.pop().unwrap();
-                                let a = output.pop().unwrap();
-                                let result = apply_operator_binary(top_op, b, a)?;
-                                output.push(result);
-                                operators.pop();
+                                let b = output.pop();
+                                let a = output.pop();
+                                match (b, a) {
+                                    (Some(b), Some(a)) => {
+                                        let result = apply_operator_binary(top_op, b, a)?;
+                                        output.push(result);
+                                        operators.pop();
+                                    }
+                                    (b, a) => {
+                                        println!("Syntax error: b {b:?}, a {a:?}");
+                                       return throw(ExactNear("Syntax error".into(), ts.current()))
+                                    }
+                                }
+    
                             } else {
                                 break;
                             }
@@ -249,7 +259,7 @@ impl Compiler {
             // binary literals
             (Some(BinaryLiteral { text, .. }), ts) => {
                 let bytes = convert_binary_literal_to_bytes(&text)?;
-                Ok((Some(Literal(BinaryValue(bytes))), ts))
+                Ok((Some(Literal(ByteStringValue(bytes))), ts))
             },
             // variables
             (Some(Backticks { text, .. }), ts) => Ok((Some(Identifier(text)), ts)),
@@ -259,7 +269,7 @@ impl Compiler {
             // date literals
             (Some(DateLiteral { text, .. }), ts) => {
                 let date = text.parse::<DateTime<Utc>>()
-                    .map(|date| DateValue(date.timestamp_millis()))
+                    .map(|date| DateTimeValue(date.timestamp_millis()))
                     .map_err(|e| cnv_error!(e))?;
                 Ok((Some(Literal(date)), ts))
             }
@@ -270,16 +280,31 @@ impl Compiler {
             // single-quoted strings
             (Some(SingleQuoted { text, .. }), ts) =>
                 match expand_escapes(text.as_str()) {
-                    s if s.len() == 1 => Ok((s.chars().next().map(|c| Literal(CharValue(c))), ts)),
+                    s if s.chars().count() == 1 => Ok((s.chars().next().map(|c| Literal(CharValue(c))), ts)),
                     s => Ok((Some(Literal(StringValue(s))), ts)),
                 }
             // numeric values
             (Some(Numeric { text, .. }), ts) => {
                 Ok((Some(Literal(TypedValue::from_numeric(text.as_str())?)), ts))
             }
+            // UUID literal
+            (Some(UUIDLiteral { text, .. }), ts) => {
+                Ok((Some(Literal(string_to_uuid_value(text.as_str())?)), ts))
+            }
             // unrecognized token
             _ => Ok((None, ts.clone())),
         }
+    }
+
+    pub fn get_keywords() -> Vec<String> {
+        vec![
+            "and", "as", "assert", "contains", "DELETE", "delete", "do", "else", "exit",
+            "false", "feature", "fn", "for", "from", "GET", "group_by", "having", "HEAD", "HTTP",
+            "if", "in", "include", "is", "is_defined", "isnt", "let", "like", "ls",
+            "match", "mod", "NaN", "null", "or", "order_by", "PATCH", "POST", "PUT", "print", "return",
+            "scenario", "select", "test", "throw", "true", "type_of",
+            "undefined", "undelete", "use", "when", "whenever", "where", "while", "yield",
+        ].into_iter().map(String::from).collect::<Vec<String>>()
     }
     
     /// Parses reserved words (i.e. keyword)
@@ -289,6 +314,7 @@ impl Compiler {
                 "assert" => self.parse_keyword_assert(nts),
                 "delete" => self.parse_keyword_delete(nts),
                 "DELETE" => self.parse_keyword_http(ts),
+                "deselect" => self.parse_keyword_deselect(nts),
                 "do" => self.parse_keyword_do_while(nts),
                 "false" => Ok((FALSE, nts)),
                 "feature" => self.parse_keyword_feature(nts),
@@ -301,6 +327,7 @@ impl Compiler {
                 "include" => self.parse_expression_1a(nts, Include),
                 "is_defined" => self.parse_expression_1a(nts, IsDefined),
                 "let" => self.parse_keyword_let(nts),
+                "ls" => self.parse_keyword_ls(nts),
                 "match" => self.parse_keyword_match(nts),
                 "mod" => self.parse_keyword_mod(nts),
                 "NaN" => Ok((Literal(Number(NaNValue)), nts)),
@@ -313,7 +340,6 @@ impl Compiler {
                 "test" => self.parse_keyword_test(nts),
                 "throw" => self.parse_keyword_throw(nts),
                 "true" => Ok((TRUE, nts)),
-                "typedef" => self.parse_keyword_type_decl(nts),
                 "type_of" => self.parse_keyword_type_of(nts),
                 "undefined" => Ok((UNDEFINED, nts)),
                 "undelete" => self.parse_keyword_undelete(nts),
@@ -401,7 +427,7 @@ impl Compiler {
         let (expr, ts) = self.compile_next(ts.clone())?;
         Ok((f(expr.into()), ts))
     }
-    
+
     /// Creates an `assert` expression
     /// #### Examples
     /// ```
@@ -422,15 +448,27 @@ impl Compiler {
         Ok((Assert { condition: condition.into(), message }, ts))
     }
 
-    /// SQL Delete statement.
+    /// Removes rows from a table
     /// #### Examples
     /// ```
     /// delete stocks where last_sale > 1.00
     /// ```
     fn parse_keyword_delete(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (from, ts) = self.compile_next(ts)?;
-        println!("parse_keyword_delete: from {from:?}");
         Ok((Delete { from: from.into() }, ts))
+    }
+
+    /// Excludes fields from a selection
+    /// #### Examples
+    /// ```
+    /// deselect stocks where last_sale > 1.00
+    /// ```
+    fn parse_keyword_deselect(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        let (fields, ts) = self.next_expression_list(ts)?;
+        let fields = fields.expect("At least one field is required");
+        let ts = ts.expect("from")?;
+        let (from, ts) = self.compile_next(ts)?;
+        Ok((Deselect { fields, from: from.into() }, ts))
     }
 
     /// Parses do-while statement
@@ -507,7 +545,7 @@ impl Compiler {
         let (title, ts) = self.compile_next(ts.clone())?;
         // does it inherit state from a parent?
         let (maybe_inherits, ts) = match ts.next() {
-            (Some(Atom { text, ..}), nts) if text == "inherits" => {
+            (Some(Atom { text, .. }), nts) if text == "inherits" => {
                 match self.compile_next(nts)? {
                     (Literal(StringValue(parent)), ts) => (Some(parent), ts),
                     _ => (None, ts)
@@ -570,7 +608,7 @@ impl Compiler {
                     TupleExpression(items) => convert_to_parameters(items)?,
                     _ => return throw(ExactNear("Parameters expected".into(), ts.current()))
                 };
-                Ok((Literal(Kind(FunctionType(params, UnresolvedType.into()))), ts))
+                Ok((Literal(Kind(FunctionType(params, RuntimeResolvedType.into()))), ts))
             }
         }
     }
@@ -711,6 +749,25 @@ impl Compiler {
             (SetVariablesExpr(name, value), ts) => Ok((SetVariablesExpr(name, value), ts)),
             _ => throw(ExactNear("Expected assignment: let x = y".into(), ts0.current())),
         }
+    }
+
+    /// Builds a model for List system files expression
+    /// #### Examples
+    /// ##### List all files in the current directory
+    /// ```
+    /// ls
+    /// ```
+    /// ##### List all files in a specific directory
+    /// ```
+    /// ls("./Downloads")
+    /// ```
+    fn parse_keyword_ls(&self, ts0: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        let (path, ts) = if ts0.is("(") {
+            self.compile_next(ts0).map(|(expr, ts)| (Some(expr.into()), ts))?
+        } else { 
+            (None, ts0)
+        };
+        Ok((Ls(path), ts))
     }
 
     /// Parses an use statement:
@@ -908,16 +965,6 @@ impl Compiler {
         let (expr, ts) = self.compile_next(ts.clone())?;
         Ok((Throw(expr.into()), ts))
     }
-    
-    /// Builds a type declaration
-    /// #### Examples
-    /// ```
-    /// typedef(String(80))
-    /// ```
-    fn parse_keyword_type_decl(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (expr, ts) = self.compile_next(ts.clone())?;
-        Ok((TypeDef(expr.into()), ts))
-    }
 
     /// Builds a `type_of` declaration
     /// #### Examples
@@ -1015,7 +1062,11 @@ impl Compiler {
         }
         // must be a identifier. e.g., abc
         else {
-            Ok((Identifier(name.to_string()), ts))
+            let identifier = Identifier(name.to_string());
+            match DataType::decipher_type(&identifier) {
+                Ok(data_type) => Ok((Literal(Kind(data_type)), ts)),
+                Err(_) => Ok((identifier, ts))
+            }
         }
     }
 
@@ -1030,7 +1081,7 @@ impl Compiler {
         match ts.next() {
             (Some(Atom { text: name, .. }), ts) => {
                 // next, check for type constraint
-                let (typedef, ts) = if ts.is(":") {
+                let (type_decl, ts) = if ts.is(":") {
                     self.expect_parameter_type_decl(ts.skip())?
                 } else {
                     (None, ts)
@@ -1040,13 +1091,14 @@ impl Compiler {
                 let (default_value, ts) = if ts.is("=") {
                     let ts = ts.skip();
                     let (expr, ts) = self.compile_next(ts)?;
-                    (expr.to_pure()?, ts)
+                    let (_, value) = Machine::evaluate_pure(&expr)?;
+                    (value, ts)
                 } else {
                     (Null, ts)
                 };
 
                 Ok((
-                    Parameter::new_with_default(name, typedef.unwrap_or(UnresolvedType), default_value),
+                    Parameter::new_with_default(name, type_decl.unwrap_or(RuntimeResolvedType), default_value),
                     ts,
                 ))
             }
@@ -1160,6 +1212,7 @@ fn apply_operator_binary(
         "->" => Ok(ArrowSkinnyRight(aa, bb)),
         "|>" => Ok(ArrowVerticalBar(aa, bb)),
         "|>>" => Ok(ArrowVerticalBar2x(aa, bb)),
+        "as" => Ok(As(aa, bb)),
         "&" => Ok(BitwiseAnd(aa, bb)),
         "|" => Ok(BitwiseOr(aa, bb)),
         "<<" => Ok(BitwiseShiftLeft(aa, bb)),
@@ -1269,7 +1322,7 @@ pub fn convert_to_parameters(items: Vec<Expression>) -> std::io::Result<Vec<Para
                 }
             }
             // x
-            Identifier(name) => my_params.push(Parameter::new(name, UnresolvedType)),
+            Identifier(name) => my_params.push(Parameter::new(name, RuntimeResolvedType)),
             other => return throw(SyntaxError(IllegalExpression(other.to_code())))
         }
     }
@@ -1291,14 +1344,14 @@ fn get_precedence(op: &Token, is_even: bool) -> i8 {
         "&" | "&&" | "and" => 7,        // Bitwise/Logical AND
         "^" | "|" | "||" | "or" => 6,  // Bitwise XOR, Bitwise/Logical OR
         ".." | "..=" => 5,
-        "::" | ":::" => 4,
+        "." | "::" | ":::" => 4,
         ":" => 3,
         "==" | "!=" | "<" | "<=" | ">" | ">=" => 2,
         "contains" | "in" | "is" | "isnt" | "like" | "matches" => 2,
         "group_by" | "having" | "limit" | "order_by" | "when" | "where" => 1,
         "->" | "=>" | "~>" | "<~" | "~>>" | "<<~" | "|>" | "|>>" => 1,
         "=" | ":=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" => 0,
-        "?" | "!?" => 0,
+        "?" | "!?" | "as" => 0,
         _ => -1, // Unknown or lowest
     }
 }
@@ -1316,7 +1369,7 @@ fn is_operator(token: &Token, is_even: bool) -> bool {
 /// Indicates whether the token is a mnemonic operator.
 fn is_mnemonic_operator(token: &Token, _is_even: bool) -> bool {
     matches!(token.get().as_str(), 
-       "and" | "contains" | "in" | "is" | "isnt" | "like" |
+       "and" | "as" | "contains" | "in" | "is" | "isnt" | "like" |
        "group_by" | "having" | "limit" | "matches" |
         "or" | "order_by" | "when" | "where"
     )
@@ -1357,7 +1410,7 @@ pub fn resolve_name_and_parameters_and_return_type(
             convert_to_parameters(items).map(|params| (None, params, None)),
         // x -> x + 1
         Identifier(name) =>
-            Ok((None, vec![Parameter::new(name, UnresolvedType)], None)),
+            Ok((None, vec![Parameter::new(name, RuntimeResolvedType)], None)),
         other => {
             println!("resolve_name_and_parameters_and_return_type: {:?}", other);
             throw(SyntaxError(IllegalExpression(other.to_code())))
@@ -1381,7 +1434,7 @@ mod tests {
         use crate::numbers::Numbers::F64Value;
         use crate::parameter::Parameter;
         use crate::token_slice::TokenSlice;
-        use crate::typed_values::TypedValue::{DateValue, Number};
+        use crate::typed_values::TypedValue::{DateTimeValue, Number};
 
         #[test]
         fn test_expected_parameter() {
@@ -1396,12 +1449,12 @@ mod tests {
 
         #[test]
         fn test_expected_parameter_with_default_literal() {
-            let ts = TokenSlice::from_string("processed_time: Date = 2025-01-13T03:25:47.350Z");
+            let ts = TokenSlice::from_string("processed_time: DateTime = 2025-01-13T03:25:47.350Z");
             let compiler = Compiler::new();
             let (param, _) = compiler.expect_parameter(ts).unwrap();
             assert_eq!(
                 param,
-                Parameter::new_with_default("processed_time", DateTimeType, DateValue(1736738747350)),
+                Parameter::new_with_default("processed_time", DateTimeType, DateTimeValue(1736738747350)),
             )
         }
 
@@ -1422,7 +1475,7 @@ mod tests {
     mod integration_tests {
         use super::*;
         use crate::compiler::{get_exponent_symbols, Compiler};
-        use crate::data_types::DataType::{FixedSizeType, FunctionType, NumberType, StringType, StructureType, UnresolvedType};
+        use crate::data_types::DataType::{DateTimeType, FixedSizeType, FunctionType, NumberType, RuntimeResolvedType, StringType, StructureType};
         use crate::expression::Conditions::*;
         use crate::expression::Expression::*;
         use crate::expression::Ranges::{Exclusive, Inclusive};
@@ -1555,11 +1608,11 @@ mod tests {
         #[test]
         fn test_colon_colon_function() {
             assert_eq!(
-                Compiler::build("cal::now()").unwrap(),
+                Compiler::build("date::is_weekend()").unwrap(),
                 ColonColon(
-                    Identifier("cal".into()).into(),
+                    Identifier("date".into()).into(),
                     FunctionCall {
-                        fx: Identifier("now".into()).into(),
+                        fx: Identifier("is_weekend".into()).into(),
                         args: vec![]
                     }.into()
                 )
@@ -2448,8 +2501,8 @@ mod tests {
             assert_eq!(
                 expr,
                 Parameters(vec![
-                    Parameter::new("a", UnresolvedType),
-                    Parameter::new("b", UnresolvedType),
+                    Parameter::new("a", RuntimeResolvedType),
+                    Parameter::new("b", RuntimeResolvedType),
                     Parameter::new("c", NumberType(I64Kind)),
                 ])
             )
@@ -2622,15 +2675,14 @@ mod tests {
         #[test]
         fn test_structure_expression_complex() {
             verify_build_with_decompile(
-                strip_margin(
-                    r#"
-                          |{
-                          |    symbol: symbol,
-                          |    exchange: exchange,
-                          |    last_sale: last_sale * 2.0,
-                          |    event_time: cal::now()
-                          |}"#, '|').trim(),
-                "{symbol: symbol, exchange: exchange, last_sale: last_sale * 2, event_time: cal::now()}",
+                strip_margin(r#"
+                  |{
+                  |    symbol: symbol,
+                  |    exchange: exchange,
+                  |    last_sale: last_sale * 2.0,
+                  |    event_time: DateTime::new()
+                  |}"#, '|').trim(),
+        "{symbol: symbol, exchange: exchange, last_sale: last_sale * 2, event_time: DateTime::new()}",
                 StructureExpression(vec![
                     ("symbol".into(), Identifier("symbol".into())),
                     ("exchange".into(), Identifier("exchange".into())),
@@ -2639,9 +2691,9 @@ mod tests {
                         Literal(Number(F64Value(2.0))).into()
                     )),
                     ("event_time".into(), ColonColon(
-                        Identifier("cal".into()).into(),
+                        Literal(Kind(DateTimeType)).into(),
                         FunctionCall {
-                            fx: Identifier("now".into()).into(),
+                            fx: Identifier("new".into()).into(),
                             args: vec![]
                         }.into()))
                 ]))
@@ -2683,23 +2735,8 @@ mod tests {
         }
 
         #[test]
-        fn test_typedef() {
-            let model = Compiler::build(
-                r#"
-                typedef(String(32))
-            "#,
-            )
-            .unwrap();
-            assert_eq!(
-                model,
-                TypeDef(Literal(Kind(FixedSizeType(StringType.into(), 32))).into())
-            )
-        }
-
-        #[test]
         fn test_type_of() {
-            let model = Compiler::build(
-                r#"
+            let model = Compiler::build(r#"
                 type_of("cat")
             "#,
             )
@@ -2713,8 +2750,7 @@ mod tests {
         #[test]
         fn test_use_single() {
             // single use
-            let code = Compiler::build(
-                r#"
+            let code = Compiler::build(r#"
                 use "os"
             "#,
             )
@@ -2726,8 +2762,7 @@ mod tests {
         #[test]
         fn test_use_multiple() {
             // multiple uses
-            let code = Compiler::build(
-                r#"
+            let code = Compiler::build(r#"
                 use os, utils, "tools"
             "#,
             )

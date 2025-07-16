@@ -9,7 +9,7 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::data_types::*;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Disk, Model, TestReport};
+use crate::dataframe::Dataframe::{DiskTable, ModelTable, TestReport};
 
 use crate::errors::Errors;
 use crate::expression::Expression;
@@ -19,8 +19,8 @@ use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::{F64Kind, I64Kind};
 use crate::numbers::Numbers::{F64Value, I64Value};
 use crate::object_config::ObjectConfig;
-use crate::oxide_server::start_http_server;
 use crate::parameter::Parameter;
+use crate::server_engine::start_http_server;
 use crate::structures::Row;
 use crate::table_renderer::TableRenderer;
 use crate::test_engine::TestEngine;
@@ -43,11 +43,18 @@ pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Par
 }
 
 pub fn make_dataframe_ns(ns: Namespace, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
-    Ok(Disk(FileRowCollection::create_table(&ns, &columns)?))
+    Ok(DiskTable(FileRowCollection::create_table(&ns, &columns)?))
 }
 
 pub fn make_dataframe_config(columns: Vec<Parameter>) -> ObjectConfig {
     ObjectConfig::build_table(columns)
+}
+
+pub fn make_lines_from_table(table_value: TypedValue) -> Vec<String> {
+    match table_value {
+        TableValue(df) => TableRenderer::from_dataframe(&df),
+        _ => vec![]
+    }
 }
 
 pub fn make_quote(id: usize,
@@ -109,7 +116,7 @@ pub fn start_test_server(port: u16) {
 
 pub fn verify_bit_operator(op: &str) {
     verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
-    verify_data_type(format!("a {} b", op).as_str(), UnresolvedType);
+    verify_data_type(format!("a {} b", op).as_str(), RuntimeResolvedType);
 }
 
 pub fn verify_data_type(code: &str, expected: DataType) {
@@ -155,7 +162,7 @@ pub fn verify_exact_report_with(
         TableValue(TestReport(mrc, state)) => {
             let mut report = TestEngine::generate_summary(&state);
             report.push("".to_string());
-            report.extend(TestEngine::generate_report(Model(mrc)));
+            report.extend(TestEngine::generate_report(ModelTable(mrc)));
             report.iter()
                 .map(|s| s.replace("\"", "'"))
                 .collect::<Vec<_>>()
@@ -183,6 +190,22 @@ pub fn verify_exact_table_with(
     let actual = TableRenderer::from_table_with_ids(&result).unwrap();
     for s in &actual { println!("{}", s) }
     assert_eq!(actual, expected);
+    interpreter
+}
+
+pub fn verify_exact_unwrapped(code: &str, expected: &str) {
+    let mut interpreter = Interpreter::new();
+    let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual.unwrap_value(), expected);
+}
+
+pub fn verify_exact_unwrapped_with(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: &str
+) -> Interpreter {
+    let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual.unwrap_value(), expected);
     interpreter
 }
 
@@ -223,7 +246,7 @@ pub fn verify_exact_value_with(
 pub fn verify_math_operator(op: &str) {
     verify_data_type(format!("5 {} 9", op).as_str(), NumberType(I64Kind));
     verify_data_type(format!("9.4 {} 3.7", op).as_str(), NumberType(F64Kind));
-    verify_data_type(format!("a {} b", op).as_str(), UnresolvedType);
+    verify_data_type(format!("a {} b", op).as_str(), RuntimeResolvedType);
 }
 
 /////////////////////////////////////////////////////////////
@@ -236,7 +259,7 @@ fn are_equal_unordered(expected: Vec<&str>, actual: Vec<String>)  {
     a_norm.sort();
     b_norm.sort();
     if a_norm != b_norm {
-        assert_eq!(a_norm, b_norm)
+        assert_eq!(actual, expected)
     }
 }
 

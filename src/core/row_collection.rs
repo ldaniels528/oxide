@@ -7,7 +7,8 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
 use crate::data_types::DataType::*;
-use crate::dataframe::Dataframe::Model;
+use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::Errors::{Exact, InvalidNamespace, TypeMismatch};
 use crate::errors::TypeMismatchErrors::TableExpected;
 use crate::errors::{throw, Errors};
@@ -17,16 +18,16 @@ use crate::file_row_collection::FileRowCollection;
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::I64Kind;
-use crate::numbers::Numbers::{I64Value, RowId};
+use crate::numbers::Numbers::I64Value;
 use crate::packages::ToolsPkg;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::Array;
 use crate::structures::Structures::{Firm, Hard};
 use crate::structures::{Row, Structure};
-use crate::table_scan::{TableScanPlan, TableScanTypes};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::fs::File;
@@ -36,14 +37,10 @@ use std::sync::Arc;
 /// represents the underlying storage resource for the dataframe
 pub trait RowCollection: Debug {
     /// Appends the given row to the end of the table
-    fn append_row(&mut self, row: Row) -> TypedValue {
-        match self.len() {
-            Ok(id) => {
-                let _ = self.overwrite_row(id, row.with_row_id(id));
-                Number(RowId(id as u64))
-            }
-            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
-        }
+    fn append_row(&mut self, row: Row) -> std::io::Result<u64> {
+        let id = self.len()?;
+        let _ = self.overwrite_row(id, row.with_row_id(id));
+        Ok(id as u64)
     }
 
     /// Appends the vector of rows to the end of the table
@@ -81,10 +78,10 @@ pub trait RowCollection: Debug {
             let metadata = self.read_row_metadata(row_id)?;
             // if row is unallocated, replace it
             if !metadata.is_allocated {
-                if let Some((row, _rmd, id)) = self.find_previous(eof, |(_, md)| md.is_allocated)? {
-                    eof = id;
+                if let Some(row) = self.find_previous(eof, |row| true)? {
+                    eof = row.get_id();
                     let a = self.overwrite_row(row_id, row.with_row_id(row_id))?;
-                    let b = self.delete_row(id)?;
+                    let b = self.delete_row(row.get_id())?;
                     affected += a + b
                 }
             }
@@ -147,7 +144,7 @@ pub trait RowCollection: Debug {
                 Boolean(true),
             ]));
         }
-        TableValue(Model(mrc))
+        TableValue(ModelTable(mrc))
     }
 
     fn examine_range(&self, range: std::ops::Range<usize>) -> TypedValue {
@@ -174,7 +171,7 @@ pub trait RowCollection: Debug {
             let meta = meta.with_allocated(true);
             row_data.push((row, meta));
         }
-        TableValue(Model(ModelRowCollection::with_rows(columns, row_data)))
+        TableValue(ModelTable(ModelRowCollection::with_rows(columns, row_data)))
     }
 
     /// Reads active and inactive (deleted) rows
@@ -294,18 +291,20 @@ pub trait RowCollection: Debug {
         Ok(None)
     }
 
+    /// Returns an option of the nearest preceding row that satisfies the function
+    /// starting with the initial_row_id.
     fn find_previous(
         &self,
         initial_row_id: usize,
-        f: fn((&Row, &RowMetadata)) -> bool,
-    ) -> std::io::Result<Option<(Row, RowMetadata, usize)>> {
+        f: fn(&Row) -> bool,
+    ) -> std::io::Result<Option<Row>> {
         let (mut row_id, mut done) = (initial_row_id, false);
         while !done {
             // attempt to read the row with its metadata
             if let Ok((row, metadata)) = self.read_row(row_id) {
                 // if it's a match, return it
-                if metadata.is_allocated && f((&row, &metadata)) {
-                    return Ok(Some((row, metadata, row_id)));
+                if metadata.is_allocated && f(&row) {
+                    return Ok(Some(row));
                 }
             }
             if row_id > 0 { row_id -= 1; } else { done = true }
@@ -349,12 +348,12 @@ pub trait RowCollection: Debug {
                     match self.read_one(row_id) {
                         Ok(Some(row)) => result = callback(result, row),
                         Ok(None) => {}
-                        Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
+                        Err(err) => return ErrorValue(Exact(err.to_string()))
                     }
                 }
                 result
             }
-            Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
+            Err(err) => ErrorValue(Exact(err.to_string()))
         }
     }
 
@@ -377,7 +376,7 @@ pub trait RowCollection: Debug {
                     }
                 }
                 Ok(..) => {}
-                Err(err) => return ErrorValue(Errors::Exact(err.to_string()))
+                Err(err) => return ErrorValue(Exact(err.to_string()))
             }
         }
         result
@@ -468,12 +467,12 @@ pub trait RowCollection: Debug {
                 Structured(Firm(row, self.get_parameters()))
             }
             Ok(None) => Undefined,
-            Err(err) => ErrorValue(Errors::Exact(err.to_string()))
+            Err(err) => ErrorValue(Exact(err.to_string()))
         }
     }
 
     /// Appends the given row to the end of the table
-    fn push_row(&mut self, row: Row) -> TypedValue {
+    fn push_row(&mut self, row: Row) -> std::io::Result<u64> {
         self.append_row(row)
     }
 
@@ -545,124 +544,66 @@ pub trait RowCollection: Debug {
 
     /// returns a reverse-order copy of the table
     fn reverse(&self) -> std::io::Result<Box<dyn RowCollection>> {
-        match self.reverse_table_value() {
-            TableValue(rcv) => Ok(Box::new(rcv)),
+        match self.reverse_table_value()? {
+            TableValue(df) => Ok(Box::new(df)),
             ErrorValue(err) => throw(Exact(err.to_string())),
-            z => throw(Exact(format!("Expected table value near {}", z.unwrap_value())))
+            z => throw(Exact(format!("Expected table value near {}", z.to_code())))
         }
     }
 
     /// returns a reverse-order copy of the table
-    fn reverse_table_value(&self) -> TypedValue {
+    fn reverse_table_value(&self) -> std::io::Result<TypedValue> {
         use TypedValue::{ErrorValue, TableValue};
         let mrc = ModelRowCollection::with_rows(self.get_columns().to_owned(), Vec::new());
-        self.fold_right(TableValue(Model(mrc)), |tv, row| {
+        let result = self.fold_right(TableValue(ModelTable(mrc)), |tv, row| {
             match tv {
                 ErrorValue(message) => return ErrorValue(message),
                 TableValue(mut df) =>
                     match df.append_row(row) {
-                        ErrorValue(message) => return ErrorValue(message),
-                        _ => TableValue(df),
+                        Err(message) => return ErrorValue(Exact(message.to_string())),
+                        Ok(_) => TableValue(df),
                     }
                 z => return ErrorValue(InvalidNamespace(z.unwrap_value()))
             }
-        })
-    }
-
-    /// Returns an option of the first row that matches the given [TableScanPlan]
-    fn scan_first(
-        &self,
-        plan: TableScanPlan,
-    ) -> std::io::Result<Option<Row>> {
-        match plan.get_scan_type() {
-            TableScanTypes::ColumnScan { column_index, column_value } =>
-                self.scan_next(TableScanPlan::column_scan(column_index, column_value)),
-            TableScanTypes::ConditionScan { machine, condition } =>
-                self.scan_next(TableScanPlan::condition_scan(machine, condition)),
-            TableScanTypes::CompleteScan =>
-                self.scan_next(TableScanPlan::complete_scan())
+        });
+        match result {
+            ErrorValue(err) => throw(err),
+            value => Ok(value)
         }
     }
-
-    /// Returns an option of the last row that matches the given [TableScanPlan]
-    fn scan_last(
-        &self,
-        plan: TableScanPlan,
-    ) -> std::io::Result<Option<Row>> {
+    
+    fn shuffle(&mut self) -> std::io::Result<bool> {
+        let mut src_row_id = 0;
         let eof = self.get_eof()?;
-        match plan.get_scan_type() {
-            TableScanTypes::ColumnScan { column_index, column_value } =>
-                self.scan_next(TableScanPlan::new(eof, false, TableScanTypes::ColumnScan {
-                    column_index,
-                    column_value,
-                })),
-            TableScanTypes::ConditionScan { machine, condition } =>
-                self.scan_next(TableScanPlan::new(eof, false, TableScanTypes::ConditionScan {
-                    machine,
-                    condition,
-                })),
-            TableScanTypes::CompleteScan =>
-                self.scan_next(TableScanPlan::new(eof, false, TableScanTypes::CompleteScan))
+        
+        fn get_random_dest_id(src_row_id: usize, eof:  usize) -> usize {
+            let mut rng = rand::thread_rng();
+            let dst_row_id = rng.gen_range(0..eof);
+            if src_row_id == dst_row_id {
+                get_random_dest_id(src_row_id, eof)
+            } else { dst_row_id }
         }
-    }
-
-    /// Returns an option of the next row that matches the given [TableScanPlan]
-    fn scan_next(
-        &self,
-        plan: TableScanPlan,
-    ) -> std::io::Result<Option<Row>> {
-        let eof = self.get_eof()?;
-        let mut row_id = plan.get_position();
-        let is_forward = plan.is_forward();
-
-        // determine the matching function for the search method
-        let is_match: Box<dyn Fn(&Row) -> bool> = match plan.get_scan_type() {
-            TableScanTypes::ColumnScan { column_index, column_value } =>
-                Box::new(move |row: &Row| column_value == row[column_index]),
-            TableScanTypes::ConditionScan { machine, condition } =>
-                Box::new(move |row: &Row| matches!(
-                        machine.with_row(self.get_columns(), row).evaluate_condition(&condition),
-                        Ok((_ms, Boolean(true)))
-                    )),
-            TableScanTypes::CompleteScan => Box::new(|_row: &Row| true)
-        };
-
-        // attempt to find the next match
-        while (is_forward && row_id < eof) || (!is_forward && row_id as isize >= 0) {
-            if let Some(row) = self.read_one(row_id)? {
-                if is_match(&row) { return Ok(Some(row)); }
+        
+        while src_row_id <= eof {
+            match self.read_one(src_row_id)? {
+                Some(src_row) => {
+                    let dst_row_id = get_random_dest_id(src_row_id, eof);
+                    match self.read_one(dst_row_id)? {
+                        Some(dst_row) => {
+                            self.overwrite_row(dst_row_id, src_row)?;
+                            self.overwrite_row(src_row_id, dst_row)?;
+                        }
+                        None => {
+                            self.overwrite_row(dst_row_id, src_row)?;
+                            self.overwrite_row_metadata(src_row_id, RowMetadata::new(false))?;
+                        }
+                    }
+                }
+                None => {}
             }
-            row_id = if is_forward { row_id + 1 } else { row_id.wrapping_sub(1) };
+            src_row_id += 1;
         }
-
-        Ok(None)
-    }
-
-    /// Returns an option of the previous row that matches the given [TableScanPlan]
-    fn scan_previous(
-        &self,
-        plan: TableScanPlan,
-    ) -> std::io::Result<Option<Row>> {
-        match plan.get_scan_type() {
-            TableScanTypes::ColumnScan { column_index, column_value } =>
-                self.scan_next(TableScanPlan::new(
-                    plan.get_position(),
-                    !plan.is_forward(),
-                    TableScanTypes::ColumnScan { column_index, column_value },
-                )),
-            TableScanTypes::ConditionScan { machine, condition } =>
-                self.scan_next(TableScanPlan::new(
-                    plan.get_position(),
-                    !plan.is_forward(),
-                    TableScanTypes::ConditionScan { machine, condition },
-                )),
-            TableScanTypes::CompleteScan =>
-                self.scan_next(TableScanPlan::new(
-                    plan.get_position(),
-                    !plan.is_forward(),
-                    TableScanTypes::CompleteScan,
-                )),
-        }
+        Ok(true)
     }
 
     fn to_array(&self) -> Array {
@@ -682,18 +623,6 @@ pub trait RowCollection: Debug {
     /// Restores a deleted row by ID to an active state within the table
     fn undelete_row(&mut self, id: usize) -> std::io::Result<i64> {
         self.overwrite_row_metadata(id, RowMetadata::new(true))
-    }
-
-    /// Restores deleted rows that satisfy the include function
-    fn undelete_rows(&mut self, include: fn(Row, RowMetadata) -> bool) -> std::io::Result<i64> {
-        let mut restorations = 0;
-        for id in 0..self.len()? {
-            let (row, metadata) = self.read_row(id)?;
-            if !metadata.is_allocated && include(row.to_owned(), metadata) {
-                restorations += self.overwrite_row_metadata(id, metadata.as_undelete())?;
-            }
-        }
-        Ok(restorations)
     }
 
     /// modifies the specified row by ID
@@ -716,22 +645,6 @@ pub trait RowCollection: Debug {
                 }).collect::<Vec<TypedValue>>())
         };
         self.overwrite_row(id, row)
-    }
-
-    /// Updates rows that satisfy the include function
-    fn update_rows(
-        &mut self,
-        include: fn(Row, RowMetadata) -> bool,
-        transform: fn(Row) -> Row,
-    ) -> std::io::Result<i64> {
-        let mut modified = 0;
-        for id in 0..self.len()? {
-            let (row, metadata) = self.read_row(id)?;
-            if !metadata.is_allocated && include(row.to_owned(), metadata) {
-                modified += self.update_row(id, transform(row))?;
-            }
-        }
-        Ok(modified)
     }
 }
 
@@ -779,15 +692,15 @@ mod tests {
     use crate::expression::Expression::{Identifier, Literal};
     use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::hybrid_row_collection::HybridRowCollection;
+    use crate::interpreter::Interpreter;
     use crate::journaling::EventSourceRowCollection;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
     use crate::number_kind::NumberKind::F64Kind;
-    use crate::numbers::Numbers::{F64Value, RowId};
+    use crate::numbers::Numbers::F64Value;
     use crate::parameter::Parameter;
     use crate::structures::Structures::Firm;
     use crate::table_renderer::TableRenderer;
-    use crate::table_scan::TableScanTypes::ColumnScan;
     use crate::testdata::*;
     use crate::utils::compute_time_millis;
     use chrono::Local;
@@ -935,8 +848,8 @@ mod tests {
     fn test_write_then_read_field() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write two rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "INTC", "NYSE", 66.77)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(1, "AMD", "NASDAQ", 77.66)));
+            assert_eq!(0, rc.append_row(make_quote(0, "INTC", "NYSE", 66.77)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(1, "AMD", "NASDAQ", 77.66)).unwrap());
 
             // read the first column of the first row
             assert_eq!(rc.read_field(0, 0).unwrap(), StringValue("INTC".into()));
@@ -972,7 +885,7 @@ mod tests {
         ]);
 
         // perform: table0 + table1
-        let mrc_ab = TableValue(Model(mrc_a)) + TableValue(Model(mrc_b));
+        let mrc_ab = TableValue(ModelTable(mrc_a)) + TableValue(ModelTable(mrc_b));
         let rows = match mrc_ab {
             TableValue(rcv) => rcv.get_rows(),
             _ => Vec::new()
@@ -1036,11 +949,11 @@ mod tests {
     fn test_delete_row() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "Y", "NASDAQ", 0.00)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(0, "Z", "NASDAQ", 0.00)));
+            assert_eq!(0, rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(0, "Y", "NASDAQ", 0.00)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(4, rc.append_row(make_quote(0, "Z", "NASDAQ", 0.00)).unwrap());
 
             // delete even rows
             assert_eq!(1, rc.delete_row(0).unwrap());
@@ -1065,11 +978,11 @@ mod tests {
     fn test_delete_rows() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(1, "ATT", "NYSE", 98.44)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(2, "H", "OTC_BB", 0.0076)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(3, "X", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(4, "OXIDE", "OSS", 0.00)));
+            assert_eq!(0, rc.append_row(make_quote(0, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(1, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(2, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(3, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(4, rc.append_row(make_quote(4, "OXIDE", "OSS", 0.00)).unwrap());
 
             // delete even rows
             assert_eq!(3, rc.delete_rows(|row| row.get_id() % 2 == 0).unwrap());
@@ -1092,7 +1005,7 @@ mod tests {
     fn test_describe_table() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write a row
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
+            assert_eq!(0, rc.append_row(make_quote(0, "GE", "NYSE", 21.22)).unwrap());
 
             // describe the table
             let mrc = rc.describe().to_table().unwrap();
@@ -1136,45 +1049,114 @@ mod tests {
     }
 
     #[test]
-    fn test_find() {
+    fn test_find_first() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "HAZ", "OTC_BB", 0.0076)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "XMT", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.001)));
+            assert_eq!(5, rc.append_rows(vec![
+                make_quote(0, "YTD", "AMEX", 0.2456),
+                make_quote(1, "ABC", "AMEX", 12.33),
+                make_quote(2, "BIZ", "NYSE", 9.775),
+                make_quote(3, "GOTO", "OTC", 0.1442),
+                make_quote(4, "XYZ", "NASDAQ", 0.0289),
+            ]).unwrap());
+            
+            // perform a forward scan
+            let result = rc.find_first(|row| {
+                matches!(row.get(1), StringValue(s) if s == "OTC".to_string())
+            }).unwrap();
 
-            // resize and verify
-            let expected = vec![
-                StringValue("XMT".to_string()),
-                StringValue("NASDAQ".to_string()),
-                Number(F64Value(33.33)),
-            ];
-            let actual = rc.scan_first(TableScanPlan::new(0, true, ColumnScan {
-                column_index: 0,
-                column_value: StringValue("XMT".into()),
-            })).unwrap()
-                .map(|row| row.get_values())
+            // verify the result
+            let (scan_columns, scan_row) = result
+                .map(|row| (rc.get_columns().to_owned(), row))
                 .unwrap();
-            assert_eq!(actual, expected);
+            assert_eq!(
+                scan_row,
+                make_quote(3, "GOTO", "OTC", 0.1442)
+            );
 
             rc.len().unwrap() as u64
         }
 
         // test the variants
-        verify_variants("find", make_quote_columns(), test_variant);
+        verify_variants("find_first", make_quote_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_find_first_active_row() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+            assert_eq!(5, rc.append_rows(vec![
+                make_quote(0, "YTD", "AMEX", 0.2456),
+                make_quote(1, "ABC", "AMEX", 12.33),
+                make_quote(2, "BIZ", "NYSE", 9.775),
+                make_quote(3, "GOTO", "OTC", 0.1442),
+                make_quote(4, "XYZ", "NASDAQ", 0.0289),
+            ]).unwrap());
+            
+            for row_id in 0..2 {
+                rc.delete_row(row_id).unwrap();
+            }
+
+            // perform a forward scan
+            let result = rc.find_first_active_row().unwrap();
+
+            // verify the result
+            let (scan_columns, scan_row) = result
+                .map(|row| (rc.get_columns().to_owned(), row))
+                .unwrap();
+            assert_eq!(
+                scan_row,
+                make_quote(3, "GOTO", "OTC", 0.1442)
+            );
+
+            rc.len().unwrap() as u64
+        }
+
+        // test the variants
+        verify_variants("find_first_active_row", make_quote_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_find_last_active_row() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+            assert_eq!(5, rc.append_rows(vec![
+                make_quote(0, "YTD", "AMEX", 0.2456),
+                make_quote(1, "ABC", "AMEX", 12.33),
+                make_quote(2, "BIZ", "NYSE", 9.775),
+                make_quote(3, "GOTO", "OTC", 0.1442),
+                make_quote(4, "XYZ", "NASDAQ", 0.0289),
+            ]).unwrap());
+
+            for row_id in 0..2 {
+                rc.delete_row(row_id).unwrap();
+            }
+
+            // perform a forward scan
+            let result = rc.find_first_active_row().unwrap();
+
+            // verify the result
+            let (scan_columns, scan_row) = result
+                .map(|row| (rc.get_columns().to_owned(), row))
+                .unwrap();
+            assert_eq!(
+                scan_row,
+                make_quote(3, "GOTO", "OTC", 0.1442)
+            );
+
+            rc.len().unwrap() as u64
+        }
+
+        // test the variants
+        verify_variants("find_last_active_row", make_quote_columns(), test_variant);
     }
 
     #[test]
     fn test_find_next() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
+            assert_eq!(0, rc.append_row(make_quote(0, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(4, rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)).unwrap());
 
             // resize and verify
             assert_eq!(
@@ -1186,18 +1168,48 @@ mod tests {
         }
 
         // test the variants
-        verify_variants("find_next_too", make_quote_columns(), test_variant);
+        verify_variants("find_next", make_quote_columns(), test_variant);
+    }
+
+    #[test]
+    fn test_find_previous() {
+        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+            // write some rows
+            assert_eq!(0, rc.append_row(make_quote(0, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(0, "HAZ", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(0, "XMT", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(4, rc.append_row(make_quote(0, "OXIDE", "OSS", 0.001)).unwrap());
+
+            // resize and verify
+            let expected = vec![
+                StringValue("XMT".to_string()),
+                StringValue("NASDAQ".to_string()),
+                Number(F64Value(33.33)),
+            ];
+            let actual = rc.find_previous(4, |row| {
+                row[0] == StringValue("XMT".into())
+            }).unwrap()
+                .map(|row| row.get_values())
+                .unwrap();
+            assert_eq!(actual, expected);
+
+            rc.len().unwrap() as u64
+        }
+
+        // test the variants
+        verify_variants("find_previous", make_quote_columns(), test_variant);
     }
 
     #[test]
     fn test_fold_left() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
+            assert_eq!(0, rc.append_row(make_quote(0, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(4, rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)).unwrap());
 
             // resize and verify
             assert_eq!(Number(F64Value(152.99759999999998)),
@@ -1214,11 +1226,11 @@ mod tests {
     fn test_fold_left_where() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "ABC", "NYSE", 21.22)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "XCI", "NYSE", 98.44)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "JJJ", "NASDAQ", 0.0076)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "BMX", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(0, "RIDE", "NASDAQ", 0.00)));
+            assert_eq!(0, rc.append_row(make_quote(0, "ABC", "NYSE", 21.22)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(0, "XCI", "NYSE", 98.44)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(0, "JJJ", "NASDAQ", 0.0076)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(0, "BMX", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(4, rc.append_row(make_quote(0, "RIDE", "NASDAQ", 0.00)).unwrap());
 
             // fold and verify
             let condition = Equal(
@@ -1243,11 +1255,11 @@ mod tests {
     fn test_fold_right() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
+            assert_eq!(0, rc.append_row(make_quote(0, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(4, rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)).unwrap());
 
             // fold and verify
             assert_eq!(
@@ -1266,11 +1278,11 @@ mod tests {
     fn test_iterator() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "A", "NYSE", 100.74)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "B", "NYSE", 50.19)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "C", "AMEX", 35.11)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "D", "NASDAQ", 16.45)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(0, "E", "NYSE", 0.26)));
+            assert_eq!(0, rc.append_row(make_quote(0, "A", "NYSE", 100.74)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(0, "B", "NYSE", 50.19)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(0, "C", "AMEX", 35.11)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(0, "D", "NASDAQ", 16.45)).unwrap());
+            assert_eq!(4, rc.append_row(make_quote(0, "E", "NYSE", 0.26)).unwrap());
 
             // use an iterator
             let mut total = Number(F64Value(0.));
@@ -1292,10 +1304,10 @@ mod tests {
     fn test_overwrite_field() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "BAT", "AMEX", 1.66)));
+            assert_eq!(0, rc.append_row(make_quote(0, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(0, "BAT", "AMEX", 1.66)).unwrap());
 
             // overwrite the field at (0, 0)
             assert_eq!(1, rc.overwrite_field(0, 1, StringValue("AMEX".to_string())).unwrap());
@@ -1349,11 +1361,11 @@ mod tests {
     fn test_update_row() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
+            assert_eq!(0, rc.append_row(make_quote(0, "GE", "NYSE", 21.22)).unwrap());
+            assert_eq!(1, rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)).unwrap());
+            assert_eq!(2, rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)).unwrap());
+            assert_eq!(3, rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)).unwrap());
+            assert_eq!(4, rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)).unwrap());
 
             // retrieve the entire range of rows
             let rows = rc.read_active_rows().unwrap();
@@ -1427,8 +1439,8 @@ mod tests {
     fn test_push_pop() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             let params = make_quote_parameters();
-            assert_eq!(Number(RowId(0)), rc.push_row(make_quote(0, "BILL", "AMEX", 12.33)));
-            assert_eq!(Number(RowId(1)), rc.push_row(make_quote(1, "TED", "NYSE", 56.2456)));
+            assert_eq!(0, rc.push_row(make_quote(0, "BILL", "AMEX", 12.33)).unwrap());
+            assert_eq!(1, rc.push_row(make_quote(1, "TED", "NYSE", 56.2456)).unwrap());
             assert_eq!(
                 rc.pop_row(),
                 Structured(Firm(make_quote(1, "TED", "NYSE", 56.2456), params.clone())));
@@ -1643,101 +1655,36 @@ mod tests {
     }
 
     #[test]
-    fn test_find_next_fn() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            assert_eq!(5, rc.append_rows(vec![
-                make_quote(0, "TED", "OTC", 0.2456),
-                make_quote(1, "ABC", "AMEX", 12.33),
-                make_quote(2, "BIZ", "NYSE", 9.775),
-                make_quote(3, "GOTO", "OTC", 0.1442),
-                make_quote(4, "XYZ", "NASDAQ", 0.0289),
-            ]).unwrap());
-
-            // delete some rows
-            for id in [0, 2, 4] {
-                assert_eq!(1, rc.delete_row(id).unwrap());
-            }
-
-            // perform a forward scan
-            let result = rc.find_next(2, |row| {
-                matches!(row.get(1), StringValue(s) if s == "OTC".to_string())
-            }).unwrap();
-
-            // verify the result
-            let (scan_columns, scan_row) = result
-                .map(|row| (rc.get_columns().to_owned(), row))
-                .unwrap();
-            assert_eq!(
-                scan_row,
-                make_quote(3, "GOTO", "OTC", 0.1442)
+    fn test_shuffle() {
+        let mut intepreter = Interpreter::new();
+        intepreter = verify_exact_code_with(intepreter, r#"
+            let stocks = nsd::save(
+                "row_collection.shuffle.stocks",
+                |--------------------------------|
+                | symbol | exchange  | last_sale |
+                |--------------------------------|
+                | ABC    | AMEX      | 11.77     |
+                | UNO    | OTC       | 0.2456    |
+                | BIZ    | NYSE      | 23.66     |
+                | GOTO   | OTC       | 0.1428    |
+                | BKP    | OTHER_OTC | 0.1421    |
+                | XYZ    | NYSE      | 55.11     |
+                | SHOE   | NASDAQ    | 1.8765    |
+                | RTE    | AMEX      | 23.89     |
+                | RAT    | OTC       | 0.0014    |
+                | DNC    | OTC       | 0.0375    |
+                |--------------------------------|                
             );
+            stocks::shuffle
+        "#, "true");
 
-            rc.len().unwrap() as u64
+        let stocks = intepreter.evaluate(r#"
+            stocks
+        "#).unwrap();
+
+        for s in make_lines_from_table(stocks) {
+            println!("{s}")
         }
-
-        // test the variants
-        verify_variants("scan_forward", make_quote_columns(), test_variant);
-    }
-
-    #[test]
-    fn test_scan_next() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            // write some rows
-            assert_eq!(Number(RowId(0)), rc.append_row(make_quote(0, "GE", "NYSE", 21.22)));
-            assert_eq!(Number(RowId(1)), rc.append_row(make_quote(0, "ATT", "NYSE", 98.44)));
-            assert_eq!(Number(RowId(2)), rc.append_row(make_quote(0, "H", "OTC_BB", 0.0076)));
-            assert_eq!(Number(RowId(3)), rc.append_row(make_quote(0, "X", "NASDAQ", 33.33)));
-            assert_eq!(Number(RowId(4)), rc.append_row(make_quote(0, "OXIDE", "OSS", 0.00)));
-
-            // resize and verify
-            assert_eq!(
-                Some(make_quote(3, "X", "NASDAQ", 33.33)),
-                rc.scan_next(TableScanPlan::column_scan(0, StringValue("X".into())))
-                    .unwrap()
-            );
-
-            rc.len().unwrap() as u64
-        }
-
-        // test the variants
-        verify_variants("scan_next", make_quote_columns(), test_variant);
-    }
-
-    #[test]
-    fn test_find_previous() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            assert_eq!(5, rc.append_rows(vec![
-                make_quote(0, "TED", "OTC", 0.2456),
-                make_quote(1, "GOTO", "OTC", 0.1442),
-                make_quote(2, "BIZ", "NYSE", 9.775),
-                make_quote(3, "ABC", "AMEX", 12.33),
-                make_quote(4, "XYZ", "NASDAQ", 0.0289),
-            ]).unwrap());
-
-            // delete some rows
-            for id in [0, 2, 4] {
-                assert_eq!(1, rc.delete_row(id).unwrap());
-            }
-
-            // perform a reverse scan
-            let result = rc.find_previous(4, |(row, _)| {
-                matches!(row.get(1), StringValue(s) if s == "OTC".to_string())
-            }).unwrap();
-
-            // verify the result
-            let (scan_columns, scan_row) = result
-                .map(|(row, _, _)| (columns, row))
-                .unwrap();
-            assert_eq!(
-                scan_row,
-                make_quote(1, "GOTO", "OTC", 0.1442)
-            );
-
-            rc.len().unwrap() as u64
-        }
-
-        // test the variants
-        verify_variants("scan_reverse", make_quote_columns(), test_variant);
     }
 
     #[test]
@@ -1857,19 +1804,19 @@ mod tests {
     }
 
     fn verify_dataframe_binary_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let brc = Dataframe::Binary(ByteRowCollection::from_bytes(columns.to_owned(), Vec::new(), 0));
+        let brc = Dataframe::BinaryTable(ByteRowCollection::from_bytes(columns.to_owned(), Vec::new(), 0));
         test_variant(kind, Box::new(brc), columns)
     }
 
     fn verify_dataframe_file_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
         let ns = Namespace::new("disk", name, "stocks");
         let params = Parameter::from_columns(&columns);
-        let frc = Dataframe::Disk(FileRowCollection::create_table(&ns, &params).unwrap());
+        let frc = Dataframe::DiskTable(FileRowCollection::create_table(&ns, &params).unwrap());
         test_variant(kind, Box::new(frc), columns.to_owned())
     }
 
     fn verify_dataframe_model_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let mrc = Dataframe::Model(ModelRowCollection::with_rows(columns.to_owned(), Vec::new()));
+        let mrc = Dataframe::ModelTable(ModelRowCollection::with_rows(columns.to_owned(), Vec::new()));
         test_variant(kind, Box::new(mrc), columns)
     }
 

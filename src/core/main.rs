@@ -6,8 +6,8 @@
 extern crate core;
 
 use crate::interpreter::Interpreter;
-use crate::oxide_server::start_http_server;
 use crate::repl::REPLState;
+use crate::server_engine::start_http_server;
 use crate::terminal::{read_line_from_stdin, TerminalState};
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
@@ -15,14 +15,13 @@ use shared_lib::cnv_error;
 use std::env;
 use std::string::ToString;
 
-mod base62;
 mod blob_file_row_collection;
 mod blobs;
+mod builtins;
 mod byte_code_compiler;
 mod byte_row_collection;
 mod columns;
 mod compiler;
-mod cursor;
 mod dataframe;
 mod dataframe_actor;
 mod data_types;
@@ -40,21 +39,18 @@ mod namespaces;
 mod number_kind;
 mod numbers;
 mod object_config;
-mod oxide_server;
 mod packages;
 mod parameter;
-mod platform;
 mod query_engine;
 mod readme;
 mod repl;
 mod row_collection;
 mod row_metadata;
 mod sequences;
-mod server;
+mod server_engine;
 mod sprintf;
 mod structures;
 mod table_renderer;
-mod table_scan;
 mod template;
 mod terminal;
 mod testdata;
@@ -64,7 +60,7 @@ mod tokenizer;
 mod tokens;
 mod typed_values;
 mod utils;
-mod websockets;
+mod web_engine;
 
 const LOCAL_HOST: &str = "0.0.0.0";
 
@@ -110,7 +106,8 @@ fn main() -> std::io::Result<()> {
         .init();
 
     // start the REPL 
-    repl::do_terminal(REPLState::new(), env::args().collect(), || read_line_from_stdin())
+    //repl::do_terminal(REPLState::new(), env::args().collect(), || read_line_from_stdin())
+    repl::do_terminal_bash_like(REPLState::new(), env::args().collect())
 }
 
 // Start the Oxide terminal (embedded or remote server)

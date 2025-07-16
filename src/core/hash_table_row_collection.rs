@@ -23,7 +23,6 @@ use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;
-use crate::table_scan::{TableScanPlan, TableScanTypes};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use log::warn;
@@ -332,22 +331,6 @@ impl RowCollection for HashTableRowCollection {
         self.data_table.resize(new_size)
     }
 
-    fn scan_first(
-        &self,
-        plan: TableScanPlan,
-    ) -> std::io::Result<Option<Row>> {
-        match plan.get_scan_type() {
-            TableScanTypes::ColumnScan { column_index, column_value } =>
-                if column_index == self.key_column_index {
-                    self.find_row_by_key(&column_value)
-                } else {
-                    self.scan_next(plan)
-                },
-            TableScanTypes::ConditionScan { .. } => RowCollection::scan_first(self, plan),
-            TableScanTypes::CompleteScan => RowCollection::scan_first(self, plan),
-        }
-    }
-
     fn update_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         let new_value = row[self.key_column_index].to_owned();
         let old_value = self.read_field(id, self.key_column_index)?;
@@ -493,13 +476,8 @@ mod tests {
         println!("[{:.4} msec] find_row_by_key({}) -> {}", msec_b, symbol.unwrap_value(), row_b.clone()
             .map(|r| r.to_string()).unwrap_or(String::new()));
 
-        let (row_b, msec_b) = measure_time(|| stocks.find_row_by_key(&symbol).unwrap());
+        let (row_a, msec_a) = measure_time(|| stocks.find_row_by_key(&symbol).unwrap());
         println!("[{:.4} msec] find_row_by_key({}) -> {}", msec_b, symbol.unwrap_value(), row_b.clone()
-            .map(|r| r.to_string()).unwrap_or(String::new()));
-
-        let (row_a, msec_a) = measure_time(|| stocks.data_table
-            .scan_first(TableScanPlan::column_scan(column_id, symbol.clone())).unwrap());
-        println!("[{:.4} msec] find_row({}, {}) -> {}", msec_a, column_id, symbol.unwrap_value(), row_a.clone()
             .map(|r| r.to_string()).unwrap_or(String::new()));
 
         // Insert-into-index timings (msec) - avg: 0.0225, min: 0.0124, max: 0.4536

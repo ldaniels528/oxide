@@ -83,10 +83,8 @@ impl ModelRowCollection {
     /// Creates a new [ModelRowCollection] prefilled with all rows from the given table.
     pub fn from_table(table: Box<&dyn RowCollection>) -> std::io::Result<ModelRowCollection> {
         let mut mrc = ModelRowCollection::new(table.get_columns().to_owned());
-        for row_id in table.get_indices()? {
-            if let Some(row) = table.read_one(row_id)? {
-                let _ = mrc.append_row(row);
-            }
+        for row in table.iter() {
+            let _ = mrc.append_row(row)?;
         }
         Ok(mrc)
     }
@@ -101,7 +99,7 @@ impl ModelRowCollection {
         }
     }
 
-    pub fn to_binary(&self) -> ByteRowCollection {
+    pub fn to_u8(&self) -> ByteRowCollection {
         ByteRowCollection::from_columns_and_rows(
             self.get_columns().clone(),
             self.get_rows()
@@ -246,7 +244,7 @@ impl RowCollection for ModelRowCollection {
 mod tests {
     use crate::byte_code_compiler::ByteCodeCompiler;
     use crate::columns::Column;
-    use crate::dataframe::Dataframe::Model;
+    use crate::dataframe::Dataframe::ModelTable;
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::I64Value;
     use crate::row_collection::RowCollection;
@@ -264,7 +262,7 @@ mod tests {
     #[test]
     fn test_encode_decode() {
         let (mrc, phys_columns) = create_data_set();
-        let encoded = ByteCodeCompiler::encode_df(&Model(mrc.clone()));
+        let encoded = ByteCodeCompiler::encode_df(&ModelTable(mrc.clone()));
         assert_eq!(ModelRowCollection::decode(phys_columns, encoded), mrc)
     }
 
@@ -304,7 +302,7 @@ mod tests {
             make_quote(3, "GOTO", "OTC", 0.1442),
             make_quote(4, "XYZ", "NYSE", 0.0289),
         ]);
-        let brc = mrc.to_binary();
+        let brc = mrc.to_u8();
         assert_eq!(brc.get_rows(), vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),

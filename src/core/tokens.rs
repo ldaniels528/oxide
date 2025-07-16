@@ -20,6 +20,7 @@ pub enum Token {
     Numeric { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     Operator { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     SingleQuoted { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
+    UUIDLiteral { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
     URL { text: String, start: usize, end: usize, line_number: usize, column_number: usize },
 }
 
@@ -68,7 +69,12 @@ impl Token {
         SingleQuoted { text, start, end, line_number, column_number }
     }
 
-    /// creates a new numeric token
+    /// creates a new UUID token
+    pub fn uuid(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
+        UUIDLiteral { text, start, end, line_number, column_number }
+    }
+
+    /// creates a new URL token
     pub fn url(text: String, start: usize, end: usize, line_number: usize, column_number: usize) -> Token {
         URL { text, start, end, line_number, column_number }
     }
@@ -89,6 +95,7 @@ impl Token {
             | Numeric { column_number, .. }
             | Operator { column_number, .. }
             | SingleQuoted { column_number, .. }
+            | UUIDLiteral { column_number, .. }
             | URL { column_number, .. } => *column_number
         }
     }
@@ -105,6 +112,7 @@ impl Token {
             | Numeric { line_number, .. }
             | Operator { line_number, .. }
             | SingleQuoted { line_number, .. }
+            | UUIDLiteral { line_number, .. }
             | URL { line_number, .. } => *line_number
         }
     }
@@ -120,6 +128,7 @@ impl Token {
             | Numeric { text, .. }
             | Operator { text, .. }
             | SingleQuoted { text, .. }
+            | UUIDLiteral { text, .. }
             | URL { text, .. } => text,
             DataframeLiteral { cells, .. } => { 
                 let mut lines: Vec<String> = vec![];
@@ -195,6 +204,7 @@ impl Token {
             | (Numeric { .. }, "Numeric")
             | (Operator { .. }, "Operator")
             | (SingleQuoted { .. }, "SingleQuoted")
+            | (UUIDLiteral { .. }, "UUID")
             | (URL { .. }, "URL") => true,
             _ => false,
         }

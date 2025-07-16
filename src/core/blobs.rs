@@ -6,7 +6,8 @@
 use crate::blob_file_row_collection::BLOBFileRowCollection;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
-use crate::dataframe::Dataframe::Model;
+use crate::data_types::DataType;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::Exact;
 use crate::field;
@@ -15,12 +16,86 @@ use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::typed_values::TypedValue;
 use num_traits::ToPrimitive;
-use serde::{Deserialize, Serialize};
+use serde::de::Error;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use shared_lib::cnv_error;
+use std::cmp::Ordering;
+use std::fmt::{Debug, Formatter};
 use std::fs;
 use std::fs::{File, OpenOptions};
 use std::os::unix::fs::FileExt;
 use std::sync::Arc;
+
+const HEADER_LEN: usize = 24;
+
+/// BLOB Store: Cell Metadata
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct BLOB {
+    blob_store: BLOBStore,
+    metadata: BLOBMetadata,
+    data_type: DataType,
+}
+
+impl BLOB {
+    /// Creates a new BLOB containing the given [TypedValue]
+    pub fn create(
+        blob_store: BLOBStore,
+        value: TypedValue
+    ) -> std::io::Result<BLOB> {
+        let data_type = value.get_type();
+        let metadata = blob_store.insert_value(value)?;
+        Ok(BLOB {
+            blob_store,
+            metadata,
+            data_type,
+        })    
+    }
+    
+    /// Instantiates a BLOB
+    pub fn new(
+        blob_store: BLOBStore, 
+        metadata: BLOBMetadata, 
+        data_type: DataType
+    ) -> BLOB {
+        BLOB { blob_store, metadata, data_type }    
+    }
+    
+    /// Returns the [DataType] of the BLOB content
+    pub fn get_data_type(&self) -> DataType {
+        self.data_type.clone()
+    }
+    
+    /// Reads bytes from the BLOB
+    pub fn read_bytes(&self) -> std::io::Result<Vec<u8>> {
+        self.blob_store.read_bytes(&self.metadata)
+    }
+
+    /// Reads a value of type [T] from the BLOB
+    pub fn read(&self) -> std::io::Result<TypedValue> {
+        self.blob_store.read_value(&self.metadata)
+    }
+
+    /// Updates the contents of the BLOB with a value of type [T] 
+    pub fn update(&mut self, value: TypedValue) -> std::io::Result<()> {
+        self.metadata = self.blob_store.update_value(&self.metadata, value)?;
+        Ok(())
+    }
+}
+
+/// BLOB Store: Cell Metadata
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub struct BLOBMetadata {
+    pub offset: u64,
+    pub allocated: u64,
+    pub used: u64,
+}
+
+impl BLOBMetadata {
+    pub fn get_data_len(&self) -> u64 {
+        self.used - HEADER_LEN as u64
+    }
+}
 
 /// BLOB Store
 #[derive(Clone)]
@@ -76,7 +151,7 @@ impl BLOBStore {
             encoded.extend(buffer);
         } else {
             let key = match value {
-                TypedValue::TableValue(Model(mrc)) => self.insert_value(mrc)?,
+                TypedValue::TableValue(ModelTable(mrc)) => self.insert_value(mrc)?,
                 other => self.insert_value(other)?
             };
             encoded.push(field::ACTIVE_MASK | field::EXTERNAL_MASK);
@@ -262,19 +337,57 @@ impl BLOBStore {
     }
 }
 
-pub const HEADER_LEN: usize = 24;
-
-/// BLOB Store: Cell Metadata
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct BLOBMetadata {
-    pub offset: u64,
-    pub allocated: u64,
-    pub used: u64,
+impl Serialize for BLOBStore {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("BLOBStore", 1)?;
+        state.serialize_field("path", &self.path)?;
+        state.end()
+    }
 }
 
-impl BLOBMetadata {
-    pub fn get_data_len(&self) -> u64 {
-        self.used - HEADER_LEN as u64
+impl<'de> Deserialize<'de> for BLOBStore {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // define a helper struct for deserialization
+        #[derive(Deserialize)]
+        struct BLOBStoreHelper {
+            path: String,
+        }
+
+        let helper = BLOBStoreHelper::deserialize(deserializer)?;
+        BLOBStore::open_file(helper.path.as_str(), false)
+            .map_err(|e| D::Error::custom(e.to_string()))
+    }
+}
+
+impl Eq for BLOBStore {}
+
+impl Ord for BLOBStore {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.path.cmp(&other.path)
+    }
+}
+
+impl PartialEq for BLOBStore {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+    }
+}
+
+impl PartialOrd for BLOBStore {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.path.partial_cmp(&other.path)
+    }
+}
+
+impl Debug for BLOBStore {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BLOBStore({})", self.path)
     }
 }
 
@@ -282,141 +395,14 @@ impl BLOBMetadata {
 #[cfg(test)]
 mod tests {
     use crate::blobs::BLOBStore;
-    use crate::byte_code_compiler::ByteCodeCompiler;
     use crate::byte_row_collection::ByteRowCollection;
-    use crate::dataframe::Dataframe::Binary;
-    use crate::model_row_collection::ModelRowCollection;
+    use crate::interpreter::Interpreter;
     use crate::namespaces::Namespace;
     use crate::parameter::Parameter;
-    use crate::row_collection::RowCollection;
     use crate::testdata::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::StringValue;
 
-    #[test]
-    fn test_bytes() {
-        // create a new blob store
-        let ns = Namespace::new("blobs", "raw", "byte_data");
-        let bs = BLOBStore::open(&ns).unwrap();
-        println!("BLOBStore => {}", bs.get_path());
-        
-        // insert a message via insert_bytes(..)
-        let message = b"This is a binary message";
-        println!("message {:?}", message);
-        let metadata = bs.insert_bytes(&message.to_vec()).unwrap();
-        println!("metadata {:?}", metadata);
-
-        // read a message as read_bytes(..)
-        let bytes_message = bs.read_bytes(&metadata).unwrap();
-        println!("bytes_message {:?}", bytes_message);
-        assert_eq!(message.to_vec(), bytes_message);
-
-        // read a message via read_block(..)
-        let (block_metadata, block_message) = bs.read_block(metadata.offset).unwrap();
-        println!("block_metadata {:?}", block_metadata);
-        println!("block_message {:?}", block_message);
-        assert_eq!(message.to_vec(), block_message);
-    }
-
-    #[test]
-    fn test_raw_byte_table() {
-        // create a new blob store
-        let ns = Namespace::new("blobs", "raw", "byte_table");
-        let bs = BLOBStore::open(&ns).unwrap();
-        println!("BLOBStore => {}", bs.get_path());
-
-        // create a byte table
-        let (brc0, params) = create_binary_table();
-        println!("brc0.watermark {}", brc0.get_watermark());
-
-        // write the byte table
-        let bytes0 = ByteCodeCompiler::encode_df(&Binary(brc0.clone()));
-        println!("bytes0: {}", bytes0.len());
-        let metadata0 = bs.insert_bytes(&bytes0).unwrap();
-        println!("metadata0: {:?}", metadata0);
-
-        // read the byte table
-        let bytes1 = bs.read_bytes(&metadata0).unwrap();
-        println!("bytes1: {}", bytes1.len());
-        assert_eq!(bytes0, bytes1);
-        
-        let brc1 = ByteRowCollection::decode(
-            brc0.get_columns().clone(),
-            bytes1.clone(),
-            bytes1.len()
-        );
-        assert_eq!(brc0.get_rows(), brc1.get_rows())
-    }
-    
-    #[test]
-    fn test_byte_tables() {
-        // create a new blob store
-        let ns = Namespace::new("blobs", "byte", "tables");
-        let bs = BLOBStore::open(&ns).unwrap();
-        println!("BLOBStore => {}", bs.get_path());
-        
-        // create a byte table
-        let (brc0, params) = create_binary_table();
-
-        // write the byte table
-        let key0 = bs.insert_byte_table(&brc0).unwrap();
-        println!("key0: {:?}", key0);
-        
-        // read the byte table
-        let brc1 = bs.read_byte_table(&key0, &params).unwrap();
-        assert_eq!(brc0.get_rows(), brc1.get_rows())
-    }
-    
-    #[test]
-    fn test_blob_tables() {
-        // create a new blob store
-        let ns = Namespace::new("blobs", "blob_tables", "stocks");
-        let bs = BLOBStore::open(&ns).unwrap();
-        println!("BLOBStore => {}", bs.get_path());
-        
-        // create a table
-        let (brc0, params) = create_binary_table();
-        let mrc = ModelRowCollection::from_columns_and_rows(
-            brc0.get_columns(),
-            &brc0.get_rows()
-        );
-
-        // insert a new blob table
-        let key0 = bs.insert_value(&mrc).unwrap();
-        println!("key0: {:?}", key0);
-
-        // read the blob table
-        let brc1 = bs.read_blob_table(&key0, &params).unwrap();
-        assert_eq!(brc0.get_rows(), brc1.get_rows())
-    }
-
-    #[test]
-    fn test_values() {
-        // create a new blob store
-        let ns = Namespace::new("blobs", "crud", "data");
-        let bs = BLOBStore::open(&ns).unwrap();
-        println!("BLOBStore => {}", bs.get_path());
-
-        // insert a new blob
-        let key0 = bs.insert_value(StringValue("Hello World".into())).unwrap();
-        println!("key0: {:?}", key0);
-
-        // read back the value by the key
-        let value0 = bs.read_value::<TypedValue>(&key0).unwrap();
-        println!("value0: {:?}", value0);
-        assert_eq!(value0, StringValue("Hello World".into()));
-
-        // next, update the value
-        let key1 = bs.update_value(&key0, StringValue("The little brown fox ran down the road".into())).unwrap();
-        println!("key1: {:?}", key1);
-
-        // read back the value by the key
-        let value1 = bs.read_value::<TypedValue>(&key1).unwrap();
-        println!("value1: {:?}", value1);
-        assert_eq!(value1, StringValue("The little brown fox ran down the road".into()));
-    }
-    
-    fn create_binary_table() -> (ByteRowCollection, Vec<Parameter>) {
+    fn make_binary_table() -> (ByteRowCollection, Vec<Parameter>) {
         let params = make_quote_parameters();
         let brc = ByteRowCollection::from_parameters_and_rows(&params, &vec![
             make_quote(0, "ABC", "AMEX", 12.33),
@@ -428,4 +414,214 @@ mod tests {
         (brc, params)
     }
     
+    fn make_blob_store(path: &str) -> BLOBStore {
+        let ns = Namespace::parse(path).unwrap();
+        let bs = BLOBStore::open(&ns).unwrap();
+        println!("BLOBStore => {}", bs.get_path());
+        bs
+    }
+    
+    fn make_table_value() -> TypedValue {
+        let mut interpreter = Interpreter::new();
+        interpreter.evaluate(r#"
+            |-------------------------------|
+            | symbol | exchange | last_sale |
+            |-------------------------------|
+            | BOOM   | NYSE     | 113.76    |
+            | ABC    | AMEX     | 24.98     |
+            | JET    | NASDAQ   | 64.24     |
+            |-------------------------------| 
+        "#).unwrap()
+    }
+    
+    /// Unit tests
+    #[cfg(test)]
+    mod blob_tests {
+        use super::*;
+        use crate::blobs::BLOB;
+        use crate::data_types::DataType::{FixedSizeType, NumberType, StringType, TableType};
+        use crate::number_kind::NumberKind::F64Kind;
+        use crate::testdata::make_lines_from_table;
+
+        #[test]
+        fn test_create_read_update_then_read() {
+            // create a table value and put the table value in a BLOB
+            let table_value0 = make_table_value();
+            let bs = make_blob_store("blobs.update_then_read.stocks");
+            let mut blob = BLOB::create(bs, table_value0).unwrap();
+            
+            // read the blob and verify the content
+            let table_value1 = blob.read().unwrap();
+            assert_eq!(make_lines_from_table(table_value1.clone()), vec![
+                "|-------------------------------|",
+                "| symbol | exchange | last_sale |",
+                "|-------------------------------|",
+                "| BOOM   | NYSE     | 113.76    |",
+                "| ABC    | AMEX     | 24.98     |",
+                "| JET    | NASDAQ   | 64.24     |",
+                "|-------------------------------|"]);
+
+            // verify the content type
+            assert_eq!(blob.get_data_type(), TableType(vec![
+                Parameter::new("symbol", FixedSizeType(StringType.into(), 4)),
+                Parameter::new("exchange", FixedSizeType(StringType.into(), 6)),
+                Parameter::new("last_sale", NumberType(F64Kind)),
+            ]));
+
+            // update the blob
+            let mut interpreter = Interpreter::new();
+            let table_value2 = interpreter.evaluate(r#"
+                |-------------------------------|
+                | symbol | exchange | last_sale |
+                |-------------------------------|
+                | BOOM   | NYSE     | 113.76    |
+                | ABC    | AMEX     | 24.98     |
+                | JET    | NASDAQ   | 64.24     |
+                | XYZ    | NYSE     | 11.22     |
+                |-------------------------------| 
+            "#).unwrap();
+            blob.update(table_value2).unwrap();
+            
+            // re-read it and verify the content
+            let table_value3 = blob.read().unwrap();
+            assert_eq!(make_lines_from_table(table_value3), vec![
+                "|-------------------------------|",
+                "| symbol | exchange | last_sale |",
+                "|-------------------------------|",
+                "| BOOM   | NYSE     | 113.76    |",
+                "| ABC    | AMEX     | 24.98     |",
+                "| JET    | NASDAQ   | 64.24     |",
+                "| XYZ    | NYSE     | 11.22     |",
+                "|-------------------------------|"]);
+        }
+        
+    }
+    
+    /// Unit tests
+    #[cfg(test)]
+    mod blob_store_tests {
+        use super::*;
+        use crate::byte_code_compiler::ByteCodeCompiler;
+        use crate::byte_row_collection::ByteRowCollection;
+        use crate::dataframe::Dataframe::BinaryTable;
+        use crate::model_row_collection::ModelRowCollection;
+        use crate::row_collection::RowCollection;
+        use crate::typed_values::TypedValue;
+        use crate::typed_values::TypedValue::StringValue;
+
+        #[test]
+        fn test_bytes() {
+            // create a new blob store
+            let bs = make_blob_store("blobstore.raw.byte_data");
+
+            // insert a message via insert_bytes(..)
+            let message = b"This is a binary message";
+            println!("message {:?}", message);
+            let metadata = bs.insert_bytes(&message.to_vec()).unwrap();
+            println!("metadata {:?}", metadata);
+
+            // read a message as read_bytes(..)
+            let bytes_message = bs.read_bytes(&metadata).unwrap();
+            println!("bytes_message {:?}", bytes_message);
+            assert_eq!(message.to_vec(), bytes_message);
+
+            // read a message via read_block(..)
+            let (block_metadata, block_message) = bs.read_block(metadata.offset).unwrap();
+            println!("block_metadata {:?}", block_metadata);
+            println!("block_message {:?}", block_message);
+            assert_eq!(message.to_vec(), block_message);
+        }
+
+        #[test]
+        fn test_raw_byte_table() {
+            // create a new blob store
+            let bs = make_blob_store("blobstore.raw.byte_table");
+
+            // create a byte table
+            let (brc0, params) = make_binary_table();
+            println!("brc0.watermark {}", brc0.get_watermark());
+
+            // write the byte table
+            let bytes0 = ByteCodeCompiler::encode_df(&BinaryTable(brc0.clone()));
+            println!("bytes0: {}", bytes0.len());
+            let metadata0 = bs.insert_bytes(&bytes0).unwrap();
+            println!("metadata0: {:?}", metadata0);
+
+            // read the byte table
+            let bytes1 = bs.read_bytes(&metadata0).unwrap();
+            println!("bytes1: {}", bytes1.len());
+            assert_eq!(bytes0, bytes1);
+
+            let brc1 = ByteRowCollection::decode(
+                brc0.get_columns().clone(),
+                bytes1.clone(),
+                bytes1.len()
+            );
+            assert_eq!(brc0.get_rows(), brc1.get_rows())
+        }
+
+        #[test]
+        fn test_byte_tables() {
+            // create a new blob store
+            let bs = make_blob_store("blobstore.bytes.tables");
+
+            // create a byte table
+            let (brc0, params) = make_binary_table();
+
+            // write the byte table
+            let key0 = bs.insert_byte_table(&brc0).unwrap();
+            println!("key0: {:?}", key0);
+
+            // read the byte table
+            let brc1 = bs.read_byte_table(&key0, &params).unwrap();
+            assert_eq!(brc0.get_rows(), brc1.get_rows())
+        }
+
+        #[test]
+        fn test_blob_tables() {
+            // create a new blob store
+            let bs = make_blob_store("blobstore.blob_tables.stocks");
+
+            // create a table
+            let (brc0, params) = make_binary_table();
+            let mrc = ModelRowCollection::from_columns_and_rows(
+                brc0.get_columns(),
+                &brc0.get_rows()
+            );
+
+            // insert a new blob table
+            let key0 = bs.insert_value(&mrc).unwrap();
+            println!("key0: {:?}", key0);
+
+            // read the blob table
+            let brc1 = bs.read_blob_table(&key0, &params).unwrap();
+            assert_eq!(brc0.get_rows(), brc1.get_rows())
+        }
+
+        #[test]
+        fn test_values() {
+            // create a new blob store
+            let bs = make_blob_store("blobstore.crud.data");
+
+            // insert a new blob
+            let key0 = bs.insert_value(StringValue("Hello World".into())).unwrap();
+            println!("key0: {:?}", key0);
+
+            // read back the value by the key
+            let value0 = bs.read_value::<TypedValue>(&key0).unwrap();
+            println!("value0: {:?}", value0);
+            assert_eq!(value0, StringValue("Hello World".into()));
+
+            // next, update the value
+            let key1 = bs.update_value(&key0, StringValue("The little brown fox ran down the road".into())).unwrap();
+            println!("key1: {:?}", key1);
+
+            // read back the value by the key
+            let value1 = bs.read_value::<TypedValue>(&key1).unwrap();
+            println!("value1: {:?}", value1);
+            assert_eq!(value1, StringValue("The little brown fox ran down the road".into()));
+        }
+
+    }
+
 }

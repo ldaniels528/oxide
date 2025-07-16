@@ -5,24 +5,23 @@
 
 use crate::compiler::Compiler;
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{Model, TestReport};
-use crate::file_row_collection::FileRowCollection;
+use crate::dataframe::Dataframe::{ModelTable, TestReport};
 use crate::interpreter::Interpreter;
-use crate::numbers::Numbers::{F64Value, I64Value};
-use crate::packages::OxidePkg;
+use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::sequences::Array;
 use crate::structures::Structure;
 use crate::structures::Structures::{Hard, Soft};
-use crate::structures::{HardStructure, Row, SoftStructure};
+use crate::structures::{HardStructure, SoftStructure};
 use crate::table_renderer::TableRenderer;
 use crate::test_engine::TestEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use crate::utils::compute_time_millis;
-use crate::websockets::OxideWebSocketClient;
+use crate::web_engine::WebSocketClient;
 use chrono::Local;
+use crossterm::style::Stylize;
 use crossterm::terminal;
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
@@ -33,7 +32,7 @@ use std::io::{stdin, stdout, Read, Write};
 // Represents an enumeration of Terminal Consoles
 pub enum TerminalConsoles {
     Local(Interpreter),
-    Remote(OxideWebSocketClient),
+    Remote(WebSocketClient),
 }
 
 impl TerminalConsoles {
@@ -86,7 +85,7 @@ impl TerminalState {
         Ok(TerminalState {
             database: "oxide".into(),
             schema: "public".into(),
-            interpreter: TerminalConsoles::Remote(OxideWebSocketClient::connect(host, port, path).await?),
+            interpreter: TerminalConsoles::Remote(WebSocketClient::connect(host, port, path).await?),
             session_id: Local::now().timestamp_millis(),
             user_id: users::get_current_uid().to_i64().unwrap_or(-1),
             user_name: users::get_current_username().iter()
@@ -170,8 +169,6 @@ async fn do_terminal_input(
                 Ok(result) => {
                     // compute the execution-time
                     let execution_time = compute_time_millis(Local::now() - t0);
-                    // record the request in the history table
-                    update_history(&state, input, execution_time).ok();
                     // process the result
                     let limit = state.interpreter.evaluate("__COLUMNS__").await?.to_usize();
                     let raw_lines = build_output(state.counter, result, execution_time)?;
@@ -199,7 +196,7 @@ pub fn build_output(
         TableValue(TestReport(mrc, state)) => {
             let mut report = TestEngine::generate_summary(&state);
             report.push("".to_string());
-            report.extend(TestEngine::generate_report(Model(mrc)));
+            report.extend(TestEngine::generate_report(ModelTable(mrc)));
             out.extend(report)
         }
         TableValue(df) => {
@@ -238,9 +235,9 @@ pub fn build_output_header(
             let kind = match other {
                 Structured(Hard(hs)) => get_hard_type(hs),
                 Structured(Soft(ss)) => get_soft_type(ss),
-                v => v.get_type_name()
+                v => v.get_type_decl()
             };
-            format!("returned type `{}` in {execution_time:.1} ms", kind)
+            format!("returned type `{}` in {execution_time:.1} ms", kind).reverse().to_string()
         }
     };
     Ok(format!("{pid}: {label}"))
@@ -426,34 +423,16 @@ async fn setup_system_variables(mut state: TerminalState, args: Vec<String>) -> 
 }
 
 pub fn show_title() {
-    use crate::platform::VERSION;
+    use crate::packages::VERSION;
     println!("Welcome to Oxide v{VERSION}\n");
-}
-
-fn update_history(
-    state: &TerminalState,
-    input: &str,
-    processing_time: f64,
-) -> std::io::Result<TypedValue> {
-    let mut frc = FileRowCollection::open_or_create(
-        &OxidePkg::get_oxide_history_ns(),
-        OxidePkg::get_oxide_history_parameters())?;
-    let result = frc.append_row(Row::new(0, vec![
-        Number(I64Value(state.session_id)),
-        Number(I64Value(state.user_id)),
-        Number(F64Value(processing_time)),
-        StringValue(cleanup(input))
-    ]));
-    Ok(result)
 }
 
 /// Unit tests
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::oxide_server::start_http_server;
+    use crate::server_engine::start_http_server;
     use crate::testdata::start_test_server;
-    use std::cmp::max;
     use std::fs;
     use std::fs::File;
 
@@ -481,7 +460,7 @@ mod tests {
         start_http_server(port);
         let mut state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
         let result = state.interpreter.evaluate(r#"
-            tools::describe(oxide::help())
+            oxide::help()::describe()
         "#).await.unwrap();
 
         let lines = build_output(12, result, 13.2).unwrap();
@@ -540,14 +519,14 @@ mod tests {
         let lines = build_output_header(12, &result, 0.1).unwrap();
         assert_eq!(
             lines,
-            "12: returned type `String(11)` in 0.1 ms")
+            "12: \u{1b}[7mreturned type `String(11)` in 0.1 ms\u{1b}[0m")
     }
 
     #[test]
     fn test_build_output_header_table() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
-            tools::describe(oxide::help())
+            oxide::help()::describe()
         "#).unwrap();
 
         let lines = build_output_header(12, &result, 13.2).unwrap();
@@ -627,20 +606,5 @@ mod tests {
     #[test]
     fn test_show_title() {
         show_title()
-    }
-
-    #[test]
-    fn test_update_history() {
-        let state = TerminalState::offline().unwrap();
-        let _ = update_history(&state, "oxide::help()", 3.5).unwrap();
-        let mut frc = FileRowCollection::open_or_create(
-            &OxidePkg::get_oxide_history_ns(),
-            OxidePkg::get_oxide_history_parameters()).unwrap();
-        let count = frc.len().unwrap() as i64;
-        let last = max(count - 1, -1);
-        let row_id = last as usize;
-        let row = frc.read_one(row_id).unwrap();
-        assert!(row.is_some());
-        frc.resize(row_id).unwrap();
     }
 }

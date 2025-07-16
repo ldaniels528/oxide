@@ -106,7 +106,7 @@ impl Namespace {
             ObjectConfig::EventSourceConfig { columns, .. } =>
                 EventSourceRowCollection::new(self, &columns).map(|es| EventSource(es)),
             ObjectConfig::TableConfig { .. } =>
-                FileRowCollection::open(self).map(|frc| Dataframe::Disk(frc)),
+                FileRowCollection::open(self).map(|frc| Dataframe::DiskTable(frc)),
             ObjectConfig::TableFnConfig { .. } =>
                 TableFunction::from_namespace(self, Machine::new_platform())
                     .map(|tf| Dataframe::TableFn(Box::new(tf)))

@@ -6,7 +6,6 @@
 use std::cmp::max;
 
 use crate::columns::Column;
-use crate::cursor::Cursor;
 use crate::data_types::DataType::NumberType;
 use crate::dataframe::Dataframe;
 use crate::model_row_collection::ModelRowCollection;
@@ -35,14 +34,7 @@ impl TableRenderer {
         let rows = df.read_active_rows().unwrap_or(vec![]);
         Self::from_rows(columns, &rows)
     }
-
-    /// Transforms the [Cursor] into a textual table
-    pub fn from_cursor(cursor: &mut Cursor, columns: &Vec<Column>) -> Vec<String> {
-        let header_cells = Self::tabulate_header_cells(columns);
-        let body_cells = Self::tabulate_body_cells_from_cursor(cursor);
-        tabulate_cells(header_cells, body_cells)
-    }
-
+    
     /// Transforms the [Vec<Row>] into a textual table
     pub fn from_rows(columns: &Vec<Column>, rows: &Vec<Row>) -> Vec<String> {
         Self::from_collection(Box::new(ModelRowCollection::from_columns_and_rows(columns, rows)))
@@ -82,13 +74,8 @@ impl TableRenderer {
     }
 
     fn tabulate_body_cells_from_collection(rc: Box<dyn RowCollection>) -> Vec<Vec<String>> {
-        let mut cursor = Cursor::new(rc);
-        Self::tabulate_body_cells_from_cursor(&mut cursor)
-    }
-
-    fn tabulate_body_cells_from_cursor(cursor: &mut Cursor) -> Vec<Vec<String>> {
         let mut body_cells = Vec::new();
-        while let Ok(Some(row)) = cursor.next() {
+        for row in rc.iter() {
             let column_text = row.get_values().iter()
                 .map(|v| format!(" {} ", v.unwrap_value()))
                 .collect::<Vec<String>>();
@@ -119,7 +106,7 @@ pub fn tabulate_cells(
 
     // compute the width for each cell
     let cell_widths = cells.iter().map(|cell| {
-        cell.iter().map(|s| s.len()).collect::<Vec<usize>>()
+        cell.iter().map(|s| s.chars().count()).collect::<Vec<usize>>()
     }).collect::<Vec<Vec<usize>>>();
 
     // compute the width for each column
@@ -154,7 +141,7 @@ pub fn tabulate_table(
 
 pub fn tabulate_cell(s: &String, width: usize) -> String {
     let mut t = s.to_string();
-    while t.len() < width { t += " " }
+    while t.chars().count() < width { t += " " }
     t
 }
 
@@ -180,7 +167,6 @@ pub fn tabulate_maximums(a: &Vec<usize>, b: &Vec<usize>) -> Vec<usize> {
 mod tests {
     use crate::byte_row_collection::ByteRowCollection;
     use crate::columns::Column;
-    use crate::cursor::Cursor;
     use crate::table_renderer::TableRenderer;
     use crate::testdata::{make_quote, make_quote_columns};
 
@@ -201,25 +187,7 @@ mod tests {
             "|-------------------------------|",
         ])
     }
-
-    #[test]
-    fn test_from_cursor() {
-        let (brc, columns) = create_collection();
-        let mut cursor = Cursor::new(Box::new(brc));
-        let lines = TableRenderer::from_cursor(&mut cursor, &columns);
-        assert_eq!(lines, vec![
-            "|-------------------------------|",
-            "| symbol | exchange | last_sale |",
-            "|-------------------------------|",
-            "| ABC    | AMEX     | 11.77     |",
-            "| UNO    | NASDAQ   | 0.2456    |",
-            "| BIZ    | NYSE     | 23.66     |",
-            "| GOTO   | OTC      | 0.1428    |",
-            "| BOOM   | NASDAQ   | 56.87     |",
-            "|-------------------------------|",
-        ])
-    }
-
+    
     fn create_collection() -> (ByteRowCollection, Vec<Column>) {
         let phys_columns = make_quote_columns();
         let brc = ByteRowCollection::from_columns_and_rows(phys_columns.clone(), vec![

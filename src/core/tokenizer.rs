@@ -6,6 +6,7 @@
 use crate::tokens::Token;
 use crate::tokens::Token::DataframeLiteral;
 use regex::Regex;
+use uuid::Uuid;
 
 /// Single-character operators
 const OPERATORS_1: [char; 38] = [
@@ -29,7 +30,7 @@ const OPERATORS_3: [&str; 10] = [
 ];
 
 /// Pseudo-numerical prefixes
-const PSEUDO_NUMERICAL: [&str; 4] = ["0x", "0v", "0b", "0o"];
+const PSEUDO_NUMERICAL: [&str; 4] = ["0x", "0B", "0b", "0o"];
 
 type NewToken = fn(String, usize, usize, usize, usize) -> Token;
 
@@ -98,6 +99,7 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     let parsers: Vec<ParserFunction> = vec![
         skip_comments,
         next_date_literal_token,
+        next_uuid_literal_token,
         next_dataframe_literal_token,
         next_compound_3_operator_token,
         next_compound_2_operator_token,
@@ -243,7 +245,7 @@ fn next_pseudo_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Toke
         generate_token(&inputs, start, end, generator)
     }
 
-    // can start with '0x', '0b', '0o' or '0v'
+    // can start with '0x', '0b', '0o' or '0B'
     let symbol_len = 2;
     let start = *pos;
     let limit = start + symbol_len;
@@ -253,7 +255,7 @@ fn next_pseudo_numeric_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Toke
         match String::from_iter(&inputs[start..limit]).as_str() {
             "0b" => parse_digits(inputs, start, pos, Token::numeric, |c| "01_".contains(c)),
             "0o" => parse_digits(inputs, start, pos, Token::numeric, |c| "01234567_".contains(c)),
-            "0v" => parse_digits(inputs, start, pos, Token::binary_literal, |c| "0123456789_ABCDEFabcdef".contains(c)),
+            "0B" => parse_digits(inputs, start, pos, Token::binary_literal, |c| "0123456789_ABCDEFabcdef".contains(c)),
             "0x" => parse_digits(inputs, start, pos, Token::numeric, |c| "0123456789_ABCDEFabcdef".contains(c)),
             _ => None
         }
@@ -359,6 +361,20 @@ fn next_symbol_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     next_glyph_token(inputs, pos, Token::operator, has_more)
 }
 
+fn next_uuid_literal_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    fn is_valid_uuid(input: &str) -> bool {
+        Uuid::parse_str(input).is_ok()
+    }
+    
+    let (start, end) = (*pos, *pos + 36);
+    if is_valid_uuid(span(&inputs, start, end).as_str()) {
+        *pos = end;
+        generate_token(&inputs, start, end, Token::uuid)
+    } else { 
+        None
+    }
+}
+
 fn next_url_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     fn is_eligible(c: char) -> bool {
         c.is_alphanumeric() || matches!(c,
@@ -401,6 +417,14 @@ fn skip_comments(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
     None
 }
 
+fn span(inputs: &Vec<char>, start: usize, end: usize) -> String {
+    if end <= inputs.len() {
+        inputs[start..end].iter().collect()
+    } else {
+        inputs[start..inputs.len()].iter().collect()
+    }
+}
+
 // Unit tests
 #[cfg(test)]
 mod tests {
@@ -410,9 +434,9 @@ mod tests {
 
     #[test]
     fn test_binary_literal() {
-        assert_eq!(parse_fully("0vfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce ca"), vec![
+        assert_eq!(parse_fully("0Bfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce ca"), vec![
             Token::BinaryLiteral {
-                text: "0vfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce".into(),
+                text: "0Bfe_ed_de_ad_be_ef_de_af_fa_de_ca_fe_ba_be_fa_ce".into(),
                 start: 0,
                 end: 49,
                 line_number: 1,
@@ -587,8 +611,28 @@ mod tests {
         assert_eq!(parse_fully(r#"
             // this is a comment
             one
-            "#), vec![
+        "#), vec![
             Token::atom("one".into(), 46, 49, 3, 14)
+        ])
+    }
+
+    #[test]
+    fn test_span() {
+        let text = "this is a comment";
+        let inputs = text.chars().collect::<Vec<char>>();
+        assert_eq!(span(&inputs, 5, 7), "is")
+    }
+
+    #[test]
+    fn test_uuid() {
+        assert_eq!(parse_fully(r#"
+            550e8400-e29b-41d4-a716-446655440000 
+            abc
+        "#), vec![
+            Token::uuid("550e8400-e29b-41d4-a716-446655440000".into(),
+                        13, 49, 2, 14),
+            Token::atom("abc".into(),
+                        63, 66, 3, 14)
         ])
     }
 
@@ -596,7 +640,7 @@ mod tests {
     fn test_url() {
         assert_eq!(parse_fully(r#"
             https://api.example.com/products?category=electronics abc
-            "#), vec![
+        "#), vec![
             Token::url("https://api.example.com/products?category=electronics".into(),
                        13, 66, 2, 14),
             Token::atom("abc".into(),

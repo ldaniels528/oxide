@@ -10,7 +10,7 @@ use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::data_types::DataType::{NumberType, TableType};
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::Blob;
+use crate::dataframe::Dataframe::BlobTable;
 use crate::errors::Errors::Exact;
 use crate::errors::{throw, Errors};
 use crate::field;
@@ -20,8 +20,8 @@ use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers;
 use crate::object_config::ObjectConfig;
+use crate::packages::PackageOps;
 use crate::parameter::Parameter;
-use crate::platform::PackageOps;
 use crate::row_collection::{RowCollection, RowEncoding};
 use crate::row_metadata::RowMetadata;
 use crate::structures::{Row, Structure};
@@ -151,7 +151,7 @@ impl FileRowCollection {
                 let offset = NumberType(I64Kind).decode_field_value(&buffer, column.get_offset()).to_u64();
                 let metadata = self.blobs.read_metadata(offset)?;
                 match data_type {
-                    TableType(params) => TableValue(Blob(self.blobs.read_blob_table_at(offset, params)?)),
+                    TableType(params) => TableValue(BlobTable(self.blobs.read_blob_table_at(offset, params)?)),
                     _ => self.blobs.read_value(&metadata)?
                 }
             }

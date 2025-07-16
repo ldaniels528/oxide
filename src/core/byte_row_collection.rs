@@ -219,7 +219,7 @@ mod tests {
     use crate::byte_code_compiler::ByteCodeCompiler;
     use crate::byte_row_collection::ByteRowCollection;
     use crate::columns::Column;
-    use crate::dataframe::Dataframe::Binary;
+    use crate::dataframe::Dataframe::BinaryTable;
     use crate::numbers::Numbers::I64Value;
     use crate::row_collection::RowCollection;
     use crate::testdata::{make_quote, make_quote_columns};
@@ -235,7 +235,7 @@ mod tests {
     #[test]
     fn test_encode_decode() {
         let (brc, phys_columns) = create_data_set();
-        let encoded = ByteCodeCompiler::encode_df(&Binary(brc.clone()));
+        let encoded = ByteCodeCompiler::encode_df(&BinaryTable(brc.clone()));
         let decoded = ByteRowCollection::decode(phys_columns, encoded, brc.len().unwrap());
         assert_eq!(decoded.get_rows(), brc.get_rows())
     }
