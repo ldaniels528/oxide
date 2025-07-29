@@ -21,7 +21,7 @@ use crate::row_collection::RowCollection;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, Function, Number, StringValue, TableValue, Undefined};
-use crate::utils::{pull_name, pull_string_lit};
+use crate::utils::{pull_name, pull_string, pull_string_lit};
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -296,8 +296,8 @@ impl TestEngine {
         test_state: &mut TestState,
         report: &mut ModelRowCollection,
         seq: &mut i64,
-        title: &Expression,
-        scenarios: &Vec<Expression>,
+        feat_title: String,
+        scenarios: Vec<Expression>,
     ) -> std::io::Result<(Machine, ())> {
         let mut scenario_states: HashMap<String, Machine> = HashMap::new();
 
@@ -318,7 +318,6 @@ impl TestEngine {
         };
 
         // set up the feature details
-        let (_ms, feat_title) = ms0.evaluate_as_string(title)?;
         let feat_id = next_seq();
 
         // start scenario processing
@@ -428,7 +427,7 @@ impl TestEngine {
                         _ => false
                     }).collect::<Vec<_>>();
                 (title.to_owned(), my_scenarios.iter()
-                    .map(|e| e.clone().clone()).collect::<Vec<_>>())
+                    .map(|e| e.deref().clone()).collect::<Vec<_>>())
             })
             .collect::<Vec<_>>()
     }
@@ -468,7 +467,20 @@ impl TestEngine {
         let mut report = ModelRowCollection::from_parameters(&Self::get_testing_feature_parameters());
         let mut state = TestState::new("Test Suite".into());
         let mut seq = 0;
-        for (feat_title, scenarios) in features {
+
+        // evaluate the feature titles as strings
+        let mut titled_features = vec![];
+        for (title_expr, scenarios) in features {
+            let (_, title_v) = ms.evaluate(title_expr)?;
+            let title = pull_string(&title_v)?;
+            titled_features.push((title, scenarios.clone()));
+        }
+
+        // sort the features by title
+        titled_features.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // test each feature
+        for (feat_title, scenarios) in titled_features {
             Self::do_feature_test(ms, &mut state, &mut report, &mut seq, feat_title, scenarios)?;
         }
         
@@ -490,7 +502,7 @@ impl TestEngine {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::testdata::{verify_exact_report, verify_exact_table};
+    use crate::test_util::{verify_exact_report, verify_exact_table};
 
     #[test]
     fn test_fail() {
@@ -610,7 +622,7 @@ mod tests {
                 }
             }
 
-            test where scenario_name contains "JSON"
+            test where scenario_name::contains("JSON")
         "#, vec![
             "📊 Test Suite summary:", 
             "────────────────────────────────────────────────────────────────────────────────────────", 
@@ -706,10 +718,9 @@ mod tests {
             "│		✅ assert {scores: [82, 78, 99], id: 'A1537'} matches {id: 'A1537', scores: [82, 78, 99]}",
             "└───────────────────────────────────────────────────────────────────────────────────────"]);
     }
-
-    #[ignore]
+    
     #[test]
-    fn test_features_all() {
+    fn test_features_multiple() {
         verify_exact_report(r#"
             feature "Array tests" {
                 scenario "Compare Array contents: Equal" {
@@ -740,36 +751,35 @@ mod tests {
              
             test
         "#, vec![
-            "📊 Test Suite summary:", 
-            "────────────────────────────────────────────────────────────────────────────────────────", 
-            "❌ [Math tests::A test that was meant to fail] - Assertion failed", 
-            "❌ [Math tests::Another test that was meant to fail] - Assertion failed", 
-            "❌ [Array tests::Compare Array contents: Fail Equals] - Assertion failed", 
-            "✅ 3 passed | ❌ 3 failed", 
-            "────────────────────────────────────────────────────────────────────────────────────────", 
-            "👎 3 tests failed. Please review the errors above.", 
-            "", 
-            "┌───────────────────────────────────────────────────────────────────────────────────────", 
-            "│🟥 Math tests", 
-            "├───────────────────────────────────────────────────────────────────────────────────────", 
-            "│	🔴 A test that was meant to fail", 
-            "│		❌ assert 5 + 5 == 9", 
-            "│	🔴 Another test that was meant to fail", 
-            "│		❌ assert 2 + 2 == 5", 
-            "├───────────────────────────────────────────────────────────────────────────────────────", 
-            "│🟨 Array tests", 
-            "├───────────────────────────────────────────────────────────────────────────────────────", 
-            "│	🟢 Compare Array contents: Equals", 
-            "│		✅ assert [1, 'a', 'b', 'c'] matches [1, 'a', 'b', 'c']", 
-            "│	🔴 Compare Array contents: Fail Equals", 
-            "│		❌ assert [1, 'a', 'b', 'c'] matches [0, 'x', 'y', 'z']", 
-            "├───────────────────────────────────────────────────────────────────────────────────────", 
-            "│🟨 JSON tests", 
-            "├───────────────────────────────────────────────────────────────────────────────────────", 
-            "│	🟢 Compare JSON contents (in sequence)", 
-            "│		✅ assert {first: 'Tom', last: 'Lane'} matches {first: 'Tom', last: 'Lane'}", 
-            "│	🟢 Compare JSON contents (out of sequence)", 
-            "│		✅ assert {scores: [82, 78, 99], id: 'A1537'} matches {id: 'A1537', scores: [82, 78, 99]}", 
+            "📊 Test Suite summary:",
+            "────────────────────────────────────────────────────────────────────────────────────────",
+            "❌ [Math tests::A test that was meant to fail] - Assertion failed",
+            "❌ [Math tests::Another test that was meant to fail] - Assertion failed",
+            "✅ 4 passed | ❌ 2 failed",
+            "────────────────────────────────────────────────────────────────────────────────────────",
+            "👎 2 tests failed. Please review the errors above.",
+            "",
+            "┌───────────────────────────────────────────────────────────────────────────────────────",
+            "│🟩 Array tests",
+            "├───────────────────────────────────────────────────────────────────────────────────────",
+            "│	🟢 Compare Array contents: Equal",
+            "│		✅ assert [1, 'a', 'b', 'c'] matches [1, 'a', 'b', 'c']",
+            "│	🟢 Compare Array contents: Not Equal",
+            "│		✅ assert !([1, 'a', 'b', 'c'] matches [0, 'x', 'y', 'z'])",
+            "├───────────────────────────────────────────────────────────────────────────────────────",
+            "│🟩 JSON tests",
+            "├───────────────────────────────────────────────────────────────────────────────────────",
+            "│	🟢 Compare JSON contents (in sequence)",
+            "│		✅ assert {first: 'Tom', last: 'Lane'} matches {first: 'Tom', last: 'Lane'}",
+            "│	🟢 Compare JSON contents (out of sequence)",
+            "│		✅ assert {scores: [82, 78, 99], id: 'A1537'} matches {id: 'A1537', scores: [82, 78, 99]}",
+            "├───────────────────────────────────────────────────────────────────────────────────────",
+            "│🟨 Math tests",
+            "├───────────────────────────────────────────────────────────────────────────────────────",
+            "│	🔴 A test that was meant to fail",
+            "│		❌ assert 5 + 5 == 9",
+            "│	🔴 Another test that was meant to fail",
+            "│		❌ assert 2 + 2 == 5",
             "└───────────────────────────────────────────────────────────────────────────────────────"]);
     }
 
@@ -799,7 +809,7 @@ mod tests {
                 
                 select item, passed, failed
                 from
-                    (test where scenario_name contains "JSON")
+                    (test where scenario_name::contains("JSON"))
                 where level is 2     
                 order_by item
             "#, vec![
@@ -867,7 +877,7 @@ mod tests {
                     scenario "Compare JSON contents (out of sequence)" {
                         assert { scores: [82 78 99], id: "A1537" } matches { id: "A1537", scores: [82 78 99] }
                     }
-                };
+                }
                 
                 test "Compare Array contents: Not Equal" in "Matches function"
             "#, vec![

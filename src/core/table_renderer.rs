@@ -168,7 +168,7 @@ mod tests {
     use crate::byte_row_collection::ByteRowCollection;
     use crate::columns::Column;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::test_util::{make_quote, make_quote_columns};
 
     #[test]
     fn test_from_collection() {

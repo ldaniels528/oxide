@@ -6,6 +6,8 @@
 use crate::compiler::Compiler;
 use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::{ModelTable, TestReport};
+use crate::errors::throw;
+use crate::errors::Errors::Exact;
 use crate::interpreter::Interpreter;
 use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
@@ -24,10 +26,68 @@ use chrono::Local;
 use crossterm::style::Stylize;
 use crossterm::terminal;
 use num_traits::ToPrimitive;
+use rustyline::completion::{Completer, Pair};
+use rustyline::highlight::Highlighter;
+use rustyline::hint::Hinter;
+use rustyline::history::FileHistory;
+use rustyline::validate::Validator;
+use rustyline::{Context, Helper};
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
 use std::fs::File;
-use std::io::{stdin, stdout, Read, Write};
+use std::io::{stdout, Read, Write};
+
+/// Oxide REPL auto-completion config
+pub struct OxideCompleter {
+    keywords: Vec<String>,
+}
+
+impl OxideCompleter {
+    pub fn new() -> Self {
+        Self {
+            keywords: Compiler::get_keywords()
+        }
+    }
+}
+
+impl Completer for OxideCompleter {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let word_start = line[..pos]
+            .rfind(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .map_or(0, |i| i + 1);
+
+        let prefix = &line[word_start..pos];
+
+        let candidates = self
+            .keywords
+            .iter()
+            .filter(|kw| kw.starts_with(prefix))
+            .map(|kw| Pair {
+                display: kw.clone(),
+                replacement: kw.clone(),
+            })
+            .collect();
+
+        Ok((word_start, candidates))
+    }
+}
+
+impl Helper for OxideCompleter {}
+impl Hinter for OxideCompleter {
+    type Hint = String;
+    fn hint(&self, _line: &str, _pos: usize, _ctx: &rustyline::Context<'_>) -> Option<String> {
+        None
+    }
+}
+impl Highlighter for OxideCompleter {}
+impl Validator for OxideCompleter {}
 
 // Represents an enumeration of Terminal Consoles
 pub enum TerminalConsoles {
@@ -38,7 +98,7 @@ pub enum TerminalConsoles {
 impl TerminalConsoles {
     pub async fn evaluate(&mut self, input: &str) -> std::io::Result<TypedValue> {
         match self {
-            TerminalConsoles::Local(interpreter) => interpreter.evaluate(input),
+            TerminalConsoles::Local(interpreter) => interpreter.evaluate_async(input).await,
             TerminalConsoles::Remote(client) => client.evaluate(input).await,       
         }
     }
@@ -128,61 +188,6 @@ impl TerminalState {
     }
 }
 
-pub async fn do_terminal(
-    mut state: TerminalState,
-    args: Vec<String>,
-    reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>,
-) -> std::io::Result<()> {
-    // show title
-    let mut stdout = stdout();
-    show_title();
-    stdout.flush()?;
-
-    // setup system variables
-    state = setup_system_variables(state, args).await;
-
-    // handle user input
-    while state.is_alive {
-        (stdout, state) = do_terminal_input(state, stdout, reader).await?
-    }
-    Ok(())
-}
-
-async fn do_terminal_input(
-    mut state: TerminalState,
-    mut stdout: std::io::Stdout,
-    mut reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>,
-) -> std::io::Result<(std::io::Stdout, TerminalState)> {
-    // display the prompt
-    print!("{}", state.get_prompt());
-    stdout.flush()?;
-
-    // get and process the input
-    let raw_input = read_until_blank(reader())?;
-    match raw_input.trim() {
-        "@compile" => stdout = compile_only(stdout, reader)?,
-        "q!" => state.die(),
-        input if input.is_empty() => {}
-        input => {
-            let t0 = Local::now();
-            match state.interpreter.evaluate(input).await {
-                Ok(result) => {
-                    // compute the execution-time
-                    let execution_time = compute_time_millis(Local::now() - t0);
-                    // process the result
-                    let limit = state.interpreter.evaluate("__COLUMNS__").await?.to_usize();
-                    let raw_lines = build_output(state.counter, result, execution_time)?;
-                    let lines = limit_width(raw_lines.clone(), limit);
-                    for line in lines { println!("{}", line) }
-                }
-                Err(err) => eprintln!("{}", err)
-            }
-            state.counter += 1;
-            stdout.flush()?
-        }
-    }
-    Ok((stdout, state))
-}
 
 /// Builds the execution result output
 pub fn build_output(
@@ -229,52 +234,100 @@ pub fn build_output_header(
     execution_time: f64,
 ) -> std::io::Result<String> {
     let label = match &result {
-        TableValue(tv) =>
-            format!("{} row(s) in {execution_time:.1} ms ~ {}", tv.len()?, get_table_type(tv)),
+        TableValue(tv) => {
+            let outcome = format!("{} row(s) in {execution_time:.1} ms", tv.len()?).reverse();
+            format!("{} ~ {}", outcome, get_table_type(tv))
+                .reverse().to_string()
+        }
         other => {
             let kind = match other {
                 Structured(Hard(hs)) => get_hard_type(hs),
                 Structured(Soft(ss)) => get_soft_type(ss),
                 v => v.get_type_decl()
             };
-            format!("returned type `{}` in {execution_time:.1} ms", kind).reverse().to_string()
+            let outcome = format!("`{}` in {execution_time:.1} ms", kind).reverse();
+            format!("returned type {}", outcome)
         }
     };
     Ok(format!("{pid}: {label}"))
 }
 
-pub fn cleanup(raw: &str) -> String {
-    raw.split(|c| "\n\r\t".contains(c))
-        .map(|s| s.trim())
-        .collect::<Vec<_>>()
-        .join("; ")
-}
+pub async fn do_terminal(
+    mut state: TerminalState,
+    args: Vec<String>,
+) -> std::io::Result<()> {
+    use rustyline::error::ReadlineError;
+    use rustyline::{Config, Editor};
 
-pub fn compile_only(
-    mut stdout: std::io::Stdout,
-    mut reader: fn() -> Box<dyn FnMut() -> std::io::Result<Option<String>>>,
-) -> std::io::Result<std::io::Stdout> {
-    let mut is_alive = true;
-    while is_alive {
-        // display the prompt
-        stdout.write(b"compile> ")?;
-        stdout.flush()?;
+    // show title
+    let mut stdout = stdout();
+    show_title();
+    stdout.flush()?;
 
-        // compile or quit
-        match read_until_blank(reader())?.trim() {
-            "q!" => is_alive = false,
-            input => {
-                let model = Compiler::build(input)?;
-                println!("{:?}", model)
+    // setup system variables
+    state = setup_system_variables(state, args).await;
+
+    // create the editor configuration
+    let config = Config::builder()
+        .completion_type(rustyline::CompletionType::List)
+        .build();
+    let completer = OxideCompleter::new();
+    let mut rl = Editor::<OxideCompleter, FileHistory>::with_config(config)
+        .map_err(|e| cnv_error!(e))?;
+    rl.set_helper(Some(completer));
+
+    let mut buffer = String::new();
+    let mut prompt = state.get_prompt();
+
+    loop {
+        let readline = rl.readline(prompt.as_str());
+        match readline {
+            Ok(raw_line) => {
+                let line = raw_line.trim();
+                if buffer.is_empty() && line == "q!" {
+                    break;
+                }
+
+                // update the buffer
+                buffer.push_str(line);
+                buffer.push('\n');
+
+                // if the statement is incomplete, keep buffering
+                if is_incomplete(&buffer) {
+                    prompt = "...> ".into();
+                    continue;
+                }
+
+                let trimmed = buffer.trim();
+                if !trimmed.is_empty() {
+                    // add the line to history
+                    rl.add_history_entry(trimmed).map_err(|e| cnv_error!(e))?;
+
+                    // evaluate the input
+                    state = handle_input(state, trimmed).await?;
+
+                    // Reset for next input
+                    buffer.clear();
+                    prompt = state.get_prompt();
+                }
+            }
+            Err(ReadlineError::Interrupted) => {
+                println!("^C");
+                break;
+            }
+            Err(ReadlineError::Eof) => {
+                println!("^D");
+                break;
+            }
+            Err(err) => {
+                eprintln!("REPL error: {:?}", err);
+                break;
             }
         }
     }
 
-    Ok(stdout)
-}
-
-pub fn fail<A>(message: impl Into<String>) -> std::io::Result<A> {
-    Err(std::io::Error::new(std::io::ErrorKind::Other, message.into()))
+    println!("👋 Goodbye!");
+    Ok(())
 }
 
 /// Generates a less verbose hard structure signature
@@ -296,7 +349,7 @@ pub fn get_host_and_port(args: Vec<String>) -> std::io::Result<(String, String)>
     // validate the port number
     let port_regex = regex::Regex::new(r"^\d+$").map_err(|e| cnv_error!(e))?;
     if !port_regex.is_match(&port) {
-        return fail(format!("Port number '{}' is invalid", port));
+        return throw(Exact(format!("Port number '{}' is invalid", port)));
     }
     Ok((host, port))
 }
@@ -324,6 +377,48 @@ pub fn get_table_type(rc: &Dataframe) -> String {
     format!("Table({})", param_types)
 }
 
+async fn handle_input(mut state: TerminalState, input: &str) -> std::io::Result<TerminalState> {
+    let t0 = Local::now();
+    match state.interpreter.evaluate(input).await {
+        Ok(result) => {
+            // compute the execution-time
+            let execution_time = compute_time_millis(Local::now() - t0);
+            // process the result
+            let limit = state.interpreter.get("__COLUMNS__").await.map(|v| v.unwrap_or(Undefined).to_usize());
+            let raw_lines = build_output(state.counter, result, execution_time)?;
+            let lines = limit
+                .map(|n| limit_width(raw_lines.clone(), n))
+                .unwrap_or(raw_lines);
+            for line in lines {
+                println!("{}", line)
+            }
+        }
+        Err(err) => eprintln!("{}", err),
+    }
+    state.counter += 1;
+    Ok(state)
+}
+
+pub fn is_incomplete(code: &str) -> bool {
+    let mut parens = 0;
+    let mut braces = 0;
+    let mut in_string = false;
+    let mut prev_char = '\0';
+    for c in code.chars() {
+        match c {
+            '"' if prev_char != '\\' => in_string = !in_string,
+            '(' if !in_string => parens += 1,
+            ')' if !in_string => parens -= 1,
+            '{' if !in_string => braces += 1,
+            '}' if !in_string => braces -= 1,
+            _ => {}
+        }
+        prev_char = c;
+    }
+
+    parens > 0 || braces > 0 || in_string
+}
+
 pub fn limit_width(lines: Vec<String>, limit: usize) -> Vec<String> {
     lines
         .into_iter()
@@ -347,14 +442,6 @@ pub fn read_line_from(lines: Vec<String>) -> Box<dyn FnMut() -> std::io::Result<
         } else {
             None
         })
-    })
-}
-
-pub fn read_line_from_stdin() -> Box<dyn FnMut() -> std::io::Result<Option<String>>> {
-    Box::new(move || {
-        let mut line = String::new();
-        stdin().read_line(&mut line)?;
-        Ok(Some(line))
     })
 }
 
@@ -431,33 +518,35 @@ pub fn show_title() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server_engine::start_http_server;
-    use crate::testdata::start_test_server;
+    use crate::numbers::Numbers::F64Value;
+    use crate::packages::webservers;
+    use crate::test_util::{make_quote_parameters, start_test_server_async};
     use std::fs;
     use std::fs::File;
 
     #[actix::test]
-    async fn test_do_terminal_input() {
-        let port = 7701;
-        start_test_server(port);
-        let state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
-        let stdout = stdout();
-        let reader = || read_line_from(vec![
-            "use oxide".into(),
-            "help()".into(),
-            "\n".into(),
+    async fn test_build_output_struct() {
+        let port = start_test_server_async().await.unwrap();
+        let mut state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
+        let result = state.interpreter.evaluate(r#"
+            { "symbol": "LEET", "exchange": "GAME", "last_sale": 59.99 }
+        "#).await.unwrap();
+
+        let lines = build_output(12, result, 13.2).unwrap();
+        assert_eq!(lines, vec![
+            "12: returned type \u{1b}[7m`Struct(String(4), String(4), f64)` in 13.2 ms\u{1b}[0m",
+            "{",
+            "  \"exchange\": \"GAME\",",
+            "  \"last_sale\": 59.99,",
+            "  \"symbol\": \"LEET\"",
+            "}"
         ]);
-        let (_, new_state) = do_terminal_input(state, stdout, reader).await.unwrap();
-        assert_eq!(new_state.database, "oxide".to_string());
-        assert_eq!(new_state.schema, "public".to_string());
-        assert_eq!(new_state.counter, 1);
-        assert_eq!(new_state.is_alive, true);
+        webservers::stop_server(port).await.unwrap();
     }
 
     #[actix::test]
-    async fn test_build_output() {
-        let port = 7703;
-        start_http_server(port);
+    async fn test_build_output_table() {
+        let port = start_test_server_async().await.unwrap();
         let mut state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
         let result = state.interpreter.evaluate(r#"
             oxide::help()::describe()
@@ -465,7 +554,7 @@ mod tests {
 
         let lines = build_output(12, result, 13.2).unwrap();
         assert_eq!(lines, vec![
-            "12: 5 row(s) in 13.2 ms ~ Table(String(128), String(128), String(128), Boolean)",
+            "12: \u{1b}[7m\u{1b}[7m5 row(s) in 13.2 ms\u{1b}[0m ~ Table(String(128), String(128), String(128), Boolean)\u{1b}[0m",
             "|-------------------------------------------------------------|",
             "| id | name        | type       | default_value | is_nullable |",
             "|-------------------------------------------------------------|",
@@ -474,7 +563,74 @@ mod tests {
             "| 2  | signature   | String(32) | null          | true        |",
             "| 3  | description | String(60) | null          | true        |",
             "| 4  | returns     | String(32) | null          | true        |",
-            "|-------------------------------------------------------------|"])
+            "|-------------------------------------------------------------|"]);
+        webservers::stop_server(port).await.unwrap();
+    }
+
+    #[actix::test]
+    async fn test_build_output_test() {
+        let port = start_test_server_async().await.unwrap();
+        let mut state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
+        let result = state.interpreter.evaluate(r#"
+            feature "JSON tests" {
+                scenario "Compare JSON contents (in sequence)" {
+                    assert { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+                }
+                scenario "Compare JSON contents (out of sequence)" {
+                    assert { scores: [82 78 99], id: "A1537" } matches { id: "A1537", scores: [82 78 99] }
+                }
+            }
+            test
+        "#).await.unwrap();
+
+        let lines = build_output(12, result, 13.2).unwrap();
+        assert_eq!(lines, vec![
+            "12: \u{1b}[7m\u{1b}[7m5 row(s) in 13.2 ms\u{1b}[0m ~ Table(i64, i64, String(256), i64, i64)\u{1b}[0m",
+            "📊 Test Suite summary:",
+            "────────────────────────────────────────────────────────────────────────────────────────",
+            "✅ 2 passed | ❌ 0 failed",
+            "────────────────────────────────────────────────────────────────────────────────────────",
+            "👍 All tests passed. No issues found.",
+            "",
+            r#"┌───────────────────────────────────────────────────────────────────────────────────────"#,
+            r#"│🟩 JSON tests"#,
+            r#"├───────────────────────────────────────────────────────────────────────────────────────"#,
+            r#"│	🟢 Compare JSON contents (in sequence)"#,
+            r#"│		✅ assert {first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"}"#,
+            r#"│	🟢 Compare JSON contents (out of sequence)"#,
+            r#"│		✅ assert {scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}"#,
+            r#"└───────────────────────────────────────────────────────────────────────────────────────"#]);
+        webservers::stop_server(port).await.unwrap();
+    }
+
+    #[actix::test]
+    async fn test_build_output_testreport() {
+        let port = start_test_server_async().await.unwrap();
+        let mut state = TerminalState::connect("localhost", port, "/ws").await.unwrap();
+        let result = state.interpreter.evaluate(r#"
+            feature "JSON tests" {
+                scenario "Compare JSON contents (in sequence)" {
+                    assert { first: "Tom" last: "Lane" } matches { first: "Tom" last: "Lane" }
+                }
+                scenario "Compare JSON contents (out of sequence)" {
+                    assert { scores: [82 78 99], id: "A1537" } matches { id: "A1537", scores: [82 78 99] }
+                }
+            }
+            test report
+        "#).await.unwrap();
+
+        let lines = build_output(12, result, 13.2).unwrap();
+        assert_eq!(lines, vec![
+            "12: returned type \u{1b}[7m`String(534)` in 13.2 ms\u{1b}[0m",
+            r#"┌───────────────────────────────────────────────────────────────────────────────────────"#,
+            r#"│🟩 JSON tests"#,
+            r#"├───────────────────────────────────────────────────────────────────────────────────────"#,
+            r#"│	🟢 Compare JSON contents (in sequence)"#,
+            r#"│		✅ assert {first: "Tom", last: "Lane"} matches {first: "Tom", last: "Lane"}"#,
+            r#"│	🟢 Compare JSON contents (out of sequence)"#,
+            r#"│		✅ assert {scores: [82, 78, 99], id: "A1537"} matches {id: "A1537", scores: [82, 78, 99]}"#,
+            r#"└───────────────────────────────────────────────────────────────────────────────────────"#]);
+        webservers::stop_server(port).await.unwrap();
     }
 
     #[test]
@@ -501,15 +657,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_alive() {
-        let mut state: TerminalState = TerminalState::offline().unwrap();
-        assert_eq!(state.is_alive(), true);
-
-        state.die();
-        assert_eq!(state.is_alive(), false);
-    }
-
-    #[test]
     fn test_build_output_header_string() {
         let mut interpreter = Interpreter::new();
         let result = interpreter.evaluate(r#"
@@ -519,7 +666,7 @@ mod tests {
         let lines = build_output_header(12, &result, 0.1).unwrap();
         assert_eq!(
             lines,
-            "12: \u{1b}[7mreturned type `String(11)` in 0.1 ms\u{1b}[0m")
+            "12: returned type \u{1b}[7m`String(11)` in 0.1 ms\u{1b}[0m")
     }
 
     #[test]
@@ -532,7 +679,61 @@ mod tests {
         let lines = build_output_header(12, &result, 13.2).unwrap();
         assert_eq!(
             lines,
-            "12: 5 row(s) in 13.2 ms ~ Table(String(128), String(128), String(128), Boolean)")
+            "12: \u{1b}[7m\u{1b}[7m5 row(s) in 13.2 ms\u{1b}[0m ~ Table(String(128), String(128), String(128), Boolean)\u{1b}[0m")
+    }
+
+    #[test]
+    fn test_get_hard_type() {
+        let text = get_hard_type(&HardStructure::new(
+            make_quote_parameters(),
+            vec![
+                StringValue("ABC".into()),
+                StringValue("NYSE".into()),
+                Number(F64Value(11.77))
+            ]));
+        assert_eq!(text, "Struct(String(8), String(8), f64)");
+    }
+
+    #[test]
+    fn test_get_parameter_string() {
+        let text = get_parameter_string(&make_quote_parameters());
+        assert_eq!(text, "String(8), String(8), f64");
+    }
+
+    #[test]
+    fn test_get_soft_type() {
+        let text = get_soft_type(&SoftStructure::new(&vec![
+            ("symbol", StringValue("ABC".into())),
+            ("exchange", StringValue("NYSE".into())),
+            ("last_sale", Number(F64Value(11.77)))
+        ]));
+        assert_eq!(text, "Struct(String(3), String(4), f64)");
+    }
+
+    #[actix::test]
+    async fn test_handle_input() {
+        let state: TerminalState = TerminalState::offline().unwrap();
+        let new_state = handle_input(state, "2 * 5").await.unwrap();
+        assert_eq!(new_state.counter, 1);
+    }
+
+    #[test]
+    fn test_is_alive() {
+        let mut state: TerminalState = TerminalState::offline().unwrap();
+        assert_eq!(state.is_alive(), true);
+
+        state.die();
+        assert_eq!(state.is_alive(), false);
+    }
+
+    #[test]
+    fn test_is_incomplete_false() {
+        assert_eq!(is_incomplete("x = (4 + 7) * 3"), false);
+    }
+
+    #[test]
+    fn test_is_incomplete_true() {
+        assert_eq!(is_incomplete("x = (4 + 7"), true);
     }
 
     #[test]
@@ -594,14 +795,14 @@ mod tests {
         fs::remove_file(file_path).ok();
     }
 
-    // #[actix::test]
-    // async fn test_setup_system_variables() {
-    //     let state = TerminalState::offline().unwrap();
-    //     let state = setup_system_variables(state, vec![]);
-    //     assert!(matches!(state.get("__ARGS__").await, Some(ArrayValue(..))));
-    //     assert!(matches!(state.get("__COLUMNS__"), Some(Number(..))));
-    //     assert!(matches!(state.get("__HEIGHT__"), Some(Number(..))));
-    // }
+    #[actix::test]
+    async fn test_setup_system_variables() {
+        let state = TerminalState::offline().unwrap();
+        let mut state = setup_system_variables(state, vec![]).await;
+        assert!(matches!(state.interpreter.get("__ARGS__").await.unwrap(), Some(ArrayValue(..))));
+        assert!(matches!(state.interpreter.get("__COLUMNS__").await.unwrap(), Some(Number(..))));
+        assert!(matches!(state.interpreter.get("__HEIGHT__").await.unwrap(), Some(Number(..))));
+    }
 
     #[test]
     fn test_show_title() {

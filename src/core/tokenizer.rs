@@ -24,9 +24,14 @@ const OPERATORS_2: [&str; 28] = [
 ];
 
 /// Triple-character operators
-const OPERATORS_3: [&str; 10] = [
-    "~>>", "<<~", "|>>", "<|>", ":::", 
+const OPERATORS_3: [&str; 11] = [
+    "~>>", "<<~", "|>>", "<|>", ":::", "<::",
     "..=", "&&=", "||=", "<<=", ">>=",
+];
+
+/// Quad-character operators
+const OPERATORS_4: [&str; 1] = [
+    "<:::"
 ];
 
 /// Pseudo-numerical prefixes
@@ -101,6 +106,7 @@ fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
         next_date_literal_token,
         next_uuid_literal_token,
         next_dataframe_literal_token,
+        next_compound_4_operator_token,
         next_compound_3_operator_token,
         next_compound_2_operator_token,
         next_operator_token,
@@ -331,6 +337,10 @@ fn next_compound_3_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option
     next_compound_operator_token(inputs, pos, OPERATORS_3.as_slice(), 3)
 }
 
+fn next_compound_4_operator_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {
+    next_compound_operator_token(inputs, pos, OPERATORS_4.as_slice(), 4)
+}
+
 fn next_compound_operator_token(
     inputs: &Vec<char>,
     pos: &mut usize,
@@ -459,8 +469,9 @@ mod tests {
         }
 
         let mut compound_operators = vec![];
-        compound_operators.extend(stringify(OPERATORS_2.as_slice()));
+        compound_operators.extend(stringify(OPERATORS_4.as_slice()));
         compound_operators.extend(stringify(OPERATORS_3.as_slice()));
+        compound_operators.extend(stringify(OPERATORS_2.as_slice()));
 
         for operator in compound_operators {
             let tokens = parse_fully(operator.as_str());

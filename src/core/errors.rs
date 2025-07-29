@@ -1,13 +1,12 @@
 #![warn(dead_code)]
 ////////////////////////////////////////////////////////////////////
-// Errors class
+// Error class
 ////////////////////////////////////////////////////////////////////
 
 use std::fmt::{Debug, Display, Formatter};
 
 use crate::columns::Column;
 use crate::data_types::DataType;
-use crate::errors::Errors::ColumnNotFoundInColumns;
 use crate::packages::PackageOps;
 use crate::parameter::Parameter;
 use crate::tokens::Token;
@@ -41,6 +40,7 @@ impl Display for CompileErrors {
 /// Represents an enumeration of syntax errors
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum SyntaxErrors {
+    IllegalDate(String),
     IllegalExpression(String),
     IllegalOperator(Token),
     KeywordExpected(String),
@@ -52,6 +52,8 @@ pub enum SyntaxErrors {
 impl Display for SyntaxErrors {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let text = match self {
+            SyntaxErrors::IllegalDate(date) =>
+                format!("Illegal date '{date}'"),
             SyntaxErrors::IllegalExpression(expr) =>
                 format!("Illegal expression: {expr}"),
             SyntaxErrors::IllegalOperator(token) =>
@@ -74,6 +76,7 @@ impl Display for SyntaxErrors {
 pub enum TypeMismatchErrors {
     ArgumentsMismatched(usize, usize),
     ArrayExpected(String),
+    BitsetExpected(String),
     BooleanExpected(String),
     CannotBeNegated(String),
     CharExpected(String),
@@ -85,6 +88,7 @@ pub enum TypeMismatchErrors {
     FunctionArgsExpected(String),
     FunctionExpected(String),
     IdentifierExpected(String),
+    IdentifierExpectedNear(Token),
     OutcomeExpected(String),
     NamespaceExpected(String),
     NumericValueExpected(String),
@@ -101,7 +105,6 @@ pub enum TypeMismatchErrors {
     UnexpectedResult(String),
     UnrecognizedTypeName(String),
     UnsupportedType(DataType, DataType),
-    VariableExpected(Token),
 }
 
 impl Display for TypeMismatchErrors {
@@ -111,6 +114,8 @@ impl Display for TypeMismatchErrors {
                 format!("Mismatched number of arguments: {a} vs. {b}"),
             TypeMismatchErrors::ArrayExpected(a) =>
                 format!("Array value expected near {a}"),
+            TypeMismatchErrors::BitsetExpected(a) =>
+                format!("BitSet value expected near {a}"),
             TypeMismatchErrors::BooleanExpected(a) =>
                 format!("Boolean value expected near {a}"),
             TypeMismatchErrors::CannotBeNegated(a) =>
@@ -133,6 +138,8 @@ impl Display for TypeMismatchErrors {
                 format!("Function expected, but found {}", other),
             TypeMismatchErrors::IdentifierExpected(other) =>
                 format!("Identifier expected, but found {}", other),
+            TypeMismatchErrors::IdentifierExpectedNear(a) =>
+                format!("Identifier expected near {a}"),
             TypeMismatchErrors::NumericValueExpected(expr) =>
                 format!("Expected a numeric near {expr}"),
             TypeMismatchErrors::NamespaceExpected(expr) =>
@@ -167,8 +174,6 @@ impl Display for TypeMismatchErrors {
                 format!("{} is not convertible to {}",
                         a.to_type_declaration().unwrap_or("Any".into()),
                         b.to_type_declaration().unwrap_or("Any".into())),
-            TypeMismatchErrors::VariableExpected(a) =>
-                format!("Variable identifier expected near {a}"),
         };
         write!(f, "Type Mismatch: {text}")
     }
@@ -270,7 +275,7 @@ pub fn throw<A>(error: Errors) -> std::io::Result<A> {
 }
 
 pub fn column_not_found<A>(name: &str, columns: &Vec<Column>) -> std::io::Result<A> {
-    throw(ColumnNotFoundInColumns(name.into(), columns.iter()
+    throw(Errors::ColumnNotFoundInColumns(name.into(), columns.iter()
         .map(|c| c.get_name().into()).collect::<Vec<_>>()))
 }
 

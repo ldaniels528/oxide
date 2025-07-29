@@ -191,7 +191,7 @@ impl Structures {
 
 impl Display for Structures {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.to_string())
+        write!(f, "{}", self.to_json().to_string())
     }
 }
 
@@ -688,6 +688,22 @@ impl Row {
         } else { true }
     }
 
+    pub async fn matches_async(
+        &self,
+        machine: &Machine,
+        condition: &Option<Conditions>,
+        columns: &Vec<Column>,
+    ) -> bool {
+        if let Some(condition) = condition {
+            let machine = machine.with_row(columns, &self);
+            match machine.evaluate_condition_async(condition).await {
+                Ok((_, Boolean(true) | Null | Undefined)) => true,
+                Ok(_) => false,
+                Err(..) => false
+            }
+        } else { true }
+    }
+
     /// Primary Constructor
     pub fn new(id: usize, values: Vec<TypedValue>) -> Self {
         Self { id, values }
@@ -945,7 +961,7 @@ mod tests {
         use crate::sequences::Array;
         use crate::structures::Structures::{Firm, Hard, Soft};
         use crate::structures::*;
-        use crate::testdata::*;
+        use crate::test_util::*;
         use crate::typed_values::TypedValue::*;
         use serde_json::json;
 
@@ -1307,7 +1323,7 @@ mod tests {
         use crate::byte_code_compiler::ByteCodeCompiler;
         use crate::numbers::Numbers::*;
         use crate::structures::Row;
-        use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
+        use crate::test_util::{make_quote, make_quote_columns, make_quote_parameters};
         use crate::typed_values::TypedValue::*;
 
         #[test]
@@ -1435,7 +1451,7 @@ mod tests {
         use crate::parameter::Parameter;
         use crate::row_collection::RowCollection;
         use crate::structures::{HardStructure, Structure};
-        use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
+        use crate::test_util::{make_quote, make_quote_columns, make_quote_parameters};
         use crate::typed_values::TypedValue::*;
 
         #[test]

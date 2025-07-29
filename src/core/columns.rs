@@ -109,7 +109,7 @@ mod tests {
     use crate::data_types::DataType::*;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::F64Value;
-    use crate::testdata::make_quote_parameters;
+    use crate::test_util::make_quote_parameters;
     use crate::typed_values::TypedValue::*;
 
     use super::*;

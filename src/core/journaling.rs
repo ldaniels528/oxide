@@ -537,7 +537,7 @@ mod tests {
         use crate::numbers::Numbers::F64Value;
         use crate::row_collection::RowCollection;
         use crate::table_renderer::TableRenderer;
-        use crate::testdata::{make_quote, make_quote_parameters};
+        use crate::test_util::{make_quote, make_quote_parameters};
         use crate::typed_values::TypedValue::Number;
 
         #[test]
@@ -666,7 +666,7 @@ mod tests {
         use crate::row_collection::RowCollection;
         use crate::structures::Row;
         use crate::table_renderer::TableRenderer;
-        use crate::testdata::{make_quote, make_quote_parameters};
+        use crate::test_util::{make_quote, make_quote_parameters};
         use crate::typed_values::TypedValue::{Number, StringValue};
 
         #[test]

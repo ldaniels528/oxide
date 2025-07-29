@@ -24,6 +24,7 @@ group_by exchange</pre>
 | 0  | NYSE     | 17.715            |
 | 1  | NASDAQ   | 99.69333333333333 |
 |-----------------------------------|
+
 </pre>
 <hr>
 <h4>📦 agg::count &#8212; returns the counts of rows or non-null fields</h4>
@@ -49,6 +50,7 @@ group_by exchange</pre>
 | 0  | NYSE     | 2   |
 | 1  | NASDAQ   | 3   |
 |---------------------|
+
 </pre>
 <hr>
 <h4>📦 agg::max &#8212; returns the maximum value of a collection of fields</h4>
@@ -71,9 +73,10 @@ group_by exchange</pre>
 |--------------------------|
 | id | exchange | max_sale |
 |--------------------------|
-| 0  | NASDAQ   | 214.88   |
-| 1  | NYSE     | 23.66    |
+| 0  | NYSE     | 23.66    |
+| 1  | NASDAQ   | 214.88   |
 |--------------------------|
+
 </pre>
 <hr>
 <h4>📦 agg::min &#8212; returns the minimum value of a collection of fields</h4>
@@ -99,6 +102,7 @@ group_by exchange</pre>
 | 0  | NYSE     | 11.77    |
 | 1  | NASDAQ   | 32.97    |
 |--------------------------|
+
 </pre>
 <hr>
 <h4>📦 agg::sum &#8212; returns the sum of a collection of fields</h4>
@@ -121,57 +125,96 @@ group_by exchange</pre>
 |----------------------------|
 | id | exchange | total_sale |
 |----------------------------|
-| 0  | NASDAQ   | 299.08     |
-| 1  | NYSE     | 35.43      |
+| 0  | NYSE     | 35.43      |
+| 1  | NASDAQ   | 299.08     |
 |----------------------------|
+
+</pre>
+<hr>
+<h4>📦 arrays::contains &#8212; Returns true if the array contains the specific item</h4>
+<h5>example1</h5>
+<pre>1..7::contains(5)</pre>
+<h5>results</h5>
+<pre>
+true
+
 </pre>
 <hr>
 <h4>📦 arrays::filter &#8212; Filters an array based on a function</h4>
 <h5>example1</h5>
-<pre>arrays::filter(1..7, n -> (n % 2) == 0)</pre>
+<pre>1..7::filter(n -> (n % 2) == 0)</pre>
 <h5>results</h5>
 <pre>
 [2, 4, 6]
+
+</pre>
+<hr>
+<h4>📦 arrays::head &#8212; Returns true if the array head contains the specific item</h4>
+<h5>example1</h5>
+<pre>['abc', 'def', 'ghi']::head()</pre>
+<h5>results</h5>
+<pre>
+abc
+
+</pre>
+<hr>
+<h4>📦 arrays::is_empty &#8212; Returns true if the array is empty</h4>
+<h5>example1</h5>
+<pre>[1, 3, 5]::is_empty</pre>
+<h5>results</h5>
+<pre>
+false
+
+</pre>
+<hr>
+<h4>📦 arrays::is_empty &#8212; Returns true if the array is empty</h4>
+<h5>example2</h5>
+<pre>[]::is_empty</pre>
+<h5>results</h5>
+<pre>
+true
+
 </pre>
 <hr>
 <h4>📦 arrays::len &#8212; Returns the length of an array</h4>
 <h5>example1</h5>
-<pre>arrays::len([1, 5, 2, 4, 6, 0])</pre>
+<pre>[1, 5, 2, 4, 6, 0]::len()</pre>
 <h5>results</h5>
 <pre>
 6
+
 </pre>
 <hr>
 <h4>📦 arrays::map &#8212; Transform an array based on a function</h4>
 <h5>example1</h5>
-<pre>arrays::map([1, 2, 3], n -> n * 2)</pre>
+<pre>[1, 2, 3]::map(n -> n * 2)</pre>
 <h5>results</h5>
 <pre>
 [2, 4, 6]
+
 </pre>
 <hr>
 <h4>📦 arrays::pop &#8212; Removes and returns a value or object from an array</h4>
 <h5>example1</h5>
-<pre>use arrays
-stocks = []
-stocks:::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
-stocks:::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
+<pre>stocks = []
+stocks = stocks::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
+stocks = stocks::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
 stocks</pre>
 <h5>results</h5>
 <pre>
-[]
+[{"exchange":"AMEX","last_sale":12.49,"symbol":"ABC"}, {"exchange":"NYSE","last_sale":56.88,"symbol":"BOOM"}]
+
 </pre>
 <hr>
 <h4>📦 arrays::push &#8212; Appends a value or object to an array</h4>
 <h5>example1</h5>
-<pre>use arrays
-stocks = [
+<pre>stocks = [
     { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
     { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
     { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
 ]
-stocks:::push({ symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
-tools::to_table(stocks)</pre>
+stocks::push({ symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
+stocks::to(Table)</pre>
 <h5>results</h5>
 <pre>
 |------------------------------------|
@@ -181,177 +224,340 @@ tools::to_table(stocks)</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 arrays::reduce &#8212; Reduces an array to a single value</h4>
 <h5>example1</h5>
-<pre>arrays::reduce(1..=5, 0, (a, b) -> a + b)</pre>
+<pre>1..=5::reduce(0, (a, b) -> a + b)</pre>
 <h5>results</h5>
 <pre>
 15
+
 </pre>
 <hr>
 <h4>📦 arrays::reduce &#8212; Reduces an array to a single value</h4>
 <h5>example2</h5>
-<pre>use arrays::reduce
-numbers = [1, 2, 3, 4, 5]
-numbers:::reduce(0, (a, b) -> a + b)</pre>
+<pre>numbers = [1, 2, 3, 4, 5]
+numbers::reduce(0, (a, b) -> a + b)</pre>
 <h5>results</h5>
 <pre>
 15
+
 </pre>
 <hr>
 <h4>📦 arrays::reverse &#8212; Returns a reverse copy of an array</h4>
 <h5>example1</h5>
-<pre>arrays::reverse(['cat', 'dog', 'ferret', 'mouse'])</pre>
+<pre>['cat', 'dog', 'ferret', 'mouse']::reverse()</pre>
 <h5>results</h5>
 <pre>
 ["mouse", "ferret", "dog", "cat"]
+
 </pre>
 <hr>
-<h4>📦 arrays::to_array &#8212; Converts a collection into an array</h4>
+<h4>📦 arrays::tail &#8212; Every element in an array after the first element</h4>
 <h5>example1</h5>
-<pre>arrays::to_array(tools::to_table([
-   { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
-   { symbol: "DMX", exchange: "OTC_BB", last_sale: 1.17 }
-]))</pre>
+<pre>|--------------------------------------|
+| symbol | exchange | last_sale | rank |
+|--------------------------------------|
+| BOOM   | NYSE     | 113.76    | 1    |
+| ABC    | AMEX     | 24.98     | 2    |
+| JET    | NASDAQ   | 64.24     | 3    |
+|--------------------------------------|
+::tail()</pre>
 <h5>results</h5>
 <pre>
-[{"exchange":"NYSE","last_sale":23.66,"symbol":"BIZ"}, {"exchange":"NYSE","last_sale":23.66,"symbol":"BIZ"}]
+|-------------------------------------------|
+| id | symbol | exchange | last_sale | rank |
+|-------------------------------------------|
+| 0  | ABC    | AMEX     | 24.98     | 2    |
+| 1  | JET    | NASDAQ   | 64.24     | 3    |
+|-------------------------------------------|
+
 </pre>
 <hr>
-<h4>📦 cal::day_of &#8212; Returns the day of the month of a Date</h4>
+<h4>📦 blobs::append &#8212; Appends a BLOB</h4>
 <h5>example1</h5>
-<pre>use cal
-now():::day_of()</pre>
+<pre>let bs = blobs::create("builtins.blob.append")
+bs::truncate()
+let id = bs::append("Hello World")
+bs::read(id)</pre>
 <h5>results</h5>
 <pre>
-21
+Hello World
+
+</pre>
+<hr>
+<h4>📦 blobs::create &#8212; Creates a new BLOB Store</h4>
+<h5>example1</h5>
+<pre>let bs = blobs::create("builtins.blob.append")
+bs::truncate()
+let id = bs::append("Hello World")
+bs::read(id)</pre>
+<h5>results</h5>
+<pre>
+Hello World
+
+</pre>
+<hr>
+<h4>📦 blobs::entries &#8212; Returns all BLOB entries</h4>
+<h5>example1</h5>
+<pre>let bs = blobs::create("builtins.blob.entries")
+bs::truncate()
+bs::append("Hello World")
+bs::append("The little brown fox")
+bs::append("Goodbye World")
+bs::entries()</pre>
+<h5>results</h5>
+<pre>
+|-----------------------------------------------------------------------|
+| id | blob_id                              | offset | allocated | used |
+|-----------------------------------------------------------------------|
+| 0  | a5f3e5f9-e505-484c-b129-d2597c81f274 | 0      | 70        | 63   |
+| 1  | f8513951-0d1f-48d4-ae52-0e0ac2321d32 | 70     | 82        | 72   |
+| 2  | e1920943-9383-4b4c-94af-abd09255ebd3 | 152    | 73        | 65   |
+|-----------------------------------------------------------------------|
+
+</pre>
+<hr>
+<h4>📦 blobs::len &#8212; Returns the size in bytes of the BLOB</h4>
+<h5>example1</h5>
+<pre>let bs = blobs::create("builtins.blob.len")
+bs::truncate()
+bs::append("Hello World")
+bs::append("The little brown fox")
+bs::append("Goodbye World")
+bs::len()</pre>
+<h5>results</h5>
+<pre>
+225
+
+</pre>
+<hr>
+<h4>📦 blobs::read &#8212; Reads a BLOB</h4>
+<h5>example1</h5>
+<pre>let bs = blobs::create("builtins.blob.append")
+bs::truncate()
+let id = bs::append("Hello World")
+bs::read(id)</pre>
+<h5>results</h5>
+<pre>
+Hello World
+
+</pre>
+<hr>
+<h4>📦 blobs::truncate &#8212; Truncates a new BLOB Store</h4>
+<h5>example1</h5>
+<pre>let bs = blobs::create("builtins.blob.append")
+bs::truncate()
+let id = bs::append("Hello World")
+bs::read(id)</pre>
+<h5>results</h5>
+<pre>
+Hello World
+
+</pre>
+<hr>
+<h4>📦 blobs::update &#8212; Updates a BLOB</h4>
+<h5>example1</h5>
+<pre>let bs = blobs::create("builtins.blob.append")
+bs::truncate()
+let id0 = bs::append("Hello World")
+let id1 = bs::update(id0, "The brown fox")
+bs::read(id1)</pre>
+<h5>results</h5>
+<pre>
+The brown fox
+
+</pre>
+<hr>
+<h4>📦 cal::day &#8212; Returns the day of the month of a Date</h4>
+<h5>example1</h5>
+<pre>2025-07-06T21:59:02.425Z::day</pre>
+<h5>results</h5>
+<pre>
+6
+
 </pre>
 <hr>
 <h4>📦 cal::hour12 &#8212; Returns the hour of the day of a Date</h4>
 <h5>example1</h5>
-<pre>use cal
-now():::hour12()</pre>
+<pre>2025-07-06T21:59:02.425Z::hour12</pre>
 <h5>results</h5>
 <pre>
-5
+2
+
 </pre>
 <hr>
 <h4>📦 cal::hour24 &#8212; Returns the hour (military time) of the day of a Date</h4>
 <h5>example1</h5>
-<pre>use cal
-now():::hour24()</pre>
+<pre>2025-07-06T21:59:02.425Z::hour24</pre>
 <h5>results</h5>
 <pre>
-17
+14
+
 </pre>
 <hr>
-<h4>📦 cal::minute_of &#8212; Returns the minute of the hour of a Date</h4>
+<h4>📦 cal::minute &#8212; Returns the minute of the hour of a Date</h4>
 <h5>example1</h5>
-<pre>use cal
-now():::minute_of()</pre>
+<pre>2025-07-06T21:59:02.425Z::minute</pre>
 <h5>results</h5>
 <pre>
-33
+59
+
 </pre>
 <hr>
-<h4>📦 cal::month_of &#8212; Returns the month of the year of a Date</h4>
+<h4>📦 cal::month &#8212; Returns the month of the year of a Date</h4>
 <h5>example1</h5>
-<pre>use cal
-now():::month_of()</pre>
+<pre>2025-07-06T21:59:02.425Z::month</pre>
 <h5>results</h5>
 <pre>
-6
+7
+
 </pre>
 <hr>
-<h4>📦 cal::second_of &#8212; Returns the seconds of the minute of a Date</h4>
+<h4>📦 cal::second &#8212; Returns the seconds of the minute of a Date</h4>
 <h5>example1</h5>
-<pre>use cal
-now():::second_of()</pre>
+<pre>2025-07-06T21:59:02.425Z::second</pre>
 <h5>results</h5>
 <pre>
-21
+2
+
 </pre>
 <hr>
-<h4>📦 cal::year_of &#8212; Returns the year of a Date</h4>
+<h4>📦 cal::year &#8212; Returns the year of a Date</h4>
 <h5>example1</h5>
-<pre>use cal
-now():::year_of()</pre>
+<pre>2025-07-06T21:59:02.425Z::year</pre>
 <h5>results</h5>
 <pre>
 2025
+
+</pre>
+<hr>
+<h4>📦 cal::is_leapyear &#8212; Returns true if the year of the date falls on a leap year</h4>
+<h5>example1</h5>
+<pre>2024-07-06T21:00:29.412Z::is_leapyear</pre>
+<h5>results</h5>
+<pre>
+true
+
+</pre>
+<hr>
+<h4>📦 cal::is_leapyear &#8212; Returns true if the year of the date falls on a leap year</h4>
+<h5>example2</h5>
+<pre>2025-07-06T21:00:29.412Z::is_leapyear</pre>
+<h5>results</h5>
+<pre>
+false
+
+</pre>
+<hr>
+<h4>📦 cal::is_leapyear &#8212; Returns true if the year of the date falls on a leap year</h4>
+<h5>example3</h5>
+<pre>2024::is_leapyear</pre>
+<h5>results</h5>
+<pre>
+true
+
+</pre>
+<hr>
+<h4>📦 cal::is_leapyear &#8212; Returns true if the year of the date falls on a leap year</h4>
+<h5>example4</h5>
+<pre>2025::is_leapyear</pre>
+<h5>results</h5>
+<pre>
+false
+
+</pre>
+<hr>
+<h4>📦 cal::is_weekday &#8212; Returns true if the date falls on a weekday</h4>
+<h5>example1</h5>
+<pre>2025-07-06T21:00:29.412Z::is_weekday</pre>
+<h5>results</h5>
+<pre>
+false
+
+</pre>
+<hr>
+<h4>📦 cal::is_weekend &#8212; Returns true if the date falls on a weekend</h4>
+<h5>example1</h5>
+<pre>2025-07-06T21:00:29.412Z::is_weekend</pre>
+<h5>results</h5>
+<pre>
+true
+
 </pre>
 <hr>
 <h4>📦 cal::minus &#8212; Subtracts a duration from a date</h4>
 <h5>example1</h5>
-<pre>use cal, durations
-cal::minus(now(), 3:::days())</pre>
+<pre>2025-07-06T21:59:02.425Z::minus(3::days)</pre>
 <h5>results</h5>
 <pre>
-1969-12-29T00:00:00.000Z
-</pre>
-<hr>
-<h4>📦 cal::now &#8212; Returns the current local date and time</h4>
-<h5>example1</h5>
-<pre>cal::now()</pre>
-<h5>results</h5>
-<pre>
-2025-06-22T00:33:21.742Z
+2025-07-03T21:59:02.425Z
+
 </pre>
 <hr>
 <h4>📦 cal::plus &#8212; Adds a duration to a date</h4>
 <h5>example1</h5>
-<pre>use cal, durations
-cal::plus(now(), 30:::days())</pre>
+<pre>2025-07-06T21:59:02.425Z::plus(30::days)</pre>
 <h5>results</h5>
 <pre>
-1970-01-31T00:00:00.000Z
+2025-08-05T21:59:02.425Z
+
+</pre>
+<hr>
+<h4>📦 cal::to_millis &#8212; Returns the time in milliseconds of a date</h4>
+<h5>example1</h5>
+<pre>2025-07-06T21:59:02.425Z::to_millis</pre>
+<h5>results</h5>
+<pre>
+1751839142425
+
 </pre>
 <hr>
 <h4>📦 durations::days &#8212; Converts a number into the equivalent number of days</h4>
 <h5>example1</h5>
-<pre>use durations
-3:::days()</pre>
+<pre>3::days</pre>
 <h5>results</h5>
 <pre>
 259200000
+
 </pre>
 <hr>
 <h4>📦 durations::hours &#8212; Converts a number into the equivalent number of hours</h4>
 <h5>example1</h5>
-<pre>use durations
-8:::hours()</pre>
+<pre>8::hours</pre>
 <h5>results</h5>
 <pre>
 28800000
+
 </pre>
 <hr>
 <h4>📦 durations::millis &#8212; Converts a number into the equivalent number of millis</h4>
 <h5>example1</h5>
-<pre>use durations
-8:::millis()</pre>
+<pre>8::millis</pre>
 <h5>results</h5>
 <pre>
 8
+
 </pre>
 <hr>
 <h4>📦 durations::minutes &#8212; Converts a number into the equivalent number of minutes</h4>
 <h5>example1</h5>
-<pre>use durations
-30:::minutes()</pre>
+<pre>30::minutes</pre>
 <h5>results</h5>
 <pre>
 1800000
+
 </pre>
 <hr>
 <h4>📦 durations::seconds &#8212; Converts a number into the equivalent number of seconds</h4>
 <h5>example1</h5>
-<pre>use durations
-30:::seconds()</pre>
+<pre>30::seconds</pre>
 <h5>results</h5>
 <pre>
 30000
+
 </pre>
 <hr>
 <h4>📦 io::create_file &#8212; Creates a new file</h4>
@@ -364,6 +570,7 @@ cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
 52
+
 </pre>
 <hr>
 <h4>📦 io::exists &#8212; Returns true if the source path exists</h4>
@@ -372,6 +579,7 @@ cal::plus(now(), 30:::days())</pre>
 <h5>results</h5>
 <pre>
 true
+
 </pre>
 <hr>
 <h4>📦 io::read_text_file &#8212; Reads the contents of a text file into memory</h4>
@@ -382,7 +590,8 @@ file:::create_file(md5("**keep**this**secret**"))
 file:::read_text_file()</pre>
 <h5>results</h5>
 <pre>
-0v47338bd5f35bbb239092c36e30775b4a
+47338bd5-f35b-bb23-9092-c36e30775b4a
+
 </pre>
 <hr>
 <h4>📦 io::stderr &#8212; Writes a string to STDERR</h4>
@@ -391,6 +600,7 @@ file:::read_text_file()</pre>
 <h5>results</h5>
 <pre>
 true
+
 </pre>
 <hr>
 <h4>📦 io::stdout &#8212; Writes a string to STDOUT</h4>
@@ -399,6 +609,7 @@ true
 <h5>results</h5>
 <pre>
 true
+
 </pre>
 <hr>
 <h4>📦 math::abs &#8212; abs(x): Returns the absolute value of x.</h4>
@@ -407,6 +618,7 @@ true
 <h5>results</h5>
 <pre>
 81
+
 </pre>
 <hr>
 <h4>📦 math::ceil &#8212; ceil(x): Returns the smallest integer greater than or equal to x.</h4>
@@ -415,6 +627,7 @@ true
 <h5>results</h5>
 <pre>
 6
+
 </pre>
 <hr>
 <h4>📦 math::floor &#8212; floor(x): Returns the largest integer less than or equal to x.</h4>
@@ -423,6 +636,7 @@ true
 <h5>results</h5>
 <pre>
 5
+
 </pre>
 <hr>
 <h4>📦 math::max &#8212; max(a, b): Returns the larger of a and b</h4>
@@ -431,6 +645,7 @@ true
 <h5>results</h5>
 <pre>
 81
+
 </pre>
 <hr>
 <h4>📦 math::min &#8212; min(a, b): Returns the smaller of a and b.</h4>
@@ -439,6 +654,7 @@ true
 <h5>results</h5>
 <pre>
 78
+
 </pre>
 <hr>
 <h4>📦 math::pow &#8212; pow(x, y): Returns x raised to the power of y.</h4>
@@ -447,6 +663,7 @@ true
 <h5>results</h5>
 <pre>
 8
+
 </pre>
 <hr>
 <h4>📦 math::round &#8212; round(x): Rounds x to the nearest integer.</h4>
@@ -455,6 +672,7 @@ true
 <h5>results</h5>
 <pre>
 5
+
 </pre>
 <hr>
 <h4>📦 math::sqrt &#8212; sqrt(x): Returns the square root of x.</h4>
@@ -463,13 +681,14 @@ true
 <h5>results</h5>
 <pre>
 5
+
 </pre>
 <hr>
 <h4>📦 nsd::create_event_src &#8212; Creates a journaled event-source</h4>
 <h5>example1</h5>
 <pre>nsd::create_event_src(
    "examples.event_src.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )</pre>
 <h5>results</h5>
 <pre>
@@ -477,6 +696,7 @@ true
 | id | symbol | exchange | last_sale |
 |------------------------------------|
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 nsd::create_fn &#8212; Creates a journaled table function</h4>
@@ -487,7 +707,7 @@ true
        symbol: symbol,
        exchange: exchange,
        last_sale: last_sale * 2.0,
-       event_time: cal::now()
+       event_time: DateTime::new()
    })</pre>
 <h5>results</h5>
 <pre>
@@ -495,34 +715,37 @@ true
 | id | symbol | exchange | last_sale | event_time |
 |-------------------------------------------------|
 |-------------------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 nsd::drop &#8212; Deletes a dataframe from a namespace</h4>
 <h5>example1</h5>
-<pre>nsd::save('packages.remove.stocks', Table::new(
+<pre>nsd::save('packages.remove.stocks', Table(
     symbol: String(8),
     exchange: String(8),
     last_sale: f64
-))
+)::new)
 
 nsd::drop('packages.remove.stocks')
 nsd::exists('packages.remove.stocks')</pre>
 <h5>results</h5>
 <pre>
 false
+
 </pre>
 <hr>
 <h4>📦 nsd::exists &#8212; Returns true if the source path exists</h4>
 <h5>example1</h5>
-<pre>nsd::save('packages.exists.stocks', Table::new(
+<pre>nsd::save('packages.exists.stocks', Table(
    symbol: String(8),
    exchange: String(8),
    last_sale: f64
-))
+)::new)
 nsd::exists("packages.exists.stocks")</pre>
 <h5>results</h5>
 <pre>
 true
+
 </pre>
 <hr>
 <h4>📦 nsd::exists &#8212; Returns true if the source path exists</h4>
@@ -531,6 +754,7 @@ true
 <h5>results</h5>
 <pre>
 false
+
 </pre>
 <hr>
 <h4>📦 nsd::journal &#8212; Retrieves the journal for an event-source or table function</h4>
@@ -543,12 +767,12 @@ stocks = nsd::create_fn(
        symbol: symbol,
        exchange: exchange,
        last_sale: last_sale * 2.0,
-       ingest_time: cal::now()
+       ingest_time: DateTime::new()
    });
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-stocks:::journal()</pre>
+stocks::journal()</pre>
 <h5>results</h5>
 <pre>
 |------------------------------------|
@@ -558,21 +782,22 @@ stocks:::journal()</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 nsd::load &#8212; Loads a dataframe from a namespace</h4>
 <h5>example1</h5>
 <pre>let stocks =
-   nsd::save('packages.save_load.stocks', Table::new(
+   nsd::save('packages.save_load.stocks', Table(
        symbol: String(8),
        exchange: String(8),
        last_sale: f64
-   ))
+   )::new)
 
-let rows = 
+let rows =
    [{ symbol: "CAZ", exchange: "AMEX", last_sale: 65.13 },
     { symbol: "BAL", exchange: "NYSE", last_sale: 82.78 },
-    { symbol: "RCE", exchange: "NASDAQ", last_sale: 124.09 }] 
+    { symbol: "RCE", exchange: "NASDAQ", last_sale: 124.09 }]
 
 rows ~> stocks
 
@@ -586,6 +811,7 @@ nsd::load('packages.save_load.stocks')</pre>
 | 1  | BAL    | NYSE     | 82.78     |
 | 2  | RCE    | NASDAQ   | 124.09    |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 nsd::replay &#8212; Reconstructs the state of a journaled table</h4>
@@ -603,21 +829,22 @@ stocks = nsd::create_fn(
 [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-stocks:::replay()</pre>
+stocks::replay()</pre>
 <h5>results</h5>
 <pre>
 3
+
 </pre>
 <hr>
 <h4>📦 nsd::resize &#8212; Changes the size of a dataframe</h4>
 <h5>example1</h5>
 <pre>use nsd
 let stocks =
-   nsd::save('packages.resize.stocks', Table::new(
+   nsd::save('packages.resize.stocks', Table(
        symbol: String(8),
        exchange: String(8),
        last_sale: f64
-   ))
+   )::new)
 [{ symbol: "TCO", exchange: "NYSE", last_sale: 38.53 },
  { symbol: "SHMN", exchange: "NYSE", last_sale: 6.57 },
  { symbol: "HMU", exchange: "NASDAQ", last_sale: 27.12 }] ~> stocks
@@ -630,16 +857,17 @@ stocks</pre>
 |------------------------------------|
 | 0  | TCO    | NYSE     | 38.53     |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 nsd::save &#8212; Creates a new dataframe</h4>
 <h5>example1</h5>
 <pre>let stocks =
-   nsd::save('packages.save.stocks', Table::new(
+   nsd::save('packages.save.stocks', Table(
        symbol: String(8),
        exchange: String(8),
        last_sale: f64
-   ))
+   )::new)
 [{ symbol: "TCO", exchange: "NYSE", last_sale: 38.53 },
  { symbol: "SHMN", exchange: "NYSE", last_sale: 6.57 },
  { symbol: "HMU", exchange: "NASDAQ", last_sale: 27.12 }] ~> stocks
@@ -653,17 +881,19 @@ stocks</pre>
 | 1  | SHMN   | NYSE     | 6.57      |
 | 2  | HMU    | NASDAQ   | 27.12     |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 os::call &#8212; Invokes an operating system application</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.os.call",
-    Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+    Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 os::call("chmod", "777", oxide::home())</pre>
 <h5>results</h5>
 <pre>
+
 
 </pre>
 <hr>
@@ -673,13 +903,13 @@ os::call("chmod", "777", oxide::home())</pre>
 <h5>results</h5>
 <pre>
 true
+
 </pre>
 <hr>
 <h4>📦 os::current_dir &#8212; Returns the current directory</h4>
 <h5>example1</h5>
-<pre>use str
-cur_dir = os::current_dir()
-prefix = if(cur_dir:::ends_with("core"), "../..", ".")
+<pre>cur_dir = os::current_dir()
+prefix = if(cur_dir::ends_with("core"), "../..", ".")
 path_str = prefix + "/demoes/language/include_file.oxide"
 include path_str</pre>
 <h5>results</h5>
@@ -691,6 +921,7 @@ include path_str</pre>
 | 1  | BOOM   | NYSE     | 56.88     |
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 os::env &#8212; Returns a table of the OS environment variables</h4>
@@ -698,59 +929,62 @@ include path_str</pre>
 <pre>os::env()</pre>
 <h5>results</h5>
 <pre>
-|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| id | key                        | value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | BUN_INSTALL                | /Users/ldaniels/.bun                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 1  | CARGO                      | /Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 2  | CARGO_HOME                 | /Users/ldaniels/.cargo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 3  | CARGO_MANIFEST_DIR         | /Users/ldaniels/GitHub/oxide/src/core                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 4  | CARGO_MANIFEST_PATH        | /Users/ldaniels/GitHub/oxide/src/core/Cargo.toml                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 5  | CARGO_PKG_AUTHORS          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 6  | CARGO_PKG_DESCRIPTION      |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 7  | CARGO_PKG_HOMEPAGE         |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 8  | CARGO_PKG_LICENSE          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 9  | CARGO_PKG_LICENSE_FILE     |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 10 | CARGO_PKG_NAME             | core                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 11 | CARGO_PKG_README           |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 12 | CARGO_PKG_REPOSITORY       |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 13 | CARGO_PKG_RUST_VERSION     |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 14 | CARGO_PKG_VERSION          | 0.1.0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 15 | CARGO_PKG_VERSION_MAJOR    | 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 16 | CARGO_PKG_VERSION_MINOR    | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 17 | CARGO_PKG_VERSION_PATCH    | 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 18 | CARGO_PKG_VERSION_PRE      |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 19 | COMMAND_MODE               | unix2003                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 20 | DYLD_FALLBACK_LIBRARY_PATH | /Users/ldaniels/GitHub/oxide/target/debug/build/curl-sys-976ef1fd41b2ae67/out/build:/Users/ldaniels/GitHub/oxide/target/debug/build/libnghttp2-sys-03d0e22189823925/out/i/lib:/Users/ldaniels/GitHub/oxide/target/debug/build/zstd-sys-b2743e594d963e4d/out:/Users/ldaniels/GitHub/oxide/target/debug/deps:/Users/ldaniels/GitHub/oxide/target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib |
-| 21 | HOME                       | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 22 | JAVA_HOME                  | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 23 | LC_CTYPE                   | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 24 | LOGNAME                    | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 25 | OLDPWD                     | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 26 | PATH                       | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:.                                                                                                                                  |
-| 27 | PWD                        | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 28 | RR_REAL_RUSTDOC            | /Users/ldaniels/.cargo/bin/rustdoc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 29 | RUSTC                      | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| 30 | RUSTC_BOOTSTRAP            | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 31 | RUSTDOC                    | /Users/ldaniels/Library/Application Support/JetBrains/IntelliJIdea2025.1/plugins/intellij-rust/bin/mac/aarch64/intellij-rust-native-helper                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| 32 | RUSTUP_HOME                | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 33 | RUSTUP_TOOLCHAIN           | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 34 | RUST_BACKTRACE             | short                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| 35 | RUST_RECURSION_COUNT       | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 36 | SDKMAN_CANDIDATES_API      | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 37 | SDKMAN_CANDIDATES_DIR      | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 38 | SDKMAN_DIR                 | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 39 | SDKMAN_PLATFORM            | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 40 | SHELL                      | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 41 | SSH_AUTH_SOCK              | /private/tmp/com.apple.launchd.lSmiPPAhaN/Listeners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 42 | TERM                       | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 43 | TMPDIR                     | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| 44 | USER                       | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 45 | XPC_FLAGS                  | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 46 | XPC_SERVICE_NAME           | application.com.jetbrains.intellij.505803.110144030                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 47 | __CFBundleIdentifier       | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 48 | __CF_USER_TEXT_ENCODING    | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| id | key                         | value                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | BUN_INSTALL                 | /Users/ldaniels/.bun                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 1  | CARGO                       | /Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/bin/cargo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 2  | CARGO_HOME                  | /Users/ldaniels/.cargo                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 3  | CARGO_LLVM_COV              | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 4  | CARGO_MANIFEST_DIR          | /Users/ldaniels/GitHub/oxide/src/core                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 5  | CARGO_MANIFEST_PATH         | /Users/ldaniels/GitHub/oxide/src/core/Cargo.toml                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 6  | CARGO_PKG_AUTHORS           |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 7  | CARGO_PKG_DESCRIPTION       |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 8  | CARGO_PKG_HOMEPAGE          |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 9  | CARGO_PKG_LICENSE           |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 10 | CARGO_PKG_LICENSE_FILE      |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 11 | CARGO_PKG_NAME              | core                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 12 | CARGO_PKG_README            |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 13 | CARGO_PKG_REPOSITORY        |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 14 | CARGO_PKG_RUST_VERSION      |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 15 | CARGO_PKG_VERSION           | 0.1.0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 16 | CARGO_PKG_VERSION_MAJOR     | 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 17 | CARGO_PKG_VERSION_MINOR     | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 18 | CARGO_PKG_VERSION_PATCH     | 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 19 | CARGO_PKG_VERSION_PRE       |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 20 | COMMAND_MODE                | unix2003                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 21 | DYLD_FALLBACK_LIBRARY_PATH  | /Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/curl-sys-4df64ca9a12dc1ef/out/build:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/libnghttp2-sys-a03ea848d17920a3/out/i/lib:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/psm-b14dc0a618ce3260/out:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/zstd-sys-0997cf218e518f20/out:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/deps:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib |
+| 22 | HOME                        | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 23 | IJ_RESTARTER_LOG            | /Users/ldaniels/Library/Logs/JetBrains/IntelliJIdea2025.1/restarter.log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 24 | JAVA_HOME                   | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 25 | LC_CTYPE                    | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 26 | LLVM_PROFILE_FILE           | /Users/ldaniels/GitHub/oxide/target/llvm-cov-target/oxide-%p-%m.profraw                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 27 | LOGNAME                     | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 28 | OLDPWD                      | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 29 | PATH                        | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:.                                                                                                                                                                                                                                                                                                           |
+| 30 | PWD                         | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 31 | RUSTC                       | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 32 | RUSTFLAGS                   | -C instrument-coverage --cfg=trybuild_no_target                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 33 | RUSTUP_HOME                 | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 34 | RUSTUP_TOOLCHAIN            | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 35 | RUST_BACKTRACE              | short                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 36 | RUST_RECURSION_COUNT        | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 37 | SDKMAN_CANDIDATES_API       | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 38 | SDKMAN_CANDIDATES_DIR       | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 39 | SDKMAN_DIR                  | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 40 | SDKMAN_PLATFORM             | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 41 | SHELL                       | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 42 | SSH_AUTH_SOCK               | /private/tmp/com.apple.launchd.9xJlkubfiQ/Listeners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 43 | TERM                        | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 44 | TMPDIR                      | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 45 | USER                        | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 46 | XPC_FLAGS                   | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 47 | XPC_SERVICE_NAME            | application.com.jetbrains.intellij.505803.123145134.575263A5-06DE-4476-8C71-D548DCA38225                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 48 | __CFBundleIdentifier        | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 49 | __CF_USER_TEXT_ENCODING     | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 50 | __LLVM_PROFILE_RT_INIT_ONCE | __LLVM_PROFILE_RT_INIT_ONCE                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 oxide::compile &#8212; Compiles source code from a string input</h4>
@@ -760,6 +994,7 @@ code()</pre>
 <h5>results</h5>
 <pre>
 16
+
 </pre>
 <hr>
 <h4>📦 oxide::debug &#8212; Compiles source code from a string input; returning a debug string</h4>
@@ -768,6 +1003,7 @@ code()</pre>
 <h5>results</h5>
 <pre>
 Ok(Pow(Literal(Number(I64Value(2))), Literal(Number(I64Value(4)))))
+
 </pre>
 <hr>
 <h4>📦 oxide::eval &#8212; Evaluates a string containing Oxide code</h4>
@@ -778,6 +1014,7 @@ oxide::eval("a + b")</pre>
 <h5>results</h5>
 <pre>
 Hello World
+
 </pre>
 <hr>
 <h4>📦 oxide::help &#8212; Integrated help function</h4>
@@ -785,13 +1022,14 @@ Hello World
 <pre>oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|---------------------------------------------------------------------------------------------------------------------------|
-| id | name    | module    | signature                  | description                                             | returns |
-|---------------------------------------------------------------------------------------------------------------------------|
-| 0  | seconds | durations | durations::seconds(n: i64) | Converts a number into the equivalent number of seconds | i64     |
-| 1  | minutes | durations | durations::minutes(n: i64) | Converts a number into the equivalent number of minutes | i64     |
-| 2  | millis  | durations | durations::millis(n: i64)  | Converts a number into the equivalent number of millis  | i64     |
-|---------------------------------------------------------------------------------------------------------------------------|
+|-----------------------------------------------------------------------------------------------------------------------------------------|
+| id | name       | module | signature                                 | description                                            | returns |
+|-----------------------------------------------------------------------------------------------------------------------------------------|
+| 0  | send_text  | ws     | ws::send_text(a: UUID, b: String)         | Transfers a text message via a web socket connection   | String  |
+| 1  | send_bytes | ws     | ws::send_bytes(a: UUID, b: Bytes)         | Transfers a binary message via a web socket connection | String  |
+| 2  | connect    | ws     | ws::connect(a: String, b: i64, c: String) | Establishes a web socket connection                    | UUID    |
+|-----------------------------------------------------------------------------------------------------------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 oxide::home &#8212; Returns the Oxide home directory path</h4>
@@ -800,6 +1038,7 @@ Hello World
 <h5>results</h5>
 <pre>
 /Users/ldaniels/oxide_db
+
 </pre>
 <hr>
 <h4>📦 oxide::inspect &#8212; Returns a table describing the structure of a model</h4>
@@ -813,6 +1052,7 @@ Hello World
 | 0  | x = 1     | SetVariables(Identifier("x"), Literal(Number(I64Value(1))))                        |
 | 1  | x = x + 1 | SetVariables(Identifier("x"), Plus(Identifier("x"), Literal(Number(I64Value(1))))) |
 |-----------------------------------------------------------------------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 oxide::inspect &#8212; Returns a table describing the structure of a model</h4>
@@ -825,6 +1065,7 @@ Hello World
 |-------------------------------------------------------------------------------------------------------------------------------------------------------|
 | 0  | stock::is_this_you("ABC") | ColonColon(Identifier("stock"), FunctionCall { fx: Identifier("is_this_you"), args: [Literal(StringValue("ABC"))] }) |
 |-------------------------------------------------------------------------------------------------------------------------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 oxide::printf &#8212; C-style "printf" function</h4>
@@ -833,6 +1074,7 @@ Hello World
 <h5>results</h5>
 <pre>
 true
+
 </pre>
 <hr>
 <h4>📦 oxide::println &#8212; Print line function</h4>
@@ -841,6 +1083,7 @@ true
 <h5>results</h5>
 <pre>
 true
+
 </pre>
 <hr>
 <h4>📦 oxide::reset &#8212; Clears the scope of all user-defined objects</h4>
@@ -849,6 +1092,7 @@ true
 <h5>results</h5>
 <pre>
 true
+
 </pre>
 <hr>
 <h4>📦 oxide::sprintf &#8212; C-style "sprintf" function</h4>
@@ -857,6 +1101,7 @@ true
 <h5>results</h5>
 <pre>
 Hello World
+
 </pre>
 <hr>
 <h4>📦 oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
@@ -864,7 +1109,8 @@ Hello World
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-c34521ec-0615-402e-96e7-00e917d31013
+08024513-6b71-4120-967e-0e01e2b33c74
+
 </pre>
 <hr>
 <h4>📦 oxide::version &#8212; Returns the Oxide version</h4>
@@ -872,127 +1118,167 @@ c34521ec-0615-402e-96e7-00e917d31013
 <pre>oxide::version()</pre>
 <h5>results</h5>
 <pre>
-0.46
+0.48
+
 </pre>
 <hr>
 <h4>📦 str::ends_with &#8212; Returns true if string `a` ends with string `b`</h4>
 <h5>example1</h5>
-<pre>str::ends_with('Hello World', 'World')</pre>
+<pre>'Hello World'::ends_with('World')</pre>
 <h5>results</h5>
 <pre>
 true
+
 </pre>
 <hr>
 <h4>📦 str::format &#8212; Returns an argument-formatted string</h4>
 <h5>example1</h5>
-<pre>str::format("This {} the {}", "is", "way")</pre>
+<pre>"This {} the {}"::format("is", "way")</pre>
 <h5>results</h5>
 <pre>
 This is the way
+
 </pre>
 <hr>
-<h4>📦 str::index_of &#8212; Returns the index of string `b` in string `a`</h4>
+<h4>📦 str::position &#8212; Returns the index of string `b` in string `a`</h4>
 <h5>example1</h5>
-<pre>str::index_of('The little brown fox', 'brown')</pre>
+<pre>'The little brown fox'::position('brown')</pre>
 <h5>results</h5>
 <pre>
 11
+
 </pre>
 <hr>
 <h4>📦 str::join &#8212; Combines an array into a string</h4>
 <h5>example1</h5>
-<pre>str::join(['1', 5, 9, '13'], ', ')</pre>
+<pre>['1', 5, 9, '13']::join(', ')</pre>
 <h5>results</h5>
 <pre>
 1, 5, 9, 13
+
 </pre>
 <hr>
 <h4>📦 str::left &#8212; Returns n-characters from left-to-right</h4>
 <h5>example1</h5>
-<pre>str::left('Hello World', 5)</pre>
+<pre>'Hello World'::left(5)</pre>
 <h5>results</h5>
 <pre>
 Hello
+
 </pre>
 <hr>
 <h4>📦 str::len &#8212; Returns the number of characters contained in the string</h4>
 <h5>example1</h5>
-<pre>str::len('The little brown fox')</pre>
+<pre>'The little brown fox'::len()</pre>
 <h5>results</h5>
 <pre>
 20
+
 </pre>
 <hr>
 <h4>📦 str::right &#8212; Returns n-characters from right-to-left</h4>
 <h5>example1</h5>
-<pre>str::right('Hello World', 5)</pre>
+<pre>'Hello World'::right(5)</pre>
 <h5>results</h5>
 <pre>
 World
+
 </pre>
 <hr>
 <h4>📦 str::split &#8212; Splits string `a` by delimiter string `b`</h4>
 <h5>example1</h5>
-<pre>str::split('Hello,there World', ' ,')</pre>
+<pre>'Hello,there World'::split(' ,')</pre>
 <h5>results</h5>
 <pre>
 ["Hello", "there", "World"]
+
 </pre>
 <hr>
 <h4>📦 str::starts_with &#8212; Returns true if string `a` starts with string `b`</h4>
 <h5>example1</h5>
-<pre>str::starts_with('Hello World', 'World')</pre>
+<pre>'Hello World'::starts_with('World')</pre>
 <h5>results</h5>
 <pre>
 false
+
 </pre>
 <hr>
 <h4>📦 str::strip_margin &#8212; Returns the string with all characters on each line are striped up to the margin character</h4>
 <h5>example1</h5>
-<pre>str::strip_margin("
-|Code example:
-|
-|stocks
-|where exchange is 'NYSE'
-", '|')</pre>
+<pre>"|Code example:
+ |
+ |stocks
+ |where exchange is 'NYSE'
+ |"::strip_margin('|')</pre>
 <h5>results</h5>
 <pre>
-
 Code example:
 
 stocks
 where exchange is 'NYSE'
+
+
 </pre>
 <hr>
 <h4>📦 str::substring &#8212; Returns a substring of string `s` from `m` to `n`</h4>
 <h5>example1</h5>
-<pre>str::substring('Hello World', 0, 5)</pre>
+<pre>'Hello World'::substring(0, 5)</pre>
 <h5>results</h5>
 <pre>
 Hello
+
 </pre>
 <hr>
 <h4>📦 str::superscript &#8212; Returns a superscript of a number `n`</h4>
 <h5>example1</h5>
-<pre>str::superscript(5)</pre>
+<pre>5::superscript()</pre>
 <h5>results</h5>
 <pre>
 ⁵
+
+</pre>
+<hr>
+<h4>📦 str::to_lowercase &#8212; Converts a value to lowercase text-based representation</h4>
+<h5>example1</h5>
+<pre>'Hello'::to_lowercase</pre>
+<h5>results</h5>
+<pre>
+hello
+
 </pre>
 <hr>
 <h4>📦 str::to_string &#8212; Converts a value to its text-based representation</h4>
 <h5>example1</h5>
-<pre>str::to_string(125.75)</pre>
+<pre>125.75::to(String)</pre>
 <h5>results</h5>
 <pre>
 125.75
+
+</pre>
+<hr>
+<h4>📦 str::to_uppercase &#8212; Converts a value to uppercase text-based representation</h4>
+<h5>example1</h5>
+<pre>'Hello'::to_uppercase</pre>
+<h5>results</h5>
+<pre>
+HELLO
+
+</pre>
+<hr>
+<h4>📦 str::trim &#8212; Trims whitespace from a string</h4>
+<h5>example1</h5>
+<pre>' hello '::trim</pre>
+<h5>results</h5>
+<pre>
+hello
+
 </pre>
 <hr>
 <h4>📦 tools::compact &#8212; Shrinks a table by removing deleted rows</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.compact.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -1012,15 +1298,16 @@ stocks</pre>
 | 3  | GOTO   | OTC      | 0.1428    |
 | 5  | BOOM   | NASDAQ   | 0.0872    |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 tools::describe &#8212; Describes a table or structure</h4>
 <h5>example1</h5>
-<pre>tools::describe({
+<pre>{
    symbol: "BIZ",
    exchange: "NYSE",
    last_sale: 23.66
-})</pre>
+}::describe()</pre>
 <h5>results</h5>
 <pre>
 |----------------------------------------------------------|
@@ -1030,6 +1317,7 @@ stocks</pre>
 | 1  | exchange  | String(4) | NYSE          | true        |
 | 2  | last_sale | f64       | 23.66         | true        |
 |----------------------------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 tools::describe &#8212; Describes a table or structure</h4>
@@ -1042,7 +1330,7 @@ stocks</pre>
     | ABC    | AMEX     | 24.98     | 2    |
     | JET    | NASDAQ   | 64.24     | 3    |
     |--------------------------------------|
-tools::describe(stocks)</pre>
+stocks::describe()</pre>
 <h5>results</h5>
 <pre>
 |----------------------------------------------------------|
@@ -1053,18 +1341,19 @@ tools::describe(stocks)</pre>
 | 2  | last_sale | f64       | null          | true        |
 | 3  | rank      | i64       | null          | true        |
 |----------------------------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 tools::fetch &#8212; Retrieves a raw structure from a table</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.fetch.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-tools::fetch(stocks, 2)</pre>
+stocks::fetch(2)</pre>
 <h5>results</h5>
 <pre>
 |------------------------------------|
@@ -1072,15 +1361,46 @@ tools::fetch(stocks, 2)</pre>
 |------------------------------------|
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 tools::filter &#8212; Filters a collection based on a function</h4>
 <h5>example1</h5>
-<pre>tools::filter(1..11, n -> (n % 2) == 0)</pre>
+<pre>(1..11)::filter(n -> (n % 2) == 0)</pre>
 <h5>results</h5>
 <pre>
 [2, 4, 6, 8, 10]
+
 </pre>
+<hr>
+<h4>📦 tools::latest &#8212; Returns the row_id of last inserted record</h4>
+<h5>example1</h5>
+<pre>stocks = nsd::save(
+   "packages.tools_latest.stocks",
+    |--------------------------------|
+    | symbol | exchange  | last_sale |
+    |--------------------------------|
+    | GIF    | NYSE      | 11.75     |
+    | TRX    | NASDAQ    | 32.96     |
+    | SHMN   | OTCBB     | 5.02      |
+    | XCD    | OTCBB     | 1.37      |
+    | DRMQ   | OTHER_OTC | 0.02      |
+    | JTRQ   | OTHER_OTC | 0.0001    |
+    |--------------------------------|
+)
+delete stocks where last_sale < 1
+row_id = stocks::latest()
+stocks[row_id]</pre>
+<h5>results</h5>
+
+```json
+{
+  "exchange": "OTCBB",
+  "last_sale": 1.37,
+  "symbol": "XCD"
+}
+```
+            
 <hr>
 <h4>📦 tools::len &#8212; Returns the length of a table</h4>
 <h5>example1</h5>
@@ -1088,52 +1408,52 @@ tools::fetch(stocks, 2)</pre>
    "examples.table_len.stocks",
    [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
     { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
-    { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] 
+    { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }]
 )
-tools::len(stocks)</pre>
+stocks::len()</pre>
 <h5>results</h5>
 <pre>
 3
+
 </pre>
 <hr>
 <h4>📦 tools::map &#8212; Transform a collection based on a function</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.map_over_table.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
  { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
  { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
-use tools
-stocks:::map(row -> {
+stocks::map(row -> {
     symbol: symbol,
     exchange: exchange,
     last_sale: last_sale,
-    processed_time: cal::now()
+    processed_time: DateTime::new()
 })</pre>
 <h5>results</h5>
 <pre>
 |---------------------------------------------------------------|
 | id | symbol | exchange | last_sale | processed_time           |
 |---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-06-22T00:33:24.669Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-06-22T00:33:24.670Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-06-22T00:33:24.671Z |
+| 0  | WKRP   | NYSE     | 11.11     | 2025-07-26T18:00:09.287Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-07-26T18:00:09.287Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-07-26T18:00:09.288Z |
 |---------------------------------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 tools::pop &#8212; Removes and returns a value or object from a Sequence</h4>
 <h5>example1</h5>
-<pre>use tools
-stocks = nsd::save(
+<pre>stocks = nsd::save(
    "examples.tools_pop.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-stocks:::pop()</pre>
+stocks::pop()</pre>
 <h5>results</h5>
 <pre>
 |------------------------------------|
@@ -1141,19 +1461,19 @@ stocks:::pop()</pre>
 |------------------------------------|
 | 2  | JET    | NASDAQ   | 32.12     |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 tools::push &#8212; Appends a value or object to a Sequence</h4>
 <h5>example1</h5>
-<pre>use tools
-stocks = nsd::save(
+<pre>stocks = nsd::save(
    "examples.tools_push.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-stocks:::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
+stocks::push({ symbol: "XYZ", exchange: "NASDAQ", last_sale: 24.78 })
 stocks</pre>
 <h5>results</h5>
 <pre>
@@ -1165,14 +1485,12 @@ stocks</pre>
 | 2  | JET    | NASDAQ   | 32.12     |
 | 3  | XYZ    | NASDAQ   | 24.78     |
 |------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 tools::reverse &#8212; Returns a reverse copy of a table, string or array</h4>
 <h5>example1</h5>
-<pre>use tools
-to_table(reverse(
-   ['cat', 'dog', 'ferret', 'mouse']
-))</pre>
+<pre>['cat', 'dog', 'ferret', 'mouse']::reverse::to(Table)</pre>
 <h5>results</h5>
 <pre>
 |-------------|
@@ -1183,22 +1501,14 @@ to_table(reverse(
 | 2  | dog    |
 | 3  | cat    |
 |-------------|
-</pre>
-<hr>
-<h4>📦 tools::row_id &#8212; Returns the unique ID for the last retrieved row</h4>
-<h5>example1</h5>
-<pre>tools::row_id()</pre>
-<h5>results</h5>
-<pre>
-0
+
 </pre>
 <hr>
 <h4>📦 tools::scan &#8212; Returns existence metadata for a table</h4>
 <h5>example1</h5>
-<pre>use tools
-stocks = nsd::save(
+<pre>stocks = nsd::save(
    "examples.scan.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 12.33 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
@@ -1206,7 +1516,7 @@ stocks = nsd::save(
  { symbol: "GOTO", exchange: "OTC", last_sale: 0.1442 },
  { symbol: "XYZ", exchange: "NYSE", last_sale: 0.0289 }] ~> stocks
 delete stocks where last_sale > 1.0
-stocks:::scan()</pre>
+stocks::scan()</pre>
 <h5>results</h5>
 <pre>
 |------------------------------------|
@@ -1218,89 +1528,133 @@ stocks:::scan()</pre>
 | 3  | GOTO   | OTC      | 0.1442    |
 | 4  | XYZ    | NYSE     | 0.0289    |
 |------------------------------------|
+
 </pre>
 <hr>
-<h4>📦 tools::to_array &#8212; Converts a collection into an array</h4>
+<h4>📦 tools::shuffle &#8212; Shuffles a collection in random order</h4>
 <h5>example1</h5>
-<pre>tools::to_array("Hello")</pre>
+<pre>stocks = nsd::save(
+   "examples.shuffle.stocks",
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
+)
+[{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+ { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+ { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+ { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+ { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
+stocks::shuffle()
+stocks</pre>
 <h5>results</h5>
 <pre>
-["H", "e", "l", "l", "o"]
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 0  | ABC    | AMEX     | 11.11     |
+| 2  | BIZ    | NYSE     | 23.66     |
+| 3  | GOTO   | OTC      | 0.1428    |
+| 4  | BOOM   | NASDAQ   | 0.0872    |
+| 1  | UNO    | OTC      | 0.2456    |
+|------------------------------------|
+
 </pre>
 <hr>
 <h4>📦 tools::to_csv &#8212; Converts a collection to CSV format</h4>
 <h5>example1</h5>
-<pre>use tools::to_csv
-stocks = nsd::save(
+<pre>stocks = nsd::save(
    "examples.csv.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
  { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
  { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-stocks:::to_csv()</pre>
+stocks::to_csv()</pre>
 <h5>results</h5>
 <pre>
 [""ABC","AMEX",11.11", ""UNO","OTC",0.2456", ""BIZ","NYSE",23.66", ""GOTO","OTC",0.1428", ""BOOM","NASDAQ",0.0872"]
+
 </pre>
 <hr>
 <h4>📦 tools::to_json &#8212; Converts a collection to JSON format</h4>
 <h5>example1</h5>
-<pre>use tools::to_json
-stocks = nsd::save(
+<pre>stocks = nsd::save(
    "examples.json.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
  { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
  { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
  { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
  { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 }] ~> stocks
-stocks:::to_json()</pre>
+stocks::to_json()</pre>
 <h5>results</h5>
 <pre>
 ["{"symbol":"ABC","exchange":"AMEX","last_sale":11.11}", "{"symbol":"UNO","exchange":"OTC","last_sale":0.2456}", "{"symbol":"BIZ","exchange":"NYSE","last_sale":23.66}", "{"symbol":"GOTO","exchange":"OTC","last_sale":0.1428}", "{"symbol":"BOOM","exchange":"NASDAQ","last_sale":0.0872}"]
+
 </pre>
 <hr>
-<h4>📦 tools::to_table &#8212; Converts an object into a to_table</h4>
+<h4>📦 util::base36_decode &#8212; Converts a Base36 string to binary</h4>
 <h5>example1</h5>
-<pre>tools::to_table(['cat', 'dog', 'ferret', 'mouse'])</pre>
+<pre>'C3PO'::base36_decode</pre>
 <h5>results</h5>
 <pre>
-|-------------|
-| id | value  |
-|-------------|
-| 0  | cat    |
-| 1  | dog    |
-| 2  | ferret |
-| 3  | mouse  |
-|-------------|
+564684
+
 </pre>
 <hr>
-<h4>📦 util::base64 &#8212; Translates bytes into Base 64</h4>
+<h4>📦 util::base36_encode &#8212; Translates bytes into Base36</h4>
 <h5>example1</h5>
-<pre>util::base64('Hello World')</pre>
+<pre>564684::base36_encode</pre>
+<h5>results</h5>
+<pre>
+C3PO
+
+</pre>
+<hr>
+<h4>📦 util::base62_decode &#8212; Converts a Base62 string to binary</h4>
+<h5>example1</h5>
+<pre>'Hello World'::base62_encode::base62_decode::to(String)</pre>
+<h5>results</h5>
+<pre>
+     Hello World
+
+</pre>
+<hr>
+<h4>📦 util::base62_encode &#8212; Translates bytes into Base62</h4>
+<h5>example1</h5>
+<pre>'Hello World'::base62_encode</pre>
+<h5>results</h5>
+<pre>
+73XpUgyMwkGr29M
+
+</pre>
+<hr>
+<h4>📦 util::base64_decode &#8212; Converts a Base64 string to binary</h4>
+<h5>example1</h5>
+<pre>'Hello World'::base64_encode::base64_decode::to(String)</pre>
+<h5>results</h5>
+<pre>
+Hello World
+
+</pre>
+<hr>
+<h4>📦 util::base64_encode &#8212; Translates bytes into Base64</h4>
+<h5>example1</h5>
+<pre>'Hello World'::base64_encode</pre>
 <h5>results</h5>
 <pre>
 SGVsbG8gV29ybGQ=
+
 </pre>
 <hr>
-<h4>📦 util::to_binary &#8212; Translates a numeric value into binary</h4>
+<h4>📦 util::get_type &#8212; Returns the object's type</h4>
 <h5>example1</h5>
-<pre>util::to_binary(0b1011 & 0b1101)</pre>
+<pre>'Z'::get_type()</pre>
 <h5>results</h5>
 <pre>
-1001
-</pre>
-<hr>
-<h4>📦 util::gzip &#8212; Compresses bytes via gzip</h4>
-<h5>example1</h5>
-<pre>util::gzip('Hello World')</pre>
-<h5>results</h5>
-<pre>
-0v1f8b08000000000000fff348cdc9c95708cf2fca49010056b1174a0b000000
+Char
+
 </pre>
 <hr>
 <h4>📦 util::gunzip &#8212; Decompresses bytes via gzip</h4>
@@ -1308,7 +1662,17 @@ SGVsbG8gV29ybGQ=
 <pre>util::gunzip(util::gzip('Hello World'))</pre>
 <h5>results</h5>
 <pre>
-0v48656c6c6f20576f726c64
+0B48656c6c6f20576f726c64
+
+</pre>
+<hr>
+<h4>📦 util::gzip &#8212; Compresses bytes via gzip</h4>
+<h5>example1</h5>
+<pre>util::gzip('Hello World')</pre>
+<h5>results</h5>
+<pre>
+0B1f8b08000000000000fff348cdc9c95708cf2fca49010056b1174a0b000000
+
 </pre>
 <hr>
 <h4>📦 util::hex &#8212; Translates bytes into hexadecimal</h4>
@@ -1317,6 +1681,25 @@ SGVsbG8gV29ybGQ=
 <h5>results</h5>
 <pre>
 48656c6c6f20576f726c64
+
+</pre>
+<hr>
+<h4>📦 util::is_a &#8212; Indicates where a value is of a specific type</h4>
+<h5>example1</h5>
+<pre>'A'::is_a(Char)</pre>
+<h5>results</h5>
+<pre>
+true
+
+</pre>
+<hr>
+<h4>📦 util::is_a &#8212; Indicates where a value is of a specific type</h4>
+<h5>example2</h5>
+<pre>233::is_a(Char)</pre>
+<h5>results</h5>
+<pre>
+false
+
 </pre>
 <hr>
 <h4>📦 util::md5 &#8212; Creates a MD5 digest</h4>
@@ -1324,7 +1707,17 @@ SGVsbG8gV29ybGQ=
 <pre>util::md5('Hello World')</pre>
 <h5>results</h5>
 <pre>
-0vb10a8db164e0754105b7a99be72e3fe5
+b10a8db1-64e0-7541-05b7-a99be72e3fe5
+
+</pre>
+<hr>
+<h4>📦 util::random &#8212; Returns a random numeric value</h4>
+<h5>example1</h5>
+<pre>util::random()</pre>
+<h5>results</h5>
+<pre>
+1789564348963069182
+
 </pre>
 <hr>
 <h4>📦 util::round &#8212; Rounds a Float to a specific number of decimal places</h4>
@@ -1333,94 +1726,42 @@ SGVsbG8gV29ybGQ=
 <h5>results</h5>
 <pre>
 1.43
+
 </pre>
 <hr>
-<h4>📦 util::to &#8212; Converts a value to the desired type</h4>
+<h4>📦 http::start &#8212; Starts a local HTTP service</h4>
 <h5>example1</h5>
-<pre>util::to(1376438453123, Date)</pre>
-<h5>results</h5>
-<pre>
-2013-08-14T00:00:53.123Z
-</pre>
-<hr>
-<h4>📦 util::to_ascii &#8212; Converts an integer to ASCII</h4>
-<h5>example1</h5>
-<pre>util::to_ascii(177)</pre>
-<h5>results</h5>
-<pre>
-±
-</pre>
-<hr>
-<h4>📦 util::to_date &#8212; Converts a value to Date</h4>
-<h5>example1</h5>
-<pre>util::to_date(177)</pre>
-<h5>results</h5>
-<pre>
-1970-01-01T00:00:00.177Z
-</pre>
-<hr>
-<h4>📦 util::to_f64 &#8212; Converts a value to f64</h4>
-<h5>example1</h5>
-<pre>util::to_f64(4321)</pre>
-<h5>results</h5>
-<pre>
-4321
-</pre>
-<hr>
-<h4>📦 util::to_i64 &#8212; Converts a value to i64</h4>
-<h5>example1</h5>
-<pre>util::to_i64(88)</pre>
-<h5>results</h5>
-<pre>
-88
-</pre>
-<hr>
-<h4>📦 util::to_i128 &#8212; Converts a value to i128</h4>
-<h5>example1</h5>
-<pre>util::to_i128(88)</pre>
-<h5>results</h5>
-<pre>
-88
-</pre>
-<hr>
-<h4>📦 util::to_u128 &#8212; Converts a value to u128</h4>
-<h5>example1</h5>
-<pre>util::to_u128(88)</pre>
-<h5>results</h5>
-<pre>
-88
-</pre>
-<hr>
-<h4>📦 www::url_decode &#8212; Decodes a URL-encoded string</h4>
-<h5>example1</h5>
-<pre>www::url_decode('http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998')</pre>
-<h5>results</h5>
-<pre>
-http://shocktrade.com?name=the hero&t=9998
-</pre>
-<hr>
-<h4>📦 www::url_encode &#8212; Encodes a URL string</h4>
-<h5>example1</h5>
-<pre>www::url_encode('http://shocktrade.com?name=the hero&t=9998')</pre>
-<h5>results</h5>
-<pre>
-http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998
-</pre>
-<hr>
-<h4>📦 www::serve &#8212; Starts a local HTTP service</h4>
-<h5>example1</h5>
-<pre>www::serve(8787)
+<pre>http::start(8745)
 stocks = nsd::save(
-   "examples.www.stocks",
-   Table::new(symbol: String(8), exchange: String(8), last_sale: f64)
+   "examples.http_serve.stocks",
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )
 [{ symbol: "XINU", exchange: "NYSE", last_sale: 8.11 },
  { symbol: "BOX", exchange: "NYSE", last_sale: 56.88 },
  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 },
  { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
  { symbol: "MIU", exchange: "OTCBB", last_sale: 2.24 }] ~> stocks
-GET http://localhost:8787/examples/www/stocks/1/4</pre>
+GET http://localhost:8745/examples/http_serve/stocks/1/4</pre>
 <h5>results</h5>
 <pre>
 [{"exchange":"NYSE","last_sale":56.88,"symbol":"BOX"}, {"exchange":"NASDAQ","last_sale":32.12,"symbol":"JET"}, {"exchange":"AMEX","last_sale":12.49,"symbol":"ABC"}]
+
+</pre>
+<hr>
+<h4>📦 www::url_decode &#8212; Decodes a URL-encoded string</h4>
+<h5>example1</h5>
+<pre>'http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998'::url_decode()</pre>
+<h5>results</h5>
+<pre>
+http://shocktrade.com?name=the hero&t=9998
+
+</pre>
+<hr>
+<h4>📦 www::url_encode &#8212; Encodes a URL string</h4>
+<h5>example1</h5>
+<pre>'http://shocktrade.com?name=the hero&t=9998'::url_encode()</pre>
+<h5>results</h5>
+<pre>
+http%3A%2F%2Fshocktrade.com%3Fname%3Dthe%20hero%26t%3D9998
+
 </pre>

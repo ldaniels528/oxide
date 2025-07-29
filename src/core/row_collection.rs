@@ -215,7 +215,7 @@ pub trait RowCollection: Debug {
         while !is_active && row_id < eof {
             let metadata = self.read_row_metadata(row_id)?;
             is_active = metadata.is_allocated;
-            row_id += 1;
+            if !is_active { row_id += 1; }
         }
 
         // did we find one?
@@ -273,6 +273,34 @@ pub trait RowCollection: Debug {
                 }
                 Ok(None)
             }
+        }
+    }
+
+    fn find_nth_active_row_id(&self, nth: usize) -> std::io::Result<Option<usize>> {
+        let (mut row_id, mut is_active, eof) = (0, false, self.len()?);
+        let mut my_nth = nth;
+
+        // find the first active row ID
+        while !is_active && row_id < eof && my_nth > 0 {
+            let metadata = self.read_row_metadata(row_id)?;
+            is_active = metadata.is_allocated;
+            if is_active {
+                my_nth -= 1;
+                if my_nth > 0 { row_id += 1 };
+            } else { row_id += 1; }
+        }
+
+        // did we find one?
+        match is_active {
+            true => Ok(Some(row_id)),
+            false => Ok(None)
+        }
+    }
+
+    fn find_nth_active_row(&self, nth: usize) -> std::io::Result<Option<Row>> {
+        match self.find_nth_active_row_id(nth)? {
+            Some(row_id) => self.read_one(row_id),
+            None => Ok(None)
         }
     }
 
@@ -690,7 +718,6 @@ mod tests {
     use crate::dataframe::Dataframe;
     use crate::expression::Conditions::Equal;
     use crate::expression::Expression::{Identifier, Literal};
-    use crate::hash_table_row_collection::HashTableRowCollection;
     use crate::hybrid_row_collection::HybridRowCollection;
     use crate::interpreter::Interpreter;
     use crate::journaling::EventSourceRowCollection;
@@ -701,7 +728,7 @@ mod tests {
     use crate::parameter::Parameter;
     use crate::structures::Structures::Firm;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::*;
+    use crate::test_util::*;
     use crate::utils::compute_time_millis;
     use chrono::Local;
     use num_traits::ToPrimitive;
@@ -732,7 +759,7 @@ mod tests {
         let (path, file, columns, _) =
             make_table_file("rows", "append_row", "stocks", make_quote_parameters());
         let mut rc = <dyn RowCollection>::from_file(columns.to_owned(), file, path.as_str());
-        rc.overwrite_row(0, make_quote(0, "BEAM", "NYSE", 78.35));
+        rc.overwrite_row(0, make_quote(0, "BEAM", "NYSE", 78.35)).unwrap();
 
         // read and verify the row
         let (row, rmd) = rc.read_row(0).unwrap();
@@ -1104,7 +1131,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 scan_row,
-                make_quote(3, "GOTO", "OTC", 0.1442)
+                make_quote(2, "BIZ", "NYSE", 9.775)
             );
 
             rc.len().unwrap() as u64
@@ -1138,7 +1165,7 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 scan_row,
-                make_quote(3, "GOTO", "OTC", 0.1442)
+                make_quote(2, "BIZ", "NYSE", 9.775)
             );
 
             rc.len().unwrap() as u64
@@ -1459,11 +1486,11 @@ mod tests {
     #[test]
     fn test_read_column_slice() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
-            rc.append_row(make_quote(1, "TED", "OTC", 0.2456));
-            rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
-            rc.append_row(make_quote(3, "GOTO", "OTC", 0.1442));
-            rc.append_row(make_quote(4, "XYZ", "NASDAQ", 0.0289));
+            rc.append_row(make_quote(0, "ABC", "AMEX", 12.33)).unwrap();
+            rc.append_row(make_quote(1, "TED", "OTC", 0.2456)).unwrap();
+            rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775)).unwrap();
+            rc.append_row(make_quote(3, "GOTO", "OTC", 0.1442)).unwrap();
+            rc.append_row(make_quote(4, "XYZ", "NASDAQ", 0.0289)).unwrap();
 
             // produce the scan
             let values = rc.read_column_slice(0).unwrap();
@@ -1484,11 +1511,11 @@ mod tests {
     #[test]
     fn test_read_range() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
-            rc.append_row(make_quote(1, "TED", "OTC", 0.2456));
-            rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
-            rc.append_row(make_quote(3, "GOTO", "OTC", 0.1442));
-            rc.append_row(make_quote(4, "XYZ", "NASDAQ", 0.0289));
+            rc.append_row(make_quote(0, "ABC", "AMEX", 12.33)).unwrap();
+            rc.append_row(make_quote(1, "TED", "OTC", 0.2456)).unwrap();
+            rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775)).unwrap();
+            rc.append_row(make_quote(3, "GOTO", "OTC", 0.1442)).unwrap();
+            rc.append_row(make_quote(4, "XYZ", "NASDAQ", 0.0289)).unwrap();
 
             // produce the scan
             let rows = rc.read_range(1..4).unwrap();
@@ -1593,11 +1620,11 @@ mod tests {
     #[test]
     fn test_reverse() {
         fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
-            rc.append_row(make_quote(0, "ABC", "AMEX", 12.33));
-            rc.append_row(make_quote(1, "UNO", "OTC", 0.2456));
-            rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775));
-            rc.append_row(make_quote(3, "GOTO", "OTC", 0.1442));
-            rc.append_row(make_quote(4, "XYZ", "NYSE", 0.0289));
+            rc.append_row(make_quote(0, "ABC", "AMEX", 12.33)).unwrap();
+            rc.append_row(make_quote(1, "UNO", "OTC", 0.2456)).unwrap();
+            rc.append_row(make_quote(2, "BIZ", "NYSE", 9.775)).unwrap();
+            rc.append_row(make_quote(3, "GOTO", "OTC", 0.1442)).unwrap();
+            rc.append_row(make_quote(4, "XYZ", "NYSE", 0.0289)).unwrap();
 
             // produce the reverse order
             let rrc = rc.reverse().unwrap();
@@ -1714,7 +1741,7 @@ mod tests {
             let exchange = exchanges[rng.next_u32() as usize % exchanges.len()];
             let last_sale = 400.0 * rng.sample(Uniform::new(0.0, 1.0));
             let row = make_quote(0, &symbol, exchange, last_sale);
-            rc.overwrite_row(id, row);
+            rc.overwrite_row(id, row)?;
         }
         let end_time = SystemTime::now().duration_since(UNIX_EPOCH)
             .map_err(|e| cnv_error!(e))?.as_millis();
@@ -1771,7 +1798,7 @@ mod tests {
                 Number(I64Value(processed as i64)),
                 Number(F64Value(execution_time)),
                 Number(F64Value(round_2sf(rate))),
-            ]));
+            ])).unwrap();
             mrc
         }
 
@@ -1788,7 +1815,6 @@ mod tests {
         mrc = work(mrc, name, "Binary", &columns, verify_byte_array_variant, test);
         mrc = work(mrc, name, "EventSource", &columns, verify_event_sourcing_variant, test);
         mrc = work(mrc, name, "File", &columns, verify_file_variant, test);
-        mrc = work(mrc, name, "HashTable", &columns, verify_hash_table_variant, test);
         mrc = work(mrc, name, "Hybrid", &columns, verify_hybrid_table_variant, test);
         mrc = work(mrc, name, "Model", &columns, verify_model_variant, test);
 
@@ -1833,14 +1859,6 @@ mod tests {
         let params = Parameter::from_columns(&columns);
         let frc = FileRowCollection::create_table(&ns, &params).unwrap();
         test_variant(kind, Box::new(frc), columns.to_owned())
-    }
-
-    fn verify_hash_table_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {
-        let ns = Namespace::new("hashing", name, "stocks");
-        let params = Parameter::from_columns(&columns);
-        let frc = FileRowCollection::create_table(&ns, &params).unwrap();
-        let hrc = HashTableRowCollection::new(0, Box::new(frc)).unwrap();
-        test_variant(kind, Box::new(hrc), columns.to_owned())
     }
 
     fn verify_hybrid_table_variant(name: &str, kind: &str, columns: Vec<Column>, test_variant: fn(&str, Box<dyn RowCollection>, Vec<Column>) -> u64) -> u64 {

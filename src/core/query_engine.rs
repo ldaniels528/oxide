@@ -52,11 +52,32 @@ impl QueryEngine {
             }
             expr => {
                 let is_deselect = matches!(expr, Deselect { .. });
-                Self::unwind_query_graph(
-                    expression.clone(),
-                    |from, fields, condition, group_by, having, order_by, limit| {
-                        Self::eval_query(ms, from, fields, condition, group_by, having, order_by, limit, is_deselect)
-                    })
+                let (from, fields, condition, group_by, having, order_by, limit) =
+                    Self::unwind_query_graph(expression.clone())?;
+                Self::eval_query(ms, from, fields, condition, group_by, having, order_by, limit, is_deselect)
+            }
+        }
+    }
+
+    /// Evaluates a query language expression
+    pub async fn evaluate_async(
+        ms: &Machine,
+        expression: &Expression,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match expression {
+            Delete { .. } => {
+                let (from, condition, limit) = Self::unwind_update_graph(expression.clone())?;
+                Self::eval_delete_rows_async(ms, from, condition, limit).await
+            }
+            Undelete { .. } => {
+                let (from, condition, limit) = Self::unwind_update_graph(expression.clone())?;
+                Self::eval_undelete_rows_async(ms, from, condition, limit).await
+            }
+            expr => {
+                let is_deselect = matches!(expr, Deselect { .. });
+                let (from, fields, condition, group_by, having, order_by, limit) =
+                    Self::unwind_query_graph(expression.clone())?;
+                Self::eval_query_async(ms, from, fields, condition, group_by, having, order_by, limit, is_deselect).await
             }
         }
     }
@@ -68,6 +89,24 @@ impl QueryEngine {
     /// delete stocks where last_sale > 1.0 limit 1
     /// ```
     fn eval_delete_rows(
+        ms: &Machine,
+        from: Expression,
+        condition: Option<Conditions>,
+        maybe_limit: Option<Box<Expression>>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let (ms, limit) = ms.evaluate_or_undef(&maybe_limit)?;
+        let (ms, mut df) = ms.evaluate_as_dataframe(&from)?;
+        df.delete_where(&ms, &condition, limit)
+            .map(|deleted| (ms, Number(I64Value(deleted))))
+    }
+
+    /// Evaluates a SQL DELETE operation
+    /// #### Examples
+    /// ```
+    /// let stocks = nsd::load("query_engine.select.stocks")
+    /// delete stocks where last_sale > 1.0 limit 1
+    /// ```
+    async fn eval_delete_rows_async(
         ms: &Machine,
         from: Expression,
         condition: Option<Conditions>,
@@ -94,6 +133,25 @@ impl QueryEngine {
         let (ms, limit) = ms.evaluate_or_undef(&maybe_limit)?;
         let (ms, mut df) = ms.evaluate_as_dataframe(&from)?;
         df.undelete_where(&ms, &condition, limit)
+            .map(|restored| (ms, Number(I64Value(restored))))
+    }
+
+    /// Evaluates a SQL UNDELETE/RESTORE operation
+    /// #### Examples
+    /// ```
+    /// let stocks = nsd::load("query_engine.select.stocks")
+    /// undelete stocks where last_sale > 1.0 limit 1
+    /// ```
+    async fn eval_undelete_rows_async(
+        ms: &Machine,
+        from: Expression,
+        condition: Option<Conditions>,
+        maybe_limit: Option<Box<Expression>>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let (ms, limit) = ms.evaluate_or_undef_async(&maybe_limit).await?;
+        let (ms, mut df) = ms.evaluate_as_dataframe_async(&from).await?;
+        df.undelete_where_async(&ms, &condition, limit)
+            .await
             .map(|restored| (ms, Number(I64Value(restored))))
     }
     
@@ -155,6 +213,65 @@ impl QueryEngine {
             };
         Ok((ms, TableValue(df1)))
     }
+
+    /// Evaluates a SQL query
+    /// #### Examples
+    /// ##### Filtering
+    /// ```
+    /// stocks where last_sale > 1.0 limit 1
+    /// ```
+    /// ##### Transformation
+    /// ```
+    /// select symbol, exchange, last_sale
+    /// from stocks
+    /// where last_sale > 1.0 limit 1
+    /// order_by last_sale::desc
+    /// ```
+    /// ##### Summarization
+    /// ```
+    /// select
+    ///     total_sale: agg::sum(last_sale),
+    ///     min_sale: agg::min(last_sale),
+    ///     max_sale: agg::max(last_sale)
+    /// from stocks
+    /// ```
+    /// ##### Aggregation
+    /// ```
+    /// select
+    ///     exchange,
+    ///     total_sale: agg::sum(last_sale),
+    ///     min_sale: agg::min(last_sale),
+    ///     max_sale: agg::max(last_sale)
+    /// from stocks
+    /// group_by exchange
+    /// having total_sale > 1000.00
+    /// order_by total_sale::desc
+    /// ```
+    async fn eval_query_async(
+        ms: &Machine,
+        from: Expression,
+        fields: Vec<Expression>,
+        condition: Option<Conditions>,
+        maybe_group_by: Option<Vec<Expression>>,
+        having: Option<Conditions>,
+        maybe_order_by: Option<Vec<Expression>>,
+        maybe_limit: Option<Box<Expression>>,
+        is_deselect: bool,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let (ms, df0) = ms.evaluate_as_dataframe_async(&from).await?;
+        let fields = if is_deselect {
+            Self::get_fields_for_deselection(&df0, &fields)
+        } else { fields };
+        let (ms, df1) =
+            if maybe_group_by.is_some() {
+                Self::perform_aggregation(ms, df0, fields, condition, maybe_group_by, having, maybe_order_by, maybe_limit)?
+            } else if Self::has_summarization_fields(&ms, &fields) {
+                Self::perform_summarization(ms, df0, fields, condition, false)?
+            } else {
+                Self::perform_transformation(ms, df0, fields, condition, maybe_order_by, maybe_limit)?
+            };
+        Ok((ms, TableValue(df1)))
+    }
     
     fn get_fields_for_deselection(
         df: &Dataframe,
@@ -182,6 +299,11 @@ impl QueryEngine {
     /// Pulls a row (retrieves then deletes it) from a table structure 
     /// #### Examples
     /// ```
+    /// { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 } ~> stocks
+    /// stock <~ stocks
+    /// // { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }
+    /// ```
+    /// ```
     /// stock <~ stocks
     /// ```
     /// ```
@@ -207,11 +329,46 @@ impl QueryEngine {
             other => throw(Exact(other.to_code()))
         }
     }
+
+    /// Pulls a row (retrieves then deletes it) from a table structure
+    /// #### Examples
+    /// ```
+    /// { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 } ~> stocks
+    /// stock <~ stocks
+    /// // { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }
+    /// ```
+    /// ```
+    /// stock <~ stocks
+    /// ```
+    /// ```
+    /// stock <~ (stocks where exchange is "NASDAQ")
+    /// ```
+    pub async fn eval_pull_row_async(
+        ms: &Machine,
+        container: &Expression,
+        source: &Expression,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        // extract the query components
+        let (from, condition, _limit) = Self::unwind_update_graph(source.clone())?;
+
+        // get a reference to the dataframe
+        let (ms, mut df) = ms.evaluate_as_dataframe_async(&from).await?;
+
+        // pop the next row from the table
+        let row = df.pop_matching_row(&condition);
+
+        // return the table
+        match container {
+            Identifier(name) => Ok((ms.with_variable(name, row), Boolean(true))),
+            other => throw(Exact(other.to_code()))
+        }
+    }
     
     /// Pulls all qualifying rows (retrieves then deletes them) from a table structure
     /// #### Examples
     /// ```
     /// my_stocks <<~ (stocks where exchange is "NASDAQ" limit 3)
+    /// // { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }
     /// ```
     /// ```
     /// my_stocks <<~ (stocks limit 3)
@@ -253,6 +410,53 @@ impl QueryEngine {
             other => throw(Exact(other.to_code()))
         }
     }
+
+    /// Pulls all qualifying rows (retrieves then deletes them) from a table structure
+    /// #### Examples
+    /// ```
+    /// my_stocks <<~ (stocks where exchange is "NASDAQ" limit 3)
+    /// // { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }
+    /// ```
+    /// ```
+    /// my_stocks <<~ (stocks limit 3)
+    /// ```
+    /// ```
+    /// remaining_stocks <<~ stocks
+    /// ```
+    pub async fn eval_pull_rows_async(
+        ms: &Machine,
+        container: &Expression,
+        source: &Expression,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        // extract the query components
+        let (from, condition, limit) = Self::unwind_update_graph(source.clone())?;
+
+        // get a reference to the dataframe
+        let (ms, mut df) = ms.evaluate_as_dataframe_async(&from).await?;
+
+        // determine the optional limit
+        let (ms, limit) = ms.evaluate_opt_async(&limit).await?;
+        let limit = limit.map(|result| result.to_usize());
+
+        // pull the rows up to the limit
+        let (mut count, mut done) = (0, false);
+        let mut mrc = ModelRowCollection::new(df.get_columns().clone());
+        while !done && (limit.is_none() || limit.is_some_and(|n| count < n)) {
+            match df.pop_matching_row(&condition) {
+                Structured(Firm(row, _)) => {
+                    mrc.overwrite_row(count, row)?;
+                    count += 1
+                }
+                _ => done = true
+            }
+        }
+
+        // return the table
+        match container {
+            Identifier(name) => Ok((ms.with_variable(name, TableValue(ModelTable(mrc))), Boolean(true))),
+            other => throw(Exact(other.to_code()))
+        }
+    }
     
     /// Performs an insert, update or overwrite of row(s) within a table.
     /// #### Examples
@@ -286,7 +490,40 @@ impl QueryEngine {
                 Self::do_table_rows_update(ms, &target, source, &condition, &limit)
         }
     }
-    
+
+    /// Performs an insert, update or overwrite of row(s) within a table.
+    /// #### Examples
+    /// ##### insert a row into the table
+    /// ```
+    /// { symbol: "XYZ", exchange: "NASDAQ", last_sale: 0.0872 }
+    ///     ~> stocks
+    /// ```
+    /// ##### update a row within the table
+    /// ```
+    /// { symbol: "BKP", last_sale: 0.1421 }
+    ///    ~> (stocks where symbol is "BKPQ")
+    /// ```
+    /// ##### overwrite a row within the table
+    /// ```
+    /// { symbol: "BKP", exchange: "OTCBB", last_sale: 0.1421 }
+    ///    ~>> (stocks where symbol is "BKPQ")
+    /// ```
+    pub async fn eval_push_rows_async(
+        ms: &Machine,
+        source: &Expression,
+        target: &Expression,
+        is_overwrite: bool,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let (target, condition, limit) = Self::unwind_update_graph(target.clone())?;
+        match &condition {
+            None => Self::do_table_rows_insert_async(ms, source, &target).await,
+            Some(..) if is_overwrite =>
+                Self::do_table_rows_overwrite_async(ms, &target, source, &condition, &limit).await,
+            Some(..) =>
+                Self::do_table_rows_update_async(ms, &target, source, &condition, &limit).await
+        }
+    }
+
     /// Evaluates table-row insert statement
     /// #### Examples
     /// ```
@@ -320,6 +557,40 @@ impl QueryEngine {
         dest.append_rows(dest_rows)
             .map(|inserted| (ms, Number(I64Value(inserted))))
     }
+
+    /// Evaluates table-row insert statement
+    /// #### Examples
+    /// ```
+    /// let stocks = nsd::load("query_engine.examples.stocks")
+    /// { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 } ~> stocks
+    /// ```
+    /// ```
+    /// let stocks = nsd::load("query_engine.examples.stocks")
+    /// [{ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+    ///  { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+    ///  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+    /// ```
+    async fn do_table_rows_insert_async(
+        ms: &Machine,
+        source: &Expression,
+        target: &Expression,
+    ) -> std::io::Result<(Machine, TypedValue)>  {
+        let ms = ms.to_owned();
+        // determine the target row collection
+        let (ms, mut dest) = ms.evaluate_as_dataframe_async(target).await?;
+        // retrieve rows from the source
+        let (_ms, src) = ms.evaluate_as_dataframe_async(source).await?;
+        // write the rows to the target
+        let src_params = src.get_parameters();
+        let dest_params = dest.get_parameters();
+        let dest_rows = Structures::transform_rows(
+            &src_params,
+            &src.get_rows(),
+            &dest_params
+        );
+        dest.append_rows(dest_rows)
+            .map(|inserted| (ms, Number(I64Value(inserted))))
+    }
     
     /// Evaluates a SQL UPDATE/REPLACE operation
     /// #### Examples
@@ -329,6 +600,27 @@ impl QueryEngine {
     ///     ~>> (stocks where last_sale > 1.0 limit 1)
     /// ```
     fn do_table_rows_overwrite(
+        ms: &Machine,
+        target: &Expression,
+        source: &Expression,
+        condition: &Option<Conditions>,
+        maybe_limit: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let (ms, limit) = ms.evaluate_or_undef(maybe_limit)?;
+        let (ms, df) = ms.evaluate_as_dataframe(target)?;
+        let (fields, values) = Self::separate_fields_and_values(&ms, &target, &source)?;
+        Dataframe::overwrite_where(df, &ms, &fields, &values, condition, limit)
+            .map(|(_, overwritten)| (ms, Number(I64Value(overwritten))))
+    }
+
+    /// Evaluates a SQL UPDATE/REPLACE operation
+    /// #### Examples
+    /// ```
+    /// let stocks = nsd::load("query_engine.select.stocks")
+    /// { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
+    ///     ~>> (stocks where last_sale > 1.0 limit 1)
+    /// ```
+    async fn do_table_rows_overwrite_async(
         ms: &Machine,
         target: &Expression,
         source: &Expression,
@@ -360,6 +652,28 @@ impl QueryEngine {
         let (ms, df) = ms.evaluate_as_dataframe(table)?;
         let (fields, values) = Self::separate_fields_and_values(&ms, &table, &source)?;
         Dataframe::update_where(df, &ms, &fields, &values, &condition, limit)
+            .map(|modified| (ms, Number(I64Value(modified))))
+    }
+
+    /// Evaluates a SQL UPDATE/MODIFY operation
+    /// #### Examples
+    /// ```
+    /// let stocks = nsd::load("query_engine.select.stocks")
+    /// { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
+    ///     ~> (stocks where last_sale > 1.0 limit 1)
+    /// ```
+    async fn do_table_rows_update_async(
+        ms: &Machine,
+        table: &Expression,
+        source: &Expression,
+        condition: &Option<Conditions>,
+        maybe_limit: &Option<Box<Expression>>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let (ms, limit) = ms.evaluate_or_undef_async(maybe_limit).await?;
+        let (ms, df) = ms.evaluate_as_dataframe_async(table).await?;
+        let (fields, values) = Self::separate_fields_and_values_async(&ms, &table, &source).await?;
+        Dataframe::update_where_async(df, &ms, &fields, &values, &condition, limit)
+            .await
             .map(|modified| (ms, Number(I64Value(modified))))
     }
     
@@ -714,6 +1028,22 @@ impl QueryEngine {
             throw(Exact("Expected a data object".to_string()))
         }
     }
+
+    async fn separate_fields_and_values_async(
+        ms: &Machine,
+        target: &Expression,
+        source: &Expression,
+    ) -> std::io::Result<(Vec<Expression>, Vec<Expression>)> {
+        if let (_, Structured(Soft(structure))) = ms.evaluate(&source)? {
+            let (_ms, dest) = ms.evaluate_as_dataframe_async(target).await?;
+            let columns = dest.get_columns();
+            let row = Row::from_tuples(0, columns, &structure.to_name_values());
+            let (fields, values) = Self::split_row_into_fields_and_values(columns, &row);
+            Ok((fields, values))
+        } else {
+            throw(Exact("Expected a data object".to_string()))
+        }
+    }
     
     /// Returns a tuple containing fields and values from the given [Column]s and [Row]s
     fn split_row_into_fields_and_values(
@@ -780,14 +1110,10 @@ impl QueryEngine {
         }
     }
     
-    pub fn unwind_query_graph<F, E>(
+    pub fn unwind_query_graph(
         expr: Expression,
-        f: F
-    ) -> std::io::Result<E>
-    where
-        F: Fn(Expression, Vec<Expression>, Option<Conditions>, Option<Vec<Expression>>, Option<Conditions>, Option<Vec<Expression>>, Option<Box<Expression>>) -> std::io::Result<E>,
-    {
-        fn unwind<T, S>(
+    ) -> std::io::Result<(Expression, Vec<Expression>, Option<Conditions>, Option<Vec<Expression>>, Option<Conditions>, Option<Vec<Expression>>, Option<Box<Expression>>)> {
+        fn unwind(
             from: Expression,
             fields: Vec<Expression>,
             condition: Option<Conditions>,
@@ -795,53 +1121,47 @@ impl QueryEngine {
             having: Option<Conditions>,
             order_by: Option<Vec<Expression>>,
             limit: Option<Box<Expression>>,
-            f: T,
-        ) -> std::io::Result<S>
-        where
-            T: Fn(Expression, Vec<Expression>, Option<Conditions>, Option<Vec<Expression>>, Option<Conditions>, Option<Vec<Expression>>, Option<Box<Expression>>) -> std::io::Result<S>,
-        {
+        ) -> std::io::Result<(Expression, Vec<Expression>, Option<Conditions>, Option<Vec<Expression>>, Option<Conditions>, Option<Vec<Expression>>, Option<Box<Expression>>)> {
             match from {
                 Delete { from } =>
-                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit, f),
+                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit),
                 Deselect { fields, from } =>
-                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit, f),
+                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit),
                 GroupBy { from, columns: group_by } =>
-                    unwind(from.deref().clone(), fields, condition, Some(group_by), having, order_by, limit, f),
+                    unwind(from.deref().clone(), fields, condition, Some(group_by), having, order_by, limit),
                 Having { from, condition: having } =>
-                    unwind(from.deref().clone(), fields, condition, group_by, Some(having), order_by, limit, f),
+                    unwind(from.deref().clone(), fields, condition, group_by, Some(having), order_by, limit),
                 Limit { from, limit } =>
-                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, Some(limit), f),
+                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, Some(limit)),
                 OrderBy { from, columns: order_by } =>
-                    unwind(from.deref().clone(), fields, condition, group_by, having, Some(order_by), limit, f),
+                    unwind(from.deref().clone(), fields, condition, group_by, having, Some(order_by), limit),
                 Select { fields, from } =>
-                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit, f),
+                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit),
                 Undelete { from } =>
-                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit, f),
+                    unwind(from.deref().clone(), fields, condition, group_by, having, order_by, limit),
                 Where { from, condition } =>
-                    unwind(from.deref().clone(), fields, Some(condition), group_by, having, order_by, limit, f),
-                _ => f(from, fields, condition, group_by, having, order_by, limit)
+                    unwind(from.deref().clone(), fields, Some(condition), group_by, having, order_by, limit),
+                _ => Ok((from, fields, condition, group_by, having, order_by, limit))
             }
         }
-        unwind(expr, vec![], None, None, None, None, None, f)
+        unwind(expr, vec![], None, None, None, None, None)
     }
-    
+
     fn unwind_update_graph(
         expression: Expression
     ) -> std::io::Result<(Expression, Option<Conditions>, Option<Box<Expression>>)> {
-        Self::unwind_query_graph(
-            expression.clone(),
-            |from, fields, condition, group_by, having, order_by, limit| {
-                if !fields.is_empty() {
-                    return throw(Exact("fields are not supported in this context".into()))
-                } else if group_by.is_some() {
-                    return throw(Exact("group_by is not supported in this context".into()))
-                } else if having.is_some() {
-                    return throw(Exact("having is not supported in this context".into()))
-                } else if order_by.is_some() {
-                    return throw(Exact("order_by is not supported in this context".into()))
-                }
-                Ok((from, condition, limit))
-            })
+        let (from, fields, condition, group_by, having, order_by, limit) =
+            Self::unwind_query_graph(expression.clone())?;
+        if !fields.is_empty() {
+            return throw(Exact("fields are not supported in this context".into()))
+        } else if group_by.is_some() {
+            return throw(Exact("group_by is not supported in this context".into()))
+        } else if having.is_some() {
+            return throw(Exact("having is not supported in this context".into()))
+        } else if order_by.is_some() {
+            return throw(Exact("order_by is not supported in this context".into()))
+        }
+        Ok((from, condition, limit))
     }
 
 }
@@ -852,7 +1172,7 @@ mod tests {
     use crate::dataframe::Dataframe::ModelTable;
     use crate::interpreter::Interpreter;
     use crate::model_row_collection::ModelRowCollection;
-    use crate::testdata::*;
+    use crate::test_util::*;
     use crate::typed_values::TypedValue::*;
 
     #[test]
@@ -968,9 +1288,9 @@ mod tests {
         let mut interpreter = Interpreter::new();
         interpreter = verify_exact_code_with(interpreter, r#"
             faces = select face: value from (
-                (2..=10)::map(n -> n::to_string()) ++ ["J", "Q", "K", "A"]
-            )::to_table()
-            suits = select suit: value from ["♥️", "♦️", "♣️", "♠️"]::to_table()
+                (2..=10)::map(n -> n::to(String)) ++ ["J", "Q", "K", "A"]
+            )::to(Table)
+            suits = select suit: value from ["♥️", "♦️", "♣️", "♠️"]::to(Table)
         "#, "true");
 
         interpreter = verify_exact_table_with(interpreter, r#"
@@ -1502,12 +1822,12 @@ mod tests {
             order_by symbol::asc
             limit 2
         "#, vec![
-            "|-----------------------------------------------------------------------|",
-            "| id | symbol | exchange | price   | symbol_md5                         |",
-            "|-----------------------------------------------------------------------|",
-            "| 0  | ABC    | AMEX     | 11.77   | 0B902fbdd2b1df0c4f70b4a5d23525e932 |",
-            "| 1  | GOTO   | OTC      | 24.1428 | 0B4b8bb3c94a9676b5f34ace4d7102e5b9 |",
-            "|-----------------------------------------------------------------------|"]);
+            "|-------------------------------------------------------------------------|",
+            "| id | symbol | exchange | price   | symbol_md5                           |",
+            "|-------------------------------------------------------------------------|",
+            "| 0  | ABC    | AMEX     | 11.77   | 902fbdd2-b1df-0c4f-70b4-a5d23525e932 |",
+            "| 1  | GOTO   | OTC      | 24.1428 | 4b8bb3c9-4a96-76b5-f34a-ce4d7102e5b9 |",
+            "|-------------------------------------------------------------------------|"]);
     }
 
     #[test]
@@ -1563,11 +1883,11 @@ mod tests {
             )
             
             // insert some data
-            [{ symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66 }::to_table() },
+            [{ symbol: "BIZ", exchange: "NYSE", history: { last_sale: 23.66 }::to(Table) },
              { symbol: "GOTO", exchange: "OTC", history: [
                     { last_sale: 0.051 }, 
                     { last_sale: 0.048 }
-                ]::to_table()
+                ]::to(Table)
              }] ~> stocks
             stocks
         "#, vec![
@@ -1577,6 +1897,26 @@ mod tests {
             r#"| 0  | BIZ    | NYSE     | [{"last_sale":23.66}]                     |"#, 
             r#"| 1  | GOTO   | OTC      | [{"last_sale":0.051},{"last_sale":0.048}] |"#,
             r#"|--------------------------------------------------------------------|"#]);
+    }
+
+    #[test]
+    fn test_table_where_assumed_boolean() {
+        verify_exact_table(r#"
+            let stocks =
+                |--------------------------------------|
+                | symbol | exchange | last_sale | rank |
+                |--------------------------------------|
+                | ASX    | NYSE     | 113.76    | 1    |
+                | ABC    | AMEX     | 24.98     | 2    |
+                | JET    | NASDAQ   | 64.24     | 3    |
+                |--------------------------------------|
+            stocks where symbol::contains("BC")
+        "#, vec![
+            "|-------------------------------------------|",
+            "| id | symbol | exchange | last_sale | rank |",
+            "|-------------------------------------------|",
+            "| 1  | ABC    | AMEX     | 24.98     | 2    |",
+            "|-------------------------------------------|"]);
     }
     
     #[test]
@@ -1593,7 +1933,7 @@ mod tests {
         interpreter = verify_exact_code_with(interpreter, r#"
             { symbol: "BIZ", exchange: "NYSE", history: [
                 { last_sale: 11.67, processed_time: 2025-01-13T03:25:47.350Z }
-            ]::to_table()} ~> stocks
+            ]::to(Table)} ~> stocks
         "#, "1");
 
         // verify the contents of `stocks`
@@ -1628,7 +1968,7 @@ mod tests {
         interpreter = verify_exact_code_with(interpreter, r#"
             { symbol: "ABY", exchange: "NYSE", history: [
                 { last_sale: 78.33, processed_time: 2025-01-13T03:25:47.392Z }
-            ]::to_table()} ~> stocks
+            ]::to(Table)} ~> stocks
         "#, "1");
 
         // { symbol: "BIZ", exchange: "NYSE", history: [{ last_sale: 11.67, processed_time: 2025-01-13T03:25:47.350Z }] }

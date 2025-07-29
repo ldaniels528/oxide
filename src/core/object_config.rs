@@ -77,11 +77,11 @@ impl ObjectConfig {
         }
     }
 
-    pub fn get_partitions(&self) -> Option<&Vec<String>> {
+    pub fn get_partitions(&self) -> Option<Vec<String>> {
         match self {
             ObjectConfig::EventSourceConfig { partitions, .. } |
             ObjectConfig::TableConfig { partitions, .. } |
-            ObjectConfig::TableFnConfig { partitions, .. } => Some(partitions),
+            ObjectConfig::TableFnConfig { partitions, .. } => Some(partitions.to_vec()),
         }
     }
 
@@ -169,9 +169,45 @@ mod tests {
     use crate::namespaces::Namespace;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::F64Value;
+    use crate::object_config::ObjectConfig::TableConfig;
     use crate::parameter::Parameter;
     use crate::typed_values::TypedValue::Number;
     use tokio::io;
+
+    #[test]
+    fn test_table_config() {
+        let mut cfg = ObjectConfig::build_table(vec![
+            Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+            Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
+            Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
+        ]);
+        cfg = cfg.with_indices(vec![
+            HashIndexConfig::new(
+                vec!["symbol".into()],
+                false
+            )
+        ]);
+        cfg = cfg.with_partitions(vec![
+            "exchange".into()
+        ]);
+
+        assert_eq!(cfg, TableConfig {
+            columns: vec![
+                Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+                Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
+                Parameter::new_with_default("last_sale", NumberType(F64Kind), Number(F64Value(0.0))),
+            ],
+            indices: vec![
+                HashIndexConfig::new(
+                    vec!["symbol".into()],
+                    false
+                )
+            ],
+            partitions: vec![
+                "exchange".into()
+            ],
+        });
+    }
 
     #[test]
     fn test_table_config_load_and_save() -> io::Result<()> {

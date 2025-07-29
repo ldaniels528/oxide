@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use std::ops::Range;
 
 use actix::prelude::*;
-use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 
 use crate::columns::Column;
@@ -357,7 +356,7 @@ mod tests {
     use crate::data_types::DataType::*;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::*;
-    use crate::testdata::{make_quote_columns, make_quote_parameters};
+    use crate::test_util::{make_quote_columns, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
 
     use super::*;

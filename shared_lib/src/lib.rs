@@ -5,6 +5,6 @@
 #[macro_export]
 macro_rules! cnv_error {
     ($e:expr) => {
-        std::io::Error::new(std::io::ErrorKind::Other, $e)
+        std::io::Error::new(std::io::ErrorKind::Other, format!("{}", $e))
     };
 }

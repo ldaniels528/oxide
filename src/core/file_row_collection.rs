@@ -3,16 +3,13 @@
 // file row-collection module
 ////////////////////////////////////////////////////////////////////
 
-use crate::blob_file_row_collection::BLOBFileRowCollection;
-use crate::blobs::{BLOBMetadata, BLOBStore};
+use crate::blobs::BLOBStore;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
-use crate::data_types::DataType;
 use crate::data_types::DataType::{NumberType, TableType};
-use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::BlobTable;
+use crate::errors::throw;
 use crate::errors::Errors::Exact;
-use crate::errors::{throw, Errors};
 use crate::field;
 use crate::field::FieldMetadata;
 use crate::machine::Machine;
@@ -149,9 +146,9 @@ impl FileRowCollection {
         let value = match fmd {
             f if f.is_external => {
                 let offset = NumberType(I64Kind).decode_field_value(&buffer, column.get_offset()).to_u64();
-                let metadata = self.blobs.read_metadata(offset)?;
+                let metadata = self.blobs.read_metadata_by_offset(offset)?;
                 match data_type {
-                    TableType(params) => TableValue(BlobTable(self.blobs.read_blob_table_at(offset, params)?)),
+                    TableType(params) => TableValue(BlobTable(self.blobs.read_blob_table_by_offset(offset, params)?)),
                     _ => self.blobs.read_value(&metadata)?
                 }
             }
@@ -392,7 +389,7 @@ mod tests {
     use crate::numbers::Numbers::F64Value;
     use crate::row_collection::RowCollection;
     use crate::structures::Row;
-    use crate::testdata::make_quote_parameters;
+    use crate::test_util::make_quote_parameters;
     use crate::typed_values::TypedValue::{Number, StringValue};
 
     #[test]

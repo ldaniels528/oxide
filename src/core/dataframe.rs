@@ -7,6 +7,7 @@ use crate::blob_file_row_collection::BLOBFileRowCollection;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
 use crate::data_types::DataType;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::expression::{Conditions, Expression};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
@@ -158,6 +159,27 @@ impl Dataframe {
             let (row, metadata) = self.read_row(id)?;
             // if the row is inactive and the predicate matches the condition, restore the row.
             if !metadata.is_allocated && row.matches(machine, condition, self.get_columns()) {
+                if self.undelete_row(id).is_ok() {
+                    restored += 1
+                }
+            }
+        }
+        Ok(restored)
+    }
+
+    /// restores rows from the table based on a condition
+    pub async fn undelete_where_async(
+        &mut self,
+        machine: &Machine,
+        condition: &Option<Conditions>,
+        limit: TypedValue,
+    ) -> std::io::Result<i64> {
+        let mut restored = 0;
+        for id in self.get_indices_with_limit(limit)? {
+            // read a row with its metadata
+            let (row, metadata) = self.read_row(id)?;
+            // if the row is inactive and the predicate matches the condition, restore the row.
+            if !metadata.is_allocated && row.matches_async(machine, condition, self.get_columns()).await {
                 if self.undelete_row(id).is_ok() {
                     restored += 1
                 }
@@ -324,6 +346,13 @@ impl Dataframe {
         Dataframe::ModelTable(mrc)
     }
 
+    pub fn tail(&self) -> std::io::Result<Dataframe> {
+        Ok(match self.find_nth_active_row_id(2)? {
+            None => ModelTable(ModelRowCollection::from_parameters(&self.get_parameters())),
+            Some(row_id) => self.sublist(row_id, self.len()?),
+        })
+    }
+
     pub fn to_model(self) -> ModelRowCollection {
         let (rows, columns) = (self.get_rows(), self.get_columns());
         ModelRowCollection::from_columns_and_rows(columns, &rows)
@@ -355,6 +384,35 @@ impl Dataframe {
                     let (ms, field_names) =
                         ms.with_row(&columns, &row).evaluate_as_atoms(fields)?;
                     if let (_, TypedValue::ArrayValue(field_values)) = ms.evaluate_as_array(values)? {
+                        let new_row = row.transform(&columns, &field_names, &field_values.get_values())?;
+                        let result = df.overwrite_row(id, new_row);
+                        if result.is_ok() { updated += 1 }
+                    }
+                }
+            }
+        }
+        Ok(updated)
+    }
+
+    /// updates rows that match the supplied criteria
+    pub async fn update_where_async(
+        mut df: Dataframe,
+        ms: &Machine,
+        fields: &Vec<Expression>,
+        values: &Vec<Expression>,
+        condition: &Option<Conditions>,
+        limit: TypedValue,
+    ) -> std::io::Result<i64> {
+        let columns = df.get_columns().clone();
+        let mut updated = 0;
+        for id in df.get_indices_with_limit(limit)? {
+            // read an active row
+            if let Some(row) = df.read_one(id)? {
+                // if the predicate matches the condition, update the row.
+                if row.matches_async(ms, condition, &columns).await {
+                    let (ms, field_names) =
+                        ms.with_row(&columns, &row).evaluate_as_atoms(fields)?;
+                    if let (_, TypedValue::ArrayValue(field_values)) = ms.evaluate_as_array_async(values).await? {
                         let new_row = row.transform(&columns, &field_names, &field_values.get_values())?;
                         let result = df.overwrite_row(id, new_row);
                         if result.is_ok() { updated += 1 }
@@ -552,7 +610,7 @@ mod tests {
     use crate::row_collection::RowCollection;
     use crate::structures::Row;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::test_util::{make_quote, make_quote_columns};
     use crate::tokenizer;
     use crate::tokens::Token;
     use crate::typed_values::TypedValue::{Null, Number, StringValue};

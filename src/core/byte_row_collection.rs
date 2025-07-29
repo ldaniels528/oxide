@@ -6,7 +6,6 @@
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
 use crate::field::FieldMetadata;
-use crate::model_row_collection::ModelRowCollection;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
@@ -82,7 +81,7 @@ impl ByteRowCollection {
     }
 
     /// Creates a new [ByteRowCollection] from the specified row data
-    pub fn new(columns: Vec<Column>, capacity: usize) -> Self {
+    pub fn new(columns: Vec<Column>, _capacity: usize) -> Self {
         Self::from_bytes(columns, vec![], 0)
     }
     
@@ -222,7 +221,7 @@ mod tests {
     use crate::dataframe::Dataframe::BinaryTable;
     use crate::numbers::Numbers::I64Value;
     use crate::row_collection::RowCollection;
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::test_util::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::Number;
 
     #[test]

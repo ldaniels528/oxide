@@ -3,7 +3,7 @@
 // DataType class
 ////////////////////////////////////////////////////////////////////
 
-use crate::blobs::{BLOBStore, BLOB};
+use crate::bit_array::BitSet;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::compiler;
 use crate::compiler::Compiler;
@@ -17,20 +17,20 @@ use crate::expression::Expression;
 use crate::expression::Expression::*;
 use crate::field::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
-use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::*;
 use crate::numbers::Numbers::I64Value;
 use crate::packages::PackageOps;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
-use crate::sequences::Array;
+use crate::sequences::{Array, Sequence};
 use crate::structures::Structures::Hard;
 use crate::structures::{HardStructure, Structure};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, ByteStringValue, CharValue, DateTimeValue, ErrorValue, Number, Structured, TableValue, TupleValue, UUIDValue};
-use crate::utils::{pull_number, pull_string};
+use crate::typed_values::TypedValue::*;
+use crate::utils::{convert_to, pull_number_lit, remove_last_char, values_to_bitset};
 use chrono::Local;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Debug, Display};
 use std::ops::Deref;
@@ -42,9 +42,10 @@ const PTR_LEN: usize = 8;
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum DataType {
     ArrayType(Box<DataType>),
-    ByteStringType,
-    BlobType(Box<DataType>),
+    BLOBStoreHandleType,
+    BitSetType,
     BooleanType,
+    ByteStringType,
     CharType,
     DateTimeType,
     EnumType(Vec<Parameter>),
@@ -59,6 +60,7 @@ pub enum DataType {
     TableType(Vec<Parameter>),
     TupleType(Vec<DataType>),
     UUIDType,
+    WebSocketHandleType,
 }
 
 impl DataType {
@@ -97,18 +99,18 @@ impl DataType {
         use crate::typed_values::TypedValue::*;
         match self {
             ArrayType(..) => ArrayValue(Array::new()),
-            Self::ByteStringType => ByteStringValue(Vec::new()),
-            BlobType(..) => ByteCodeCompiler::decode_value(buffer),
+            Self::BitSetType => BitSetValue(BitSet::decode(&buffer[offset..])),
+            Self::BLOBStoreHandleType => ByteCodeCompiler::decode_u8x16(buffer, offset, |b| BLOBStoreHandle(u128::from_be_bytes(b))),
             Self::BooleanType => ByteCodeCompiler::decode_u8(buffer, offset, |b| Boolean(b == 1)),
-            Self::CharType => {
+            Self::ByteStringType => ByteStringValue(Vec::new()),
+            Self::CharType =>
                 std::str::from_utf8(&buffer[offset..offset+4].to_vec()).ok()
                     .and_then(|s| {
                         let mut chars = s.chars();
                         chars.next()
                     })
                     .map(|c| CharValue(c))
-                    .unwrap_or(Undefined)
-            }
+                    .unwrap_or(Undefined),
             Self::DateTimeType => ByteCodeCompiler::decode_u8x8(buffer, offset, |b| DateTimeValue(i64::from_be_bytes(b))),
             EnumType(..) => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec()),
             Self::ErrorType => ErrorValue(Exact(ByteCodeCompiler::decode_string(buffer, offset, 255).to_string())),
@@ -130,6 +132,7 @@ impl DataType {
             TupleType(params) => TupleValue(params.iter().map(|dt| dt.decode(buffer, offset)).collect()),
             Self::RuntimeResolvedType => ByteCodeCompiler::decode_value(&buffer[offset..].to_vec()),
             Self::UUIDType => ByteCodeCompiler::decode_u8x16(buffer, offset, |b| UUIDValue(u128::from_be_bytes(b))),
+            Self::WebSocketHandleType => ByteCodeCompiler::decode_u8x16(buffer, offset, |b| WebSocketHandle(u128::from_be_bytes(b))),
         }
     }
 
@@ -169,16 +172,16 @@ impl DataType {
 
     /// computes and returns the maximum physical size of this datatype
     pub fn compute_fixed_size(&self) -> usize {
-        use crate::data_types::DataType::*;
         let width: usize = match self {
             ArrayType(..) => PTR_LEN,
-            Self::ByteStringType => PTR_LEN,
-            BlobType(..) => PTR_LEN,
+            Self::BitSetType => PTR_LEN,
+            Self::BLOBStoreHandleType => 16,
             Self::BooleanType => 1,
+            Self::ByteStringType => PTR_LEN,
             Self::CharType => 4,
             Self::DateTimeType => 8,
             EnumType(..) => 2,
-            Self::ErrorType => 256,
+            Self::ErrorType => 64,
             FixedSizeType(data_type, size) =>
                 match data_type.deref() {
                     ByteStringType | StringType =>
@@ -190,18 +193,19 @@ impl DataType {
                 }
             FunctionType(columns, ..) => columns.len() * PTR_LEN,
             NumberType(nk) => nk.compute_fixed_size(),
-            PlatformOpsType(..) => 4,
+            PlatformOpsType(..) => 8,
             Self::StringType => PTR_LEN,
             StructureType(columns) => columns.len() * PTR_LEN,
             TableType(columns) => columns.len() * PTR_LEN,
             TupleType(types) => types.iter().map(|t| t.compute_fixed_size()).sum(),
             Self::RuntimeResolvedType => PTR_LEN,
-            Self::UUIDType => 16,
+            Self::UUIDType
+            | Self::WebSocketHandleType => 16,
         };
         width + 1 // +1 for field metadata
     }
 
-    fn construct<F, G>(
+    fn construct_0_or_1<F, G>(
         args: Vec<TypedValue>,
         f0: F,
         f1: G,
@@ -217,7 +221,7 @@ impl DataType {
         }
     }
 
-    fn construct_ok<F, G>(
+    fn construct_0_or_1_ok<F, G>(
         args: Vec<TypedValue>,
         f0: F,
         f1: G,
@@ -233,57 +237,62 @@ impl DataType {
         }
     }
 
+    fn construct_1<F>(
+        args: Vec<TypedValue>,
+        f1: F,
+    ) -> std::io::Result<TypedValue>
+    where
+        F: Fn(&TypedValue) -> TypedValue,
+    {
+        match args.as_slice() {
+            [item] => Ok(f1(item)),
+            items => throw(TypeMismatch(ArgumentsMismatched(1, items.len()))),
+        }
+    }
+
     pub fn instantiate(
         &self,
         args: Vec<TypedValue>,
     ) -> std::io::Result<TypedValue> {
-        use crate::typed_values::TypedValue::*;
         match self {
-            Self::ArrayType(datatype) => Ok(match args.as_slice() {  
-                [] => ArrayValue(Array::new()),
-                items => 
-                    ArrayValue(Array::from({
-                        let mut values = Vec::with_capacity(items.len());
-                        for item in items { values.push( item.convert_to(datatype)?) }
-                        values 
-                    })),
-            }),
-            Self::ByteStringType => Self::construct(
-                args,
-                || ByteStringValue(vec![]),
-                |bytes| ByteStringValue(bytes.to_bytes()),
-            ),
-            Self::BlobType(data_type) => match args.as_slice() {
-                [path_v, offset_v] => {
-                    let (path, offset) = (pull_string(path_v)?, pull_number(offset_v)?);
-                    let ns = Namespace::parse(path.as_str())?;
-                    let bs = BLOBStore::open(&ns)?;
-                    let bmd = bs.read_metadata(offset.to_u64())?;
-                    Ok(BLOBValue(BLOB::new(bs, bmd, data_type.deref().clone())))
+            Self::ArrayType(datatype) =>
+                Ok(match args.as_slice() {
+                    [] => ArrayValue(Array::new()),
+                    items => ArrayValue(Array::from(convert_to(&items.to_vec(), datatype)?)),
+                }),
+            Self::BitSetType =>
+                match args.as_slice() {
+                    [] => Ok(BitSetValue(BitSet::new(1, 0))),
+                    items => values_to_bitset(items.to_vec())
                 }
-                items => throw(TypeMismatch(ArgumentsMismatched(2, items.len()))),
-            }
-            Self::BooleanType => Self::construct(
-                args,
-                || Boolean(false),
-                |item| Boolean(item.to_bool()),
-            ),
-            Self::CharType => Self::construct(
-                args,
-                || CharValue('\0'),
-                |item| item.to_char().map(CharValue).unwrap_or(CharValue('\0')),
-            ),
-            Self::DateTimeType => Self::construct(
-                args,
-                || DateTimeValue(Local::now().timestamp_millis()),
-                |item| DateTimeValue(item.to_i64()),
-            ),
+            Self::BLOBStoreHandleType =>
+                Self::construct_1(args, |item| BLOBStoreHandle(item.to_u128())),
+            Self::BooleanType =>
+                Self::construct_0_or_1(
+                    args,
+                    || Boolean(false),
+                    |item| Boolean(item.to_bool())),
+            Self::ByteStringType =>
+                Self::construct_0_or_1(
+                    args,
+                    || ByteStringValue(vec![]),
+                    |bytes| ByteStringValue(bytes.to_bytes())),
+            Self::CharType =>
+                Self::construct_0_or_1(
+                    args,
+                    || CharValue('\0'),
+                    |item| item.to_char().map(CharValue).unwrap_or(CharValue('\0'))),
+            Self::DateTimeType =>
+                Self::construct_0_or_1(
+                    args,
+                    || DateTimeValue(Local::now().timestamp_millis()),
+                    |item| DateTimeValue(item.to_i64())),
             Self::EnumType(..) => Ok(Number(I64Value(0))),
-            Self::ErrorType => Self::construct(
-                args,
-                || ErrorValue(Errors::Empty),
-                |item| ErrorValue(Exact(item.to_string())),
-            ),
+            Self::ErrorType =>
+                Self::construct_0_or_1(
+                    args,
+                    || ErrorValue(Errors::Empty),
+                    |item| ErrorValue(Exact(item.to_string()))),
             Self::FixedSizeType(data_type, ..) => data_type.instantiate(args),
             Self::FunctionType(params, returns) => Ok(Function {
                 params: params.to_vec(),
@@ -291,25 +300,26 @@ impl DataType {
                 returns: returns.deref().clone(),
             }),
             Self::NumberType(kind) =>
-                Self::construct_ok(
+                Self::construct_0_or_1_ok(
                     args,
                     || Number(kind.get_default_value()),
                     |item| item.convert_to_number(kind)),
             Self::PlatformOpsType(kind) => Ok(PlatformOp(kind.clone())),
-            Self::StringType => Self::construct(
-                args,
-                || StringValue(String::new()),
-                |item| StringValue(item.unwrap_value()),
-            ),
+            Self::StringType =>
+                Self::construct_0_or_1(
+                    args,
+                    || StringValue(String::new()),
+                    |item| StringValue(item.unwrap_value())),
             Self::StructureType(params) => Self::instantiate_struct(params, args),
             Self::TableType(params) => Ok(TableValue(ModelTable(ModelRowCollection::from_parameters(params)))),
             Self::TupleType(types) => Self::instantiate_tuple(types, args),
             Self::RuntimeResolvedType => throw(Exact("Type cannot be instantiated".into())),
-            Self::UUIDType => Self::construct(
-                args,
-                || UUIDValue(Uuid::new_v4().as_u128()),
-                |item| UUIDValue(item.to_u128()),
-            ),
+            Self::UUIDType =>
+                Self::construct_0_or_1(
+                    args,
+                    || UUIDValue(Uuid::new_v4().as_u128()),
+                    |item| UUIDValue(item.to_u128())),
+            Self::WebSocketHandleType => Ok(Null)
         }
     }
 
@@ -379,9 +389,10 @@ impl DataType {
     pub fn get_name(&self) -> String {
         match self {
             Self::ArrayType(..) => "Array".to_string(),
-            Self::ByteStringType => "ByteString".to_string(),
-            Self::BlobType(..) => "BLOB".to_string(),
+            Self::BitSetType => "BitSet".to_string(),
+            Self::BLOBStoreHandleType => "BLOBStoreHandle".to_string(),
             Self::BooleanType => "Boolean".to_string(),
+            Self::ByteStringType => "Bytes".to_string(),
             Self::CharType => "Char".to_string(),
             Self::DateTimeType => "DateTime".to_string(),
             Self::EnumType(..) => "Enum".to_string(),
@@ -396,6 +407,7 @@ impl DataType {
             Self::TableType(..) => "Table".to_string(),
             Self::TupleType(..) => "Tuple".to_string(),
             Self::UUIDType => "UUID".to_string(),
+            Self::WebSocketHandleType => "WebSocketHandle".to_string(),
         }
     }
 
@@ -423,7 +435,7 @@ impl DataType {
         fn sized(name: &str, size: usize) -> String {
             match size {
                 0 => name.to_string(),
-                n if name.ends_with(")") => format!("{name}:::({n})"),
+                n if name.ends_with(")") => format!("{}, {})", remove_last_char(name), n),
                 n => format!("{name}({n})"),
             }
         }
@@ -435,9 +447,10 @@ impl DataType {
         }
         match self {
             ArrayType(data_type) => format!("Array({})", data_type.to_code()),
-            Self::ByteStringType => "ByteString".into(), // UTF8
-            BlobType(data_type) => format!("Blob({})", data_type.to_code()),
+            Self::BitSetType => "BitSet".into(),
+            Self::BLOBStoreHandleType => "BLOBStoreHandle".into(),
             Self::BooleanType => "Boolean".into(),
+            Self::ByteStringType => "Bytes".into(), // UTF8
             Self::CharType => "Char".into(),
             Self::DateTimeType => "DateTime".into(),
             EnumType(labels) => parameterized("Enum", labels, true),
@@ -457,6 +470,7 @@ impl DataType {
             TupleType(types) => typed("", types),
             Self::RuntimeResolvedType => String::new(),
             Self::UUIDType => "UUID".into(),
+            Self::WebSocketHandleType => "WebSocketHandle".into(),
         }
     }
 
@@ -477,14 +491,6 @@ impl Display for DataType {
 fn decipher_model(model: &Expression) -> std::io::Result<DataType> {
     use crate::typed_values::TypedValue::Structured;
     match model {
-        // e.g. Array(DateTime):::(12)
-        ColonColonColon(model, size) => {
-            match size.deref() {
-                Literal(TypedValue::Number(n)) =>
-                    Ok(FixedSizeType(decipher_model(model)?.into(), n.to_usize())),
-                _ => throw(Exact(format!("Invalid type declaration: try {}:::({})", model, 20)))
-            }
-        }
         // e.g. [String, String, f64]
         ArrayExpression(params) => decipher_model_array(params),
         // e.g. String(80)
@@ -529,13 +535,17 @@ fn decipher_model_function_call(
             other => throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
         }
     }
-    fn expect_type(args: &Vec<Expression>, f: fn(DataType) -> DataType) -> std::io::Result<DataType> {
-        let data_type = match args.as_slice() {
-            [] => RuntimeResolvedType,
-            [arg] => decipher_model(arg)?,
-            other => return throw(TypeMismatch(ArgumentsMismatched(1, other.len())))
+    fn expect_type_and_size(args: &Vec<Expression>, f: fn(DataType) -> DataType) -> std::io::Result<DataType> {
+        let (data_type, number_maybe) = match args.as_slice() {
+            [] => (RuntimeResolvedType, None),
+            [arg] => (decipher_model(arg)?, None),
+            [arg, num] => (decipher_model(arg)?, Some(pull_number_lit(num)?)),
+            other => return throw(TypeMismatch(ArgumentsMismatched(2, other.len())))
         };
-        Ok(f(data_type))
+        match number_maybe {
+            None => Ok(f(data_type)),
+            Some(size) => Ok(FixedSizeType(f(data_type).into(), size.to_usize()))
+        }
     }
     fn expect_types(args: &Vec<Expression>, f: fn(Vec<DataType>) -> DataType) -> std::io::Result<DataType> {
         let mut data_types = vec![];
@@ -549,9 +559,8 @@ fn decipher_model_function_call(
     match fx {
         Identifier(name) =>
             match name.as_str() {
-                "Array" => expect_type(args, |data_type| ArrayType(data_type.into())),
-                "BLOB" => expect_type(args, |data_type| BlobType(data_type.into())),
-                "ByteString" => expect_size(args, ByteStringType),
+                "Array" => expect_type_and_size(args, |data_type| ArrayType(data_type.into())),
+                "Bytes" => expect_size(args, ByteStringType),
                 "Enum" => expect_params(args, |params| EnumType(params)),
                 "fn" => expect_params(args, |params| FunctionType(params, RuntimeResolvedType.into())),
                 "String" => expect_size(args, StringType),
@@ -576,24 +585,29 @@ fn decipher_model_tuple(items: &Vec<Expression>) -> std::io::Result<DataType> {
 fn decipher_model_identifier(name: &str) -> std::io::Result<DataType> {
     match name {
         "Array" => Ok(ArrayType(RuntimeResolvedType.into())),
-        "BLOB" => Ok(BlobType(RuntimeResolvedType.into())),
-        "ByteString" => Ok(ByteStringType),
+        "BitSet" => Ok(BitSetType),
         "Boolean" => Ok(BooleanType),
+        "Bytes" => Ok(ByteStringType),
         "Char" => Ok(CharType),
         "DateTime" => Ok(DateTimeType),
         "Enum" => Ok(EnumType(vec![])),
         "Error" => Ok(ErrorType),
         "f64" => Ok(NumberType(F64Kind)),
         "Fn" => Ok(FunctionType(vec![], RuntimeResolvedType.into())),
+        "i8" => Ok(NumberType(I8Kind)),
+        "i16" => Ok(NumberType(I16Kind)),
+        "i32" => Ok(NumberType(I32Kind)),
         "i64" => Ok(NumberType(I64Kind)),
         "i128" => Ok(NumberType(I128Kind)),
-        "Number" => Ok(NumberType(NaNKind)),
+        "Number" => Ok(NumberType(AnyKind)),
         "String" => Ok(StringType),
         "Struct" => Ok(StructureType(vec![])),
         "Table" => Ok(TableType(vec![])),
         "Tuple" => Ok(TupleType(vec![])),
         "UUID" => Ok(UUIDType),
         "u8" => Ok(NumberType(U8Kind)),
+        "u16" => Ok(NumberType(U16Kind)),
+        "u32" => Ok(NumberType(U32Kind)),
         "u64" => Ok(NumberType(U64Kind)),
         "u128" => Ok(NumberType(U128Kind)),
         type_name => throw(TypeMismatch(UnrecognizedTypeName(type_name.to_string())))
@@ -654,7 +668,7 @@ mod tests {
         use crate::number_kind::NumberKind::*;
         use crate::numbers::Numbers::I64Value;
         use crate::parameter::Parameter;
-        use crate::testdata::make_quote_parameters;
+        use crate::test_util::make_quote_parameters;
         use crate::typed_values::TypedValue::Number;
 
         #[test]
@@ -676,14 +690,14 @@ mod tests {
         #[test]
         fn test_array_fixed_of_type() {
             verify_type_construction(
-                "Array(DateTime):::(12)",
+                "Array(DateTime, 12)",
                 FixedSizeType(ArrayType(DateTimeType.into()).into(), 12)
             );
         }
 
         #[test]
-        fn test_binary() {
-            verify_type_construction("ByteString(5566)", FixedSizeType(ByteStringType.into(), 5566));
+        fn test_bits() {
+            verify_type_construction("BitSet", BitSetType);
         }
 
         #[test]
@@ -692,7 +706,12 @@ mod tests {
         }
 
         #[test]
-        fn test_date() {
+        fn test_bytes() {
+            verify_type_construction("Bytes(5566)", FixedSizeType(ByteStringType.into(), 5566));
+        }
+
+        #[test]
+        fn test_datetime() {
             verify_type_construction("DateTime", DateTimeType);
         }
 
@@ -787,15 +806,16 @@ mod tests {
     /// Instantiation tests
     #[cfg(test)]
     mod instantiation_tests {
+        use crate::bit_array::BitSet;
         use crate::dataframe::Dataframe::ModelTable;
         use crate::errors::Errors;
         use crate::errors::Errors::Exact;
         use crate::model_row_collection::ModelRowCollection;
         use crate::numbers::Numbers::*;
         use crate::sequences::Array;
-        use crate::testdata::{make_quote_columns, verify_exact_code, verify_exact_unwrapped, verify_exact_value, verify_exact_value_where};
+        use crate::test_util::{make_quote_columns, verify_exact_code, verify_exact_unwrapped, verify_exact_value, verify_exact_value_where};
         use crate::typed_values::TypedValue;
-        use crate::typed_values::TypedValue::{ArrayValue, Boolean, ByteStringValue, CharValue, DateTimeValue, ErrorValue, Number, StringValue, TableValue, TupleValue};
+        use crate::typed_values::TypedValue::{ArrayValue, BitSetValue, Boolean, ByteStringValue, CharValue, DateTimeValue, ErrorValue, Number, StringValue, TableValue, TupleValue};
 
         #[test]
         fn test_array() {
@@ -818,30 +838,33 @@ mod tests {
         }
 
         #[test]
-        fn test_byte_string() {
+        fn test_bits() {
             verify_exact_value(r#"
-                ByteString::new()
-            "#, ByteStringValue(vec![]));
+                BitSet::new()
+            "#, BitSetValue(BitSet::new(1, 0)));
         }
 
         #[test]
-        fn test_byte_string_from_bytes() {
+        fn test_bitset_with_values() {
             verify_exact_value(r#"
-                ByteString::new(0B68656c6c6f)
-            "#, ByteStringValue(vec![
-                0x68, 0x65, 0x6c, 0x6c, 0x6f
-            ]));
+                BitSet::new(3, 4, 5, 14)
+            "#, BitSetValue(BitSet::from_vec(vec![3, 4, 5, 14])));
         }
 
         #[test]
-        fn test_byte_string_from_chars() {
+        fn test_bitset_with_vector() {
             verify_exact_value(r#"
-                ByteString::new("hello")
-            "#, ByteStringValue(vec![
-                0x68, 0x65, 0x6c, 0x6c, 0x6f
-            ]));
+                BitSet::new([3, 4, 5, 14])
+            "#, BitSetValue(BitSet::from_vec(vec![3, 4, 5, 14])));
         }
-        
+
+        #[test]
+        fn test_bitset_with_mixed_values_and_vector() {
+            verify_exact_value(r#"
+                BitSet::new(14, 0..3, 5)
+            "#, BitSetValue(BitSet::from_vec(vec![0, 1, 2, 5, 14])));
+        }
+
         #[test]
         fn test_boolean() {
             verify_exact_value(r#"
@@ -850,10 +873,42 @@ mod tests {
         }
 
         #[test]
-        fn test_boolean_from_literal() {
+        fn test_boolean_from_literal_false() {
+            verify_exact_value(r#"
+                Boolean::new(false)
+            "#, Boolean(false));
+        }
+
+        #[test]
+        fn test_boolean_from_literal_true() {
             verify_exact_value(r#"
                 Boolean::new(true)
             "#, Boolean(true));
+        }
+
+        #[test]
+        fn test_bytes() {
+            verify_exact_value(r#"
+                Bytes::new()
+            "#, ByteStringValue(vec![]));
+        }
+
+        #[test]
+        fn test_bytes_from_bytes() {
+            verify_exact_value(r#"
+                Bytes::new(0B68656c6c6f)
+            "#, ByteStringValue(vec![
+                0x68, 0x65, 0x6c, 0x6c, 0x6f
+            ]));
+        }
+
+        #[test]
+        fn test_bytes_from_chars() {
+            verify_exact_value(r#"
+                Bytes::new("hello")
+            "#, ByteStringValue(vec![
+                0x68, 0x65, 0x6c, 0x6c, 0x6f
+            ]));
         }
 
         #[test]
@@ -894,7 +949,7 @@ mod tests {
         #[test]
         fn test_enum() {
             verify_exact_value(r#"
-                Enum::new(AMEX, NYSE, NASDAQ, OTCBB)
+                Enum(AMEX, NYSE, NASDAQ, OTCBB)::new
             "#, Number(I64Value(0)));
         }
 
@@ -1084,17 +1139,16 @@ mod tests {
         }
     }
 
-    /// "type_of" tests
+    /// Type tests
     #[cfg(test)]
     mod type_of_tests {
-        use crate::numbers::Numbers::*;
-        use crate::testdata::verify_exact_code;
+        use crate::test_util::verify_exact_code;
 
         #[test]
         fn test_type_of_user_defined_type() {
             verify_exact_code(r#"
                 Cards = Table(face: String(2), suit: String(2))
-                type_of Cards
+                Cards::get_type
             "#, "Table(face: String(2), suit: String(2))");
         }
     }

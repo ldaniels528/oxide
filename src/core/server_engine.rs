@@ -3,6 +3,7 @@
 // Oxide Server module
 ////////////////////////////////////////////////////////////////////
 
+use crate::builtins::Builtins;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
 use crate::compiler::Compiler;
@@ -14,7 +15,7 @@ use crate::expression::Expression::Literal;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::object_config::ObjectConfig;
-use crate::packages::VERSION;
+use crate::packages::{PackageOps, VERSION};
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Structures::Soft;
@@ -25,7 +26,9 @@ use crate::web_engine::{WebSocketSystemServer, WebSocketUserServer};
 use crate::*;
 use actix::{Actor, Addr, StreamHandler};
 use actix_session::Session;
+use actix_web::body::BoxBody;
 use actix_web::dev::Server;
+use actix_web::dev::{ServiceFactory, ServiceRequest};
 use actix_web::http::Method;
 use actix_web::{web, App, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws;
@@ -33,15 +36,18 @@ use actix_web_actors::ws::WebsocketContext;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
+use once_cell::sync::Lazy;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::error::Error;
 use std::io::{stdout, Write};
+use std::net::TcpListener;
 use std::ops::Deref;
 use std::thread;
 use std::thread::JoinHandle;
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
+use tokio::sync::oneshot;
 use tokio_tungstenite::tungstenite::handshake::client::Response;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
@@ -510,7 +516,7 @@ pub async fn handle_user_api(
 
     // execute the user code
     //println!("handle_user_api: user_code {user_code}");
-    match interpreter.invoke(&user_code) {
+    match interpreter.invoke_async(&user_code).await {
         Ok(result) => {
             println!("handle_user_api: result {result}");
             HttpResponse::Ok().json(result.to_json())
@@ -566,16 +572,13 @@ pub async fn handle_user_websockets(
     }
 }
 
-pub fn start_http_server(port: u16) -> JoinHandle<()> {
-    start_http_server_with_user_apis(port, vec![])
-}
-
-pub fn start_http_server_with_user_apis(
+pub fn start_http_server(
     port: u16,
     apis: Vec<UserAPI>,
 ) -> JoinHandle<()> {
+    println!("start_http_server: Starting HTTP server on port {port}");
     thread::spawn(move || {
-        let server = actix_web::HttpServer::new(move || { 
+        let server = actix_web::HttpServer::new(move || {
             let mut web_cfg = web_routes!(SharedState::with_user_apis(apis.clone()));
             for api in apis.clone() {
                 for api_method in api.methods {
@@ -603,11 +606,61 @@ pub fn start_http_server_with_user_apis(
     })
 }
 
-pub async fn start_async_http_server(port: u16) -> Server {
-       actix_web::HttpServer::new(move || web_routes!(SharedState::new()))
-            .bind(format!("{}:{}", "0.0.0.0", port))
-            .expect(format!("Can't bind to port {port}").as_str())
-            .run()
+pub async fn start_http_server_async(
+    port: u16,
+    apis: Vec<UserAPI>,
+)  -> tokio::task::JoinHandle<()> {
+    let (tx, rx) = oneshot::channel();
+
+    let server_handle = start_http_server_async_no_wait(port, apis, tx);
+
+    // Wait for a signal that the server is ready
+    rx.await.expect("Failed to receive server ready signal");
+
+    server_handle
+}
+
+pub fn start_http_server_async_no_wait(
+    port: u16,
+    apis: Vec<UserAPI>,
+    ready_tx: oneshot::Sender<()>,
+) -> tokio::task::JoinHandle<()> {
+    println!("start_http_server_async: Starting HTTP server on port {port}");
+
+    let listener = TcpListener::bind(("0.0.0.0", port))
+        .expect(&format!("Can't bind to port {port}"));
+
+    tokio::spawn(async move {
+        // Notify the outside world that the server is ready to accept requests
+        let server = actix_web::HttpServer::new(move || {
+            let mut web_cfg = web_routes!(SharedState::with_user_apis(apis.clone()));
+            for api in apis.clone() {
+                for api_method in api.methods {
+                    let path = api.path.as_str();
+                    web_cfg = match api_method.method {
+                        APIMethods::DELETE => web_cfg.route(path, web::delete().to(handle_user_api)),
+                        APIMethods::GET => web_cfg.route(path, web::get().to(handle_user_api)),
+                        APIMethods::HEAD => web_cfg.route(path, web::head().to(handle_user_api)),
+                        APIMethods::PATCH => web_cfg.route(path, web::patch().to(handle_user_api)),
+                        APIMethods::POST => web_cfg.route(path, web::post().to(handle_user_api)),
+                        APIMethods::PUT => web_cfg.route(path, web::put().to(handle_user_api)),
+                        APIMethods::WS => web_cfg.service(web::resource(path).to(handle_user_websockets)),
+                    };
+                }
+            }
+            web_cfg
+        })
+            .listen(listener)
+            .expect("Failed to start server");
+
+        // Signal that the server is bound and ready
+        let _ = ready_tx.send(());
+
+        // Start serving
+        if let Err(e) = server.run().await {
+            eprintln!("HTTP server error: {e}");
+        }
+    })
 }
 
 async fn append_row(
@@ -719,10 +772,10 @@ fn row_uri(database: &str, schema: &str, name: &str, id: usize) -> String {
 mod tests {
     use super::*;
     use crate::data_types::DataType::{NumberType, RuntimeResolvedType, StringType};
-    use crate::expression::Expression::{Identifier, TypeOf};
+    use crate::expression::Expression::Identifier;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::packages::VERSION;
-    use crate::testdata::make_quote_parameters;
+    use crate::test_util::make_quote_parameters;
     use crate::typed_values::TypedValue;
     use crate::typed_values::TypedValue::{Function, StringValue};
     use actix_web::test;
@@ -742,18 +795,18 @@ mod tests {
                 {
                     "/api/orders" : {
                         "GET" : (order_id -> {
-                           type_of(order_id)
+                           order_id
                         })
                     }
                      "/api/contests" : {
                         "GET" : (order_id -> {
-                           type_of(order_id)
+                           order_id
                         })
                         "POST" : ((symbol: String, exchange: String, lastSale: f64) -> {
-                            type_of(symbol)
+                            symbol
                         })
                         "PUT" : (form -> {
-                            type_of(form)
+                            form
                         })
                     }
                 }
@@ -769,7 +822,7 @@ mod tests {
                             params: vec![
                                 Parameter::new("order_id", RuntimeResolvedType),
                             ],
-                            body: TypeOf(Identifier("order_id".into()).into()).into(),
+                            body: Identifier("order_id".into()).into(),
                             returns: RuntimeResolvedType
                         }
                     }
@@ -784,7 +837,7 @@ mod tests {
                             params: vec![
                                 Parameter::new("order_id", RuntimeResolvedType),
                             ],
-                            body: TypeOf(Identifier("order_id".into()).into()).into(),
+                            body: Identifier("order_id".into()).into(),
                             returns: RuntimeResolvedType
                         }
                     }, UserAPIMethod {
@@ -795,7 +848,7 @@ mod tests {
                                 Parameter::new("exchange", StringType),
                                 Parameter::new("lastSale", NumberType(F64Kind)),
                             ],
-                            body: TypeOf(Identifier("symbol".into()).into()).into(),
+                            body: Identifier("symbol".into()).into(),
                             returns: RuntimeResolvedType
                         }
                     },
@@ -805,7 +858,7 @@ mod tests {
                             params: vec![
                                 Parameter::new("form", RuntimeResolvedType),
                             ],
-                            body: TypeOf(Identifier("form".into()).into()).into(),
+                            body: Identifier("form".into()).into(),
                             returns: RuntimeResolvedType
                         }
                     }

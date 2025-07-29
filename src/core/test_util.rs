@@ -19,8 +19,8 @@ use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::{F64Kind, I64Kind};
 use crate::numbers::Numbers::{F64Value, I64Value};
 use crate::object_config::ObjectConfig;
+use crate::packages::webservers;
 use crate::parameter::Parameter;
-use crate::server_engine::start_http_server;
 use crate::structures::Row;
 use crate::table_renderer::TableRenderer;
 use crate::test_engine::TestEngine;
@@ -35,8 +35,6 @@ use rand::{thread_rng, Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs::File;
-use std::thread;
-use std::time::Duration;
 
 pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
     make_dataframe_ns(Namespace::new(database, schema, name), columns)
@@ -109,9 +107,9 @@ pub fn make_table_file(
     (ns.get_table_file_path(), file, table_columns, record_size)
 }
 
-pub fn start_test_server(port: u16) {
-    start_http_server(port);
-    thread::sleep(Duration::from_millis(100));
+pub async fn start_test_server_async() -> std::io::Result<u16> {
+    let port = webservers::start_server_on_random_port().await?;
+    Ok(port)
 }
 
 pub fn verify_bit_operator(op: &str) {
@@ -125,9 +123,11 @@ pub fn verify_data_type(code: &str, expected: DataType) {
 }
 
 pub fn verify_exact_code(code: &str, expected: &str) {
-    let mut interpreter = Interpreter::new();
-    let actual = interpreter.evaluate(code).unwrap();
-    assert_eq!(actual.to_code(), expected);
+    verify_exact_code_with(Interpreter::new(), code, expected);
+}
+
+pub async fn verify_exact_code_async(code: &str, expected: &str) {
+    verify_exact_code_with_async(Interpreter::new(), code, expected).await;
 }
 
 pub fn verify_exact_code_with(
@@ -140,10 +140,42 @@ pub fn verify_exact_code_with(
     interpreter
 }
 
+pub async fn verify_exact_code_with_async(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: &str
+) -> Interpreter {
+    let actual = interpreter.evaluate_async(code).await.unwrap();
+    assert_eq!(actual.to_code(), expected);
+    interpreter
+}
+
 pub fn verify_exact_json(code: &str, expected: Value) {
-    let mut interpreter = Interpreter::new();
+    verify_exact_json_with(Interpreter::new(), code, expected);
+}
+
+pub async fn verify_exact_json_async(code: &str, expected: Value) {
+    verify_exact_json_with_async(Interpreter::new(), code, expected).await;
+}
+
+pub fn verify_exact_json_with(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: Value
+) -> Interpreter {
     let actual = interpreter.evaluate(code).unwrap();
     assert_eq!(actual.to_json(), expected);
+    interpreter
+}
+
+pub async fn verify_exact_json_with_async(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: Value
+) -> Interpreter {
+    let actual = interpreter.evaluate_async(code).await.unwrap();
+    assert_eq!(actual.to_json(), expected);
+    interpreter
 }
 
 pub fn verify_exact_report(code: &str, expected: Vec<&str>) {
@@ -180,6 +212,10 @@ pub fn verify_exact_table(code: &str, expected: Vec<&str>) {
     verify_exact_table_with(Interpreter::new(), code, expected);
 }
 
+pub async fn verify_exact_table_async(code: &str, expected: Vec<&str>) {
+    verify_exact_table_with_async(Interpreter::new(), code, expected).await;
+}
+
 pub fn verify_exact_table_with(
     mut interpreter: Interpreter,
     code: &str,
@@ -193,10 +229,21 @@ pub fn verify_exact_table_with(
     interpreter
 }
 
+pub async fn verify_exact_table_with_async(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: Vec<&str>,
+) -> Interpreter {
+    let result = interpreter.evaluate_async(code).await
+        .unwrap().to_table().unwrap();
+    let actual = TableRenderer::from_table_with_ids(&result).unwrap();
+    for s in &actual { println!("{}", s) }
+    assert_eq!(actual, expected);
+    interpreter
+}
+
 pub fn verify_exact_unwrapped(code: &str, expected: &str) {
-    let mut interpreter = Interpreter::new();
-    let actual = interpreter.evaluate(code).unwrap();
-    assert_eq!(actual.unwrap_value(), expected);
+    verify_exact_unwrapped_with(Interpreter::new(), code, expected);
 }
 
 pub fn verify_exact_unwrapped_with(
@@ -209,8 +256,22 @@ pub fn verify_exact_unwrapped_with(
     interpreter
 }
 
+pub async  fn verify_exact_unwrapped_with_async(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: &str
+) -> Interpreter {
+    let actual = interpreter.evaluate_async(code).await.unwrap();
+    assert_eq!(actual.unwrap_value(), expected);
+    interpreter
+}
+
 pub fn verify_exact_value(code: &str, expected: TypedValue) {
     verify_exact_value_with(Interpreter::new(), code, expected);
+}
+
+pub async  fn verify_exact_value_async(code: &str, expected: TypedValue) {
+    verify_exact_value_with_async(Interpreter::new(), code, expected).await;
 }
 
 pub fn verify_exact_value_whence(
@@ -232,6 +293,18 @@ pub fn verify_exact_value_where(code: &str, f: fn(TypedValue) -> bool) {
 }
 
 pub fn verify_exact_value_with(
+    mut interpreter: Interpreter,
+    code: &str,
+    expected: TypedValue,
+) -> Interpreter {
+    match interpreter.evaluate(code) {
+        Ok(actual) => assert_eq!(actual, expected),
+        Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected),
+    }
+    interpreter
+}
+
+pub async  fn verify_exact_value_with_async(
     mut interpreter: Interpreter,
     code: &str,
     expected: TypedValue,

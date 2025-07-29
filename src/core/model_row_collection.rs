@@ -248,7 +248,7 @@ mod tests {
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::I64Value;
     use crate::row_collection::RowCollection;
-    use crate::testdata::{make_quote, make_quote_parameters};
+    use crate::test_util::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue::*;
     use std::ops::Deref;
 

@@ -42,14 +42,31 @@ impl Interpreter {
         self.invoke(&opcode)
     }
 
+    /// Executes the supplied source code returning the result of the evaluation
+    pub async fn evaluate_async(&mut self, source_code: &str) -> std::io::Result<TypedValue> {
+        let opcode = Compiler::build(source_code)?;
+        self.invoke_async(&opcode).await
+    }
+
     /// returns a variable by name
     pub fn get(&self, name: &str) -> Option<TypedValue> {
         self.machine.get(name)
+    }
+    
+    pub fn get_machine(&self) -> &Machine {
+        &self.machine
     }
 
     /// Executes the supplied source code returning the result of the evaluation
     pub fn invoke(&mut self, opcode: &Expression) -> std::io::Result<TypedValue> {
         let (machine, result) = self.machine.evaluate(&opcode)?;
+        self.machine = machine;
+        Ok(result)
+    }
+
+    /// Executes the supplied source code returning the result of the evaluation
+    pub async fn invoke_async(&mut self, opcode: &Expression) -> std::io::Result<TypedValue> {
+        let (machine, result) = self.machine.evaluate_async(&opcode).await?;
         self.machine = machine;
         Ok(result)
     }
@@ -71,56 +88,56 @@ mod tests {
     mod assignment_tests {
         use crate::interpreter::Interpreter;
         use crate::numbers::Numbers::{F64Value, I64Value, NaNValue};
-        use crate::testdata::{verify_exact_code, verify_exact_value_with};
+        use crate::test_util::{verify_exact_code_async, verify_exact_table_with, verify_exact_value_with};
         use crate::typed_values::TypedValue::{Boolean, Number};
 
-        #[test]
-        fn test_assignment_via_array_destructuring() {
-            verify_exact_code(r#"
-            let [a, b, c, d] = [3, 5, 7, 9]
-            a + b + c + d
-        "#, "24")
+        #[actix::test]
+        async fn test_assignment_via_array_destructuring_async() {
+            verify_exact_code_async(r#"
+                let [a, b, c, d] = [3, 5, 7, 9]
+                [a, b, c, d]
+            "#, "[3, 5, 7, 9]").await
         }
 
-        #[test]
-        fn test_assignment_via_tuple_destructuring() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_assignment_via_tuple_destructuring() {
+            verify_exact_code_async(r#"
             let (x, y, z) = (3, 5, 7)
             x + y + z
-        "#, "15")
+        "#, "15").await
         }
 
-        #[test]
-        fn test_euler_mascheroni_constant() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_euler_mascheroni_constant() {
+            verify_exact_code_async(r#"
                 let x = 2 * γ
                 x
-            "#, "1.1544313298030657")
+            "#, "1.1544313298030657").await
         }
 
-        #[test]
-        fn test_euler_number() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_euler_number() {
+            verify_exact_code_async(r#"
                 let n = 2 * 𝑒
                 n
-            "#, "5.43656365691809")
+            "#, "5.43656365691809").await
         }
 
-        #[test]
-        fn test_golden_ratio() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_golden_ratio() {
+            verify_exact_code_async(r#"
                 let g = 2 * φ
                 g
-            "#, "3.23606797749979")
+            "#, "3.23606797749979").await
         }
 
-        #[test]
-        fn test_pi() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_pi() {
+            verify_exact_code_async(r#"
                 let r = 5
                 let c = 2 * π * r
                 c
-            "#, "31.41592653589793")
+            "#, "31.41592653589793").await
         }
 
         #[test]
@@ -139,164 +156,199 @@ mod tests {
             interpreter = verify_exact_value_with(interpreter, "x < 35", Boolean(false));
             interpreter = verify_exact_value_with(interpreter, "x >= 35", Boolean(true));
         }
+
+        #[test]
+        fn test_colon_colon_capture() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_table_with(interpreter, r#"
+                stocks = []
+                stocks<::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
+                stocks<::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
+                stocks<::push({ symbol: "TIX", exchange: "NASDAQ", last_sale: 22.33 })
+                stocks
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | ABC    | AMEX     | 12.49     |",
+                "| 1  | BOOM   | NYSE     | 56.88     |",
+                "| 2  | TIX    | NASDAQ   | 22.33     |",
+                "|------------------------------------|"]);
+
+            interpreter = verify_exact_table_with(interpreter, r#"
+                stocks<::pop()
+                stocks
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | ABC    | AMEX     | 12.49     |",
+                "| 1  | BOOM   | NYSE     | 56.88     |",
+                "|------------------------------------|"]);
+        }
     }
 
     /// Coalesce tests
     #[cfg(test)]
     mod coalesce_tests {
-        use crate::testdata::verify_exact_code;
+        use crate::test_util::verify_exact_code_async;
 
-        #[test]
-        fn test_coalesce_not_null_or_undefined() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_coalesce_not_null_or_undefined() {
+            verify_exact_code_async(r#"
                 "Hello" ? "it was null or undefined"
-            "#, "\"Hello\"");
+            "#, "\"Hello\""
+            ).await;
         }
 
-        #[test]
-        fn test_coalesce_null() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_coalesce_null() {
+            verify_exact_code_async(r#"
                 null ? "it was null or undefined"
-            "#, "\"it was null or undefined\"");
+            "#, "\"it was null or undefined\""
+            ).await;
         }
 
-        #[test]
-        fn test_coalesce_undefined() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_coalesce_undefined() {
+            verify_exact_code_async(r#"
                 undefined ? "it was null or undefined"
-            "#, "\"it was null or undefined\"");
+            "#, "\"it was null or undefined\""
+            ).await;
         }
 
         // Error::new('Boom!')
-        #[test]
-        fn test_coalesce_error() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_coalesce_error() {
+            verify_exact_code_async(r#"
                 (Error::new()) !? "An error occurred"
-            "#, "\"An error occurred\"");
+            "#, "\"An error occurred\""
+            ).await;
         }
 
-        #[test]
-        fn test_coalesce_thrown_error() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_coalesce_thrown_error() {
+            verify_exact_code_async(r#"
                 (throw "Boom!") !? "An error occurred"
-            "#, "\"An error occurred\"");
+            "#, "\"An error occurred\""
+            ).await;
         }
 
-        #[test]
-        fn test_coalesce_no_thrown_error() {
-            verify_exact_code(r#"
+        #[actix::test]
+        async fn test_coalesce_no_thrown_error() {
+            verify_exact_code_async(r#"
                 "No problem" !? "An error occurred"
-            "#, "\"No problem\"");
+            "#, "\"No problem\""
+            ).await;
         }
     }
 
     /// Condition expression tests
     #[cfg(test)]
     mod condition_expression_tests {
-        use crate::testdata::verify_exact_value;
-        use crate::typed_values::TypedValue::Boolean;
+        use crate::test_util::verify_exact_code_async;
 
-        #[test]
-        fn test_contains_with_array() {
-            verify_exact_value("[1, 5, 7, 9] contains 5", Boolean(true));
-            verify_exact_value("[1, 5, 7, 9] contains 6", Boolean(false));
+        #[actix::test]
+        async fn test_contains_with_array() {
+            verify_exact_code_async("[1, 5, 7, 9]::contains(5)", "true").await;
+            verify_exact_code_async("[1, 5, 7, 9]::contains(6)", "false").await;
         }
 
-        #[test]
-        fn test_contains_with_binary_string() {
-            verify_exact_value("0Bdeadbeefcafebabe contains 0xbe", Boolean(true));
-            verify_exact_value("0Bdeadbeefcafebabe contains 0xcc", Boolean(false));
+        #[actix::test]
+        async fn test_contains_with_binary_string() {
+            verify_exact_code_async("0Bdeadbeefcafebabe::contains(0xbe)", "true").await;
+            verify_exact_code_async("0Bdeadbeefcafebabe::contains(0xcc)", "false").await;
         }
 
-        #[test]
-        fn test_contains_with_range_exclusive() {
-            verify_exact_value("(1..20) contains 19", Boolean(true));
-            verify_exact_value("(1..20) contains 20", Boolean(false));
+        #[actix::test]
+        async fn test_contains_with_range_exclusive() {
+            verify_exact_code_async("(1..20)::contains(19)", "true").await;
+            verify_exact_code_async("(1..20)::contains(20)", "false").await;
         }
 
-        #[test]
-        fn test_contains_with_range_inclusive() {
-            verify_exact_value("(1..=20) contains 20", Boolean(true));
-            verify_exact_value("(1..=20) contains 21", Boolean(false));
+        #[actix::test]
+        async fn test_contains_with_range_inclusive() {
+            verify_exact_code_async("(1..=20)::contains(20)", "true").await;
+            verify_exact_code_async("(1..=20)::contains(21)", "false").await;
         }
 
-        #[test]
-        fn test_contains_with_string() {
-            verify_exact_value(r#""🔥🎁💎🎉" contains '🎁'"#, Boolean(true));
-            verify_exact_value(r#""🔥🎁💎🎉" contains '🔮'"#, Boolean(false));
+        #[actix::test]
+        async fn test_contains_with_string() {
+            verify_exact_code_async(r#""🔥🎁💎🎉"::contains('🎁')"#, "true").await;
+            verify_exact_code_async(r#""🔥🎁💎🎉"::contains('🔮')"#, "false").await;
         }
 
-        #[test]
-        fn test_contains_with_structure() {
-            verify_exact_value(r#"{ first: "Tom", last: "Lane" } contains "first""#, Boolean(true));
-            verify_exact_value(r#"{ first: "Tom", last: "Lane" } contains "middle""#, Boolean(false));
+        #[actix::test]
+        async fn test_contains_with_structure() {
+            verify_exact_code_async(r#"{ first: "Tom", last: "Lane" }::contains("first")"#, "true").await;
+            verify_exact_code_async(r#"{ first: "Tom", last: "Lane" }::contains("middle")"#, "false").await;
         }
 
-        #[test]
-        fn test_in_array() {
-            verify_exact_value("8 in [1, 4, 2, 8, 5, 7]", Boolean(true));
-            verify_exact_value("3 in [1, 4, 2, 8, 5, 7]", Boolean(false));
+        #[actix::test]
+        async fn test_in_array() {
+            verify_exact_code_async("8 in [1, 4, 2, 8, 5, 7]", "true").await;
+            verify_exact_code_async("3 in [1, 4, 2, 8, 5, 7]", "false").await;
         }
 
-        #[test]
-        fn test_in_binary_string() {
-            verify_exact_value("0xbe in 0Bdeadbeefcafebabe", Boolean(true));
-            verify_exact_value("0xcc in 0Bdeadbeefcafebabe", Boolean(false));
+        #[actix::test]
+        async fn test_in_binary_string() {
+            verify_exact_code_async("0xbe in 0Bdeadbeefcafebabe", "true").await;
+            verify_exact_code_async("0xcc in 0Bdeadbeefcafebabe", "false").await;
         }
 
-        #[test]
-        fn test_in_range_exclusive() {
-            verify_exact_value("19 in 1..20", Boolean(true));
-            verify_exact_value("20 in 1..20", Boolean(false));
+        #[actix::test]
+        async fn test_in_range_exclusive() {
+            verify_exact_code_async("19 in 1..20", "true").await;
+            verify_exact_code_async("20 in 1..20", "false").await;
         }
 
-        #[test]
-        fn test_in_range_inclusive() {
-            verify_exact_value("20 in 1..=20", Boolean(true));
-            verify_exact_value("21 in 1..=20", Boolean(false));
+        #[actix::test]
+        async fn test_in_range_inclusive() {
+            verify_exact_code_async("20 in 1..=20", "true").await;
+            verify_exact_code_async("21 in 1..=20", "false").await;
         }
 
-        #[test]
-        fn test_like() {
-            verify_exact_value("'Hello' like 'H*o'", Boolean(true));
-            verify_exact_value("'Hello' like 'H.ll.'", Boolean(true));
-            verify_exact_value("'Hello' like 'H%ll%'", Boolean(false));
+        #[actix::test]
+        async fn test_like() {
+            verify_exact_code_async("'Hello' like 'H*o'", "true").await;
+            verify_exact_code_async("'Hello' like 'H.ll.'", "true").await;
+            verify_exact_code_async("'Hello' like 'H%ll%'", "false").await;
         }
 
-        #[test]
-        fn test_matches_exact() {
-            verify_exact_value(r#"
+        #[actix::test]
+        async fn test_matches_exact() {
+            verify_exact_code_async(r#"
                 a = { first: "Tom", last: "Lane", scores: [82, 78, 99] }
                 b = { first: "Tom", last: "Lane", scores: [82, 78, 99] }
                 a matches b
-            "#, Boolean(true));
+            "#, "true").await;
         }
 
-        #[test]
-        fn test_matches_unordered() {
-            verify_exact_value(r#"
+        #[actix::test]
+        async fn test_matches_unordered() {
+            verify_exact_code_async(r#"
                 a = { scores: [82, 78, 99], first: "Tom", last: "Lane" }
                 b = { last: "Lane", first: "Tom", scores: [82, 78, 99] }
                 a matches b
-            "#, Boolean(true));
+            "#, "true").await;
         }
 
-        #[test]
-        fn test_matches_not_match_1() {
-            verify_exact_value(r#"
+        #[actix::test]
+        async fn test_matches_not_match_1() {
+            verify_exact_code_async(r#"
                 a = { first: "Tom", last: "Lane" }
                 b = { first: "Jerry", last: "Lane" }
                 a matches b
-            "#, Boolean(false));
+            "#, "false").await;
         }
 
-        #[test]
-        fn test_matches_not_match_2() {
-            verify_exact_value(r#"
+        #[actix::test]
+        async fn test_matches_not_match_2() {
+            verify_exact_code_async(r#"
                 a = { key: "123", values: [1, 74, 88] }
                 b = { key: "123", values: [1, 74, 88, 0] }
                 a matches b
-            "#, Boolean(false));
+            "#, "false").await;
         }
     }
 
@@ -305,7 +357,7 @@ mod tests {
     mod control_flow_tests {
         use crate::errors::Errors;
         use crate::interpreter::Interpreter;
-        use crate::testdata::*;
+        use crate::test_util::*;
         use crate::typed_values::TypedValue::*;
 
         #[test]
@@ -315,11 +367,26 @@ mod tests {
             "#, "[0xde, 0xad, 0xbe, 0xef, 0xfa, 0xce, 0xba, 0xde]");
         }
 
+        #[actix::test]
+        async fn test_for_each_byte_in_a_binary_string_async() {
+            verify_exact_code_async(r#"
+                for b in 0Bdeadbeeffacebade yield b
+            "#, "[0xde, 0xad, 0xbe, 0xef, 0xfa, 0xce, 0xba, 0xde]").await;
+        }
+
+
         #[test]
         fn test_for_each_char_in_a_string() {
             verify_exact_code(r#"
                 for c in "Hello World" yield c
             "#, "['H', 'e', 'l', 'l', 'o', ' ', 'W', 'o', 'r', 'l', 'd']");
+        }
+
+        #[actix::test]
+        async fn test_for_each_char_in_a_string_async() {
+            verify_exact_code_async(r#"
+                for c in "Hello World" yield c
+            "#, "['H', 'e', 'l', 'l', 'o', ' ', 'W', 'o', 'r', 'l', 'd']").await;
         }
 
         #[test]
@@ -329,11 +396,25 @@ mod tests {
             "#, "['🔥', '🎁', '💎', '🎉']");
         }
 
+        #[actix::test]
+        async fn test_for_each_unicode_char_in_a_string_async() {
+            verify_exact_code_async(r#"
+                for c in "🔥🎁💎🎉" yield c
+            "#, "['🔥', '🎁', '💎', '🎉']").await;
+        }
+
         #[test]
         fn test_for_each_item_in_an_array() {
             verify_exact_code(r#"
                 for item in [1, 5, 6, 11, 17] yield item / 2.0
             "#, "[0.5, 2.5, 3, 5.5, 8.5]");
+        }
+
+        #[actix::test]
+        async fn test_for_each_item_in_an_array_async() {
+            verify_exact_code_async(r#"
+                for item in [1, 5, 6, 11, 17] yield item / 2.0
+            "#, "[0.5, 2.5, 3, 5.5, 8.5]").await;
         }
 
         #[test]
@@ -368,7 +449,7 @@ mod tests {
                     {symbol: "ABC", exchange: "NYSE", last_sale: 23.77},
                     {symbol: "BOX", exchange: "AMEX", last_sale: 123.43},
                     {symbol: "GMO", exchange: "NASD", last_sale: 5.007}
-                ]::to_table() yield row.last_sale
+                ]::to(Table) yield row.last_sale
             "#, r#"[23.77, 123.43, 5.007]"#);
         }
 
@@ -376,9 +457,9 @@ mod tests {
         fn test_for_each_row_in_a_table() {
             verify_exact_table(r#"
                 let results =
-                    for row in ['apple', 'berry', 'kiwi', 'lime']::to_table()
+                    for row in ['apple', 'berry', 'kiwi', 'lime']::to(Table)
                         yield { fruit: row.value }
-                results::to_table()
+                results::to(Table)
             "#, vec![
                 "|------------|",
                 "| id | fruit |", 
@@ -404,18 +485,18 @@ mod tests {
                     | DRMQ   | OTHER_OTC | 0.02      |
                     | JTRQ   | OTHER_OTC | 0.0001    |
                     |--------------------------------|
-                for row in stocks yield (__row_id__, row.last_sale)
+                for row in stocks yield ('A' + __row_id__, 100 * (1 + __row_id__), row.last_sale)
             "#, vec![
-                "|------------------|", 
-                "| id | value       |", 
-                "|------------------|", 
-                "| 0  | (0, 11.75)  |", 
-                "| 1  | (1, 32.96)  |", 
-                "| 2  | (2, 5.02)   |", 
-                "| 3  | (3, 1.37)   |", 
-                "| 4  | (4, 0.02)   |", 
-                "| 5  | (5, 0.0001) |", 
-                "|------------------|"]);
+                "|------------------------|",
+                "| id | t0 | t1  | t2     |",
+                "|------------------------|",
+                "| 0  | A  | 100 | 11.75  |",
+                "| 1  | B  | 200 | 32.96  |",
+                "| 2  | C  | 300 | 5.02   |",
+                "| 3  | D  | 400 | 1.37   |",
+                "| 4  | E  | 500 | 0.02   |",
+                "| 5  | F  | 600 | 0.0001 |",
+                "|------------------------|"]);
         }
 
         #[test]
@@ -457,6 +538,13 @@ mod tests {
                 x = 4
                 if(x > 5, "Yes", if(x < 5, "Maybe", "No"))
             "#, "\"Maybe\"");
+        }
+
+        #[test]
+        fn test_include_expect_failure() {
+            let mut interpreter = Interpreter::new();
+            let result = interpreter.evaluate(r#"include 123"#);
+            assert!(matches!(result, Err(..)))
         }
         
         #[test]
@@ -531,18 +619,18 @@ mod tests {
             "#, "[3, 6, 9, 12, 15]");
         }
 
-        #[test]
-        fn test_throw_error() {
-            verify_exact_value(r#"
+        #[actix::test]
+        async fn test_throw_error() {
+            verify_exact_value_async(r#"
                 throw("Boom!")
-            "#, ErrorValue(Errors::Exact("Boom!".into())));
+            "#, ErrorValue(Errors::Exact("Boom!".into()))).await;
         }
     }
 
     /// Data structure tests
     #[cfg(test)]
     mod data_structure_tests {
-        use crate::testdata::verify_exact_code;
+        use crate::test_util::{verify_exact_code, verify_exact_code_async};
 
         #[test]
         fn test_array_zip() {
@@ -550,13 +638,20 @@ mod tests {
                 [1, 2, 3] <|> ['A', 'B', 'C']
             "#, r#"[(1, 'A'), (2, 'B'), (3, 'C')]"#);
         }
+
+        #[actix::test]
+        async fn test_array_zip_async() {
+            verify_exact_code_async(r#"
+                [1, 2, 3] <|> ['A', 'B', 'C']
+            "#, r#"[(1, 'A'), (2, 'B'), (3, 'C')]"#).await;
+        }
         
     }
 
     /// Declarative tests
     #[cfg(test)]
     mod declarative_tests {
-        use crate::testdata::{verify_exact_code, verify_exact_value_where};
+        use crate::test_util::{verify_exact_code, verify_exact_value_where};
         use crate::typed_values::TypedValue;
 
         #[test]
@@ -612,9 +707,8 @@ mod tests {
     #[cfg(test)]
     mod demo_tests {
         use crate::interpreter::Interpreter;
-        use crate::testdata::{verify_exact_code_with, verify_exact_table_with};
+        use crate::test_util::{verify_exact_code_with, verify_exact_table_with};
 
-        //#[ignore]
         #[test]
         fn test_demo_blackjack() {
             // deck = nsd::load("games.blackjack.deck")
@@ -627,8 +721,8 @@ mod tests {
                 Cards = Table(face: String(2), suit: String(2))
                 
                 // create the card faces & suits
-                faces = select face: value from ((2..=10)::map(n -> n::to_string()) ++ ["J", "Q", "K", "A"])::to_table()
-                suits = select suit: value from ["♥️", "♦️", "♣️", "♠️"]::to_table()
+                faces = select face: value from ((2..=10)::map(n -> n::to(String)) ++ ["J", "Q", "K", "A"])::to(Table)
+                suits = select suit: value from ["♥️", "♦️", "♣️", "♠️"]::to(Table)
                 
                 // create the deck, player-hand and dealer-hand
                 deck = nsd::save("games.blackjack.deck", Cards::new())
@@ -713,7 +807,7 @@ mod tests {
                         select
                             score: sum(match face {
                                 "A" => aceScore
-                                face when face:::to(i64) in 2..9 => face:::to(i64)
+                                face when face::to(i64) in 2..9 => face::to(i64)
                                 _ => 10
                             })
                         from hand;
@@ -869,7 +963,7 @@ mod tests {
                 gamestate = create_gamestate();
                 
                 // reset and shuffle the deck
-                (faces * suits)::to_table ~>> deck
+                (faces * suits)::to(Table) ~>> deck
             "#, "52");
 
             interpreter = verify_exact_code_with(interpreter, r#"
@@ -899,7 +993,7 @@ mod tests {
     #[cfg(test)]
     mod function_tests {
         use crate::interpreter::Interpreter;
-        use crate::testdata::*;
+        use crate::test_util::*;
         use crate::typed_values::TypedValue::*;
 
         #[test]
@@ -1041,13 +1135,228 @@ mod tests {
                 3.2:::gb
             "#, "3435973836.8");
         }
+
+        #[test]
+        fn test_functional_sugar_with_package_fn() {
+            verify_exact_value(r#"
+                backwards(a) -> a::reverse()
+                "Hello World":::backwards()
+            "#, StringValue("dlroW olleH".into()));
+        }
+
+        #[test]
+        fn test_platform_function_execute_and_capture() {
+            verify_exact_table(r#"
+                stocks = []
+                stocks<::push({ symbol: "YUMI", exchange: "NYSE", last_sale: 13.82 })
+                stocks<::push({ symbol: "DTXM", exchange: "NYSE", last_sale: 51.24 })
+                stocks<::to(Table)
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | YUMI   | NYSE     | 13.82     |",
+                "| 1  | DTXM   | NYSE     | 51.24     |",
+                "|------------------------------------|"]);
+        }
+
+        #[test]
+        fn test_user_function_execute_and_capture() {
+            verify_exact_code(r#"
+                fn multiply(n) -> n * 2
+                value = 8
+                value<:::multiply()
+            "#, "16");
+        }
+    }
+
+    /// Function tests
+    #[cfg(test)]
+    mod function_async_tests {
+        use crate::interpreter::Interpreter;
+        use crate::test_util::*;
+        use crate::typed_values::TypedValue::*;
+
+        #[actix::test]
+        async fn test_function_lambda_with_inferred_types() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                let product = (a, b) -> a * b
+            "#, "true").await;
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                product(2, 5)
+            "#, "10").await
+        }
+
+        #[actix::test]
+        async fn test_function_lambda_with_parameter_types() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                let product = (a: i64, b: i64) -> a * b
+            "#, "true").await;
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                product(3, 3)
+            "#, "9").await
+        }
+
+        #[actix::test]
+        async fn test_function_lambda_with_parameter_types_and_return_type() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                let product = (a: i64, b: i64): i64 -> a * b
+            "#, "true").await;
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                product(3, 9)
+            "#, "27").await
+        }
+
+        #[actix::test]
+        async fn test_function_named_with_inferred_types() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                fn product(a, b) -> a * b
+            "#, "true").await;
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                product(4, 5)
+            "#, "20").await
+        }
+
+        #[actix::test]
+        async fn test_function_named_with_parameter_types() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                fn product(a: i64, b: i64) -> a * b
+            "#, "true").await;
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                product(4, 9)
+            "#, "36").await
+        }
+
+        #[actix::test]
+        async fn test_function_named_with_parameter_types_and_return_type() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                fn product(a: i64, b: i64): i64 -> a * b
+            "#, "true").await;
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                product(5, 6)
+            "#, "30").await
+        }
+
+        #[actix::test]
+        async fn test_function_recursion_1() {
+            verify_exact_code_async(r#"
+                let f = (n: i64) -> if(n <= 1) 1 else n * f(n - 1)
+                f(5)
+            "#, "120").await
+        }
+
+        #[ignore]
+        #[actix::test]
+        async fn test_function_recursion_2() {
+            verify_exact_code_async(r#"
+                let f = n -> if(n <= 1, 1, n * f(n - 1))
+                f(6)
+            "#, "720").await
+        }
+
+        #[actix::test]
+        async fn test_functional_pipeline() {
+            verify_exact_code_async(r#"
+                let f = s -> s::reverse
+                "Hello" |> f
+            "#, "\"olleH\"").await;
+        }
+
+        #[actix::test]
+        async fn test_functional_pipeline_with_destructure() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                fn add(a, b) -> a + b
+            "#, "true").await;
+
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                fn inverse(a) -> 1.0 / a
+            "#, "true").await;
+
+            interpreter = verify_exact_code_with_async(interpreter, r#"
+                (2, 3) |>> add
+            "#, "5").await;
+
+            verify_exact_code_with_async(interpreter, r#"
+                (2, 3) |>> add |> inverse
+            "#, "0.2").await;
+        }
+
+        #[actix::test]
+        async fn test_functional_sugar_with_filter_map() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                let arr = [1, 2, 3, 4]
+                arr
+                    ::filter(x -> (x % 2) == 0)
+                    ::map(x -> x * 10)
+            "#, "[20, 40]");
+        }
+
+        #[actix::test]
+        async fn test_functional_sugar() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with(interpreter, r#"
+                let kb = n -> n * 1024
+                let mb = n -> kb(n) * 1024
+                let gb = n -> mb(n) * 1024
+            "#, "true");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                3.2:::kb
+            "#, "3276.8");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                3.2:::mb
+            "#, "3355443.2");
+            interpreter = verify_exact_code_with(interpreter, r#"
+                3.2:::gb
+            "#, "3435973836.8");
+        }
+
+        #[actix::test]
+        async fn test_functional_sugar_with_package_fn() {
+            verify_exact_value(r#"
+                backwards(a) -> a::reverse()
+                "Hello World":::backwards()
+            "#, StringValue("dlroW olleH".into()));
+        }
+
+        #[actix::test]
+        async fn test_platform_function_execute_and_capture() {
+            verify_exact_table(r#"
+                stocks = []
+                stocks<::push({ symbol: "YUMI", exchange: "NYSE", last_sale: 13.82 })
+                stocks<::push({ symbol: "DTXM", exchange: "NYSE", last_sale: 51.24 })
+                stocks<::to(Table)
+            "#, vec![
+                "|------------------------------------|",
+                "| id | symbol | exchange | last_sale |",
+                "|------------------------------------|",
+                "| 0  | YUMI   | NYSE     | 13.82     |",
+                "| 1  | DTXM   | NYSE     | 51.24     |",
+                "|------------------------------------|"]);
+        }
+
+        #[actix::test]
+        async fn test_user_function_execute_and_capture() {
+            verify_exact_code(r#"
+                fn multiply(n) -> n * 2
+                value = 8
+                value<:::multiply()
+            "#, "16");
+        }
     }
 
     /// Package "infix" tests
     #[cfg(test)]
     mod infix_tests {
         use crate::interpreter::Interpreter;
-        use crate::testdata::{verify_exact_code, verify_exact_code_with, verify_exact_unwrapped_with};
+        use crate::test_util::{verify_exact_code, verify_exact_code_with, verify_exact_unwrapped_with};
 
         #[test]
         fn test_infix_field_access() {
@@ -1097,125 +1406,58 @@ mod tests {
         }
     }
 
-    /// Package "testing" tests
+    /// Package "infix" tests
     #[cfg(test)]
-    mod type_of_tests {
-        use crate::errors::Errors::Exact;
-        use crate::testdata::{verify_exact_code, verify_exact_value};
-        use crate::typed_values::TypedValue::ErrorValue;
+    mod infix_async_tests {
+        use crate::interpreter::Interpreter;
+        use crate::test_util::{verify_exact_code_async, verify_exact_code_with_async, verify_exact_unwrapped_with_async};
 
-        #[test]
-        fn test_user_defined_type() {
-            verify_exact_code(r#"
-                Cards = Table(face: String(2), suit: String(2))  
-                type_of(Cards::new())
-            "#, "Table(face: String(2), suit: String(2))")
+        #[actix::test]
+        async fn test_infix_field_access() {
+            verify_exact_code_async(r#"
+                let stock = { symbol: "TED", exchange: "AMEX", last_sale: 13.37 }
+                stock.last_sale
+            "#, "13.37").await;
         }
 
-        #[test]
-        fn test_type_of_array_bool() {
-            verify_exact_code("type_of([true, false])", "Array(Boolean):::(2)");
+        #[actix::test]
+        async fn test_infix_field_assignment() {
+            verify_exact_code_async(r#"
+                let stock = { symbol: "RLPH", exchange: "NYSE", last_sale: 13.37 }
+                stock.last_sale = 35.78
+                stock.last_sale
+            "#, "35.78").await;
         }
 
-        #[test]
-        fn test_type_of_array_i64() {
-            verify_exact_code("type_of([12, 76, 444])", "Array(i64):::(3)");
-        }
+        #[actix::test]
+        async fn test_infix_function_call() {
+            let mut interpreter = Interpreter::new();
+            interpreter = verify_exact_code_with_async(interpreter,r#"
+            stock = Struct(
+                symbol: String(8) = "ABC",
+                exchange: String(8) = "NYSE",
+                last_sale: f64 = 23.67
+            )::new
+            mod stock {
+                fn contains_symbol(symbol) -> symbol is self.symbol
+            }
+            "#, "true").await;
 
-        #[test]
-        fn test_type_of_array_str() {
-            verify_exact_code("type_of(['ciao', 'hello', 'world'])", "Array(String(5)):::(3)");
-        }
+            // verify the structure
+            interpreter = verify_exact_unwrapped_with_async(interpreter,r#"
+                stock
+            "#, r#"{"contains_symbol":{"code":"symbol == self.symbol","params":[{"data_type":"RuntimeResolvedType","default_value":"Null","name":"symbol"}],"returns":"Boolean"},"exchange":"NYSE","last_sale":23.67,"symbol":"ABC"}"#
+            ).await;
 
-        #[test]
-        fn test_type_of_array_f64() {
-            verify_exact_code("type_of([12.5, 123.2, 76.78])", "Array(f64):::(3)");
-        }
+            // verify the negative case
+            interpreter = verify_exact_code_with_async(interpreter,r#"
+                stock.contains_symbol("XYZ")
+            "#, "false").await;
 
-        #[test]
-        fn test_type_of_bool() {
-            verify_exact_code("type_of(false)", "Boolean");
-            verify_exact_code("type_of(true)", "Boolean");
-        }
-
-        #[test]
-        fn test_type_of_date() {
-            verify_exact_code("type_of(2025-07-06T21:00:29.412Z)", "DateTime");
-        }
-
-        #[test]
-        fn test_type_of_fn() {
-            verify_exact_code("type_of((a, b) -> a + b)", "fn(a, b)");
-        }
-
-        #[test]
-        fn test_type_of_i64() {
-            verify_exact_code("type_of(1234)", "i64");
-        }
-
-        #[test]
-        fn test_type_of_f64() {
-            verify_exact_code("type_of(12.394)", "f64");
-        }
-
-        #[test]
-        fn test_type_of_string() {
-            verify_exact_code("type_of('1234')", "String(4)");
-            verify_exact_code(r#"type_of("abcde")"#, "String(5)");
-        }
-
-        #[test]
-        fn test_type_of_structure_hard() {
-            verify_exact_code(
-                r#"type_of(Struct(symbol: String(3) = "ABC"))"#,
-                r#"Struct(symbol: String(3) = "ABC")"#,
-            );
-        }
-
-        #[test]
-        fn test_type_of_structure_soft() {
-            verify_exact_code(
-                r#"type_of({symbol:"ABC"})"#,
-                r#"Struct(symbol: String(3) = "ABC")"#,
-            );
-        }
-
-        #[test]
-        fn test_type_of_table() {
-            verify_exact_code(
-                r#"type_of(Table(symbol: String(8), exchange: String(8), last_sale: f64)::new)"#,
-                "Table(symbol: String(8), exchange: String(8), last_sale: f64)",
-            );
-        }
-
-        #[test]
-        fn test_type_of_tuple() {
-            verify_exact_code(
-                "type_of(('ABC', 123.2, 2025-01-13T03:25:47.350Z))", 
-                "(String(3), f64, DateTime)"
-            );
-        }
-
-        #[test]
-        fn test_type_of_uuid() {
-            verify_exact_code("type_of(oxide::uuid())", "UUID");
-        }
-
-        #[test]
-        fn test_type_of_variable() {
-            verify_exact_value(
-                "type_of(my_var)",
-                ErrorValue(Exact("Variable 'my_var' not found".into())));
-        }
-
-        #[test]
-        fn test_type_of_null() {
-            verify_exact_code("type_of(null)", "");
-        }
-
-        #[test]
-        fn test_type_of_undefined() {
-            verify_exact_code("type_of(undefined)", "");
+            // verify the positive case
+            interpreter = verify_exact_code_with_async(interpreter,r#"
+                stock.contains_symbol("ABC")
+            "#, "true").await;
         }
     }
     

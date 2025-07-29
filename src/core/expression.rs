@@ -12,7 +12,6 @@ use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::machine;
 use crate::number_kind::NumberKind;
 use crate::number_kind::NumberKind::I64Kind;
-use crate::numbers::Numbers::I64Value;
 use crate::packages::Package;
 use crate::packages::{IoPkg, PackageOps};
 use crate::parameter::Parameter;
@@ -37,7 +36,6 @@ pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
 pub enum Conditions {
     And(Box<Expression>, Box<Expression>),
     AssumedBoolean(Box<Expression>),
-    Contains(Box<Expression>, Box<Expression>),
     Equal(Box<Expression>, Box<Expression>),
     False,
     GreaterOrEqual(Box<Expression>, Box<Expression>),
@@ -59,7 +57,6 @@ impl Conditions {
         match self {
             Conditions::And(a, b) => is_pure_a_and_b(a, b),
             Conditions::AssumedBoolean(a) => a.is_pure(),
-            Conditions::Contains(a, b) => is_pure_a_and_b(a, b),
             Conditions::Equal(a, b) => is_pure_a_and_b(a, b),
             Conditions::False => true,
             Conditions::GreaterOrEqual(a, b) => is_pure_a_and_b(a, b),
@@ -86,7 +83,6 @@ impl Conditions {
 /// Represents an HTTP Method Call
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum HttpMethodCalls {
-    CONNECT(Box<Expression>),
     DELETE(Box<Expression>),
     GET(Box<Expression>),
     HEAD(Box<Expression>),
@@ -106,7 +102,6 @@ impl HttpMethodCalls {
     /// - the [Option] of a [HttpMethodCalls] instance
     pub fn new(method: &str, config: Expression) -> Option<Self> {
         Some(match method {
-            "CONNECT" => HttpMethodCalls::CONNECT(config.into()),
             "DELETE" => HttpMethodCalls::DELETE(config.into()),
             "GET" => HttpMethodCalls::GET(config.into()),
             "HEAD" => HttpMethodCalls::HEAD(config.into()),
@@ -122,7 +117,6 @@ impl HttpMethodCalls {
     /// Returns the HTTP method (e.g. "POST")
     pub fn get_method(&self) -> String {
         match self {
-            HttpMethodCalls::CONNECT(_) => "CONNECT",
             HttpMethodCalls::DELETE(_) => "DELETE",
             HttpMethodCalls::GET(_) => "GET",
             HttpMethodCalls::HEAD(_) => "HEAD",
@@ -137,7 +131,6 @@ impl HttpMethodCalls {
     /// Returns the URL or configuration structure/object
     pub fn get_url_or_config(&self) -> Expression {
         match self.clone() {
-            HttpMethodCalls::CONNECT(url_or_object) |
             HttpMethodCalls::DELETE(url_or_object) |
             HttpMethodCalls::GET(url_or_object) |
             HttpMethodCalls::HEAD(url_or_object) |
@@ -218,6 +211,8 @@ pub enum Expression {
     CodeBlock(Vec<Expression>),
     ColonColon(Box<Expression>, Box<Expression>),
     ColonColonColon(Box<Expression>, Box<Expression>),
+    ColonColonCapture(Box<Expression>, Box<Expression>),
+    ColonColonColonCapture(Box<Expression>, Box<Expression>),
     Condition(Conditions),
     Divide(Box<Expression>, Box<Expression>),
     DoWhile {
@@ -265,7 +260,6 @@ pub enum Expression {
     Test(Box<Expression>),
     Throw(Box<Expression>),
     TupleExpression(Vec<Expression>),
-    TypeOf(Box<Expression>),
     Use(Vec<UseOps>),
     WhenEver {
         condition: Box<Expression>,
@@ -350,8 +344,12 @@ impl Expression {
                 format!("{}[{}]", Self::decompile(a), Self::decompile(b)),
             ColonColon(a, b) =>
                 format!("{}::{}", Self::decompile(a), Self::decompile(b)),
+            ColonColonCapture(a, b) =>
+                format!("{}<::{}", Self::decompile(a), Self::decompile(b)),
             ColonColonColon(a, b) =>
                 format!("{}:::{}", Self::decompile(a), Self::decompile(b)),
+            ColonColonColonCapture(a, b) =>
+                format!("{}<:::{}", Self::decompile(a), Self::decompile(b)),
             Feature { title, scenarios } =>
                 format!("feature {} {{\n{}\n}}", title.to_code(), scenarios.iter()
                     .map(|s| s.to_code())
@@ -435,7 +433,6 @@ impl Expression {
             }),
             Throw(message) => format!("throw({})", Self::decompile(message)),
             TupleExpression(args) => format!("({})", Self::decompile_list(args)),
-            TypeOf(expr) => format!("type_of({})", expr.to_code()),
             Identifier(name) => name.to_string(),
             WhenEver { condition, code } => 
                 format!("when {} {}", Self::decompile(condition), Self::decompile(code)),
@@ -481,8 +478,6 @@ impl Expression {
                 format!("{} && {}", Self::decompile(a), Self::decompile(b)),
             Conditions::AssumedBoolean(a) =>
                 format!("Boolean({})", Self::decompile(a)),
-            Conditions::Contains(a, b) =>
-                format!("{} contains {}", Self::decompile(a), Self::decompile(b)),
             Conditions::Equal(a, b) =>
                 format!("{} == {}", Self::decompile(a), Self::decompile(b)),
             Conditions::False => "false".to_string(),
@@ -586,22 +581,10 @@ impl Expression {
             CodeBlock(ops) => ops.last().map(|op| Self::infer_with_hints(op, hints))
                 .unwrap_or(RuntimeResolvedType),
             // platform functions: cal::plus(..)
-            ColonColon(a, b) =>
-                match (a.deref(), b.deref()) {
-                    (Identifier(package), FunctionCall { fx, .. }) =>
-                        match fx.deref() {
-                            Identifier(name) =>
-                                maybe_a_or_b(
-                                    PackageOps::find_function(package, name),
-                                    Builtins::new().lookup_by_name(package, name),
-                                )
-                                    .map(|pf| pf.get_return_type())
-                                    .unwrap_or(RuntimeResolvedType),
-                            _ => RuntimeResolvedType
-                        }
-                    _ => RuntimeResolvedType
-                }
+            ColonColon(a, b) => Self::infer_package_op(a, b),
             ColonColonColon(..) => RuntimeResolvedType,
+            ColonColonCapture(a, b) => Self::infer_package_op(a, b),
+            ColonColonColonCapture(..) => RuntimeResolvedType,
             Zip(a, b) => Self::infer_a_or_b(a, b, hints),
             Condition(..) => BooleanType,
             Divide(a, b) => Self::infer_a_or_b(a, b, hints),
@@ -668,7 +651,6 @@ impl Expression {
             TupleExpression(values) => TupleType(values.iter()
                 .map(|p| Self::infer_with_hints(p, hints))
                 .collect::<Vec<_>>()),
-            TypeOf(expr) => Self::infer_with_hints(expr, hints),
             Use(..) => BooleanType,
             Identifier(name) =>
                 match name {
@@ -694,6 +676,23 @@ impl Expression {
             | OrderBy { .. }
             | Select { .. }
             | Where { .. } => TableType(vec![]),
+        }
+    }
+
+    fn infer_package_op(a: &Expression, b: &Expression) -> DataType {
+        match (a, b) {
+            (Identifier(package), FunctionCall { fx, .. }) =>
+                match fx.deref() {
+                    Identifier(name) =>
+                        maybe_a_or_b(
+                            PackageOps::find_function(package, name),
+                            Builtins::lookup_by_name(package, name),
+                        )
+                            .map(|pf| pf.get_return_type())
+                            .unwrap_or(RuntimeResolvedType),
+                    _ => RuntimeResolvedType
+                }
+            _ => RuntimeResolvedType
         }
     }
     
@@ -757,7 +756,9 @@ impl Expression {
             CoalesceErr(a, b) => is_pure_a_and_b(a, b),
             CodeBlock(items) => is_pure_all(items),
             ColonColon(_, _) => false,
+            ColonColonCapture(_, _) => false,
             ColonColonColon(_, _) => false,
+            ColonColonColonCapture(_, _) => false,
             Condition(c) => c.is_pure(),
             Divide(a, b) => is_pure_a_and_b(a, b),
             DoWhile { condition, code } => is_pure_a_and_b(condition, code),
@@ -795,7 +796,6 @@ impl Expression {
             Test(_) => false,
             Throw(a) => a.is_pure(),
             TupleExpression(items) => is_pure_all(items),
-            TypeOf(a) => a.is_pure(),
             Use(_) => false,
             WhenEver { .. } => false,
             While { condition, code } => is_pure_a_and_b(condition, code),
@@ -837,11 +837,9 @@ impl Display for Expression {
 mod expression_tests {
     use crate::expression::Conditions::*;
     use crate::expression::Expression::*;
-    use crate::expression::*;
     use crate::machine::Machine;
     use crate::numbers::Numbers::I64Value;
     use crate::numbers::Numbers::*;
-    use crate::typed_values::TypedValue::*;
     use crate::typed_values::TypedValue::{Number, StringValue};
 
     use super::*;
@@ -849,7 +847,7 @@ mod expression_tests {
     #[test]
     fn test_conditional_and() {
         let machine = Machine::empty();
-        let model = Conditions::And(Box::new(TRUE), Box::new(FALSE));
+        let model = And(Box::new(TRUE), Box::new(FALSE));
         let (_, result) = machine.evaluate_condition(&model).unwrap();
         assert_eq!(result, Boolean(false));
         assert_eq!(model.to_code(), "true && false")
@@ -1277,7 +1275,7 @@ mod inference_tests {
     use super::*;
     use crate::number_kind::NumberKind::{F64Kind, I64Kind};
     use crate::numbers::Numbers::{F64Value, I64Value};
-    use crate::testdata::{verify_bit_operator, verify_data_type, verify_math_operator};
+    use crate::test_util::{verify_bit_operator, verify_data_type, verify_math_operator};
     use crate::typed_values::TypedValue::{Number, StringValue};
 
     #[test]

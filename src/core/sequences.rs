@@ -329,6 +329,10 @@ impl Array {
     pub fn sublist(&self, start: usize, end: usize) -> Self {
         Array::from(self.the_array[start..end].to_vec())
     }
+
+    pub fn tail(&self) -> Self {
+        Array::from(if self.the_array.len() < 2 { vec![] } else { self.the_array[1..].to_vec() })
+    }
 }
 
 impl Index<usize> for Array {
@@ -632,7 +636,7 @@ mod tests {
         use crate::data_types::DataType::{ArrayType, FixedSizeType, StringType};
         use crate::numbers::Numbers::I64Value;
         use crate::sequences::{Array, Sequence, Tuple};
-        use crate::testdata::*;
+        use crate::test_util::*;
         use crate::typed_values::TypedValue::*;
         use crate::typed_values::TypedValue::{Boolean, StringValue};
 
@@ -672,7 +676,7 @@ mod tests {
             array.push(Boolean(true));
             assert_eq!(array.get_component_type(), DataType::BooleanType);
 
-            array.push(StringValue("Hello World".into()));
+            array.push(StringValue("Hello".into()));
             array.push(StringValue("Hello World".into()));
             assert_eq!(array.get_component_type(), FixedSizeType(StringType.into(), 11));
 
@@ -813,13 +817,58 @@ mod tests {
 
     /// Unit tuple tests
     #[cfg(test)]
+    mod purity_tests {
+        use crate::dataframe::Dataframe::ModelTable;
+        use crate::model_row_collection::ModelRowCollection;
+        use crate::numbers::Numbers::{I64Value, U8Value};
+        use crate::sequences::Array;
+        use crate::sequences::Sequences::{TheArray, TheDataframe, TheRange, TheTuple};
+        use crate::test_util::make_quote_parameters;
+        use crate::typed_values::TypedValue::{CharValue, Number, StringValue};
+
+        #[test]
+        fn test_array_is_pure() {
+            let array = TheArray(Array::from(vec![
+                StringValue("ONE".into()),
+                StringValue("AMEX".into()),
+            ]));
+            assert_eq!(array.is_pure(), true)
+        }
+
+        #[test]
+        fn test_dataframe_is_pure() {
+            let params = make_quote_parameters();
+            let df = TheDataframe(ModelTable(ModelRowCollection::from_parameters(&params)));
+            assert_eq!(df.is_pure(), true)
+        }
+
+        #[test]
+        fn test_range_is_pure() {
+            let range = TheRange(Number(I64Value(1)).into(), Number(I64Value(10)).into(), true);
+            assert_eq!(range.is_pure(), true)
+        }
+
+        #[test]
+        fn test_tuple_is_pure() {
+            let tuple = TheTuple(vec![
+                CharValue('R'),
+                Number(I64Value(2)),
+                StringValue("D".into()),
+                Number(U8Value(2)),
+            ]);
+            assert_eq!(tuple.is_pure(), true)
+        }
+    }
+
+    /// Unit tuple tests
+    #[cfg(test)]
     mod tuple_tests {
         use crate::data_types::DataType;
         use crate::data_types::DataType::{StringType, TupleType};
         use crate::number_kind::NumberKind;
         use crate::numbers::Numbers::F64Value;
         use crate::sequences::{Array, Sequence, Tuple};
-        use crate::testdata::verify_exact_code;
+        use crate::test_util::verify_exact_code;
         use crate::typed_values::TypedValue::{Number, StringValue};
 
         #[test]

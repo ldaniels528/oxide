@@ -5,16 +5,19 @@
 
 extern crate core;
 
-use crate::interpreter::Interpreter;
-use crate::repl::REPLState;
-use crate::server_engine::start_http_server;
-use crate::terminal::{read_line_from_stdin, TerminalState};
+use crate::errors::throw;
+use crate::errors::Errors::Exact;
+use crate::packages::webservers;
+use crate::server_engine::start_http_server_async;
+use crate::terminal::TerminalState;
+use crate::utils::{is_u16, parse_u16};
 use log::LevelFilter;
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
 use std::env;
 use std::string::ToString;
 
+mod bit_array;
 mod blob_file_row_collection;
 mod blobs;
 mod builtins;
@@ -29,7 +32,6 @@ mod errors;
 mod expression;
 mod field;
 mod file_row_collection;
-mod hash_table_row_collection;
 mod hybrid_row_collection;
 mod interpreter;
 mod journaling;
@@ -43,7 +45,6 @@ mod packages;
 mod parameter;
 mod query_engine;
 mod readme;
-mod repl;
 mod row_collection;
 mod row_metadata;
 mod sequences;
@@ -53,7 +54,7 @@ mod structures;
 mod table_renderer;
 mod template;
 mod terminal;
-mod testdata;
+mod test_util;
 mod test_engine;
 mod token_slice;
 mod tokenizer;
@@ -65,100 +66,55 @@ mod web_engine;
 const LOCAL_HOST: &str = "0.0.0.0";
 
 /// Represents an enumeration of Application Modes
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Debug, Eq, PartialEq)]
 enum ApplicationModes {
     EmbeddedSession(u16),
-    OfflineSession,
+    OfflineSession(Vec<String>),
     RemoteSession(String, u16),
-    StartupFailure(String),
 }
 
 impl ApplicationModes {
     /// Parses the commandline arguments
-    pub fn parse(args: Vec<String>) -> ApplicationModes {
+    pub fn parse(args: Vec<String>) -> std::io::Result<ApplicationModes> {
         match args.as_slice() {
-            [_, port] if is_u16(port) =>
-                match parse_u16(port) {
-                    Ok(port) => ApplicationModes::RemoteSession(LOCAL_HOST.into(), port),
-                    Err(err) => ApplicationModes::StartupFailure(err.to_string())
-                }
-            [_, action, port] if action == "embedded" && is_u16(port) =>
-                match parse_u16(port) {
-                    Ok(port) => ApplicationModes::EmbeddedSession(port),
-                    Err(err) => ApplicationModes::StartupFailure(err.to_string())
-                }
-            [_, host, port] if is_u16(port) =>
-                match parse_u16(port) {
-                    Ok(port) => ApplicationModes::RemoteSession(host.into(), port),
-                    Err(err) => ApplicationModes::StartupFailure(err.to_string())
-                }
-            _ => ApplicationModes::OfflineSession,
+            [port] if is_u16(port) =>
+                Ok(ApplicationModes::RemoteSession(LOCAL_HOST.into(), parse_u16(port)?)),
+            [action, port] if is_u16(port) && action == "--embedded" =>
+                Ok(ApplicationModes::EmbeddedSession(parse_u16(port)?)),
+            [host, port] if is_u16(port) =>
+                Ok(ApplicationModes::RemoteSession(host.into(), parse_u16(port)?)),
+            args =>
+                Ok(ApplicationModes::OfflineSession(args.to_vec())),
         }
     }
 }
 
 /// Starts the Oxide server
-//#[actix::main] 
-fn main() -> std::io::Result<()> {
+#[actix::main] 
+async fn main() -> std::io::Result<()> {
     // set up the logger
     env_logger::builder()
         .filter_level(LevelFilter::Info)
         .init();
 
-    // start the REPL 
-    //repl::do_terminal(REPLState::new(), env::args().collect(), || read_line_from_stdin())
-    repl::do_terminal_bash_like(REPLState::new(), env::args().collect())
+    // start the REPL based on the commandline arguments
+    let args = env::args().skip(1).collect();
+    start_terminal(ApplicationModes::parse(args)?).await
 }
 
 // Start the Oxide terminal (embedded or remote server)
-async fn terminal_startup() -> std::io::Result<()> {
-    // start the REPL based on the commandline arguments
-    match ApplicationModes::parse(env::args().collect()) {
+async fn start_terminal(mode: ApplicationModes) -> std::io::Result<()> {
+    let (state, args) = match mode {
         ApplicationModes::EmbeddedSession(port) => {
-            println!("Starting embedded Oxide service on port {port}...");
-            start_http_server(port);
-            start_online_session(LOCAL_HOST, port).await?
+            webservers::start_server(port).await?;
+            (TerminalState::connect(LOCAL_HOST, port, "/ws").await?, vec![])
         }
-        ApplicationModes::RemoteSession(host, port) => {
-            println!("Connecting to remote Oxide service at {host}:{port}...");
-            start_online_session(host.as_str(), port).await?
-        }
-        ApplicationModes::OfflineSession => {
-            println!("Starting offline Oxide service...");
-            start_offline_session().await?
-        }
-        ApplicationModes::StartupFailure(message) => {
-            eprintln!("{}", message)
-        }
-    }
-    Ok(())
-}
-
-/// Tests whether as string could be converted into an u16
-fn is_u16(s: &str) -> bool { s.parse::<u16>().is_ok() }
-
-/// Converts the contents of a string to u16
-fn parse_u16(s: &str) -> std::io::Result<u16> {
-    s.parse::<u16>().map_err(|e| cnv_error!(e))
-}
-
-/// Starts a standalone/offline Oxide REPL
-async fn start_offline_session() -> std::io::Result<()> {
-    terminal::do_terminal(
-        TerminalState::offline()?,
-        env::args().collect(),
-        || read_line_from_stdin(),
-    ).await
-}
-
-/// Starts a websockets-based Oxide Server
-async fn start_online_session(host: &str, port: u16) -> std::io::Result<()> {
-    terminal::do_terminal(
-        TerminalState::connect(host, port, "/ws").await?,
-        env::args().collect(),
-        || read_line_from_stdin(),
-    ).await?;
-    Ok(())
+        ApplicationModes::RemoteSession(host, port) =>
+            (TerminalState::connect(host.as_str(), port, "/ws").await?, vec![]),
+        ApplicationModes::OfflineSession(args) =>
+            (TerminalState::offline()?, args),
+    };
+    terminal::do_terminal(state, args).await
 }
 
 /// Unit tests
@@ -167,50 +123,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_u16() {
-        assert!(is_u16("456"))
+    fn test_embedded_session() {
+        let mode = ApplicationModes::parse(vec![
+            "--embedded".into(), "8754".into()
+        ]).unwrap();
+        assert_eq!(mode, ApplicationModes::EmbeddedSession(8754));
     }
 
     #[test]
-    fn test_is_u16_vs_float() {
-        assert!(!is_u16("113.76"))
+    fn test_local_session() {
+        let mode = ApplicationModes::parse(vec![
+            "8888".into()
+        ]).unwrap();
+        assert_eq!(mode, ApplicationModes::RemoteSession(LOCAL_HOST.into(), 8888));
     }
 
     #[test]
-    fn test_parse_u16() {
-        assert_eq!(parse_u16("8766").unwrap(), 8766)
+    fn test_offline_session() {
+        let mode = ApplicationModes::parse(vec![
+            "1".into(), "2".into(), "3".into()
+        ]).unwrap();
+        assert_eq!(mode, ApplicationModes::OfflineSession(vec![
+            "1".into(), "2".into(), "3".into()
+        ]));
     }
 
     #[test]
-    fn test_parse_args_embedded_session() {
-        let args = ApplicationModes::parse(vec![
-            "oxide".into(), "embedded".into(), "8754".into()
-        ]);
-        assert_eq!(args, ApplicationModes::EmbeddedSession(8754));
+    fn test_remote_session() {
+        let mode = ApplicationModes::parse(vec![
+            "roadrunner.acme.com".into(), "9090".into()
+        ]).unwrap();
+        assert_eq!(mode, ApplicationModes::RemoteSession(
+            "roadrunner.acme.com".into(), 9090
+        ));
     }
 
-    #[test]
-    fn test_parse_args_offline_session() {
-        let args = ApplicationModes::parse(vec![
-            "oxide".into()
-        ]);
-        assert_eq!(args, ApplicationModes::OfflineSession);
-    }
-
-
-    #[test]
-    fn test_parse_args_local_session() {
-        let args = ApplicationModes::parse(vec![
-            "oxide".into(), "8754".into()
-        ]);
-        assert_eq!(args, ApplicationModes::RemoteSession(LOCAL_HOST.into(), 8754));
-    }
-
-    #[test]
-    fn test_parse_args_remote_session() {
-        let args = ApplicationModes::parse(vec![
-            "oxide".into(), "roadrunner.acme.com".into(), "8754".into()
-        ]);
-        assert_eq!(args, ApplicationModes::RemoteSession("roadrunner.acme.com".into(), 8754));
-    }
 }

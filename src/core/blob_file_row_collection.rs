@@ -8,7 +8,7 @@ use crate::columns::Column;
 use crate::field::FieldMetadata;
 use crate::model_row_collection::ModelRowCollection;
 use crate::parameter::Parameter;
-use crate::row_collection::{RowCollection, RowEncoding};
+use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
@@ -183,30 +183,225 @@ impl RowCollection for  BLOBFileRowCollection {
 mod tests {
     use crate::blob_file_row_collection::BLOBFileRowCollection;
     use crate::blobs::BLOBStore;
+    use crate::data_types::DataType::{FixedSizeType, NumberType, StringType};
     use crate::dataframe::Dataframe::BlobTable;
+    use crate::field::FieldMetadata;
     use crate::model_row_collection::ModelRowCollection;
     use crate::namespaces::Namespace;
+    use crate::number_kind::NumberKind::F64Kind;
+    use crate::numbers::Numbers::F64Value;
+    use crate::parameter::Parameter;
     use crate::row_collection::RowCollection;
+    use crate::row_metadata::RowMetadata;
+    use crate::structures::Row;
     use crate::table_renderer::TableRenderer;
-    use crate::testdata::{make_quote, make_quote_parameters};
+    use crate::test_util::{make_quote, make_quote_parameters};
+    use crate::typed_values::TypedValue::{Number, StringValue};
+
+    #[test]
+    fn test_delete_row() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "delete_row", "stocks");
+        let mut blob_rc = create_blob_row_collection(&ns);
+
+        // overwrite a field
+        blob_rc.delete_row(1).unwrap();
+
+        // verify its contents
+        let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
+        assert_eq!(lines, vec![
+            "|-------------------------------|",
+            "| symbol | exchange | last_sale |",
+            "|-------------------------------|",
+            "| ABC    | AMEX     | 12.33     |",
+            "| BIZ    | NYSE     | 9.775     |",
+            "|-------------------------------|"])
+    }
+
+    #[test]
+    fn test_overwrite_field() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "overwrite_field", "stocks");
+        let mut blob_rc = create_blob_row_collection(&ns);
+
+        // overwrite a field
+        blob_rc.overwrite_field(1, 0, StringValue("ONU".into())).unwrap();
+
+        // read the field
+        let symbol = blob_rc.read_field(1, 0).unwrap();
+
+        // verify its contents
+        assert_eq!(symbol, StringValue("ONU".into()));
+
+        // verify its contents
+        let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
+        assert_eq!(lines, vec![
+            "|-------------------------------|",
+            "| symbol | exchange | last_sale |",
+            "|-------------------------------|",
+            "| ABC    | AMEX     | 12.33     |",
+            "| ONU    | OTC      | 0.2456    |",
+            "| BIZ    | NYSE     | 9.775     |",
+            "|-------------------------------|"])
+    }
+
+    #[test]
+    fn test_overwrite_field_metadata() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "overwrite_fmd", "stocks");
+        let mut blob_rc = create_blob_row_collection(&ns);
+
+        // overwrite the field metadata
+        blob_rc.overwrite_field_metadata(0, 2, FieldMetadata::new(false)).unwrap();
+
+        // verify its contents
+        let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
+        assert_eq!(lines, vec![
+            "|-------------------------------|",
+            "| symbol | exchange | last_sale |",
+            "|-------------------------------|",
+            "| ABC    | AMEX     | null      |",
+            "| UNO    | OTC      | 0.2456    |",
+            "| BIZ    | NYSE     | 9.775     |",
+            "|-------------------------------|"])
+    }
+
+    #[test]
+    fn test_overwrite_row() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "overwrite_row", "stocks");
+        let mut blob_rc = create_blob_row_collection(&ns);
+
+        // overwrite a field
+        blob_rc.overwrite_row(1, Row::new(1,vec![
+            StringValue("ONU".into()),
+            StringValue("NYSE".into()),
+            Number(F64Value(24.56))
+        ])).unwrap();
+
+        // verify its contents
+        let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
+        assert_eq!(lines, vec![
+            "|-------------------------------|",
+            "| symbol | exchange | last_sale |",
+            "|-------------------------------|",
+            "| ABC    | AMEX     | 12.33     |",
+            "| ONU    | NYSE     | 24.56     |",
+            "| BIZ    | NYSE     | 9.775     |",
+            "|-------------------------------|"])
+    }
+
+    #[test]
+    fn test_overwrite_row_metadata() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "overwrite_rmd", "stocks");
+        let mut blob_rc = create_blob_row_collection(&ns);
+
+        // overwrite the row metadata
+        blob_rc.overwrite_row_metadata(1, RowMetadata::new(false)).unwrap();
+
+        // verify its contents
+        let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
+        assert_eq!(lines, vec![
+            "|-------------------------------|",
+            "| symbol | exchange | last_sale |",
+            "|-------------------------------|",
+            "| ABC    | AMEX     | 12.33     |",
+            "| BIZ    | NYSE     | 9.775     |",
+            "|-------------------------------|"])
+    }
+
+    #[test]
+    fn test_read_field() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "read_field", "stocks");
+        let blob_rc = create_blob_row_collection(&ns);
+
+        // read a field
+        let symbol = blob_rc.read_field(1, 0).unwrap();
+
+        // verify its contents
+        assert_eq!(symbol, StringValue("UNO".into()));
+    }
+
+    #[test]
+    fn test_read_field_metadata() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "read_fmd", "stocks");
+        let blob_rc = create_blob_row_collection(&ns);
+
+        // read a field
+        let fmd = blob_rc.read_field_metadata(2, 2).unwrap();
+
+        // verify its contents
+        assert_eq!(fmd, FieldMetadata::new(true));
+    }
+
+    #[test]
+    fn test_read_one() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "read_one", "stocks");
+        let blob_rc = create_blob_row_collection(&ns);
+
+        // read a row
+        let row = blob_rc.read_one(2).unwrap();
+
+        // verify its contents
+        assert_eq!(row, Some(Row::new(2,vec![
+            StringValue("BIZ".into()),
+            StringValue("NYSE".into()),
+            Number(F64Value(9.775))
+        ])));
+    }
+
+    #[test]
+    fn test_read_row() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "read_row", "stocks");
+        let blob_rc = create_blob_row_collection(&ns);
+
+        // read a row
+        let (row, rmd) = blob_rc.read_row(0).unwrap();
+
+        // verify its contents
+        assert_eq!(row, Row::new(0,vec![
+            StringValue("ABC".into()),
+            StringValue("AMEX".into()),
+            Number(F64Value(12.33))
+        ]));
+        assert_eq!(rmd, RowMetadata::new(true))
+    }
+
+    #[test]
+    fn test_read_row_metadata() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "read_rmd", "stocks");
+        let blob_rc = create_blob_row_collection(&ns);
+
+        // read a row metadata
+        let rmd = blob_rc.read_row_metadata(2).unwrap();
+
+        // verify its contents
+        assert_eq!(rmd, RowMetadata::new(true));
+    }
 
     #[test]
     fn test_read_sync() {
-        // create a new BLOB store
+        // create a new BLOB table
         let ns = Namespace::new("blobs", "read_sync", "stocks");
-        let bs = BLOBStore::open(&ns).unwrap();
+        let blob_rc = create_blob_row_collection(&ns);
 
-        // create a table
-        let params = make_quote_parameters();
-        let mrc0 = ModelRowCollection::from_parameters_and_rows(&params, &vec![
-            make_quote(0, "ABC", "AMEX", 12.33),
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 9.775),
+        // verify the record size
+        assert_eq!(blob_rc.get_record_size(), 52);
+
+        // verify the parameters
+        assert_eq!(blob_rc.get_parameters(), vec![
+            Parameter::new("symbol", FixedSizeType(StringType.into(), 8)),
+            Parameter::new("exchange", FixedSizeType(StringType.into(), 8)),
+            Parameter::new("last_sale", NumberType(F64Kind)),
         ]);
 
-        // insert the table into the BLOB store
-        let key0 = bs.insert_value(&mrc0).unwrap();
-        let blob_rc = BLOBFileRowCollection::new(bs, &params, key0);
+        // verify its contents
         let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
         assert_eq!(lines, vec![
             "|-------------------------------|", 
@@ -219,26 +414,37 @@ mod tests {
     }
 
     #[test]
+    fn test_resize() {
+        // create a new BLOB table
+        let ns = Namespace::new("blobs", "resize", "stocks");
+        let mut blob_rc = create_blob_row_collection(&ns);
+
+        // resize the table
+        blob_rc.resize(1).unwrap();
+
+        // verify its contents
+        let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
+        assert_eq!(lines, vec![
+            "|-------------------------------|",
+            "| symbol | exchange | last_sale |",
+            "|-------------------------------|",
+            "| ABC    | AMEX     | 12.33     |",
+            "|-------------------------------|"])
+    }
+
+    #[test]
     fn test_write_sync() {
-        // create a new BLOB store
+        // create a new BLOB table
         let ns = Namespace::new("blobs", "write_sync", "stocks");
-        let bs = BLOBStore::open(&ns).unwrap();
+        let mut blob_rc = create_blob_row_collection(&ns);
 
-        // create a table
-        let params = make_quote_parameters();
-        let mrc0 = ModelRowCollection::from_parameters_and_rows(&params, &vec![
-            make_quote(0, "ABC", "AMEX", 12.33),
-            make_quote(1, "UNO", "OTC", 0.2456),
-            make_quote(2, "BIZ", "NYSE", 9.775),
-        ]);
-
-        // insert the table into the BLOB store
-        let key0 = bs.insert_value(&mrc0).unwrap();
-        let mut blob_rc = BLOBFileRowCollection::new(bs, &params, key0);
+        // insert rows
         blob_rc.append_rows(vec![
             make_quote(3, "GOTO", "OTC", 0.1442),
             make_quote(4, "XYZ", "NYSE", 0.0289),
         ]).unwrap();
+
+        // verify its contents
         let lines = TableRenderer::from_dataframe(&BlobTable(blob_rc));
         assert_eq!(lines, vec![
             "|-------------------------------|", 
@@ -250,5 +456,23 @@ mod tests {
             "| GOTO   | OTC      | 0.1442    |", 
             "| XYZ    | NYSE     | 0.0289    |", 
             "|-------------------------------|"])
+    }
+
+    fn create_blob_row_collection(ns: &Namespace) -> BLOBFileRowCollection {
+        // create a new BLOB store
+        let bs = BLOBStore::open(ns).unwrap();
+
+        // create a table
+        let params = make_quote_parameters();
+        let mrc0 = ModelRowCollection::from_parameters_and_rows(&params, &vec![
+            make_quote(0, "ABC", "AMEX", 12.33),
+            make_quote(1, "UNO", "OTC", 0.2456),
+            make_quote(2, "BIZ", "NYSE", 9.775),
+        ]);
+
+        // insert the table into the BLOB store
+        let key0 = bs.insert_value(&mrc0).unwrap();
+        let brc = BLOBFileRowCollection::new(bs, &params, key0);
+        brc
     }
 }

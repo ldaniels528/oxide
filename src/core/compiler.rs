@@ -10,6 +10,7 @@ use crate::dataframe::Dataframe;
 use crate::errors::Errors::{CompilerError, Exact, ExactNear, SyntaxError};
 use crate::errors::SyntaxErrors::IllegalExpression;
 use crate::errors::{throw, CompileErrors, SyntaxErrors};
+use crate::expression::Conditions::AssumedBoolean;
 use crate::expression::Expression::*;
 use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::expression::*;
@@ -298,11 +299,11 @@ impl Compiler {
 
     pub fn get_keywords() -> Vec<String> {
         vec![
-            "and", "as", "assert", "contains", "DELETE", "delete", "do", "else", "exit",
+            "and", "as", "assert", "DELETE", "delete", "do", "else", "exit",
             "false", "feature", "fn", "for", "from", "GET", "group_by", "having", "HEAD", "HTTP",
             "if", "in", "include", "is", "is_defined", "isnt", "let", "like", "ls",
             "match", "mod", "NaN", "null", "or", "order_by", "PATCH", "POST", "PUT", "print", "return",
-            "scenario", "select", "test", "throw", "true", "type_of",
+            "scenario", "select", "test", "throw", "true", 
             "undefined", "undelete", "use", "when", "whenever", "where", "while", "yield",
         ].into_iter().map(String::from).collect::<Vec<String>>()
     }
@@ -340,7 +341,6 @@ impl Compiler {
                 "test" => self.parse_keyword_test(nts),
                 "throw" => self.parse_keyword_throw(nts),
                 "true" => Ok((TRUE, nts)),
-                "type_of" => self.parse_keyword_type_of(nts),
                 "undefined" => Ok((UNDEFINED, nts)),
                 "undelete" => self.parse_keyword_undelete(nts),
                 "use" => self.parse_keyword_use(nts),
@@ -779,10 +779,10 @@ impl Compiler {
     /// use str::format
     /// ```
     /// ```
-    /// use oxide::[eval, serve, version]
+    /// use oxide::[eval, start, version]
     /// ```
     /// ```
-    /// use "os", str::format, oxide::[eval, serve, version]
+    /// use "os", str::format, oxide::[eval, start, version]
     /// ```
     fn parse_keyword_use(
         &self,
@@ -798,14 +798,14 @@ impl Compiler {
                 Literal(StringValue(pkg)) => ops.push(UseOps::Everything(pkg)),
                 // use vm
                 Identifier(pkg) => ops.push(UseOps::Everything(pkg)),
-                // use http::serve | oxide::[eval, serve, version]
+                // use http::start | oxide::[eval, start, version]
                 ColonColon(a, b) => {
                     match (*a, *b) {
-                        // use http::serve
+                        // use http::start
                         (Identifier(pkg), Identifier(func)) => {
                             ops.push(UseOps::Selection(pkg, vec![func]))
                         }
-                        // use oxide::[eval, serve, version]
+                        // use oxide::[eval, start, version]
                         (Identifier(pkg), ArrayExpression(items)) => {
                             let mut func_list = Vec::new();
                             for item in items {
@@ -921,7 +921,7 @@ impl Compiler {
     /// ##### Test all matching features and scenarios
     /// ```
     /// test where feature_name matches "JSON(*.)"
-    ///     and scenario_name contains "Table"
+    ///     and scenario_name::contains("Table")
     /// ```
     fn parse_keyword_test(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         use crate::expression::Conditions::In;
@@ -941,9 +941,14 @@ impl Compiler {
                     (Some(Atom { text, ..}), tsb) if text == "where" => {
                         match self.compile_next(tsb) {
                             // ex: test where feature_name matches "JSON(*.)"
-                            //      and scenario_name contains "Table"
+                            //      and scenario_name is "Scenario #1"
                             Ok((Condition(cond), ts)) => {
                                 Ok((Test(Condition(cond).into()), ts))
+                            }
+                            // ex: test where feature_name matches "JSON(*.)"
+                            //      and scenario_name::contains("Table")
+                            Ok((cond_expr, ts)) => {
+                                Ok((Test(Condition(AssumedBoolean(cond_expr.into())).into()), ts))
                             }
                             // ex: test
                             _ => Ok((Test(UNDEFINED.into()), ts))
@@ -964,19 +969,6 @@ impl Compiler {
     fn parse_keyword_throw(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (expr, ts) = self.compile_next(ts.clone())?;
         Ok((Throw(expr.into()), ts))
-    }
-
-    /// Builds a `type_of` declaration
-    /// #### Examples
-    /// ```
-    /// type_of(name)
-    /// ```
-    /// ```
-    /// type_of num
-    /// ``
-    fn parse_keyword_type_of(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
-        let (expr, ts) = self.compile_next(ts.clone())?;
-        Ok((TypeOf(expr.into()), ts))
     }
 
     /// Builds a language model from an UNDELETE statement:
@@ -1223,8 +1215,9 @@ fn apply_operator_binary(
         ":" => apply_colon(a, b),
         "::" => Ok(ColonColon(aa, bb)),
         ":::" => Ok(ColonColonColon(aa, bb)),
+        "<::" => Ok(ColonColonCapture(aa, bb)),
+        "<:::" => Ok(ColonColonColonCapture(aa, bb)),
         "&&" | "and" => Ok(Condition(Conditions::And(aa, bb))),
-        "contains" => Ok(Condition(Conditions::Contains(aa, bb))),
         "==" | "is" => Ok(Condition(Conditions::Equal(aa, bb))),
         "when" => Ok(Condition(Conditions::When(aa, bb))),
         ">=" => Ok(Condition(Conditions::GreaterOrEqual(aa, bb))),
@@ -1344,10 +1337,10 @@ fn get_precedence(op: &Token, is_even: bool) -> i8 {
         "&" | "&&" | "and" => 7,        // Bitwise/Logical AND
         "^" | "|" | "||" | "or" => 6,  // Bitwise XOR, Bitwise/Logical OR
         ".." | "..=" => 5,
-        "." | "::" | ":::" => 4,
+        "." | "::" | ":::" | "<::" | "<:::" => 4,
         ":" => 3,
         "==" | "!=" | "<" | "<=" | ">" | ">=" => 2,
-        "contains" | "in" | "is" | "isnt" | "like" | "matches" => 2,
+        "in" | "is" | "isnt" | "like" | "matches" => 2,
         "group_by" | "having" | "limit" | "order_by" | "when" | "where" => 1,
         "->" | "=>" | "~>" | "<~" | "~>>" | "<<~" | "|>" | "|>>" => 1,
         "=" | ":=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" => 0,
@@ -1369,7 +1362,7 @@ fn is_operator(token: &Token, is_even: bool) -> bool {
 /// Indicates whether the token is a mnemonic operator.
 fn is_mnemonic_operator(token: &Token, _is_even: bool) -> bool {
     matches!(token.get().as_str(), 
-       "and" | "as" | "contains" | "in" | "is" | "isnt" | "like" |
+       "and" | "as" | "in" | "is" | "isnt" | "like" |
        "group_by" | "having" | "limit" | "matches" |
         "or" | "order_by" | "when" | "where"
     )
@@ -1388,7 +1381,7 @@ fn is_unary_operator(token: &Token, is_even: bool) -> bool {
 fn must_be_condition(expression: &Expression) -> std::io::Result<Conditions> {
     match expression {
         Condition(cond) => Ok(cond.to_owned()),
-        z => throw(Exact(format!("Boolean expression expected near {}", z)))
+        z => Ok(AssumedBoolean(z.to_owned().into()))
     }
 }
 
@@ -1423,7 +1416,6 @@ pub fn resolve_name_and_parameters_and_return_type(
 mod tests {
     use crate::compiler::Compiler;
     use crate::expression::Expression;
-    use crate::numbers::Numbers::I64Value;
     use crate::typed_values::TypedValue::Number;
 
     #[cfg(test)]
@@ -1575,15 +1567,15 @@ mod tests {
             );
         }
 
-        #[test]
-        fn test_build_save_load() {
+        #[actix::test]
+        async fn test_build_save_load() {
             // compile and save as a binary
             let src_path = "test.oxc";
             Compiler::build_and_save(src_path, "8 + 7").unwrap();
 
             // load the binary
             let expr = Compiler::load(src_path).unwrap();
-            let (_, result) = Machine::new_platform().evaluate(&expr).unwrap();
+            let (_, result) = Machine::new_platform().evaluate_async(&expr).await.unwrap();
             assert_eq!(result, Number(I64Value(15)))
         }
 
@@ -2735,19 +2727,6 @@ mod tests {
         }
 
         #[test]
-        fn test_type_of() {
-            let model = Compiler::build(r#"
-                type_of("cat")
-            "#,
-            )
-            .unwrap();
-            assert_eq!(
-                model,
-                TypeOf(Literal(StringValue("cat".into())).into())
-            );
-        }
-
-        #[test]
         fn test_use_single() {
             // single use
             let code = Compiler::build(r#"
@@ -2951,8 +2930,8 @@ mod tests {
             )
         }
 
-        #[test]
-        fn test_math_precedence() {
+        #[actix::test]
+        async fn test_math_precedence() {
             // parse the expression into tokens
             let tokens = tokenizer::parse_fully("4 * (2 - 1) ** 2 + 3");
             // tokens ["4", "*", "(", "2", "-", "1", ")", "**", "2", "+", "3"]
@@ -2967,7 +2946,7 @@ mod tests {
 
             // compute the result
             let machine = Machine::new();
-            let (_, result) = machine.evaluate(&model).unwrap();
+            let (_, result) = machine.evaluate_async(&model).await.unwrap();
             assert_eq!(result, Number(F64Value(7.0)))
             // result: 7.0
         }

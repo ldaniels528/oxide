@@ -6,7 +6,6 @@
 use crate::blob_file_row_collection::BLOBFileRowCollection;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
-use crate::data_types::DataType;
 use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::Exact;
@@ -15,6 +14,7 @@ use crate::namespaces::Namespace;
 use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::typed_values::TypedValue;
+use crate::utils::generate_uuid;
 use num_traits::ToPrimitive;
 use serde::de::Error;
 use serde::ser::SerializeStruct;
@@ -27,65 +27,12 @@ use std::fs::{File, OpenOptions};
 use std::os::unix::fs::FileExt;
 use std::sync::Arc;
 
-const HEADER_LEN: usize = 24;
-
-/// BLOB Store: Cell Metadata
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct BLOB {
-    blob_store: BLOBStore,
-    metadata: BLOBMetadata,
-    data_type: DataType,
-}
-
-impl BLOB {
-    /// Creates a new BLOB containing the given [TypedValue]
-    pub fn create(
-        blob_store: BLOBStore,
-        value: TypedValue
-    ) -> std::io::Result<BLOB> {
-        let data_type = value.get_type();
-        let metadata = blob_store.insert_value(value)?;
-        Ok(BLOB {
-            blob_store,
-            metadata,
-            data_type,
-        })    
-    }
-    
-    /// Instantiates a BLOB
-    pub fn new(
-        blob_store: BLOBStore, 
-        metadata: BLOBMetadata, 
-        data_type: DataType
-    ) -> BLOB {
-        BLOB { blob_store, metadata, data_type }    
-    }
-    
-    /// Returns the [DataType] of the BLOB content
-    pub fn get_data_type(&self) -> DataType {
-        self.data_type.clone()
-    }
-    
-    /// Reads bytes from the BLOB
-    pub fn read_bytes(&self) -> std::io::Result<Vec<u8>> {
-        self.blob_store.read_bytes(&self.metadata)
-    }
-
-    /// Reads a value of type [T] from the BLOB
-    pub fn read(&self) -> std::io::Result<TypedValue> {
-        self.blob_store.read_value(&self.metadata)
-    }
-
-    /// Updates the contents of the BLOB with a value of type [T] 
-    pub fn update(&mut self, value: TypedValue) -> std::io::Result<()> {
-        self.metadata = self.blob_store.update_value(&self.metadata, value)?;
-        Ok(())
-    }
-}
+const HEADER_LEN: usize = 40;
 
 /// BLOB Store: Cell Metadata
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub struct BLOBMetadata {
+    pub blob_id: u128,
     pub offset: u64,
     pub allocated: u64,
     pub used: u64,
@@ -114,6 +61,14 @@ impl BLOBStore {
         let data_len_growth = data_len.to_f64().unwrap_or(0.) * 1.33;
         let data_len_growth = data_len_growth.to_u64().unwrap_or(data_len as u64);
         HEADER_LEN as u64 + data_len_growth
+    }
+
+    /// Opens a blob store by namespace
+    pub fn create(ns: &Namespace) -> std::io::Result<Self> {
+        fs::create_dir_all(ns.get_root_path())?;
+        let bs = Self::open_file(ns.get_blob_file_path().as_str(), true)?;
+        bs.truncate()?;
+        Ok(bs)
     }
 
     /// Opens a blob store by namespace
@@ -161,6 +116,27 @@ impl BLOBStore {
         Ok(encoded)
     }
 
+    /// Scans the BLOBStore and returns all BLOBMetadata entries
+    pub fn get_entries(&self) -> std::io::Result<Vec<BLOBMetadata>> {
+        let mut metadata_list = Vec::new();
+        let mut offset = 0u64;
+        let file_len = self.file.metadata()?.len();
+
+        while (offset + HEADER_LEN as u64) < file_len {
+            // read the metadata at the offset
+            let metadata = match self.read_metadata_by_offset(offset) {
+                Ok(meta) => meta,
+                Err(_) => break, // stop at first invalid/corrupt header
+            };
+            metadata_list.push(metadata.clone());
+
+            // move to the next entry based on allocated space
+            offset += metadata.allocated;
+        }
+
+        Ok(metadata_list)
+    }
+
     pub fn get_path(&self) -> String {
         self.path.clone()
     }
@@ -169,6 +145,7 @@ impl BLOBStore {
         let limit = self.file.metadata()?.len();
         let offset = limit;
         let metadata = BLOBMetadata {
+            blob_id: generate_uuid(),
             offset,
             allocated: Self::compute_allocated_size(bytes.len()),
             used: (HEADER_LEN + bytes.len()) as u64,
@@ -198,6 +175,10 @@ impl BLOBStore {
             Err(err) => throw(Exact(err.to_string()))
         }
     }
+
+    pub fn len(&self) -> std::io::Result<u64> {
+        self.file.metadata().map(|m| m.len())
+    }
     
     pub fn read_blob_table(
         &self,
@@ -211,22 +192,22 @@ impl BLOBStore {
         ))
     }
 
-    pub fn read_blob_table_at(
+    pub fn read_blob_table_by_offset(
         &self,
         offset: u64,
         params: &Vec<Parameter>
     ) -> std::io::Result<BLOBFileRowCollection> {
-        let metadata = self.read_metadata(offset)?;
+        let metadata = self.read_metadata_by_offset(offset)?;
         self.read_blob_table(&metadata, params)
     }
 
     /// Reads a raw blob of data from the blob store
-    pub fn read_block(
+    pub fn read_bytes_by_offset(
         &self,
         offset: u64
     ) -> std::io::Result<(BLOBMetadata, Vec<u8>)> {
         // read the metadata
-        let metadata = self.read_metadata(offset)?;
+        let metadata = self.read_metadata_by_offset(offset)?;
 
         // read the byes indicated within the metadata
         let mut data: Vec<u8> = self.read_bytes(&metadata)?;
@@ -262,14 +243,19 @@ impl BLOBStore {
     }
     
     /// Reads the header at the offset from the blob store
-    pub fn read_metadata(&self, offset: u64) -> std::io::Result<BLOBMetadata> {
+    pub fn read_metadata_by_offset(&self, offset: u64) -> std::io::Result<BLOBMetadata> {
         let mut header_buf: Vec<u8> = vec![0u8; HEADER_LEN];
         let _ = self.file.read_at(&mut header_buf, offset)?;
         bincode::deserialize::<BLOBMetadata>(&header_buf)
             .map_err(|e| cnv_error!(e))
     }
 
-    pub fn read_partial(
+    /// Reads the header at the offset from the blob store
+    pub fn read_metadata_by_uuid(&self, uuid: u128) -> std::io::Result<Option<BLOBMetadata>> {
+        Ok(self.get_entries()?.iter().find(|entry| entry.blob_id == uuid).map(|entry| entry.clone()))
+    }
+
+    pub fn read_partially(
         &self,
         metadata: &BLOBMetadata,
         offset: u64,
@@ -288,6 +274,10 @@ impl BLOBStore {
     {
         let bytes = self.read_bytes_used(metadata)?;
         bincode::deserialize(&bytes).map_err(|e| cnv_error!(e))
+    }
+
+    pub fn truncate(&self) -> std::io::Result<()> {
+        self.file.set_len(0)
     }
 
     pub fn update_bytes(
@@ -399,7 +389,7 @@ mod tests {
     use crate::interpreter::Interpreter;
     use crate::namespaces::Namespace;
     use crate::parameter::Parameter;
-    use crate::testdata::{make_quote, make_quote_parameters};
+    use crate::test_util::{make_quote, make_quote_parameters};
     use crate::typed_values::TypedValue;
 
     fn make_binary_table() -> (ByteRowCollection, Vec<Parameter>) {
@@ -433,25 +423,76 @@ mod tests {
             |-------------------------------| 
         "#).unwrap()
     }
-    
-    /// Unit tests
+
+    /// BLOB metadata tests
     #[cfg(test)]
-    mod blob_tests {
+    mod blob_metadata_tests {
+        use crate::blobs::{BLOBMetadata, HEADER_LEN};
+        use crate::utils::generate_uuid;
+
+        #[test]
+        fn test_blob_metadata_encode() {
+            let metadata = BLOBMetadata { blob_id: generate_uuid(), offset: 0, allocated: 38, used: 35 };
+            let bytes = bincode::serialize(&metadata).unwrap();
+            assert_eq!(bytes.len(), HEADER_LEN);
+
+            let new_metadata = bincode::deserialize::<BLOBMetadata>(&bytes).unwrap();
+            assert_eq!(metadata, new_metadata);
+        }
+    }
+    
+    /// BLOB Store tests
+    #[cfg(test)]
+    mod blob_store_tests {
         use super::*;
-        use crate::blobs::BLOB;
+        use crate::blobs::BLOBMetadata;
+        use crate::byte_code_compiler::ByteCodeCompiler;
+        use crate::byte_row_collection::ByteRowCollection;
         use crate::data_types::DataType::{FixedSizeType, NumberType, StringType, TableType};
+        use crate::dataframe::Dataframe::BinaryTable;
+        use crate::model_row_collection::ModelRowCollection;
         use crate::number_kind::NumberKind::F64Kind;
-        use crate::testdata::make_lines_from_table;
+        use crate::packages::blob_stores::metadata_to_table;
+        use crate::row_collection::RowCollection;
+        use crate::table_renderer::TableRenderer;
+        use crate::test_util::make_lines_from_table;
+        use crate::typed_values::TypedValue;
+        use crate::typed_values::TypedValue::StringValue;
+
+        #[test]
+        fn test_bytes() {
+            // create a new blob store
+            let bs = make_blob_store("blobstore.raw.byte_data");
+            bs.truncate().unwrap();
+
+            // insert a message via insert_bytes(..)
+            let message = b"This is a binary message";
+            println!("message {:?}", message);
+            let metadata = bs.insert_bytes(&message.to_vec()).unwrap();
+            println!("metadata {:?}", metadata);
+
+            // read a message as read_bytes(..)
+            let bytes_message = bs.read_bytes(&metadata).unwrap();
+            println!("bytes_message {:?}", bytes_message);
+            assert_eq!(message.to_vec(), bytes_message);
+
+            // read a message via read_block(..)
+            let (block_metadata, block_message) = bs.read_bytes_by_offset(metadata.offset).unwrap();
+            println!("block_metadata {:?}", block_metadata);
+            println!("block_message {:?}", block_message);
+            assert_eq!(message.to_vec(), block_message);
+        }
 
         #[test]
         fn test_create_read_update_then_read() {
             // create a table value and put the table value in a BLOB
             let table_value0 = make_table_value();
             let bs = make_blob_store("blobs.update_then_read.stocks");
-            let mut blob = BLOB::create(bs, table_value0).unwrap();
-            
+            bs.truncate().unwrap();
+            let bmd = bs.insert_value(table_value0).unwrap();
+
             // read the blob and verify the content
-            let table_value1 = blob.read().unwrap();
+            let table_value1: TypedValue = bs.read_value(&bmd).unwrap();
             assert_eq!(make_lines_from_table(table_value1.clone()), vec![
                 "|-------------------------------|",
                 "| symbol | exchange | last_sale |",
@@ -462,7 +503,7 @@ mod tests {
                 "|-------------------------------|"]);
 
             // verify the content type
-            assert_eq!(blob.get_data_type(), TableType(vec![
+            assert_eq!(table_value1.get_type(), TableType(vec![
                 Parameter::new("symbol", FixedSizeType(StringType.into(), 4)),
                 Parameter::new("exchange", FixedSizeType(StringType.into(), 6)),
                 Parameter::new("last_sale", NumberType(F64Kind)),
@@ -478,12 +519,12 @@ mod tests {
                 | ABC    | AMEX     | 24.98     |
                 | JET    | NASDAQ   | 64.24     |
                 | XYZ    | NYSE     | 11.22     |
-                |-------------------------------| 
+                |-------------------------------|
             "#).unwrap();
-            blob.update(table_value2).unwrap();
-            
+            let bmd = bs.update_value(&bmd, table_value2).unwrap();
+
             // re-read it and verify the content
-            let table_value3 = blob.read().unwrap();
+            let table_value3 = bs.read_value(&bmd).unwrap();
             assert_eq!(make_lines_from_table(table_value3), vec![
                 "|-------------------------------|",
                 "| symbol | exchange | last_sale |",
@@ -494,48 +535,12 @@ mod tests {
                 "| XYZ    | NYSE     | 11.22     |",
                 "|-------------------------------|"]);
         }
-        
-    }
-    
-    /// Unit tests
-    #[cfg(test)]
-    mod blob_store_tests {
-        use super::*;
-        use crate::byte_code_compiler::ByteCodeCompiler;
-        use crate::byte_row_collection::ByteRowCollection;
-        use crate::dataframe::Dataframe::BinaryTable;
-        use crate::model_row_collection::ModelRowCollection;
-        use crate::row_collection::RowCollection;
-        use crate::typed_values::TypedValue;
-        use crate::typed_values::TypedValue::StringValue;
-
-        #[test]
-        fn test_bytes() {
-            // create a new blob store
-            let bs = make_blob_store("blobstore.raw.byte_data");
-
-            // insert a message via insert_bytes(..)
-            let message = b"This is a binary message";
-            println!("message {:?}", message);
-            let metadata = bs.insert_bytes(&message.to_vec()).unwrap();
-            println!("metadata {:?}", metadata);
-
-            // read a message as read_bytes(..)
-            let bytes_message = bs.read_bytes(&metadata).unwrap();
-            println!("bytes_message {:?}", bytes_message);
-            assert_eq!(message.to_vec(), bytes_message);
-
-            // read a message via read_block(..)
-            let (block_metadata, block_message) = bs.read_block(metadata.offset).unwrap();
-            println!("block_metadata {:?}", block_metadata);
-            println!("block_message {:?}", block_message);
-            assert_eq!(message.to_vec(), block_message);
-        }
 
         #[test]
         fn test_raw_byte_table() {
             // create a new blob store
             let bs = make_blob_store("blobstore.raw.byte_table");
+            bs.truncate().unwrap();
 
             // create a byte table
             let (brc0, params) = make_binary_table();
@@ -564,6 +569,7 @@ mod tests {
         fn test_byte_tables() {
             // create a new blob store
             let bs = make_blob_store("blobstore.bytes.tables");
+            bs.truncate().unwrap();
 
             // create a byte table
             let (brc0, params) = make_binary_table();
@@ -581,6 +587,7 @@ mod tests {
         fn test_blob_tables() {
             // create a new blob store
             let bs = make_blob_store("blobstore.blob_tables.stocks");
+            bs.truncate().unwrap();
 
             // create a table
             let (brc0, params) = make_binary_table();
@@ -599,9 +606,60 @@ mod tests {
         }
 
         #[test]
+        fn test_get_entries() {
+            let bs = make_blob_store("blobstore.get_entries.byte_data");
+            bs.truncate().unwrap();
+
+            bs.insert_bytes(&b"Hello World".to_vec()).unwrap();
+            bs.insert_bytes(&b"The little brown fox".to_vec()).unwrap();
+            bs.insert_bytes(&b"joy and pain, sunshine and rain".to_vec()).unwrap();
+
+            let entries = bs.get_entries().unwrap();
+            for s in TableRenderer::from_dataframe(&metadata_to_table(&entries)) {
+                println!("{}", s);
+            }
+
+            let mut new_entries = vec![];
+            for (n, entry) in entries.iter().enumerate() {
+                let mut new_entry = entry.clone();
+                new_entry.blob_id = 1000 * (n + 1) as u128;
+                new_entries.push(new_entry);
+            }
+            assert_eq!(new_entries, vec![
+                BLOBMetadata { blob_id: 1000, offset: 0, allocated: 54, used: 51 },
+                BLOBMetadata { blob_id: 2000, offset: 54, allocated: 66, used: 60 },
+                BLOBMetadata { blob_id: 3000, offset: 120, allocated: 81, used: 71 }
+            ]);
+        }
+
+        #[test]
+        fn test_read_metadata_by_uuid() {
+            let bs = make_blob_store("blobstore.read_metadata_by_uuid.byte_data");
+            bs.truncate().unwrap();
+
+            bs.insert_bytes(&b"Hello World".to_vec()).unwrap();
+            bs.insert_bytes(&b"The little brown fox".to_vec()).unwrap();
+            bs.insert_bytes(&b"joy and pain, sunshine and rain".to_vec()).unwrap();
+
+            let entries = bs.get_entries().unwrap();
+            for s in TableRenderer::from_dataframe(&metadata_to_table(&entries)) {
+                println!("{}", s);
+            }
+
+            let metadata = bs.read_metadata_by_uuid(entries[1].blob_id).unwrap();
+            assert_eq!(metadata, Some(BLOBMetadata {
+                blob_id: entries[1].blob_id,
+                offset: 54,
+                allocated: 66,
+                used: 60
+            }));
+        }
+
+        #[test]
         fn test_values() {
             // create a new blob store
             let bs = make_blob_store("blobstore.crud.data");
+            bs.truncate().unwrap();
 
             // insert a new blob
             let key0 = bs.insert_value(StringValue("Hello World".into())).unwrap();

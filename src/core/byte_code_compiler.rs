@@ -6,7 +6,6 @@
 use crate::columns::Column;
 use crate::dataframe::Dataframe;
 
-use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::Exact;
 use crate::expression::Expression::Literal;
@@ -203,18 +202,6 @@ impl ByteCodeCompiler {
         buf.extend(bytes);
         buf
     }
-
-    pub fn vec_to_u128(bytes: Vec<u8>) -> Option<u128> {
-        if bytes.len() > 16 {
-            return None; // u128 can only hold 16 bytes
-        }
-
-        let mut buf = [0u8; 16];
-        let start = 16 - bytes.len();
-        buf[start..].copy_from_slice(&bytes);
-
-        Some(u128::from_be_bytes(buf))
-    }
 }
 
 /// Unit tests
@@ -226,7 +213,7 @@ mod tests {
     use crate::expression::Expression::{Condition, Identifier, If, Limit, Literal, Multiply, Plus, StructureExpression, Where};
     use crate::model_row_collection::ModelRowCollection;
     use crate::numbers::Numbers::{F64Value, I64Value};
-    use crate::testdata::{make_quote, make_quote_columns};
+    use crate::test_util::{make_quote, make_quote_columns};
     use crate::typed_values::TypedValue::{Number, StringValue, TableValue};
 
     #[test]

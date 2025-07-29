@@ -138,7 +138,7 @@ impl StringPrinter {
                             }
                         }
                         ('?', _) => write!(result, "{:?}", arg).unwrap(),
-                        (_, _) => result.push_str("<?>"),
+                        (_, _) => result.push_str(arg.unwrap_value().as_str()),
                     }
                 } else {
                     return Err("Unexpected end of format string after '%'".to_string());
@@ -199,12 +199,25 @@ impl StringPrinter {
 mod tests {
     use super::*;
     use crate::numbers::Numbers::{F64Value, I64Value};
+    use crate::typed_values::TypedValue::DateTimeValue;
 
     #[test]
     fn test_float_precision() {
         let num = 3.6667;
         let s = StringPrinter::format("%0.2f", vec![Number(F64Value(num))]).unwrap();
         assert_eq!(s, "3.67");
+    }
+
+    #[test]
+    fn test_string_date() {
+        let s = StringPrinter::format("%s", vec![DateTimeValue(1753475762128)]).unwrap();
+        assert_eq!(s, "2025-07-25T20:36:02.128Z");
+    }
+
+    #[test]
+    fn test_string_number_i64() {
+        let s = StringPrinter::format("%s", vec![Number(I64Value(1753))]).unwrap();
+        assert_eq!(s, "1753");
     }
 
     #[test]

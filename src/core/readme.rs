@@ -23,35 +23,35 @@ fn generate_readme(file: File) -> std::io::Result<File> {
     println!("generate title...");
     let mut file = generate_title(file)?;
 
-    // println!("generate development...");
-    // let file = generate_development(file)?;
-
-    // println!("generate run tests...");
-    // let mut file = generate_run_tests(file)?;
-
-    println!("generate language examples...");
-    let lang_header = strip_margin(r#"
-        |<a name="core_examples"></a>
-        |### 📖 Core Language Examples
-    "#, '|');
-    writeln!(file, "{lang_header}")?;
-    let mut file = generate_language_examples(file)?;
-
     println!("generate operators...");
     let operators_header = strip_margin(r#"
         |<a name="operators"></a>
         |### 🧮 Binary Operators Reference
     "#, '|');
     writeln!(file, "{operators_header}")?;
-    let mut file = generate_operators(file)?;
+    let file = generate_operators(file)?;
 
-    println!("generate platform examples...");
-    let plat_header = strip_margin(r#"
-        |<a name="platform_examples"></a>
-        |### 📦 Platform Examples
-    "#, '|');
-    writeln!(file, "{plat_header}")?;
-    let file = generate_platform_examples(file)?;
+    println!("generate development...");
+    let file = generate_development(file)?;
+
+    // println!("generate run tests...");
+    // let mut file = generate_run_tests(file)?;
+
+    // println!("generate language examples...");
+    // let lang_header = strip_margin(r#"
+    //     |<a name="core_examples"></a>
+    //     |### 📖 Core Language Examples
+    // "#, '|');
+    // writeln!(file, "{lang_header}")?;
+    // let mut file = generate_language_examples(file)?;
+
+    // println!("generate platform examples...");
+    // let plat_header = strip_margin(r#"
+    //     |<a name="platform_examples"></a>
+    //     |### 📦 Platform Examples
+    // "#, '|');
+    // writeln!(file, "{plat_header}")?;
+    // let file = generate_platform_examples(file)?;
 
     // println!("generate rpc...");
     // let file = generate_rpc(file)?;
@@ -285,6 +285,9 @@ You'll find the executables in `./target/release/`:
 
 fn generate_language_examples(mut file: File) -> std::io::Result<File> {
     for (name, examples) in create_language_examples() {
+        let mut interpreter = Interpreter::new();
+        //interpreter.with_variable("__DEBUG__", Boolean(true));
+
         println!("[+] {}", name);
         
         // header section
@@ -298,14 +301,14 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
             writeln!(file, "<h5>example{}</h5>", superscript(n + 1))?;
             writeln!(file, "{}", example_body)?;
 
-            // write the results body
+            // write the results' body
             writeln!(file, "<h5>results</h5>")?;
-            match generate_language_results(example.as_str()) {
+            match generate_language_results(&mut interpreter, example.as_str()) {
                 Ok(out_lines) => file = print_text_block(file, out_lines)?,
                 Err(err) => {
-                    println!("{}", example);
                     println!("ERROR: {}", err.to_string());
-                    Err(err.to_string()).unwrap()
+                    println!("{}", example);
+                    return Err(err)
                 }
             }
         }
@@ -313,36 +316,42 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
     Ok(file)
 }
 
-fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
+async fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
     for op in PackageOps::get_all_packages() {
-        for (n, example) in op.get_examples().iter().enumerate() {
-            if !example.is_empty() {
-                println!("[+] {}::{}", op.get_package_name(), op.get_name());
+        println!("[+] {}::{} ({} items)", op.get_package_name(), op.get_name(), op.get_examples().len());
+        let mut n = 0;
+        let mut interpreter = Interpreter::new();
+        //interpreter.with_variable("__DEBUG__", Boolean(true));
 
+        for example in op.get_examples() {
+            if !example.is_empty() {
                 // header section
                 // ex: "oxide::version - ..."
                 writeln!(file, "<hr>")?;
                 writeln!(file, "<h4>📦 {}::{} &#8212; {}</h4>",
                          op.get_package_name(), op.get_name(), op.get_description())?;
 
-                // write the example body
+                // write the example's body
                 writeln!(file, "<h5>example{}</h5>", n + 1)?;
                 let example_body = format!("<pre>{}</pre>", example.trim());
                 writeln!(file, "{}", example_body)?;
 
-                // write the results body
+                // write the results' body
                 writeln!(file, "<h5>results</h5>")?;
-                let out_lines = generate_example_results(example)?;
-                file = print_text_block(file, out_lines)?
+                let out_lines = generate_example_results(&mut interpreter, example.as_str()).await?;
+                file = print_text_block(file, out_lines)?;
+                n += 1;
             }
         }
     }
     Ok(file)
 }
 
-fn generate_language_results(example: &str) -> std::io::Result<Vec<String>> {
-    let value = Interpreter::new().evaluate(example)?;
-    match value {
+fn generate_language_results(
+    interpreter: &mut Interpreter,
+    example: &str
+) -> std::io::Result<Vec<String>> {
+    match interpreter.evaluate(example)? {
         TableValue(df) => {
             let rc: Box<dyn RowCollection> = Box::new(df);
             TableRenderer::from_table_with_ids(&rc)
@@ -351,8 +360,12 @@ fn generate_language_results(example: &str) -> std::io::Result<Vec<String>> {
     }
 }
 
-fn generate_example_results(example: &str) -> std::io::Result<Vec<String>> {
-    match Interpreter::new().evaluate(example)? {
+async fn generate_example_results(
+    interpreter: &mut Interpreter,
+    example: &str
+) -> std::io::Result<Vec<String>> {
+    println!("[+] {}", example);
+    match interpreter.evaluate_async(example).await? {
         Structured(s) => {
             let prett_json = s.to_pretty_json()?;
             let formatted = format!(r#"
@@ -538,12 +551,30 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::ColonColon(..) => vec![
             strip_margin(r#"
-                |['apple', 'berry', 'kiwi', 'lime']::to_table()
-            "#, '|')],
+                |['apple', 'berry', 'kiwi', 'lime']::to(Table)
+            "#, '|')
+        ],
         Expression::ColonColonColon(..) => vec![
             strip_margin(r#"
                 |8::hours()
-            "#, '|')],
+            "#, '|')
+        ],
+        Expression::ColonColonCapture(..) => vec![
+            strip_margin(r#"
+                |stocks = []
+                |stocks<::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
+                |stocks<::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
+                |stocks
+            "#, '|'),
+        ],
+        Expression::ColonColonColonCapture(..) => vec![
+            strip_margin(r#"
+                |fn multiply(n) -> n * 2
+                |value = 8
+                |value<:::multiply()
+                |value
+            "#, '|'),
+        ],
         Expression::Condition(..) => vec![
             strip_margin(r#"
                     |let x = 10
@@ -554,8 +585,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                     |x in 5..10
                 "#, '|'),
             strip_margin(r#"
-                    |let x = 1..8
-                    |x contains 7
+                    |(1..8)::contains(7)
                 "#, '|'),
         ],
         Expression::Divide(..) => vec![
@@ -611,43 +641,49 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::For { .. } => vec![
             strip_margin(r#"
-                |for row in ['apple', 'berry', 'kiwi', 'lime']::to_table() 
+                |for row in ['apple', 'berry', 'kiwi', 'lime']::to(Table)
                 |    yield row::value
             "#, '|')
         ],
         Expression::FunctionCall { .. } => vec![],
         Expression::HTTP(..) => vec![
             strip_margin(r#"
-                    |stocks = nsd::save(
-                    |   "readme.www.stocks",
-                    |   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
-                    |)
-                    |http::serve(8855)
-                    "#, '|'),
+                |let port = http::get_random_port()
+                |http::start(port)
+            "#, '|'),
             strip_margin(r#"
-                    |POST {
-                    |    url: http://localhost:8855/readme/www/stocks/0
-                    |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
-                    |}
-                    "#, '|'),
-            "GET http://localhost:8855/readme/www/stocks/0".into(),
-            "HEAD http://localhost:8855/readme/www/stocks/0".into(),
+                |Stocks = Table(symbol: String(8), exchange: String(8), last_sale: f64)
+                |stocks = nsd::save('readme.www.stocks', Stocks::new())
+            "#, '|'),
             strip_margin(r#"
-                    |PUT {
-                    |    url: http://localhost:8855/readme/www/stocks/0
-                    |    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }
-                    |}
-                    "#, '|'),
-            "GET http://localhost:8855/readme/www/stocks/0".into(),
+                |for n in 0..5000 {}
+                |stocks::describe()
+            "#, '|'),
             strip_margin(r#"
-                    |PATCH {
-                    |    url: http://localhost:8855/readme/www/stocks/0
-                    |    body: { last_sale: 11.81 }
-                    |}
-                    "#, '|'),
-            "GET http://localhost:8855/readme/www/stocks/0".into(),
-            "DELETE http://localhost:8855/readme/www/stocks/0".into(),
-            "GET http://localhost:8855/readme/www/stocks/0".into(),
+                |POST {
+                |    url: 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)
+                |    body: { symbol: 'ABC', exchange: 'AMEX', last_sale: 11.77 }
+                |}
+            "#, '|'),
+            "GET 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)".into(),
+            "HEAD 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)".into(),
+            strip_margin(r#"
+                |PUT {
+                |    url: 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)
+                |    body: { symbol: 'ABC', exchange: 'AMEX', last_sale: 11.79 }
+                |}
+            "#, '|'),
+            "GET 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)".into(),
+            strip_margin(r#"
+                |PATCH {
+                |    url: 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)
+                |    body: { last_sale: 11.81 }
+                |}
+            "#, '|'),
+            "GET 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)".into(),
+            "DELETE 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)".into(),
+            "GET 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)".into(),
+            "http::stop(port)".into(),
         ],
         Expression::Identifier(..) => vec![
             strip_margin(r#"
@@ -740,7 +776,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::NamedValue(..) => vec![
             "name: 'Tom'".into(),
-            "{ name: 'Tom' }::to_table()".into()
+            "{ name: 'Tom' }::to(Table)".into()
         ],
         Expression::Neg(..) => vec![
             strip_margin(r#"
@@ -852,16 +888,13 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                 |a ** b
             "#, '|'),
         ],
-        Expression::TypeOf(..) => vec![
-            "type_of([12, 76, 444])".into()
-        ],
         Expression::Use(..) => vec![
             strip_margin(r#"
                 |stocks = [
                 |   { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
                 |   { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
                 |   { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-                |]::to_table()
+                |]::to(Table)
                 |stocks
             "#, '|')
         ],
@@ -950,6 +983,8 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Code Block", CodeBlock(vec![])),
         ("Method Call", ColonColon(null.clone(), null.clone())),
         ("Implicit Method Call", ColonColonColon(null.clone(), null.clone())),
+        ("Platform Function Capture", ColonColonCapture(null.clone(), null.clone())),
+        ("User Function Capture", ColonColonColonCapture(null.clone(), null.clone())),
         ("Conditionals", Condition(Conditions::True)),
         ("Curvy-Arrow Left", ArrowCurvyLeft(null.clone(), null.clone())),
         ("Curvy-Arrow Right", ArrowCurvyRight(null.clone(), null.clone())),
@@ -976,7 +1011,6 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Structures", StructureExpression(vec![])),
         ("Throw", Throw(null.clone())),
         ("Tuples", TupleExpression(vec![])),
-        ("Type Detection", TypeOf(null.clone())),
         ("Function Pipelines", ArrowVerticalBar(null.clone(), null.clone())),
         ("Function Pipelines (destructuring)", ArrowVerticalBar2x(null.clone(), null.clone())),
         ("Import/Use", Use(vec![])),
@@ -1011,17 +1045,6 @@ mod tests {
     use std::fs::OpenOptions;
 
     #[test]
-    fn test_language_examples() {
-        for (name, examples) in create_language_examples() {
-            println!("[+] {}", name);
-            for example in examples {
-                println!("    {}", example);
-                generate_language_results(example.as_str()).unwrap();
-            }
-        }
-    }
-    
-    #[test]
     fn test_generate_language_examples() {
         let mut file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
@@ -1029,22 +1052,26 @@ mod tests {
             .unwrap();
         writeln!(file, "📖 Core Language Examples").unwrap();
         writeln!(file, "========================================").unwrap();
+        file.flush().unwrap();
+
         file = generate_language_examples(file).unwrap();
         file.flush().unwrap();
     }
-    
-    #[test]
-    fn test_generate_platform_examples() {
+
+    #[actix::test]
+    async fn test_generate_platform_examples() {
         let mut file = OpenOptions::new()
             .truncate(true).create(true).read(true).write(true)
             .open("../../platform.md")
             .unwrap();
         writeln!(file, "📦 Platform Examples").unwrap();
         writeln!(file, "========================================").unwrap();
-        file = generate_platform_examples(file).unwrap();
+        file.flush().unwrap();
+
+        file = generate_platform_examples(file).await.unwrap();
         file.flush().unwrap();
     }
-    
+
     #[test]
     fn test_generate_readme() {
         let file = OpenOptions::new()

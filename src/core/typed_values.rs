@@ -6,34 +6,37 @@
 use std::cmp::Ordering;
 use std::collections::btree_map::IntoKeys;
 use std::collections::Bound;
-use std::fmt::Display;
+use std::fmt::{format, Display};
 use std::fs::File;
 use std::hash::{DefaultHasher, Hasher};
 use std::i32;
 use std::io::{Error, Read};
 use std::ops::*;
 
-use crate::blobs::BLOB;
+use crate::bit_array::BitSet;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::cnv_error;
 use crate::columns::Column;
 use crate::data_types::DataType::*;
+use crate::data_types::*;
+use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::{DiskTable, EventSource, ModelTable, TableFn};
 use chrono::{DateTime, Utc};
+use futures_util::{StreamExt, TryFutureExt};
+use itertools::Itertools;
 use log::error;
+use mysql_async::prelude::Query;
 use num_traits::abs;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::data_types::*;
-use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{DiskTable, EventSource, ModelTable, TableFn};
-
 use crate::errors::Errors::{CannotSubtract, Exact, IncompatibleParameters, Multiple, SyntaxError, TypeMismatch};
 use crate::errors::TypeMismatchErrors::{ArgumentsMismatched, CannotBeNegated, StructsOneOrMoreExpected, UnsupportedType};
 use crate::errors::{throw, Errors, SyntaxErrors, TypeMismatchErrors};
 use crate::expression::Expression;
+use crate::expression::Expression::NamedValue;
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
 use crate::journaling::{EventSourceRowCollection, TableFunction};
@@ -56,7 +59,7 @@ use crate::structures::Structures::{Firm, Hard, Soft};
 use crate::structures::*;
 use crate::tokens::Token;
 use crate::typed_values::TypedValue::*;
-use crate::utils::{is_quoted, millis_to_iso_date, string_to_char_values, string_to_uuid_value, u128_to_uuid, u8_vec_to_values, values_to_u8_vec};
+use crate::utils::*;
 
 const ISO_DATE_FORMAT: &str =
     r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$";
@@ -69,7 +72,8 @@ const UUID_FORMAT: &str =
 #[derive(Clone, Debug, Eq, Ord, PartialEq, Serialize, Deserialize)]
 pub enum TypedValue {
     ArrayValue(Array),
-    BLOBValue(BLOB),
+    BitSetValue(BitSet),
+    BLOBStoreHandle(u128),
     Boolean(bool),
     ByteStringValue(Vec<u8>),
     CharValue(char),
@@ -177,33 +181,6 @@ impl TypedValue {
             z => throw(TypeMismatch(ArgumentsMismatched(2, z.len())))
         }
     }
-    
-    pub fn wrap_value(raw_value: &str) -> std::io::Result<Self> {
-        let iso_date_regex = Regex::new(ISO_DATE_FORMAT).map_err(|e| cnv_error!(e))?;
-        let uuid_regex = Regex::new(UUID_FORMAT).map_err(|e| cnv_error!(e))?;
-        let result = match raw_value.trim() {
-            "" => Null,
-            "false" => Boolean(false),
-            "null" => Null,
-            "true" => Boolean(true),
-            "undefined" => Undefined,
-            s if Self::is_numeric_value(s)? => Self::from_numeric(s)?,
-            s if iso_date_regex.is_match(s) =>
-                DateTimeValue(DateTime::parse_from_rfc3339(s)
-                    .map_err(|e| cnv_error!(e))?.timestamp_millis()),
-            s if uuid_regex.is_match(s) => Number(U128Value(ByteCodeCompiler::decode_uuid(s)?)),
-            s if is_quoted(s) => StringValue(s[1..s.len() - 1].to_string()),
-            s => return throw(SyntaxError(SyntaxErrors::LiteralExpected(s.to_string()))),
-        };
-        Ok(result)
-    }
-
-    pub fn wrap_value_opt(opt_value: &Option<String>) -> std::io::Result<Self> {
-        match opt_value {
-            Some(value) => Self::wrap_value(value),
-            None => Ok(Null)
-        }
-    }
 
     ////////////////////////////////////////////////////////////////////
     //  Instance Methods
@@ -245,9 +222,10 @@ impl TypedValue {
             value =>
                 match dest_type {
                     DataType::ArrayType(..) => self.convert_to_array()?,
-                    DataType::ByteStringType => self.convert_to_bytestring()?,
-                    DataType::BlobType(datatype) => self.convert_to_blob(datatype.deref())?,
+                    DataType::BitSetType => self.convert_to_bitset()?,
+                    DataType::BLOBStoreHandleType => self.convert_to_blob_store_handle()?,
                     DataType::BooleanType => self.convert_to_boolean()?,
+                    DataType::ByteStringType => self.convert_to_bytestring()?,
                     DataType::CharType => self.convert_to_char()?,
                     DataType::DateTimeType => self.convert_to_datetime()?,
                     DataType::EnumType(params) => self.convert_to_enum(params)?,
@@ -266,7 +244,8 @@ impl TypedValue {
                     DataType::TableType(params) => self.convert_to_table(params)?,
                     DataType::TupleType(types) => self.convert_to_tuple(types)?,
                     DataType::RuntimeResolvedType => value.clone(),
-                    DataType::UUIDType => self.convert_to_uuid()?
+                    DataType::UUIDType => self.convert_to_uuid()?,
+                    DataType::WebSocketHandleType => self.convert_to_websocket_handle()?,
                 }
         })
     }
@@ -276,13 +255,13 @@ impl TypedValue {
             ArrayValue(array) => ArrayValue(array.to_owned()),
             ByteStringValue(bb) => ArrayValue(Array::from(u8_vec_to_values(&bb))),
             StringValue(s) => ArrayValue(Array::from(
-                s.chars().map(|c| StringValue(c.to_string())).collect::<Vec<_>>()
+                s.chars().map(|c| CharValue(c)).collect::<Vec<_>>()
             )),
             Structured(s) => ArrayValue(s.to_array()),
             TableValue(df) => ArrayValue(df.to_array()),
             TupleValue(items) => ArrayValue(Array::from(items.to_owned())),
             UUIDValue(uuid) => ArrayValue(Array::from(uuid.to_be_bytes()
-                .iter().map(|b| Number(I64Value(*b as i64)))
+                .iter().map(|b| Number(U8Value(*b)))
                 .collect::<Vec<_>>())),
             _ => Undefined,
         };
@@ -290,27 +269,33 @@ impl TypedValue {
     }
 
     fn convert_to_array_as_table(&self, items: &Vec<TypedValue>) -> std::io::Result<Dataframe> {
-        // gather each struct in the array as a table
-        fn value_parameters(value: &TypedValue) -> Vec<Parameter> {
-            vec![Parameter::new("value", value.get_type().clone())]
+        let mut dataframes = Vec::new();
+        for item in items {
+            let mrc = match item {
+                Structured(ss) => ModelTable(ss.to_table()),
+                TableValue(ModelTable(mrc)) => ModelTable(mrc.to_owned()),
+                TupleValue(tuples) => {
+                    let (mut params, mut values) = (Vec::new(), Vec::new());
+                    for (n, value) in tuples.iter().enumerate() {
+                        let name = format!("t{n}");
+                        let data_type = value.get_type().clone();
+                        params.push(Parameter::new(name, data_type));
+                        values.push(value.clone());
+                    }
+                    let mut mrc = ModelRowCollection::from_parameters(&params);
+                    mrc.append_row(Row::new(0, values))?;
+                    ModelTable(mrc)
+                }
+                value => {
+                    let mut mrc = ModelRowCollection::from_parameters(&vec![
+                        Parameter::new("value", value.get_type().clone())
+                    ]);
+                    mrc.append_row(Row::new(0, vec![value.clone()]))?;
+                    ModelTable(mrc)
+                }
+            };
+            dataframes.push(mrc);
         }
-        let dataframes = items.iter()
-            .fold(Vec::new(), |mut tables, tv| match tv {
-                Structured(ss) => {
-                    tables.push(ModelTable(ss.to_table()));
-                    tables
-                }
-                TableValue(ModelTable(mrc)) => {
-                    tables.push(ModelTable(mrc.to_owned()));
-                    tables
-                }
-                z => {
-                    let mut mrc = ModelRowCollection::from_parameters(&value_parameters(z));
-                    mrc.append_row(Row::new(0, vec![z.clone()]));
-                    tables.push(ModelTable(mrc));
-                    tables
-                }
-            });
 
         // process the dataframes
         match dataframes.as_slice() {
@@ -320,11 +305,26 @@ impl TypedValue {
         }
     }
 
-    fn convert_to_blob(&self, datatype: &DataType) -> std::io::Result<TypedValue> {
-        match self {
-            BLOBValue(b) => Ok(BLOBValue(b.clone())),
-            _ => self.convert_to(datatype)
-        }
+    fn convert_to_bitset(&self) -> std::io::Result<TypedValue> {
+        let result = match self {
+            BitSetValue(b) => BitSetValue(b.clone()),
+            Boolean(b) => BitSetValue(BitSet::decode(&[if *b { 1 } else { 0 }])),
+            ByteStringValue(b) => BitSetValue(BitSet::decode(b.as_slice())),
+            Number(n) => BitSetValue(BitSet::decode(n.encode().as_slice())),
+            StringValue(..) => values_to_bitset(vec![self.clone()])?,
+            UUIDValue(u) => BitSetValue(BitSet::decode(u.to_be_bytes().as_slice())),
+            _ => BitSetValue(BitSet::decode(self.to_bytes().as_slice()))
+        };
+        Ok(result)
+    }
+
+    fn convert_to_blob_store_handle(&self) -> std::io::Result<TypedValue> {
+        let result = match self {
+            BLOBStoreHandle(uuid) => BLOBStoreHandle(*uuid),
+            UUIDValue(uuid) => UUIDValue(*uuid),
+            _ => Undefined
+        };
+        Ok(result)
     }
 
     fn convert_to_boolean(&self) -> std::io::Result<TypedValue> {
@@ -340,7 +340,9 @@ impl TypedValue {
     fn convert_to_bytestring(&self) -> std::io::Result<TypedValue> {
        let result = match self {
             ArrayValue(array) => ByteStringValue(values_to_u8_vec(&array.get_values())),
+            BitSetValue(bs) => ByteStringValue(u64_vec_to_u8_vec(&bs.to_vec())),
             ByteStringValue(bytes) => ByteStringValue(bytes.to_owned()),
+            CharValue(c) => ByteStringValue(c.to_string().bytes().collect()),
             DateTimeValue(epoch) => ByteStringValue(epoch.to_be_bytes().to_vec()),
             Number(number) => ByteStringValue(number.encode()),
             StringValue(s) => ByteStringValue(s.as_bytes().to_owned()),
@@ -354,6 +356,8 @@ impl TypedValue {
     fn convert_to_char(&self) -> std::io::Result<TypedValue> {
         let result = match self {
             CharValue(c) => CharValue(*c),
+            ByteStringValue(b) => u8_vec_to_char(b).map(|c| CharValue(c)).unwrap_or(Undefined),
+            Number(n) => u32_to_char(n.to_u32()).map(|c| CharValue(c)).unwrap_or(Undefined),
             other => other.to_char().map(|c| CharValue(c)).unwrap_or(Undefined),
         };
         Ok(result)
@@ -396,7 +400,7 @@ impl TypedValue {
                 Function {
                     params: params.clone(),
                     body: body.clone(),
-                    returns: returns.deref().clone(),
+                    returns: returns.clone(),
                 },
             other => return throw(TypeMismatch(TypeMismatchErrors::FunctionExpected(other.to_code())))
         };
@@ -407,6 +411,7 @@ impl TypedValue {
         let result = match self {
             Boolean(b) => I64Value(if *b { 1 } else { 0 }),
             ByteStringValue(bytes) => kind.decode(bytes, 0),
+            CharValue(c) => U64Value(unicode_char_to_u64(*c)),
             DateTimeValue(epoch) => I64Value(*epoch),
             Number(number) => *number,
             StringValue(..) => kind.convert_from(self)?,
@@ -458,10 +463,21 @@ impl TypedValue {
 
     fn convert_to_uuid(&self) -> std::io::Result<TypedValue> {
         let result = match self {
+            BLOBStoreHandle(uuid) => UUIDValue(*uuid),
             ByteStringValue(bytes) => UUIDValue(Uuid::from_slice(&bytes).map_err(|e| cnv_error!(e))?.as_u128()),
             Number(number) => UUIDValue(number.to_u128()),
             StringValue(text) => string_to_uuid_value(text.as_str())?,
             UUIDValue(uuid) => UUIDValue(*uuid),
+            WebSocketHandle(uuid) => UUIDValue(*uuid),
+            _ => Undefined
+        };
+        Ok(result)
+    }
+
+    fn convert_to_websocket_handle(&self) -> std::io::Result<TypedValue> {
+        let result = match self {
+            UUIDValue(uuid) => WebSocketHandle(*uuid),
+            WebSocketHandle(uuid) => WebSocketHandle(*uuid),
             _ => Undefined
         };
         Ok(result)
@@ -475,8 +491,9 @@ impl TypedValue {
                 for item in items.iter() { bytes.extend(item.encode()); }
                 bytes
             }
-            ByteStringValue(bytes) => ByteCodeCompiler::encode_u8x_n(bytes.to_vec()),
+            BLOBStoreHandle(id) => id.to_be_bytes().to_vec(),
             Boolean(ok) => vec![if *ok { 1 } else { 0 }],
+            ByteStringValue(bytes) => ByteCodeCompiler::encode_u8x_n(bytes.to_vec()),
             DateTimeValue(dt) => ByteCodeCompiler::encode_u8x_n(dt.to_be_bytes().to_vec()),
             ErrorValue(err) => ByteCodeCompiler::encode_string(err.to_string().as_str()),
             Number(number) => number.encode(),
@@ -501,9 +518,10 @@ impl TypedValue {
     pub fn get_type(&self) -> DataType {
         match self {
             ArrayValue(a) => FixedSizeType(ArrayType(a.get_component_type().into()).into(), a.len()),
-            ByteStringValue(bytes) => FixedSizeType(ByteStringType.into(), bytes.len()),
-            BLOBValue(blob) => blob.get_data_type(),
+            BitSetValue(bits) => FixedSizeType(BitSetType.into(), bits.size_in_bytes()),
+            BLOBStoreHandle(..) => BLOBStoreHandleType,
             Boolean(..) => BooleanType,
+            ByteStringValue(bytes) => FixedSizeType(ByteStringType.into(), bytes.len()),
             CharValue(..) => CharType,
             DateTimeValue(..) => DateTimeType,
             ErrorValue(..) => ErrorType,
@@ -520,7 +538,7 @@ impl TypedValue {
                 .map(|i| i.get_type())
                 .collect()),
             UUIDValue(..) => UUIDType,
-            WebSocketHandle(..) => UUIDType,
+            WebSocketHandle(..) => WebSocketHandleType,
         }
     }
 
@@ -532,6 +550,26 @@ impl TypedValue {
         let mut hasher = DefaultHasher::new();
         hasher.write(&self.encode());
         hasher.finish()
+    }
+
+    pub fn head(&self) -> TypedValue {
+        match self {
+            ArrayValue(array) =>
+                if array.is_empty() { Undefined } else { array.get(0).unwrap_or(Undefined) },
+            BitSetValue(bitset) =>
+                bitset.min_value().map(|n| Number(U64Value(n))).unwrap_or(Undefined),
+            StringValue(s) => s.chars().nth(0).map(|c| CharValue(c)).unwrap_or(Undefined),
+            TableValue(df) =>
+                match df.find_first_active_row() {
+                    Ok(maybe_row) => maybe_row
+                        .map(|row| Structured(Firm(row, df.get_parameters())))
+                        .unwrap_or(Undefined),
+                    Err(err) => ErrorValue(Exact(err.to_string())),
+                }
+            TupleValue(items) =>
+                if items.is_empty() { Undefined } else { items[0].clone() },
+            _ => Undefined,
+        }
     }
 
     pub fn is_ok(&self) -> bool {
@@ -552,6 +590,21 @@ impl TypedValue {
 
     pub fn is_true(&self) -> bool {
         matches!(self, Boolean(true))
+    }
+
+    pub fn tail(&self) -> TypedValue {
+        match self {
+            ArrayValue(array) => ArrayValue(array.tail()),
+            BitSetValue(bitset) => ArrayValue(Array::from(u64_vec_to_values(&bitset.ascending())).tail()),
+            StringValue(s) => StringValue(if s.len() < 2 { "".into() } else { s[1..].into() }),
+            TableValue(df) => 
+                match df.tail() {
+                    Ok(df) => TableValue(df),
+                    Err(err) => ErrorValue(Exact(err.to_string())),
+                }
+            TupleValue(items) => TupleValue(if items.len() < 2 { vec![] } else { items[1..].to_vec() }),
+            _ => Undefined,
+        }
     }
 
     pub fn matches(&self, other: &Self) -> TypedValue {
@@ -589,8 +642,19 @@ impl TypedValue {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         match self {
+            ArrayValue(array) => array.get_values().iter()
+                .map(|v| v.to_u8()).collect::<Vec<_>>(),
+            BitSetValue(bs) => u64_vec_to_u8_vec(&bs.to_vec()),
             ByteStringValue(bytes) => bytes.to_vec(),
+            CharValue(c) => {
+                let mut buf = [0; 4];
+                let s = c.encode_utf8(&mut buf);
+                s.as_bytes().to_vec()
+            }
+            DateTimeValue(t) => t.to_be_bytes().to_vec(),
+            Number(n) => n.encode(),
             StringValue(s) => s.bytes().collect(),
+            TableValue(df) => df.to_bytes(),
             UUIDValue(uuid) => u128::to_be_bytes(*uuid).to_vec(),
             z => z.encode()
         }
@@ -602,6 +666,9 @@ impl TypedValue {
                 format!("[{}]", items.iter()
                     .map(|v| v.to_code())
                     .collect::<Vec<_>>().join(", ")),
+            BitSetValue(bits) => format!("BitSet::new({})", bits.to_vec().iter()
+                .map(|v| v.to_string())
+                .collect::<Vec<_>>().join(", ")),
             CharValue(c) => format!("'{c}'"),
             PlatformOp(pf) => pf.to_code(),
             Structured(Hard(hs)) => hs.to_code(),
@@ -667,7 +734,8 @@ impl TypedValue {
             ArrayValue(items) => serde_json::json!(items.iter()
                     .map(|v|v.to_json())
                     .collect::<Vec<_>>()),
-            BLOBValue(blob) => serde_json::json!(blob),
+            BitSetValue(bits) => serde_json::json!(bits),
+            BLOBStoreHandle(id) => serde_json::json!(id),
             ByteStringValue(bytes) => serde_json::json!(bytes),
             CharValue(c) => serde_json::json!(c),
             Boolean(b) => serde_json::json!(b),
@@ -783,14 +851,14 @@ impl TypedValue {
     pub fn to_u128(&self) -> u128 {
         match self {
             Boolean(true) => 1,
-            ByteStringValue(bytes) =>
-                ByteCodeCompiler::vec_to_u128(bytes.to_vec()).unwrap_or_else(|| 0),
+            BLOBStoreHandle(uuid) => *uuid,
+            ByteStringValue(bytes) => u8_vec_to_u128(bytes.to_vec()).unwrap_or_else(|| 0),
             DateTimeValue(t) => *t as u128,
             Number(n) => n.to_u128(),
-            StringValue(string) =>
-                ByteCodeCompiler::vec_to_u128(string.bytes().collect::<Vec<_>>())
-                    .unwrap_or_else(|| 0),
+            StringValue(string) => u8_vec_to_u128(string.bytes().collect::<Vec<_>>())
+                .unwrap_or_else(|| 0),
             UUIDValue(uuid) => *uuid,
+            WebSocketHandle(uuid) => *uuid,
             _ => 0
         }
     }
@@ -821,9 +889,10 @@ impl TypedValue {
     fn unwrap_as_bytes(&self, max_len: usize) -> std::io::Result<Vec<u8>> {
         let bytes = match self {
             ArrayValue(_) => vec![],
-            ByteStringValue(bytes) => bytes.clone(),
-            BLOBValue(blob) => blob.read_bytes()?,
+            BitSetValue(bits) => bits.encode(),
+            BLOBStoreHandle(id) => id.to_be_bytes().to_vec(),
             Boolean(b) => vec![if *b { 1u8 } else { 0u8 }],
+            ByteStringValue(bytes) => bytes.clone(),
             CharValue(c) => {
                 let mut buf = [0; 4]; // max UTF-8 length for char is 4 bytes
                 let encoded = c.encode_utf8(&mut buf);
@@ -874,14 +943,10 @@ impl TypedValue {
         match self {
             Self::ArrayValue(array) => 
                 format!("[{}]", quoted(&array.get_values()).join(", ")),
-            Self::ByteStringValue(bytes) =>
-                format!("0B{}", bytes.iter().map(|b| format!("{:02x}", b))
-                    .collect::<Vec<_>>().join("")),
-            Self::BLOBValue(blob) => match blob.read_bytes() {
-                Ok(bytes) => String::from_utf8(bytes.to_vec()).unwrap_or(String::new()),
-                Err(_) => "".to_string()
-            }
+            Self::BitSetValue(..) => self.to_code(),
+            Self::BLOBStoreHandle(id) => format!("blobstore://{}", u128_to_uuid(*id)),
             Self::Boolean(b) => (if *b { "true" } else { "false" }).into(),
+            Self::ByteStringValue(bytes) => to_bytestring(bytes),
             Self::CharValue(c) => c.to_string(),
             Self::DateTimeValue(dt) => millis_to_iso_date(*dt).unwrap_or_else(|| dt.to_string()),
             Self::ErrorValue(message) => message.to_string(),
@@ -907,7 +972,34 @@ impl TypedValue {
             Self::TupleValue(items) => format!("({})", quoted(items).join(", ")),
             Self::Undefined => "undefined".into(),
             Self::UUIDValue(uuid) => u128_to_uuid(*uuid),
-            Self::WebSocketHandle(id) => format!("ws://{id}"),
+            Self::WebSocketHandle(id) => format!("ws://{}", u128_to_uuid(*id)),
+        }
+    }
+
+    pub fn wrap_value(raw_value: &str) -> std::io::Result<Self> {
+        let iso_date_regex = Regex::new(ISO_DATE_FORMAT).map_err(|e| cnv_error!(e))?;
+        let uuid_regex = Regex::new(UUID_FORMAT).map_err(|e| cnv_error!(e))?;
+        let result = match raw_value.trim() {
+            "" => Null,
+            "false" => Boolean(false),
+            "null" => Null,
+            "true" => Boolean(true),
+            "undefined" => Undefined,
+            s if Self::is_numeric_value(s)? => Self::from_numeric(s)?,
+            s if iso_date_regex.is_match(s) =>
+                DateTimeValue(DateTime::parse_from_rfc3339(s)
+                    .map_err(|e| cnv_error!(e))?.timestamp_millis()),
+            s if uuid_regex.is_match(s) => Number(U128Value(ByteCodeCompiler::decode_uuid(s)?)),
+            s if is_quoted(s) => StringValue(s[1..s.len() - 1].to_string()),
+            s => return throw(SyntaxError(SyntaxErrors::LiteralExpected(s.to_string()))),
+        };
+        Ok(result)
+    }
+
+    pub fn wrap_value_opt(opt_value: &Option<String>) -> std::io::Result<Self> {
+        match opt_value {
+            Some(value) => Self::wrap_value(value),
+            None => Ok(Null)
         }
     }
 
@@ -995,7 +1087,9 @@ impl Add for TypedValue {
                 .map(|i| i.clone() + b.clone())
                 .collect::<Vec<_>>())),
             (Boolean(a), Boolean(b)) => Boolean(a | b),
+            (CharValue(a), Number(b)) => char_map(a, b.to_u32(), |a, b| a + b),
             (CharValue(a), StringValue(b)) => StringValue(a.to_string() + b.as_str()),
+            (DateTimeValue(dt), Number(n)) => DateTimeValue(dt + n.to_i64()),
             (ErrorValue(Multiple(mut errors0)), ErrorValue(Multiple(errors1))) => {
                 errors0.extend(errors1);
                 ErrorValue(Multiple(errors0))
@@ -1011,6 +1105,8 @@ impl Add for TypedValue {
             (ErrorValue(a), ErrorValue(b)) => ErrorValue(Multiple(vec![a, b])),
             (ErrorValue(a), _) => ErrorValue(a),
             (_, ErrorValue(b)) => ErrorValue(b),
+            (Number(n), DateTimeValue(dt)) => DateTimeValue(dt + n.to_i64()),
+            (Number(a), CharValue(b)) => CharValue(b).add(Number(a)),
             (Number(a), Number(b)) => Number(a + b),
             (StringValue(a), StringValue(b)) => StringValue(a + b.as_str()),
             (StringValue(a), CharValue(b)) => StringValue(a + b.to_string().as_str()),
@@ -1047,6 +1143,8 @@ impl BitAnd for TypedValue {
 
     fn bitand(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            (CharValue(a), Number(b)) => char_map(a, b.to_u32(), |a, b| a & b),
+            (Number(a), CharValue(b)) => CharValue(b).bitand(Number(a)),
             (Number(a), Number(b)) => Number(a & b),
             (TableValue(a), TableValue(b)) => 
                 match a.intersect(&b) {
@@ -1064,6 +1162,8 @@ impl BitOr for TypedValue {
 
     fn bitor(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            (CharValue(a), Number(b)) => char_map(a, b.to_u32(), |a, b| a | b),
+            (Number(a), CharValue(b)) => CharValue(b).bitor(Number(a)),
             (Number(a), Number(b)) => Number(a | b),
             (TableValue(a), TableValue(b)) => TableValue(a.union(&b)),
             (TupleValue(a), TupleValue(b)) => TupleValue(bitor_vec(a, b)),
@@ -1077,6 +1177,8 @@ impl BitXor for TypedValue {
 
     fn bitxor(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            (CharValue(a), Number(b)) => char_map(a, b.to_u32(), |a, b| a ^ b),
+            (Number(a), CharValue(b)) => CharValue(b).bitxor(Number(a)),
             (Number(a), Number(b)) => Number(a ^ b),
             (TupleValue(a), TupleValue(b)) => TupleValue(bitxor_vec(a, b)),
             _ => Undefined
@@ -1095,8 +1197,13 @@ impl Div for TypedValue {
 
     fn div(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            // divide a character by a number
+            (CharValue(a), Number(b)) => char_div(a, b.to_u32()),
+            (Number(a), CharValue(b)) => CharValue(b).div(Number(a)),
+            // divide two numbers
             (Number(..), Number(b)) if b.is_effectively_zero() => Number(NaNValue),
             (Number(a), Number(b)) => Number(a / b),
+            // divide two tuples
             (TupleValue(a), TupleValue(b)) => TupleValue(div_vec(a, b)),
             _ => Undefined
         }
@@ -1155,6 +1262,9 @@ impl Mul for TypedValue {
             (b, ArrayValue(a)) => ArrayValue(Array::from(a.get_values().iter()
                 .map(|i| i.clone() * b.clone())
                 .collect::<Vec<_>>())),
+            // multiply a character by a number
+            (CharValue(a), Number(b)) => char_map(a, b.to_u32(), |a, b| a * b),
+            (Number(a), CharValue(b)) => CharValue(b).mul(Number(a)),
             // multiply two numbers
             (Number(a), Number(b)) => Number(a * b),
             // repeat a string `n` times
@@ -1174,12 +1284,10 @@ impl Neg for TypedValue {
         let error: fn(String) -> TypedValue = |s| ErrorValue(TypeMismatch(CannotBeNegated(s)));
         match self {
             ArrayValue(v) => ArrayValue(v.map(|tv| tv.to_owned().neg())),
-            ByteStringValue(..) => error("ByteString".into()),
-            BLOBValue(b) => match b.read() {
-                Ok(value) => value.neg(),
-                Err(_) => error("BLOB".into()),
-            }
+            BitSetValue(b) => BitSetValue(b.clone()), // TODO invert
+            BLOBStoreHandle(..) => error("BLOBStoreHandle".into()),
             Boolean(n) => Boolean(!n),
+            ByteStringValue(..) => error("Bytes".into()),
             CharValue(c) => CharValue(c),
             DateTimeValue(dt) => Number(I64Value(dt.neg())),
             ErrorValue(msg) => ErrorValue(msg),
@@ -1205,6 +1313,7 @@ impl Not for TypedValue {
     fn not(self) -> Self::Output {
         match self {
             ArrayValue(a) => ArrayValue(a.map(|i| i.to_owned().neg())),
+            BitSetValue(b) => BitSetValue(b.clone()), // TODO invert
             Boolean(v) => Boolean(!v),
             Number(a) => Number(-a),
             TupleValue(a) => TupleValue(not_vec(a)),
@@ -1228,6 +1337,8 @@ impl Rem for TypedValue {
 
     fn rem(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            (CharValue(a), Number(b)) => char_map(a, b.to_u32(), |a, b| a % b),
+            (Number(a), CharValue(b)) => CharValue(b).rem(Number(a)),
             (Number(a), Number(b)) => Number(a % b),
             (TupleValue(a), TupleValue(b)) => TupleValue(rem_vec(a, b)),
             _ => Undefined
@@ -1258,6 +1369,8 @@ impl Shl for TypedValue {
 
     fn shl(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            (CharValue(a), Number(b)) => char_map(a, b.to_u32(), |a, b| a << b),
+            (Number(a), CharValue(b)) => CharValue(b).shl(Number(a)),
             (Number(a), Number(b)) => Number(a << b),
             (TupleValue(a), TupleValue(b)) => TupleValue(shl_vec(a, b)),
             _ => Undefined
@@ -1270,6 +1383,9 @@ impl Shr for TypedValue {
 
     fn shr(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
+            // multiply a character by a number
+            (CharValue(a), Number(b)) => char_map(a, b.to_u32(), |a, b| a >> b),
+            (Number(a), CharValue(b)) => CharValue(b).shr(Number(a)),
             (Number(a), Number(b)) => Number(a >> b),
             (TupleValue(a), TupleValue(b)) => TupleValue(shr_vec(a, b)),
             _ => Undefined
@@ -1283,6 +1399,10 @@ impl Sub for TypedValue {
     fn sub(self, rhs: Self) -> Self::Output {
         match (self, rhs) {
             (Boolean(a), Boolean(b)) => Boolean(a & b),
+            (CharValue(a), Number(b)) => char_map(a, b.to_u32(), |a, b| a - b),
+            (DateTimeValue(a), DateTimeValue(b)) => Number(I64Value(a - b)),
+            (DateTimeValue(dt), Number(n)) => DateTimeValue(dt - n.to_i64()),
+            (Number(a), CharValue(b)) => CharValue(b).sub(Number(a)),
             (Number(a), Number(b)) => Number(a - b),
             (TupleValue(a), TupleValue(b)) => TupleValue(sub_vec(a, b)),
             (a, b) => ErrorValue(CannotSubtract(a.to_code(), b.to_code()))
@@ -1293,7 +1413,7 @@ impl Sub for TypedValue {
 /// Unit tests
 #[cfg(test)]
 mod core_tests {
-    use crate::testdata::{make_quote, make_quote_columns, make_quote_parameters};
+    use crate::test_util::{make_quote, make_quote_columns, make_quote_parameters};
     use serde_json::{json, Value};
 
     use super::*;
@@ -1326,26 +1446,6 @@ mod core_tests {
     fn test_decode() {
         let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
         assert_eq!(FixedSizeType(StringType.into(), 5).decode(&buf, 0), StringValue("Hello".into()))
-    }
-
-    #[test]
-    fn test_addition() {
-        use Numbers::*;
-        assert_eq!(Number(F64Value(45.0)) + Number(F64Value(32.7)), Number(F64Value(77.7)));
-        assert_eq!(Number(I128Value(45)) + Number(I128Value(32)), Number(I128Value(77)));
-        assert_eq!(Number(I64Value(45)) + Number(I64Value(32)), Number(I64Value(77)));
-        assert_eq!(Number(U128Value(45)) + Number(U128Value(32)), Number(U128Value(77)));
-        assert_eq!(Boolean(true) + Boolean(true), Boolean(true));
-        assert_eq!(StringValue("Hello".into()) + StringValue(" World".into()), StringValue("Hello World".into()));
-    }
-
-    #[test]
-    fn test_subtraction() {
-        use Numbers::*;
-        assert_eq!(Number(F64Value(45.0)) - Number(F64Value(32.5)), Number(F64Value(12.5)));
-        assert_eq!(Number(I128Value(45)) - Number(I128Value(32)), Number(I128Value(13)));
-        assert_eq!(Number(I64Value(45)) - Number(I64Value(32)), Number(I64Value(13)));
-        assert_eq!(Number(U128Value(45)) - Number(U128Value(32)), Number(U128Value(13)));
     }
 
     #[test]
@@ -1688,8 +1788,12 @@ mod conversion_tests {
     }
 
     #[test]
-    fn test_number_to_boolean() {
+    fn test_number_to_boolean_false() {
         verify(Number(I64Value(0)), BooleanType, Boolean(false));
+    }
+
+    #[test]
+    fn test_number_to_boolean_true() {
         verify(Number(I64Value(1)), BooleanType, Boolean(true));
     }
 
@@ -1706,8 +1810,22 @@ mod conversion_tests {
     }
 
     #[test]
-    fn test_number_to_string() {
+    fn test_number_to_string_f64() {
         verify(Number(F64Value(12.35)), FixedSizeType(StringType.into(), 5), StringValue("12.35".into()));
+    }
+
+    #[test]
+    fn test_number_to_string_i64() {
+        verify(Number(I64Value(-128)), FixedSizeType(StringType.into(), 4), StringValue("-128".into()));
+    }
+
+    #[test]
+    fn test_number_to_string_u64() {
+        verify(Number(U64Value(128)), FixedSizeType(StringType.into(), 3), StringValue("128".into()));
+    }
+
+    #[test]
+    fn test_number_to_string_u128() {
         verify(Number(U128Value(0xfeed_dead_beef_deaf_fade_cafe_babe_face_u128)),
                StringType, StringValue("338859001745337648252653219454709070542".into()));
     }
@@ -1842,8 +1960,66 @@ mod conversion_tests {
                StringType, StringValue("feeddead-beef-deaf-fade-cafebabeface".into()));
     }
 
+    #[test]
+    fn test_websocket_to_uuid() {
+        let uuid = 0xcafe_babe_face_u128;
+        assert_eq!(WebSocketHandle(uuid).convert_to(&UUIDType).unwrap(), UUIDValue(uuid));
+    }
+
     fn verify(from_value: TypedValue, to_type: DataType, to_value: TypedValue) {
         assert_eq!(from_value.convert_to(&to_type).unwrap(), to_value);
+    }
+}
+
+/// math tests
+#[cfg(test)]
+mod math_tests {
+    use crate::numbers::Numbers::*;
+    use crate::test_util::verify_exact_code;
+    use crate::typed_values::TypedValue::*;
+
+    #[test]
+    fn test_addition_f64_to_f64() {
+        assert_eq!(Number(F64Value(45.0)) + Number(F64Value(32.7)), Number(F64Value(77.7)));
+    }
+
+    #[test]
+    fn test_addition_i128_to_i128() {
+        assert_eq!(Number(I128Value(45)) + Number(I128Value(32)), Number(I128Value(77)));
+    }
+
+    #[test]
+    fn test_addition_i64_to_i64() {
+        assert_eq!(Number(I64Value(45)) + Number(I64Value(32)), Number(I64Value(77)));
+    }
+
+    #[test]
+    fn test_addition_u128_to_u128() {
+        assert_eq!(Number(U128Value(45)) + Number(U128Value(32)), Number(U128Value(77)));
+    }
+
+    #[test]
+    fn test_addition_bool_to_bool() {
+        assert_eq!(Boolean(true) + Boolean(true), Boolean(true));
+    }
+
+    #[test]
+    fn test_addition_string_to_string() {
+        assert_eq!(StringValue("Hello".into()) + StringValue(" World".into()), StringValue("Hello World".into()));
+    }
+
+    #[test]
+    fn test_division_char_to_i64() {
+        verify_exact_code("'f' / 2", "'3'")
+    }
+
+    #[test]
+    fn test_subtraction() {
+        use crate::numbers::Numbers::*;
+        assert_eq!(Number(F64Value(45.0)) - Number(F64Value(32.5)), Number(F64Value(12.5)));
+        assert_eq!(Number(I128Value(45)) - Number(I128Value(32)), Number(I128Value(13)));
+        assert_eq!(Number(I64Value(45)) - Number(I64Value(32)), Number(I64Value(13)));
+        assert_eq!(Number(U128Value(45)) - Number(U128Value(32)), Number(U128Value(13)));
     }
 }
 
@@ -1892,16 +2068,16 @@ mod unwrapping_tests {
     }
 
     #[test]
-    fn test_binary() {
-        verify(ByteStringValue(vec![
-            0xde, 0xad, 0xbe, 0xef, 0xfa, 0xce
-        ]), "0Bdeadbeefface");
-    }
-
-    #[test]
     fn test_boolean() {
         verify(Boolean(true), "true");
         verify(Boolean(false), "false");
+    }
+
+    #[test]
+    fn test_byte_string() {
+        verify(ByteStringValue(vec![
+            0xde, 0xad, 0xbe, 0xef, 0xfa, 0xce
+        ]), "0Bdeadbeefface");
     }
 
     #[test]
