@@ -3,57 +3,41 @@
 // Oxide Server module
 ////////////////////////////////////////////////////////////////////
 
-use crate::builtins::Builtins;
-use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::columns::Column;
-use crate::compiler::Compiler;
+use crate::conversions::Conversions;
 use crate::dataframe_actor::DataframeActor;
 use crate::errors::throw;
 use crate::errors::Errors::Exact;
-use crate::expression::Expression;
 use crate::expression::Expression::Literal;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::object_config::ObjectConfig;
-use crate::packages::{PackageOps, VERSION};
+use crate::packages::VERSION;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Structures::Soft;
 use crate::structures::{Row, SoftStructure, Structure, Structures};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ErrorValue, StringValue, Structured, Undefined};
+use crate::typed_values::TypedValue::{StringValue, Structured};
 use crate::web_engine::{WebSocketSystemServer, WebSocketUserServer};
 use crate::*;
-use actix::{Actor, Addr, StreamHandler};
+use actix::{Actor, Addr};
 use actix_session::Session;
-use actix_web::body::BoxBody;
-use actix_web::dev::Server;
-use actix_web::dev::{ServiceFactory, ServiceRequest};
 use actix_web::http::Method;
-use actix_web::{web, App, HttpRequest, HttpResponse, Responder};
+use actix_web::{web, HttpRequest, HttpResponse, Responder};
 use actix_web_actors::ws;
-use actix_web_actors::ws::WebsocketContext;
-use futures_util::stream::{SplitSink, SplitStream};
-use futures_util::{SinkExt, StreamExt};
 use log::{error, info};
-use once_cell::sync::Lazy;
-use serde_json::{json, Value};
-use std::collections::HashMap;
+use serde_json::Value;
 use std::error::Error;
-use std::io::{stdout, Write};
 use std::net::TcpListener;
 use std::ops::Deref;
 use std::thread;
 use std::thread::JoinHandle;
-use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
-use tokio_tungstenite::tungstenite::handshake::client::Response;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
 /// API Methods
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum APIMethods {
     DELETE,
     GET,
@@ -92,31 +76,23 @@ impl APIMethods {
 }
 
 /// Remote Call Request
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RemoteCallRequest {
     code: String,
 }
 
 impl RemoteCallRequest {
-    pub fn new(code: String) -> Self {
-        RemoteCallRequest { code }
-    }
-
     pub fn get_code(&self) -> &String { &self.code }
 }
 
 /// Remote Call Response
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RemoteCallResponse {
     result: Value,
     message: Option<String>,
 }
 
 impl RemoteCallResponse {
-    pub fn from_string(json_string: &str) -> std::io::Result<RemoteCallResponse> {
-        serde_json::from_str(json_string).map_err(|e| cnv_error!(e))
-    }
-
     pub fn fail(message: String) -> Self {
         RemoteCallResponse {
             result: Value::Null,
@@ -130,10 +106,6 @@ impl RemoteCallResponse {
             message: None,
         }
     }
-
-    pub fn get_message(&self) -> Option<String> { self.message.to_owned() }
-
-    pub fn get_result(&self) -> Value { self.result.to_owned() }
 }
 
 /// Represents all the shared state of the application
@@ -160,7 +132,7 @@ impl SharedState {
 }
 
 // JSON representation of Oxide system information
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SystemInfoJs {
     title: String,
     version: String,
@@ -176,13 +148,13 @@ impl SystemInfoJs {
 }
 
 /// User API
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserAPI {
     pub path: String,
     pub methods: Vec<UserAPIMethod>,
 }
 
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UserAPIMethod {
     pub method: APIMethods,
     pub code: TypedValue
@@ -487,7 +459,7 @@ pub async fn handle_user_api(
     // gather the request headers
     let headers_map = req.headers().iter()
         .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
-        .map(|(k, v)| (k, TypedValue::wrap_value(v.as_str())
+        .map(|(k, v)| (k, Conversions::wrap_value(v.as_str())
             .unwrap_or_else(|_| StringValue(v))))
         .collect::<Vec<_>>();
     
@@ -612,6 +584,7 @@ pub async fn start_http_server_async(
 )  -> tokio::task::JoinHandle<()> {
     let (tx, rx) = oneshot::channel();
 
+    println!("start_http_server_async: Starting HTTP server on port {port}");
     let server_handle = start_http_server_async_no_wait(port, apis, tx);
 
     // Wait for a signal that the server is ready
@@ -625,7 +598,7 @@ pub fn start_http_server_async_no_wait(
     apis: Vec<UserAPI>,
     ready_tx: oneshot::Sender<()>,
 ) -> tokio::task::JoinHandle<()> {
-    println!("start_http_server_async: Starting HTTP server on port {port}");
+    println!("start_http_server_async_no_wait: Starting HTTP server on port {port}");
 
     let listener = TcpListener::bind(("0.0.0.0", port))
         .expect(&format!("Can't bind to port {port}"));
@@ -756,7 +729,7 @@ fn parse_query_string(req: &HttpRequest) -> Vec<(String, TypedValue)> {
             let mut kv = pair.splitn(2, '=');
             let name = kv.next()?.to_string();
             let raw_value = urlencoding::decode(kv.next()?).ok()?.to_string();
-            let value = TypedValue::wrap_value(raw_value.as_str())
+            let value = Conversions::wrap_value(raw_value.as_str())
                 .unwrap_or_else(|_| StringValue(raw_value));
             Some((name, value))
         })
@@ -776,17 +749,9 @@ mod tests {
     use crate::number_kind::NumberKind::F64Kind;
     use crate::packages::VERSION;
     use crate::test_util::make_quote_parameters;
-    use crate::typed_values::TypedValue;
-    use crate::typed_values::TypedValue::{Function, StringValue};
+    use crate::typed_values::TypedValue::Function;
     use actix_web::test;
-    use futures_util::stream::SplitSink;
-    use futures_util::{SinkExt, StreamExt};
     use serde_json::json;
-    use std::thread;
-    use tokio::net::TcpStream;
-    use tokio::runtime::Runtime;
-    use tokio_tungstenite::tungstenite::Message;
-    use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 
     #[test]
     async fn test_convert_to_user_api_config() {

@@ -3,71 +3,58 @@
 //  Machine - state machine module
 ////////////////////////////////////////////////////////////////////
 
-use chrono::{Datelike, TimeZone, Timelike};
-use crossterm::style::Stylize;
-use futures_util::SinkExt;
-use isahc::{ReadResponseExt, RequestExt};
-use itertools::Itertools;
-use serde::{Deserialize, Serialize};
-use std::cmp::Ordering;
-use std::convert::{From, Into};
-use std::env;
-use std::fs::File;
-use std::future::Future;
-use std::io::{Read, Write};
-use std::ops::{Deref, Neg};
-use std::pin::Pin;
-
+use crate::builtins::Builtins;
 use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
-use crate::sequences::{is_in_range, Array, Sequence};
-
 use crate::dataframe::Dataframe;
-
-use crate::builtins::Builtins;
-use crate::compiler;
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, SyntaxErrors};
-use crate::expression::Conditions::{AssumedBoolean, False, In, True, When};
+use crate::expression::Conditions::{AssumedBoolean, In, When};
 use crate::expression::Expression::*;
 use crate::expression::Ranges::{Exclusive, Inclusive};
-use crate::expression::{Conditions, Expression, UseOps, UNDEFINED};
+use crate::expression::{AliasCalls, Conditions, Expression, Observations, UseOps, UNDEFINED};
+use crate::extractions::*;
 use crate::machine::Observations::VariableObservation;
-use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers::*;
-use crate::packages::{IoPkg, PACKAGE_OPS};
+use crate::packages::IoPkg;
 use crate::packages::{Package, PackageOps};
 use crate::parameter::Parameter;
 use crate::query_engine::QueryEngine;
 use crate::row_collection::RowCollection;
 use crate::sequences::Sequences::{TheArray, TheDataframe, TheRange, TheTuple};
+use crate::sequences::{is_in_range, Array, Sequence};
 use crate::structures::Row;
 use crate::structures::Structures::{Firm, Hard, Soft};
 use crate::structures::*;
 use crate::test_engine::TestEngine;
+use crate::type_engine::TypeEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use crate::utils::*;
 use crate::web_engine::WebEngine;
-use serde::de::{MapAccess, Visitor};
-use serde::ser::SerializeStruct;
-use serde::{Deserializer, Serializer};
+use crate::{compiler, connections};
+use serde::{Deserialize, Serialize};
+use std::convert::{From, Into};
+use std::env;
+use std::fs::File;
+use std::future::Future;
+use std::io::Read;
+use std::ops::{Deref, Neg};
+use std::pin::Pin;
+use crate::dataframe::Dataframe::ModelTable;
+use crate::model_row_collection::ModelRowCollection;
 
+pub const FX_SELF: &str = "self";
 pub const ROW_ID: &str = "__row_id__";
-pub const FX_SELF: &str = "__self__";
-
-/// Observables
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum Observations {
-    VariableObservation { condition: Conditions, code: Expression },
-}
+pub const ROW_SELF: &str = "__self__";
 
 /// Represents the state of the machine.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Machine {
+    aliases: Vec<AliasCalls>,
     observations: Vec<Observations>,
     variables: im::HashMap<String, TypedValue>,
 }
@@ -79,24 +66,22 @@ impl Machine {
     ////////////////////////////////////////////////////////////////
 
     /// (lowest-level constructor) creates a new state machine
-    fn build(observations: Vec<Observations>, variables: im::HashMap<String, TypedValue>) -> Self {
-        Machine {
-            observations, 
-            variables 
-        }
+    fn build(
+        aliases: Vec<AliasCalls>,
+        observations: Vec<Observations>,
+        variables: im::HashMap<String, TypedValue>,
+    ) -> Self {
+        Machine { aliases, observations, variables }
     }
 
     /// creates a new completely empty state machine
     pub fn empty() -> Self {
-        Self::build(Vec::new(), im::HashMap::new())
+        Self::build(Vec::new(), Vec::new(), im::HashMap::new())
     }
 
     /// creates a new state machine prepopulated with platform packages
     pub fn new() -> Self {
-        PACKAGE_OPS.iter()
-            .fold(Self::empty(), |ms, (name, list)| {
-                ms.with_module(name, list.to_owned())
-            })
+        Self::empty()
     }
 
     /// creates a new state machine prepopulated with platform packages
@@ -135,6 +120,8 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         if self.is_debugging() { println!("machine: evaluate {:?}", expression); }
         match expression {
+            Alias(a) => self.exec_alias_define(a),
+            Aliases => self.exec_aliases(),
             ArrayExpression(items) => self.evaluate_as_array(items),
             ArrowCurvyLeft(dest, src) => QueryEngine::eval_pull_row(self, dest, src),
             ArrowCurvyLeft2x(dest, src) => QueryEngine::eval_pull_rows(&self, dest, src),
@@ -164,7 +151,7 @@ impl Machine {
             DoWhile { condition, code } => self.exec_do_while(condition, code),
             ElementAt(a, b) => self.exec_index_of_collection(a, b),
             Feature { title, scenarios } => TestEngine::add_feature(self, title, scenarios),
-            For { construct, op } => self.exec_for_construct(construct, op),
+            For { construct, code } => self.exec_for_construct(construct, code),
             FunctionCall { fx, args } => self.exec_function_call(fx, args),
             HTTP(..) => WebEngine::evaluate(self, expression),
             Identifier(name) => self.exec_get_variable(name),
@@ -184,6 +171,7 @@ impl Machine {
                 Ok((machine.with_variable(name, tv.clone()), tv))
             }
             Neg(a) => self.exec_negate(a),
+            OneTime(a, uid) => self.exec_one_time(a, *uid),
             Parameters(params) => self.build_parameters(params),
             Plus(a, b) => self.eval_inline_2(a, b, |aa, bb| aa + bb),
             PlusPlus(a, b) => self.eval_inline_2(a, b, Self::exec_plus_plus),
@@ -192,14 +180,7 @@ impl Machine {
             Range(Inclusive(a, b)) => self.eval_inline_2(a, b, |aa, bb| aa.range_inclusive(&bb).unwrap_or(Undefined)),
             Referenced(a) => self.exec_referenced(a),
             Return(a) => self.evaluate(a),
-            Scenario { title, inherits, verifications } =>
-                TestEngine::add_feature(self, title, &vec![
-                    Scenario {
-                        title: title.clone(),
-                        inherits: inherits.clone(),
-                        verifications: verifications.clone()
-                    }
-                ]),
+            Scenario { title, inherits, verifications } => self.exec_scenario(title, inherits, verifications),
             SetVariables(vars, values) => self.exec_set_variables(vars, values),
             SetVariablesExpr(vars, values) => self.exec_set_variables_expr(vars, values),
             StructureExpression(items) => self.exec_structure_soft(items),
@@ -209,12 +190,13 @@ impl Machine {
             Use(ops) => self.exec_uses(ops),
             WhenEver { condition, code } => self.exec_when_statement(condition, code),
             While { condition, code } => self.exec_while(condition, code),
+            With { resource, code } => self.exec_with(resource, code),
             Yield(a) => self.exec_yield(a),
             Zip(a, b) => self.exec_zip(a, b),
             ////////////////////////////////////////////////////////////////////
             // SQL models
             ////////////////////////////////////////////////////////////////////
-            Delete { .. } | Deselect { .. } | GroupBy { .. } 
+            Delete { .. } | Deselect { .. } | Fetch { .. } | GroupBy { .. }
             | Having { .. } | Limit { .. } | OrderBy { .. } 
             | Select { .. } | Undelete { .. } | Where { .. } =>
                 QueryEngine::evaluate(self, expression),
@@ -228,6 +210,8 @@ impl Machine {
         if self.is_debugging() { println!("machine: evaluate_async {:?}", expression); }
         Box::pin(async move {
             match expression {
+                Alias(a) => self.exec_alias_define(a),
+                Aliases => self.exec_aliases(),
                 ArrayExpression(items) => self.evaluate_as_array_async(items).await,
                 ArrowCurvyLeft(dest, src) => QueryEngine::eval_pull_row_async(self, dest, src).await,
                 ArrowCurvyLeft2x(dest, src) => QueryEngine::eval_pull_rows_async(&self, dest, src).await,
@@ -257,10 +241,10 @@ impl Machine {
                 DoWhile { condition, code } => self.exec_do_while_async(condition, code).await,
                 ElementAt(a, b) => self.exec_index_of_collection_async(a, b).await,
                 Feature { title, scenarios } => TestEngine::add_feature(self, title, scenarios),
-                For { construct, op } => self.exec_for_construct(construct, op),
+                For { construct, code } => self.exec_for_construct_async(construct, code).await,
                 FunctionCall { fx, args } => self.exec_function_call_async(fx, args).await,
                 HTTP(..) => WebEngine::evaluate_async(self, expression).await,
-                Identifier(name) => self.exec_get_variable(name),
+                Identifier(name) => self.exec_get_variable_async(name).await,
                 If { condition, a, b } => self.exec_if_then_else_async(condition, a, b).await,
                 Include(path) => self.exec_include_async(path).await,
                 Infix(a, b) => self.exec_infix_async(a, b).await,
@@ -277,6 +261,7 @@ impl Machine {
                     Ok((machine.with_variable(name, tv.clone()), tv))
                 }
                 Neg(a) => self.exec_negate(a),
+                OneTime(a, id) => self.exec_one_time_async(a, *id).await,
                 Parameters(params) => self.build_parameters(params),
                 Plus(a, b) => self.eval_inline_2_async(a, b, |aa, bb| aa + bb).await,
                 PlusPlus(a, b) => self.eval_inline_2_async(a, b, Self::exec_plus_plus).await,
@@ -285,14 +270,7 @@ impl Machine {
                 Range(Inclusive(a, b)) => self.eval_inline_2_async(a, b, |aa, bb| aa.range_inclusive(&bb).unwrap_or(Undefined)).await,
                 Referenced(a) => self.exec_referenced_async(a).await,
                 Return(a) => self.evaluate_async(a).await,
-                Scenario { title, inherits, verifications } =>
-                    TestEngine::add_feature(self, title, &vec![
-                        Scenario {
-                            title: title.clone(),
-                            inherits: inherits.clone(),
-                            verifications: verifications.clone()
-                        }
-                    ]),
+                Scenario { title, inherits, verifications } => self.exec_scenario(title, inherits, verifications),
                 SetVariables(vars, values) => self.exec_set_variables_async(vars, values).await,
                 SetVariablesExpr(vars, values) => self.exec_set_variables_expr_async(vars, values).await,
                 StructureExpression(items) => self.exec_structure_soft_async(items).await,
@@ -302,12 +280,13 @@ impl Machine {
                 Use(ops) => self.exec_uses(ops),
                 WhenEver { condition, code } => self.exec_when_statement(condition, code),
                 While { condition, code } => self.exec_while_async(condition, code).await,
+                With { resource, code } => self.exec_with_async(resource, code).await,
                 Yield(a) => self.exec_yield_async(a).await,
                 Zip(a, b) => self.exec_zip_async(a, b).await,
                 ////////////////////////////////////////////////////////////////////
                 // SQL models
                 ////////////////////////////////////////////////////////////////////
-                Delete { .. } | Deselect { .. } | GroupBy { .. }
+                Delete { .. } | Deselect { .. } | Fetch { .. } | GroupBy { .. }
                 | Having { .. } | Limit { .. } | OrderBy { .. }
                 | Select { .. } | Undelete { .. } | Where { .. } =>
                     QueryEngine::evaluate_async(self, expression).await,
@@ -318,7 +297,7 @@ impl Machine {
     /// evaluates the specified [Expression]; returning an array ([TypedValue]) result.
     pub fn evaluate_as_array(
         &self,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
         self.evaluate_as_vec(ops).map(|(ms, vec)| (ms, ArrayValue(Array::from(vec))))
     }
@@ -326,7 +305,7 @@ impl Machine {
     /// evaluates the specified [Expression]; returning an array ([TypedValue]) result.
     pub async fn evaluate_as_array_async(
         &self,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
         self.evaluate_as_vec_async(ops).await.map(|(ms, vec)| (ms, ArrayValue(Array::from(vec))))
     }
@@ -334,7 +313,7 @@ impl Machine {
     /// evaluates the specified [Expression]; returning an array ([String]) result.
     pub fn evaluate_as_atoms(
         &self,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, Vec<String>)> {
         let mut values = Vec::new();
         for op in ops {
@@ -406,7 +385,7 @@ impl Machine {
     /// evaluates the specified [Expression]; returning a [Vec] of [TypedValue]s.
     pub fn evaluate_as_vec(
         &self,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, Vec<TypedValue>)> {
         let (mut ms, mut results) = (self.to_owned(), Vec::new());
         for op in ops {
@@ -420,7 +399,7 @@ impl Machine {
     /// evaluates the specified [Expression]; returning a [Vec] of [TypedValue]s.
     pub async fn evaluate_as_vec_async(
         &self,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, Vec<TypedValue>)> {
         let (mut ms, mut results) = (self.to_owned(), Vec::new());
         for op in ops {
@@ -441,7 +420,7 @@ impl Machine {
         match condition {
             And(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.and(&bb).unwrap_or(Undefined)),
             AssumedBoolean(a) => self.exec_assume_boolean(a),
-            Equal(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa == bb)),
+            Equal(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa.equals(&bb))),
             False => Ok((self.to_owned(), Boolean(false))),
             GreaterThan(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa > bb)),
             GreaterOrEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa >= bb)),
@@ -451,7 +430,7 @@ impl Machine {
             Like(text, pattern) => self.exec_like(text, pattern),
             Matches(src, pattern) => self.eval_inline_2(src, pattern, |aa, bb| aa.matches(&bb)),
             Not(a) => self.eval_inline_1(a, |aa| !aa),
-            NotEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(aa != bb)),
+            NotEqual(a, b) => self.eval_inline_2(a, b, |aa, bb| Boolean(!aa.equals(&bb))),
             Or(a, b) => self.eval_inline_2(a, b, |aa, bb| aa.or(&bb).unwrap_or(Undefined)),
             True => Ok((self.to_owned(), Boolean(true))),
             When(..) => Ok((self.clone(), Boolean(false))),
@@ -568,7 +547,7 @@ impl Machine {
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
-    fn evaluate_scope(&self, ops: &Vec<Expression>) -> std::io::Result<(Self, TypedValue)> {
+    fn evaluate_scope(&self, ops: &[Expression]) -> std::io::Result<(Self, TypedValue)> {
         let result = ops.iter().fold(
             (self.to_owned(), Undefined),
             |(m, result0), op| match result0 {
@@ -585,7 +564,7 @@ impl Machine {
     }
 
     /// evaluates the specified [Expression]; returning a [TypedValue] result.
-    async fn evaluate_scope_async(&self, ops: &Vec<Expression>) -> std::io::Result<(Self, TypedValue)> {
+    async fn evaluate_scope_async(&self, ops: &[Expression]) -> std::io::Result<(Self, TypedValue)> {
         let (mut ms, mut result) = (self.clone(), Undefined);
         for op in ops {
             let (ms1, result1) = ms.evaluate_async(op).await?;
@@ -613,6 +592,98 @@ impl Machine {
     ) -> std::io::Result<(Self, bool)> {
         let (ms, result) = self.evaluate_condition_async(condition).await?;
         Ok((ms, pull_bool(&result)?))
+    }
+
+    /// Defines an `alias`
+    fn exec_alias_define(&self, alias: &AliasCalls) -> std::io::Result<(Self, TypedValue)> {
+        Ok((self.with_alias(alias.clone()), Boolean(true)))
+    }
+    
+    pub fn get_alias_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("value", StringType)
+        ]
+    }
+    
+    fn exec_aliases(&self) -> std::io::Result<(Self, TypedValue)> {
+        Ok((self.to_owned(), TableValue(ModelTable(ModelRowCollection::from_parameters_and_rows(
+            &Self::get_alias_parameters(),
+            &self.aliases.iter().enumerate()
+                .map(|(id, call)| Row::new(id, vec![
+                    StringValue(Alias(call.clone()).to_code())
+                ]))
+                .collect::<Vec<_>>(),
+        )))))
+    }
+
+    /// Executes an `alias` function call
+    fn exec_alias_function_call(
+        &self,
+        name: &str,
+        args: &[Expression],
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let alias_maybe = self.aliases.iter().find(|alias| match alias {
+            AliasCalls::FunctionCall(my_name, my_params, _) =>
+                my_name == name && my_params.len() == args.len(),
+            _ => false
+        }).map(|alias| (alias.get_parameters(), alias.get_body()));
+        match alias_maybe {
+            Some((params, body)) => {
+                let (ms, vargs) = self.evaluate_as_vec(args)?;
+                ms.build_function_arguments(params, vargs).evaluate(body)
+            },
+            _ => throw(IdentifierNotFound(name.into()))
+        }
+    }
+
+    /// Executes an `alias` function call
+    async fn exec_alias_function_call_async(
+        &self,
+        name: &str,
+        args: &[Expression],
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let alias_maybe = self.aliases.iter().find(|alias| match alias {
+            AliasCalls::FunctionCall(my_name, my_params, _) =>
+                my_name == name && my_params.len() == args.len(),
+            _ => false
+        }).map(|alias| (alias.get_parameters(), alias.get_body()));
+        match alias_maybe {
+            Some((params, body)) => {
+                let (ms, vargs) = self.evaluate_as_vec_async(args).await?;
+                ms.build_function_arguments(params, vargs).evaluate_async(body).await
+            },
+            _ => throw(IdentifierNotFound(name.into()))
+        }
+    }
+
+    /// Executes an `alias` identifier call
+    fn exec_alias_identifier_call(
+        &self,
+        name: &str,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let alias_maybe = self.aliases.iter().find(|alias| match alias {
+            AliasCalls::IdentifierCall(my_name, _) => my_name == name,
+            _ => false
+        }).map(|alias| alias.get_body());
+        match alias_maybe {
+            Some(body) => self.evaluate(body),
+            _ => throw(IdentifierNotFound(name.into()))
+        }
+    }
+
+    /// Executes an `alias` identifier call (async)
+    async fn exec_alias_identifier_call_async(
+        &self,
+        name: &str,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let alias_maybe = self.aliases.iter().find(|alias| match alias {
+            AliasCalls::IdentifierCall(my_name, _) => my_name == name,
+            _ => false
+        }).map(|alias| alias.get_body());
+        match alias_maybe {
+            Some(body) => self.evaluate_async(body).await,
+            _ => throw(IdentifierNotFound(name.into()))
+        }
     }
 
     /// Creates a function definition
@@ -775,7 +846,7 @@ impl Machine {
                 self.exec_colon_colon_new(container, &vec![]),
             // must be a platform function. 
             // ex: stocks::replay()
-            _ => self.exec_colon_colon_builtins(container, field)
+            _ => self.exec_colon_colon_package(container, field)
         }
     }
 
@@ -806,7 +877,7 @@ impl Machine {
                 self.exec_colon_colon_new_async(container, &vec![]).await,
             // must be a platform function. 
             // ex: stocks::replay()
-            _ => self.exec_colon_colon_builtins_async(container, field).await
+            _ => self.exec_colon_colon_package_async(container, field).await
         }
     }
 
@@ -814,23 +885,19 @@ impl Machine {
     fn exec_colon_colon_new(
         &self,
         container: &Expression,
-        args: &Vec<Expression>,
+        args: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
+        // evaluate the "kind"
+        let (ms, data_type) = match self.evaluate(container)? {
+            (ms, Kind(data_type)) => (ms, data_type),
+            (ms, TupleValue(values)) => (ms, TypeEngine::decipher_model_tuple_literal(&values)?),
+            (ms, _) => (ms, TypeEngine::decipher_model(container)?)
+        };
         // evaluate the arguments
-        let (ms, inst_args) = self.evaluate_as_vec(args)?;
-        
-        // evaluate the class
-        match ms.evaluate(container)? {
-            (ms, Kind(data_type)) => {
-                let inst = data_type.instantiate(inst_args)?;
-                Ok((ms, inst))
-            }
-            (ms, _) => {
-                let data_type = DataType::decipher_type(container)?;
-                let inst = data_type.instantiate(inst_args)?;
-                Ok((ms, inst))
-            }
-        }
+        let (ms, inst_args) = ms.evaluate_as_vec(args)?;
+        // construct the instance
+        let inst = data_type.instantiate(inst_args)?;
+        Ok((ms, inst))
     }
 
     /// Evaluates a type instantiation
@@ -847,23 +914,18 @@ impl Machine {
     async fn exec_colon_colon_new_async(
         &self,
         container: &Expression,
-        args: &Vec<Expression>,
+        args: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
-        // evaluate the arguments
-        let (ms, inst_args) = self.evaluate_as_vec_async(args).await?;
-
         // evaluate the class
-        match ms.evaluate_async(container).await? {
-            (ms, Kind(data_type)) => {
-                let inst = data_type.instantiate(inst_args)?;
-                Ok((ms, inst))
-            }
-            (ms, _) => {
-                let data_type = DataType::decipher_type(container)?;
-                let inst = data_type.instantiate(inst_args)?;
-                Ok((ms, inst))
-            }
-        }
+        let (ms, data_type) = match self.evaluate_async(container).await? {
+            (ms, Kind(data_type)) => (ms, data_type),
+            (ms, _) => (ms, TypeEngine::decipher_model(container)?)
+        };
+        // evaluate the arguments
+        let (ms, inst_args) = ms.evaluate_as_vec_async(args).await?;
+        // construct the instance
+        let inst = data_type.instantiate(inst_args)?;
+        Ok((ms, inst))
     }
 
     /// Enables integrated support for package functions for specific data types:
@@ -872,35 +934,26 @@ impl Machine {
         container: &Expression,
         field: &Expression
     ) -> std::io::Result<(Machine, TypedValue)> {
-        let (ms, host) = self.evaluate(&container)?;
-        let (fx_name, fx_args) = match field {
-            // label::trim()
-            FunctionCall { fx, args } => 
-                match fx.deref() {
-                    Identifier(fx_name) => {
-                        let mut fx_args = vec![host.clone()];
-                        let (_ms, args) = self.evaluate_as_vec(args)?;
-                        fx_args.extend(args);
-                        (fx_name.clone(), fx_args)
-                    }
-                    z => return throw(Exact(format!("Illegal function '{}' for {}", z.to_code(), host)))
-                }
-            // label::trim
-            Identifier(fx_name) => (fx_name.clone(), vec![host.clone()]),
-            z => return throw(Exact(format!("Illegal function '{}' for {}", z.to_code(), host)))
+        // get the function name and arguments
+        let (fx_name, args) = match find_name_and_args(field) {
+            Some((name, args)) => (name, args),
+            None => return throw(Exact(format!("Illegal function '{}' for {}", field, container)))
         };
+        // convert the arguments to values
+        let (ms, host) = self.evaluate(&container)?;
+        let mut fx_args = vec![host.clone()];
+        let (ms, v_args) = ms.evaluate_as_vec(&args)?;
+        fx_args.extend(v_args);
+        // is it a builtin method?
         match Builtins::lookup_by_value(&host, fx_name.as_str()) {
+            Some(pkg_op) => pkg_op.evaluate(ms, fx_args),
             None => {
                 let container_name = pull_identifier_name(container)?;
-                match self.get(container_name.as_str()) {
+                match ms.get(container_name.as_str()) {
                     Some(Structured(structure)) =>
-                        self.exec_structure_method_or_property(&container_name, structure, field, false),
+                        ms.exec_structure_method_or_property(&container_name, structure, field, false),
                     _ => throw(Exact(format!("Illegal function '{}' for {}", fx_name, host)))
                 }
-            }
-            Some(pkgOp) => {
-                //println!("pkgOp.evaluate(ms, {fx_args:?})");
-                pkgOp.evaluate(ms, fx_args)
             }
         }
     }
@@ -920,35 +973,62 @@ impl Machine {
         container: &Expression,
         field: &Expression
     ) -> std::io::Result<(Machine, TypedValue)> {
-        let (ms, host) = self.evaluate_async(&container).await?;
-        let (fx_name, fx_args) = match field {
-            // label::trim()
-            FunctionCall { fx, args } =>
-                match fx.deref() {
-                    Identifier(fx_name) => {
-                        let mut fx_args = vec![host.clone()];
-                        let (_ms, args) = self.evaluate_as_vec_async(args).await?;
-                        fx_args.extend(args);
-                        (fx_name.clone(), fx_args)
-                    }
-                    z => return throw(Exact(format!("Illegal function '{}' for {}", z.to_code(), host)))
-                }
-            // label::trim
-            Identifier(fx_name) => (fx_name.clone(), vec![host.clone()]),
-            z => return throw(Exact(format!("Illegal function '{}' for {}", z.to_code(), host)))
+        // get the function name and arguments
+        let (fx_name, args) = match find_name_and_args(field) {
+            Some((name, args)) => (name, args),
+            None => return throw(Exact(format!("Illegal function '{}' for {}", field, container)))
         };
+        // convert the arguments to values
+        let (ms, host) = self.evaluate_async(&container).await?;
+        let mut fx_args = vec![host.clone()];
+        let (ms, v_args) = ms.evaluate_as_vec_async(&args).await?;
+        fx_args.extend(v_args);
+        // is it a builtin method?
         match Builtins::lookup_by_value(&host, fx_name.as_str()) {
+            Some(pkg_op) => pkg_op.evaluate_async(ms, fx_args).await,
             None => {
                 let container_name = pull_identifier_name(container)?;
-                match self.get(container_name.as_str()) {
+                match ms.get(container_name.as_str()) {
                     Some(Structured(structure)) =>
-                        self.exec_structure_method_or_property_async(&container_name, structure, field, false).await,
+                        ms.exec_structure_method_or_property_async(&container_name, structure, field, false).await,
                     _ => throw(Exact(format!("Illegal function '{}' for {}", fx_name, host)))
                 }
             }
-            Some(pkgOp) => {
-                //println!("pkgOp.evaluate_async(ms, {fx_args:?}).await");
-                pkgOp.evaluate_async(ms, fx_args).await
+        }
+    }
+
+    fn exec_colon_colon_package(
+        &self,
+        container: &Expression,
+        field: &Expression
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let pkg_op_maybe = find_name(container)
+            .and_then(|pkg_name| find_name(field).map(|name| (pkg_name, name)))
+            .and_then(|(pkg_name, name)| PackageOps::lookup_by_name(pkg_name.as_str(), name.as_str()))
+            .and_then(|pkg_op| find_name_and_args(field).map(|(_, args)| (pkg_op, args)));
+        match pkg_op_maybe {
+            None => self.exec_colon_colon_builtins(container, field),
+            Some((pkg_op, args)) => {
+                let (ms, fx_args) = self.evaluate_as_vec(&args)?;
+                pkg_op.evaluate(ms, fx_args)
+            }
+        }
+    }
+
+    async fn exec_colon_colon_package_async(
+        &self,
+        container: &Expression,
+        field: &Expression
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        let pkg_op_maybe = find_name(container)
+            .and_then(|pkg_name| find_name(field).map(|name| (pkg_name, name)))
+            .and_then(|(pkg_name, name)| PackageOps::lookup_by_name(pkg_name.as_str(), name.as_str()))
+            .and_then(|pkg_op| find_name_and_args(field).map(|(_, args)| (pkg_op, args)));
+        match pkg_op_maybe {
+            None => self.exec_colon_colon_builtins_async(container, field).await,
+            Some((pkg_op, args)) => {
+                let (ms, fx_args) = self.evaluate_as_vec_async(&args).await?;
+                pkg_op.evaluate_async(ms, fx_args).await
             }
         }
     }
@@ -1263,7 +1343,7 @@ impl Machine {
     /// for item in ['apple', 'berry', ...] ...
     /// ```
     /// ```
-    /// for row in tools::to_table([{symbol:'ABC', price: 10.0}, ...]) ...
+    /// for row in collections::to_table([{symbol:'ABC', price: 10.0}, ...]) ...
     /// ```
     fn exec_for_construct(&self,
                           construct: &Box<Expression>,
@@ -1306,7 +1386,7 @@ impl Machine {
     /// for item in ['apple', 'berry', ...] ...
     /// ```
     /// ```
-    /// for row in tools::to_table([{symbol:'ABC', price: 10.0}, ...]) ...
+    /// for row in collections::to_table([{symbol:'ABC', price: 10.0}, ...]) ...
     /// ```
     async fn exec_for_construct_async(&self,
                                       construct: &Box<Expression>,
@@ -1473,6 +1553,14 @@ impl Machine {
                 ms.with_variable(c.get_name(), v.to_owned()))
     }
 
+    fn is_alias_function(&self, name: &str, args: &[Expression]) -> bool {
+        self.aliases.iter().position(|alias| match alias {
+            AliasCalls::FunctionCall(my_name, my_params, _) =>
+                my_name == name && my_params.len() == args.len(),
+            _ => false,
+        }).is_some()
+    }
+
     /// Executes a function call
     /// #### Examples
     /// ```
@@ -1480,18 +1568,21 @@ impl Machine {
     /// ```
     fn exec_function_call(&self,
                           fx: &Expression,
-                          args: &Vec<Expression>,
+                          args: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, args) = self.evaluate_as_vec(args)?;
-        match ms.evaluate(fx)? {
-            (ms, Function { params, body, .. }) =>
-                ms.build_function_arguments(params, args)
-                    .evaluate(&body),
-            (ms, PlatformOp(pf)) => {
-                //println!("pkgOp.evaluate(ms, {args:?})");
-                pf.evaluate(ms, args)
-            },
-            (_, z) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
+        match find_name(fx) {
+            Some(name) if self.is_alias_function(name.as_str(), args) =>
+                self.exec_alias_function_call(name.as_str(), args),
+            _ => {
+                let (ms, args) = self.evaluate_as_vec(args)?;
+                match ms.evaluate(fx)? {
+                    (ms, Function { params, body, .. }) =>
+                        ms.build_function_arguments(params, args)
+                            .evaluate(&body),
+                    (ms, PackageFunction(pf)) => pf.evaluate(ms, args),
+                    (_, z) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
+                }
+            }
         }
     }
 
@@ -1502,18 +1593,21 @@ impl Machine {
     /// ```
     async fn exec_function_call_async(&self,
                                 fx: &Expression,
-                                args: &Vec<Expression>,
+                                args: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
-        let (ms, args) = self.evaluate_as_vec_async(args).await?;
-        match ms.evaluate_async(fx).await? {
-            (ms, Function { params, body, .. }) =>
-                ms.build_function_arguments(params, args)
-                    .evaluate_async(&body).await,
-            (ms, PlatformOp(pf)) => {
-                //println!("pkgOp.evaluate_async(ms, {args:?}).await");
-                pf.evaluate_async(ms, args).await
-            },
-            (_, z) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
+        match find_name(fx) {
+            Some(name) if self.is_alias_function(name.as_str(), args) =>
+                self.exec_alias_function_call_async(name.as_str(), args).await,
+            _ => {
+                let (ms, args) = self.evaluate_as_vec(args)?;
+                match ms.evaluate_async(fx).await? {
+                    (ms, Function { params, body, .. }) =>
+                        ms.build_function_arguments(params, args)
+                            .evaluate_async(&body).await,
+                    (ms, PackageFunction(pf)) => pf.evaluate_async(ms, args).await,
+                    (_, z) => throw(TypeMismatch(FunctionExpected(z.to_code()))),
+                }
+            }
         }
     }
 
@@ -1523,9 +1617,26 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         let result = match self.get(name) {
             Some(value) => value,
-            None if DataType::is_type_name(name) =>
-                Kind(DataType::decipher_type(&Identifier(name.into()))?),
-            None => return throw(IdentifierNotFound(name.into())),
+            // is it a type?
+            None if TypeEngine::is_type_name(name) =>
+                Kind(TypeEngine::decipher_model(&Identifier(name.into()))?),
+            // is it an alias?
+            None => return self.exec_alias_identifier_call(name),
+        };
+        Ok((self.clone(), result))
+    }
+
+    async fn exec_get_variable_async(
+        &self,
+        name: &str,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let result = match self.get(name) {
+            Some(value) => value,
+            // is it a type?
+            None if TypeEngine::is_type_name(name) =>
+                Kind(TypeEngine::decipher_model(&Identifier(name.into()))?),
+            // is it an alias?
+            None => return self.exec_alias_identifier_call_async(name).await,
         };
         Ok((self.clone(), result))
     }
@@ -1744,13 +1855,22 @@ impl Machine {
     fn element_at(collection: TypedValue, index: TypedValue) -> std::io::Result<TypedValue> {
         let value = match collection {
             ArrayValue(array) => {
-                elem_at("Value", array, index,
+                elem_at("Array", array, index,
                         |a| Ok(a.len()), |a, i| Ok(a[i].clone()))?
             }
             ByteStringValue(bytes) => {
                 elem_at("Byte", bytes, index,
                         |bv| Ok(bv.len()), |bv, i| Ok(Number(U8Value(bv[i].clone()))))?
             }
+            EnumValue(pos, params) =>
+                match pos {
+                    None => Undefined,
+                    Some(n) => {
+                        let value = params[n as usize].get_name().to_string();
+                        elem_at("Char", value, index,
+                                |s| Ok(s.len()), |s, i| Ok(CharValue(s.chars().nth(i).unwrap())))?
+                    }
+                }
             StringValue(string) => {
                 elem_at("Char", string, index,
                         |s| Ok(s.chars().count()), |s, i| Ok(CharValue(s.chars().nth(i).unwrap())))?
@@ -1871,7 +1991,7 @@ impl Machine {
     fn exec_match(
         &self,
         host: &Expression,
-        cases: &Vec<Expression>,
+        cases: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
         // find a matching case
         let (ms, host_value) = self.evaluate(host)?;
@@ -1907,7 +2027,7 @@ impl Machine {
     fn exec_module_alone(
         &self,
         name: &str,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
         let structure = HardStructure::empty();
         let result =
@@ -1947,7 +2067,7 @@ impl Machine {
     fn exec_module_structure(
         &self,
         name: &str,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
         match self.get(name) {
             Some(Structured(structure)) => self.exec_module_structure_impl(name, structure, ops),
@@ -1960,7 +2080,7 @@ impl Machine {
         &self,
         name: &str,
         structure: Structures,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
         let result = ops.iter()
             .fold(Structured(structure), |tv, op| match tv {
@@ -1992,6 +2112,24 @@ impl Machine {
         self.evaluate(expr).map(|(ms, result)| (ms, result.neg()))
     }
 
+    fn exec_one_time(&self, expr: &Expression, uid: u128) -> std::io::Result<(Self, TypedValue)> {
+        if connections::one_time::if_not_triggered(&uid)? {
+            self.evaluate(expr).map(|(ms, _)| (ms, Boolean(true)))
+        }
+        else {
+            Ok((self.clone(), Boolean(false)))
+        }
+    }
+
+    async fn exec_one_time_async(&self, expr: &Expression, uid: u128) -> std::io::Result<(Self, TypedValue)> {
+        if connections::one_time::if_not_triggered(&uid)? {
+            self.evaluate_async(expr).await.map(|(ms, _)| (ms, Boolean(true)))
+        }
+        else {
+            Ok((self.clone(), Boolean(false)))
+        }
+    }
+
     /// ++ operator
     /// ex: checks++
     fn exec_plus_plus(
@@ -2012,14 +2150,17 @@ impl Machine {
     /// Returns a reference to an embedded table
     /// ```
     /// // create a table with an embedded table
-    /// let stocks = nsd::save(
-    ///     "machine.examples.stocks",
-    ///     Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: DateTime))::new
-    /// )
+    /// let stocks = Table(
+    ///    symbol: String(8),
+    ///    exchange: String(8),
+    ///    history: Table(last_sale: f64, processed_time: DateTime)
+    /// )::new::save_as("machine.examples.stocks")
+    ///
     /// { symbol: "BIZ", exchange: "NYSE", history: [] } ~> stocks
     /// 
     /// // get a reference to the embedded table
     /// let history = &stocks(0, 2)
+    ///
     /// { last_sale: 11.67, processed_time: DateTime::new() } ~> history
     /// stocks
     /// 
@@ -2031,15 +2172,10 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         match expr {
             FunctionCall { fx, args } => {
-                let (ms, table_val) = self.evaluate(fx)?;
-                match table_val.to_table_or_value() {
-                    TableValue(df) => {
-                        let (ms, coords) = ms.get_referenced_coordinates(args)?;
-                        let ref_df = ms.get_referenced_dataframe(&df, coords)?;
-                        Ok((ms, TableValue(ref_df)))
-                    }
-                    x => throw(TypeMismatch(TableExpected(x.to_code())))
-                }
+                let (ms, df) = self.evaluate_as_dataframe(fx)?;
+                let (ms, coords) = ms.get_referenced_coordinates(args)?;
+                let ref_df = ms.get_referenced_dataframe(&df, coords)?;
+                Ok((ms, TableValue(ref_df)))
             }
             x => throw(TypeMismatch(FunctionExpected(x.to_code())))
         }
@@ -2048,14 +2184,17 @@ impl Machine {
     /// Returns a reference to an embedded table
     /// ```
     /// // create a table with an embedded table
-    /// let stocks = nsd::save(
-    ///     "machine.examples.stocks",
-    ///     Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: DateTime))::new
-    /// )
+    /// let stocks = Table(
+    ///    symbol: String(8),
+    ///    exchange: String(8),
+    ///    history: Table(last_sale: f64, processed_time: DateTime)
+    /// )::new::save_as("machine.examples.stocks")
+    ///
     /// { symbol: "BIZ", exchange: "NYSE", history: [] } ~> stocks
     ///
     /// // get a reference to the embedded table
     /// let history = &stocks(0, 2)
+    /// 
     /// { last_sale: 11.67, processed_time: DateTime::new() } ~> history
     /// stocks
     ///
@@ -2067,15 +2206,10 @@ impl Machine {
     ) -> std::io::Result<(Self, TypedValue)> {
         match expr {
             FunctionCall { fx, args } => {
-                let (ms, table_val) = self.evaluate_async(fx).await?;
-                match table_val.to_table_or_value() {
-                    TableValue(df) => {
-                        let (ms, coords) = ms.get_referenced_coordinates(args)?;
-                        let ref_df = ms.get_referenced_dataframe(&df, coords)?;
-                        Ok((ms, TableValue(ref_df)))
-                    }
-                    x => throw(TypeMismatch(TableExpected(x.to_code())))
-                }
+                let (ms, df) = self.evaluate_as_dataframe_async(fx).await?;
+                let (ms, coords) = ms.get_referenced_coordinates(args)?;
+                let ref_df = ms.get_referenced_dataframe(&df, coords)?;
+                Ok((ms, TableValue(ref_df)))
             }
             x => throw(TypeMismatch(FunctionExpected(x.to_code())))
         }
@@ -2083,9 +2217,9 @@ impl Machine {
 
     fn get_referenced_coordinates(
         &self, 
-        args: &Vec<Expression>
+        args: &[Expression]
     ) -> std::io::Result<(Self, Vec<usize>)> {
-        let (_, coords_tuple) = self.evaluate(&TupleExpression(args.clone()))?;
+        let (_, coords_tuple) = self.evaluate(&TupleExpression(args.to_vec()))?;
         match coords_tuple {
             TupleValue(items) => {
                 let mut coords = vec![];
@@ -2130,14 +2264,27 @@ impl Machine {
             coords: Vec<usize>,
         ) -> std::io::Result<Dataframe> {
             let (column_id, coords) = next_id(coords)?;
-            match row.get(column_id).to_table_or_value() {
-                TableValue(df) => recurse_df(&df, coords),
-                other => throw(TypeMismatch(TableExpected(other.to_code())))
-            }
+            let df = row.get(column_id).to_dataframe()?;
+            recurse_df(&df, coords)
         }
 
         // recursively resolve the embedded dataframe
         recurse_df(host, coords.iter().rev().map(|n| *n).collect::<Vec<_>>()) 
+    }
+
+    fn exec_scenario(
+        &self,
+        title: &Box<Expression>,
+        inherits: &Option<String>,
+        verifications: &[Expression]
+    ) -> std::io::Result<(Self, TypedValue)> {
+        TestEngine::add_feature(self, title, &vec![
+            Scenario {
+                title: title.clone(),
+                inherits: inherits.clone(),
+                verifications: verifications.to_vec()
+            }
+        ])
     }
 
     /// Sets variable(s) in the current [Machine] instance
@@ -2381,7 +2528,7 @@ impl Machine {
     /// ex: (1, 2, 3)
     fn exec_tuple(
         &self,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
         self.evaluate_as_vec(ops).map(|(ms, values)| (ms, TupleValue(values)))
     }
@@ -2390,7 +2537,7 @@ impl Machine {
     /// ex: (1, 2, 3)
     async fn exec_tuple_async(
         &self,
-        ops: &Vec<Expression>,
+        ops: &[Expression],
     ) -> std::io::Result<(Self, TypedValue)> {
         let (ms, values) = self.evaluate_as_vec_async(ops).await?;
         Ok((ms, TupleValue(values)))
@@ -2404,19 +2551,34 @@ impl Machine {
         selection: &Vec<String>,
     ) -> (Self, TypedValue) {
         let ms = self.to_owned();
-        match ms.get(package_name) {
-            None => (ms, ErrorValue(PackageNotFound(package_name.into()))),
-            Some(component) => match component {
-                Structured(structure) =>
-                    if selection.is_empty() {
-                        (structure.pollute(ms), Boolean(true))
+        match PackageOps::lookup_by_package_name(package_name) {
+            None =>
+                match ms.get(package_name) {
+                    None => (ms, ErrorValue(PackageNotFound(package_name.into()))),
+                    Some(component) =>
+                        match component {
+                            Structured(structure) =>
+                                if selection.is_empty() {
+                                    (structure.pollute(ms), Boolean(true))
+                                } else {
+                                    let ms = selection.iter().fold(ms, |ms, name| {
+                                        ms.with_variable(name, structure.get(name))
+                                    });
+                                    (ms, Boolean(true))
+                                }
+                            other => (ms, ErrorValue(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code()))))
+                        }
+                }
+            Some(ops) => {
+                let ms = ops.iter().fold(self.clone(), |ms, op| {
+                    let name = &op.get_name();
+                    if selection.is_empty() || selection.contains(name) {
+                        ms.with_variable(name, PackageFunction(op.clone()))
                     } else {
-                        let ms = selection.iter().fold(ms, |ms, name| {
-                            ms.with_variable(name, structure.get(name))
-                        });
-                        (ms, Boolean(true))
+                        ms
                     }
-                other => (ms, ErrorValue(SyntaxError(SyntaxErrors::TypeIdentifierExpected(other.to_code()))))
+                });
+                (ms, Boolean(true))
             }
         }
     }
@@ -2424,7 +2586,7 @@ impl Machine {
     fn exec_uses(&self, ops: &Vec<UseOps>) -> std::io::Result<(Self, TypedValue)> {
         let result = ops.iter().fold(
             (self.to_owned(), Undefined),
-            |(ms, tv), iop| match iop {
+            |(ms, _tv), iop| match iop {
                 UseOps::Everything(pkg) =>
                     ms.exec_use(pkg, &Vec::new()),
                 UseOps::Selection(pkg, selection) =>
@@ -2616,6 +2778,63 @@ impl Machine {
         Ok((machine, outcome))
     }
 
+    /// Evaluates a resource then automatically closes it after use
+    /// #### Example
+    /// ```
+    /// blobs::create("builtins.blob.append_blocking") with bs -> {
+    ///     let id = bs::append("Hello World")
+    ///     bs::read(id)
+    /// }
+    /// ```
+    fn exec_with(
+        &self,
+        resource: &Expression,
+        code: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, my_resource) = self.evaluate(resource)?;
+        let (ms, fx) = ms.evaluate(code)?;
+        let (ms, result) =  ms.evaluate(&FunctionCall {
+            fx: Literal(fx.clone()).into(),
+            args: vec![
+                Literal(my_resource.clone()),
+            ],
+        })?;
+        let _closed = Self::resource_close(my_resource).ok();
+        Ok((ms, result))
+    }
+
+    /// Evaluates a resource then automatically closes it after use
+    async fn exec_with_async(
+        &self,
+        resource: &Expression,
+        code: &Expression,
+    ) -> std::io::Result<(Self, TypedValue)> {
+        let (ms, my_resource) = self.evaluate_async(resource).await?;
+        let (ms, fx) = ms.evaluate_async(code).await?;
+        let (ms, result) =  ms.evaluate_async(&FunctionCall {
+            fx: Literal(fx.clone()).into(),
+            args: vec![
+                Literal(my_resource.clone()),
+            ],
+        }).await?;
+        let _closed = Self::resource_close_async(my_resource).await.ok();
+        Ok((ms, result))
+    }
+
+    fn resource_close(resource: TypedValue) -> std::io::Result<bool> {
+        match resource {
+            Connection(conn) => conn.close(),
+            other => throw(Exact(format!("Connection expected near {}", other)))
+        }
+    }
+
+    async fn resource_close_async(resource: TypedValue) -> std::io::Result<bool> {
+        match resource {
+            Connection(conn) => conn.close_async().await,
+            other => throw(Exact(format!("Connection expected near {}", other)))
+        }
+    }
+
     /// evaluates expression `a` then applies function `f`. ex: f(a)
     fn eval_inline_1(
         &self,
@@ -2674,7 +2893,7 @@ impl Machine {
         &self.variables
     }
 
-    fn get_variables_names(items: &Vec<Expression>) -> std::io::Result<Vec<String>> {
+    fn get_variables_names(items: &[Expression]) -> std::io::Result<Vec<String>> {
         let mut variables = vec![];
         for item in items {
             variables.push(pull_identifier_name(item)?);
@@ -2689,26 +2908,31 @@ impl Machine {
     }
     
     pub fn set(&self, name: &str, value: TypedValue) -> Self {
-        Self::build(
-            self.observations.to_owned(),
-            self.variables.update(name.to_owned(), value),
-        )
+        let mut ms = self.clone();
+        ms.variables = ms.variables.update(name.to_owned(), value);
+        ms
     }
 
-    pub fn with_module(
-        &self,
-        name: &str,
-        variables: Vec<PackageOps>,
-    ) -> Self {
-        let structure = variables.iter().fold(
-            HardStructure::empty(),
-            |structure, key|
-                structure.with_variable(
-                    key.get_name().as_str(),
-                    PlatformOp(key.clone()),
-                ),
-        );
-        self.with_variable(name, Structured(Hard(structure)))
+    pub fn with_alias(&self, alias: AliasCalls) -> Self {
+        let mut ms = self.clone();
+        let index_maybe = match &alias {
+            AliasCalls::IdentifierCall(name, _) =>
+                ms.aliases.iter().position(|alias| match alias {
+                    AliasCalls::IdentifierCall(my_name, _) if my_name == name => true,
+                    _ => false,
+                }),
+            AliasCalls::FunctionCall(name, params, _) =>
+                ms.aliases.iter().position(|alias| match alias {
+                    AliasCalls::FunctionCall(my_name, my_params, _) =>
+                        my_name == name && my_params.len() == params.len(),
+                    _ => false,
+                })
+        };
+        match index_maybe {
+            Some(index) => ms.aliases[index] = alias,
+            None =>ms.aliases.push(alias)
+        }
+        ms
     }
 
     pub fn with_observer_variable(
@@ -2716,9 +2940,9 @@ impl Machine {
         condition: Conditions, 
         code: Expression
     ) -> Self {
-        let mut observations = self.observations.clone();
-        observations.push(VariableObservation { condition, code });
-        Self::build(observations, self.variables.clone())
+        let mut ms = self.clone();
+        ms.observations.push(VariableObservation { condition, code });
+        ms
     }
 
     pub fn with_row(&self, columns: &Vec<Column>, row: &Row) -> Self {
@@ -2728,50 +2952,9 @@ impl Machine {
     }
 
     pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
-        Self::build(
-            self.observations.to_owned(),
-            self.variables.update(name.to_owned(), value),
-        )
-    }
-}
-
-impl Ord for Machine {
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.observations.cmp(&other.observations)
-    }
-}
-
-impl PartialOrd for Machine {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.observations.partial_cmp(&other.observations)
-    }
-}
-
-impl Serialize for Machine {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut state = serializer.serialize_struct("Machine", 2)?;
-        state.serialize_field("observations", &self.observations)?;
-        state.serialize_field("variables", &self.variables)?;
-        state.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for Machine {
-    fn deserialize<D>(deserializer: D) -> Result<Machine, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        struct MachineFields {
-            observations: Vec<Observations>,
-            variables: im::HashMap<String, TypedValue>,
-        }
-
-        let MachineFields { observations, variables } = MachineFields::deserialize(deserializer)?;
-        Ok(Machine { observations, variables })
+        let mut ms = self.clone();
+        ms.variables = ms.variables.update(name.to_owned(), value);
+        ms
     }
 }
 
@@ -2784,6 +2967,18 @@ mod tests {
     use crate::expression::{FALSE, NULL, TRUE};
     use crate::number_kind::NumberKind::I64Kind;
     use crate::test_util::*;
+
+    #[test]
+    fn encode_decode() {
+        let machine = Machine::new();
+        machine.with_variable("x", Number(I64Value(1)));
+        machine.with_variable("y", Number(I64Value(2)));
+        machine.with_variable("z", Number(I64Value(3)));
+
+        let bytes = bincode::serialize(&machine).unwrap();
+        let decoded = bincode::deserialize::<Machine>(&bytes[..]).unwrap();
+        assert_eq!(machine.get_variables(), decoded.get_variables());
+    }
 
     #[actix::test]
     async fn test_array_declaration() {
@@ -2995,7 +3190,7 @@ mod tests {
             };
 
             // evaluate the function
-            let (machine, result) = Machine::empty()
+            let (_machine, result) = Machine::empty()
                 .with_variable("n", Number(I64Value(3)))
                 .evaluate_async(&model).await
                 .unwrap();
@@ -3038,38 +3233,14 @@ mod tests {
                     Literal(Number(I64Value(3))),
                 ],
             };
-            let (machine, result) = machine
+            let (_machine, result) = machine
                 .evaluate_async(&model).await
                 .unwrap();
             assert_eq!(result, Number(I64Value(5)));
             assert_eq!(model.to_code(), "((a: i64, b: i64) -> a + b)(2, 3)")
         }
 
-        #[actix::test]
-        async fn test_function_pipeline() {
-            //  "Hello" |> util::md5 |> util::hex
-            let model = ArrowVerticalBar(
-                Box::new(ArrowVerticalBar(
-                    Box::new(Literal(StringValue("Hello".to_string()))),
-                    Box::new(ColonColon(
-                        Box::new(Identifier("util".to_string())),
-                        Box::new(Identifier("md5".to_string())),
-                    )),
-                )),
-                Box::new(ColonColon(
-                    Box::new(Identifier("util".to_string())),
-                    Box::new(Identifier("hex".to_string())),
-                )),
-            );
-
-            // evaluate the function
-            let (machine, result) = Machine::new()
-                .evaluate_async(&model).await
-                .unwrap();
-            assert_eq!(result, StringValue("8b1a9953c4611296a827abf8c47804d7".to_string()));
-            assert_eq!(model.to_code(), r#""Hello" |> util::md5 |> util::hex"#)
-        }
-
+        #[ignore]
         #[actix::test]
         async fn test_function_recursion() {
             // f = ((n: i64) -> if(n <= 1) 1 else n * f(n - 1))
@@ -3106,7 +3277,7 @@ mod tests {
 
             // f(5.0)
             let machine = Machine::empty().with_variable("f", model);
-            let (machine, result) = machine.evaluate_async(&FunctionCall {
+            let (_machine, result) = machine.evaluate_async(&FunctionCall {
                 fx: Box::new(Identifier("f".into())),
                 args: vec![
                     Literal(Number(I64Value(5)))

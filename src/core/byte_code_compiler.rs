@@ -11,13 +11,11 @@ use crate::errors::Errors::Exact;
 use crate::expression::Expression::Literal;
 use crate::expression::*;
 use crate::field::FieldMetadata;
-use crate::model_row_collection::ModelRowCollection;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::structures::Row;
-use crate::typed_values::TypedValue::ErrorValue;
+use crate::typed_values::TypedValue::*;
 use crate::typed_values::*;
-use std::ops::{Deref, Index};
 use uuid::Uuid;
 
 /// A JVM-inspired ByteBuffer-like utility (Big Endian)
@@ -105,7 +103,32 @@ impl ByteCodeCompiler {
                               |err| ErrorValue(Exact(err.to_string())))
     }
 
-    pub fn encode_value(model: &TypedValue) -> std::io::Result<Vec<u8>> {
+    pub fn encode_value(value: &TypedValue) -> std::io::Result<Vec<u8>> {
+        match value {
+            ArrayValue(..) => ByteCodeCompiler::encode_typed_value(value),
+            Boolean(ok) => Ok(vec![if *ok { 1 } else { 0 }]),
+            ByteStringValue(bytes) => Ok(ByteCodeCompiler::encode_u8x_n(bytes.to_vec())),
+            Connection(conn) => conn.encode(),
+            DateTimeValue(dt) => Ok(dt.to_be_bytes().to_vec()),
+            EnumValue(index_maybe, _) => {
+                let index = match index_maybe {
+                    Some(index) => index + 1,
+                    None => 0,
+                };
+                Ok(index.to_be_bytes().to_vec())
+            }
+            ErrorValue(err) => Ok(ByteCodeCompiler::encode_string(err.to_string().as_str())),
+            Number(number) => Ok(number.encode()),
+            PackageFunction(pf) => pf.encode(),
+            StringValue(string) => Ok(ByteCodeCompiler::encode_string(string)),
+            TableValue(df) => Ok(ByteCodeCompiler::encode_df(df)),
+            TupleValue(..) => ByteCodeCompiler::encode_typed_value(value),
+            UUIDValue(uuid) => Ok(uuid.to_be_bytes().to_vec()),
+            other => ByteCodeCompiler::encode_typed_value(other)
+        }
+    }
+
+    pub fn encode_typed_value(model: &TypedValue) -> std::io::Result<Vec<u8>> {
         Self::unwrap_as_result(bincode::serialize(model))
     }
 
@@ -208,13 +231,32 @@ impl ByteCodeCompiler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::data_types::DataType::{FixedSizeType, NumberType, StringType};
     use crate::dataframe::Dataframe::ModelTable;
     use crate::expression::Conditions::{GreaterThan, LessOrEqual};
     use crate::expression::Expression::{Condition, Identifier, If, Limit, Literal, Multiply, Plus, StructureExpression, Where};
     use crate::model_row_collection::ModelRowCollection;
-    use crate::numbers::Numbers::{F64Value, I64Value};
-    use crate::test_util::{make_quote, make_quote_columns};
-    use crate::typed_values::TypedValue::{Number, StringValue, TableValue};
+    use crate::number_kind::NumberKind::U16Kind;
+    use crate::numbers::Numbers::{F64Value, I64Value, U16Value};
+    use crate::parameter::Parameter;
+    use crate::test_util::{interpret, make_quote, make_quote_columns};
+    use crate::typed_values::TypedValue::{EnumValue, Number, StringValue, TableValue};
+
+    #[test]
+    fn test_enum_decode() {
+        let value = EnumValue(Some(3), vec![
+            Parameter::new_with_default("AMEX", NumberType(U16Kind), Number(U16Value(0))),
+            Parameter::new_with_default("NYSE", NumberType(U16Kind), Number(U16Value(1))),
+            Parameter::new_with_default("NASDAQ", NumberType(U16Kind), Number(U16Value(2))),
+            Parameter::new_with_default("OTCBB", NumberType(U16Kind), Number(U16Value(3))),
+        ]);
+
+        let encoded = value.get_type().encode(&value).unwrap();
+        assert_eq!(encoded.len(), 2);
+
+        let decoded = value.get_type().decode(&encoded, 0);
+        assert_eq!(decoded, value);
+    }
 
     #[test]
     fn test_table_codec() {
@@ -225,7 +267,7 @@ mod tests {
             make_quote(2, "BIZ", "NYSE", 23.66),
             make_quote(3, "GOTO", "OTC", 0.1428),
             make_quote(4, "BOOM", "NASDAQ", 56.87)])));
-        let bytes = ByteCodeCompiler::encode_value(&expected).unwrap();
+        let bytes = ByteCodeCompiler::encode_typed_value(&expected).unwrap();
         let actual = ByteCodeCompiler::decode_value(&bytes);
         assert_eq!(actual, expected)
     }
@@ -346,6 +388,12 @@ mod tests {
     }
 
     #[test]
+    fn test_decode_string_fixed_size() {
+        let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 5, b'H', b'e', b'l', b'l', b'o'];
+        assert_eq!(FixedSizeType(StringType.into(), 5).decode(&buf, 0), StringValue("Hello".into()))
+    }
+
+    #[test]
     fn test_decode_string_max_length() {
         let buf: Vec<u8> = vec![0, 0, 0, 0, 0, 0, 0, 4, b'Y', b'H', b'W', b'H'];
         assert_eq!(ByteCodeCompiler::decode_string(&buf, 0, 4), "YHWH")
@@ -361,6 +409,24 @@ mod tests {
     fn test_decode_uuid() {
         let uuid = ByteCodeCompiler::decode_uuid("2992bb53-cc3c-4f30-8a4c-c1a666afcc46").unwrap();
         assert_eq!(uuid, 0x2992bb53cc3c4f308a4cc1a666afcc46u128)
+    }
+
+    #[test]
+    fn test_encode_decode_array() {
+        verify_encode_decode(interpret("[5, 7, 9]"));
+    }
+
+    #[test]
+    fn test_encode_decode_string() {
+        let value = "Hello";
+        let bytes = ByteCodeCompiler::encode_string(value);
+        let decoded = ByteCodeCompiler::decode_string(&bytes, 0, 5);
+        assert_eq!(value, decoded);
+    }
+
+    #[test]
+    fn test_encode_decode_tuple() {
+        verify_encode_decode(interpret("(5, 7, 9)"));
     }
 
     #[test]
@@ -389,4 +455,11 @@ mod tests {
         let id = 0xDEAD_CAFE_BEEF_BABE;
         assert_eq!(ByteCodeCompiler::encode_row_id(id), expected)
     }
+
+    fn verify_encode_decode(value: TypedValue) {
+        let bytes = value.encode().unwrap();
+        let decoded = ByteCodeCompiler::decode_value(&bytes);
+        assert_eq!(value, decoded);
+    }
+
 }

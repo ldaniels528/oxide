@@ -7,14 +7,9 @@ use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};
 
-use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::EventSource;
 use crate::errors::throw;
 use crate::errors::Errors::Exact;
-use crate::file_row_collection::FileRowCollection;
-use crate::journaling::{EventSourceRowCollection, TableFunction};
 use crate::machine::Machine;
-use crate::object_config::ObjectConfig;
 
 // Namespace is a logical representation of a Lollypop object namespace or path
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Serialize, Deserialize)]
@@ -99,18 +94,6 @@ impl Namespace {
 
     pub fn id(&self) -> String {
         format!("{}.{}.{}", self.database, self.schema, self.name)
-    }
-
-    pub fn load_table(&self) -> std::io::Result<Dataframe> {
-        match ObjectConfig::load(self)? {
-            ObjectConfig::EventSourceConfig { columns, .. } =>
-                EventSourceRowCollection::new(self, &columns).map(|es| EventSource(es)),
-            ObjectConfig::TableConfig { .. } =>
-                FileRowCollection::open(self).map(|frc| Dataframe::DiskTable(frc)),
-            ObjectConfig::TableFnConfig { .. } =>
-                TableFunction::from_namespace(self, Machine::new_platform())
-                    .map(|tf| Dataframe::TableFn(Box::new(tf)))
-        }
     }
     
     pub fn with_events_name(&self) -> Self {

@@ -5,10 +5,7 @@
 
 extern crate core;
 
-use crate::errors::throw;
-use crate::errors::Errors::Exact;
-use crate::packages::webservers;
-use crate::server_engine::start_http_server_async;
+use crate::connections::webservers;
 use crate::terminal::TerminalState;
 use crate::utils::{is_u16, parse_u16};
 use log::LevelFilter;
@@ -17,7 +14,6 @@ use shared_lib::cnv_error;
 use std::env;
 use std::string::ToString;
 
-mod bit_array;
 mod blob_file_row_collection;
 mod blobs;
 mod builtins;
@@ -25,11 +21,14 @@ mod byte_code_compiler;
 mod byte_row_collection;
 mod columns;
 mod compiler;
+mod connections;
+mod conversions;
 mod dataframe;
 mod dataframe_actor;
 mod data_types;
 mod errors;
 mod expression;
+mod extractions;
 mod field;
 mod file_row_collection;
 mod hybrid_row_collection;
@@ -59,6 +58,7 @@ mod test_engine;
 mod token_slice;
 mod tokenizer;
 mod tokens;
+mod type_engine;
 mod typed_values;
 mod utils;
 mod web_engine;
@@ -99,11 +99,12 @@ async fn main() -> std::io::Result<()> {
 
     // start the REPL based on the commandline arguments
     let args = env::args().skip(1).collect();
-    start_terminal(ApplicationModes::parse(args)?).await
+    let mode = ApplicationModes::parse(args)?;
+    let (state, args) = get_terminal_state_and_args(mode).await?;
+    terminal::do_terminal(state, args).await
 }
 
-// Start the Oxide terminal (embedded or remote server)
-async fn start_terminal(mode: ApplicationModes) -> std::io::Result<()> {
+async fn get_terminal_state_and_args(mode: ApplicationModes) -> std::io::Result<(TerminalState, Vec<String>)> {
     let (state, args) = match mode {
         ApplicationModes::EmbeddedSession(port) => {
             webservers::start_server(port).await?;
@@ -114,13 +115,15 @@ async fn start_terminal(mode: ApplicationModes) -> std::io::Result<()> {
         ApplicationModes::OfflineSession(args) =>
             (TerminalState::offline()?, args),
     };
-    terminal::do_terminal(state, args).await
+    Ok((state, args))
 }
 
 /// Unit tests
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connections::webservers::{get_random_port, stop_server};
+    use crate::test_util::start_test_server_async;
 
     #[test]
     fn test_embedded_session() {
@@ -128,6 +131,32 @@ mod tests {
             "--embedded".into(), "8754".into()
         ]).unwrap();
         assert_eq!(mode, ApplicationModes::EmbeddedSession(8754));
+    }
+
+    #[actix::test]
+    async fn test_get_terminal_state_and_args_embedded() {
+        let port = get_random_port().unwrap();
+        let (_state, args) = get_terminal_state_and_args(ApplicationModes::EmbeddedSession(port)).await.unwrap();
+        assert!(args.is_empty());
+        stop_server(port).await.unwrap();
+    }
+
+    #[actix::test]
+    async fn test_get_terminal_state_and_args_offline() {
+        let (_state, args) = get_terminal_state_and_args(ApplicationModes::OfflineSession(vec![
+            "uno".into(),
+            "dos".into(),
+            "tres".into(),
+        ])).await.unwrap();
+        assert_eq!(args, vec!["uno".to_string(), "dos".into(), "tres".into()]);
+    }
+
+    #[actix::test]
+    async fn test_get_terminal_state_and_args_remote() {
+        let port = start_test_server_async().await.unwrap();
+        let (_state, args) = get_terminal_state_and_args(ApplicationModes::RemoteSession(LOCAL_HOST.into(), port)).await.unwrap();
+        assert!(args.is_empty());
+        stop_server(port).await.unwrap();
     }
 
     #[test]

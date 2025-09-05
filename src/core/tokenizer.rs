@@ -24,8 +24,8 @@ const OPERATORS_2: [&str; 28] = [
 ];
 
 /// Triple-character operators
-const OPERATORS_3: [&str; 11] = [
-    "~>>", "<<~", "|>>", "<|>", ":::", "<::",
+const OPERATORS_3: [&str; 13] = [
+    "~>>", "<<~", "|>>", "<|>", ":::", "<::", "=/>", "</=",
     "..=", "&&=", "||=", "<<=", ">>=",
 ];
 
@@ -36,6 +36,9 @@ const OPERATORS_4: [&str; 1] = [
 
 /// Pseudo-numerical prefixes
 const PSEUDO_NUMERICAL: [&str; 4] = ["0x", "0B", "0b", "0o"];
+
+/// Whitespace constants
+const WHITESPACE: [char; 4] = ['\t', '\n', '\r', ' '];
 
 type NewToken = fn(String, usize, usize, usize, usize) -> Token;
 
@@ -49,9 +52,7 @@ pub fn parse_fully(text: &str) -> Vec<Token> {
     let mut tokens: Vec<Token> = Vec::new();
     while has_next(&inputs, &mut pos) {
         let tok_opt: Option<Token> = next_token(&inputs, &mut pos);
-        if tok_opt.is_some() {
-            tokens.push(tok_opt.unwrap())
-        }
+        if tok_opt.is_some() { tokens.push(tok_opt.unwrap()) }
     }
     tokens
 }
@@ -91,13 +92,12 @@ fn has_next(inputs: &Vec<char>, pos: &mut usize) -> bool {
     while is_whitespace(inputs, pos) {
         *pos += 1
     }
-    has_more(&inputs, pos)
+    has_more(inputs, pos)
 }
 
 
 fn is_whitespace(inputs: &Vec<char>, pos: &mut usize) -> bool {
-    let chars = &['\t', '\n', '\r', ' '];
-    has_more(inputs, pos) && chars.contains(&inputs[*pos])
+    has_more(inputs, pos) && WHITESPACE.contains(&inputs[*pos])
 }
 
 fn next_token(inputs: &Vec<char>, pos: &mut usize) -> Option<Token> {

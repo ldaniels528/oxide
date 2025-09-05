@@ -14,15 +14,17 @@ use crate::expression::Conditions::AssumedBoolean;
 use crate::expression::Expression::*;
 use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::expression::*;
+use crate::extractions::{pull_identifier_name, pull_name};
 use crate::machine::Machine;
 use crate::numbers::Numbers::*;
 use crate::parameter::Parameter;
 use crate::token_slice::TokenSlice;
 use crate::tokens::Token;
 use crate::tokens::Token::*;
+use crate::type_engine::TypeEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{ByteStringValue, CharValue, DateTimeValue, Kind, Null, Number, StringValue, TableValue};
-use crate::utils::{expand_escapes, pull_identifier_name, pull_name, string_to_uuid_value};
+use crate::utils::{expand_escapes, generate_uuid, string_to_uuid_value};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared_lib::cnv_error;
@@ -297,13 +299,13 @@ impl Compiler {
         }
     }
 
-    pub fn get_keywords() -> Vec<String> {
+    pub fn keywords() -> Vec<String> {
         vec![
-            "and", "as", "assert", "DELETE", "delete", "do", "else", "exit",
-            "false", "feature", "fn", "for", "from", "GET", "group_by", "having", "HEAD", "HTTP",
-            "if", "in", "include", "is", "is_defined", "isnt", "let", "like", "ls",
-            "match", "mod", "NaN", "null", "or", "order_by", "PATCH", "POST", "PUT", "print", "return",
-            "scenario", "select", "test", "throw", "true", 
+            "alias", "aliases", "and", "as", "assert", "DELETE", "delete", "deselect", "do", "else", "exit",
+            "false", "feature", "fetch", "fn", "for", "from", "GET", "group_by",
+            "having", "HEAD", "HTTP", "if", "in", "include", "is", "is_defined", "isnt",
+            "let", "like", "ls", "match", "mod", "NaN", "null", "once", "or", "order_by",
+            "PATCH", "POST", "PUT", "print", "return", "scenario", "select", "test", "throw", "true",
             "undefined", "undelete", "use", "when", "whenever", "where", "while", "yield",
         ].into_iter().map(String::from).collect::<Vec<String>>()
     }
@@ -312,6 +314,8 @@ impl Compiler {
     fn next_keyword(&self, ts: TokenSlice) -> std::io::Result<(Option<Expression>, TokenSlice)> {
         if let (Some(Atom { text, .. }), nts) = ts.next() {
             let (expr, ts) = match text.as_str() {
+                "alias" => self.parse_keyword_alias(nts),
+                "aliases" => Ok((Aliases, nts)),
                 "assert" => self.parse_keyword_assert(nts),
                 "delete" => self.parse_keyword_delete(nts),
                 "DELETE" => self.parse_keyword_http(ts),
@@ -319,6 +323,7 @@ impl Compiler {
                 "do" => self.parse_keyword_do_while(nts),
                 "false" => Ok((FALSE, nts)),
                 "feature" => self.parse_keyword_feature(nts),
+                "fetch" => self.parse_keyword_fetch(nts),
                 "fn" => self.parse_keyword_fn(nts),
                 "for" => self.parse_keyword_for(nts),
                 "GET" => self.parse_keyword_http(ts),
@@ -333,6 +338,7 @@ impl Compiler {
                 "mod" => self.parse_keyword_mod(nts),
                 "NaN" => Ok((Literal(Number(NaNValue)), nts)),
                 "null" => Ok((NULL, nts)),
+                "once" => self.parse_keyword_once(nts),
                 "PATCH" => self.parse_keyword_http(ts),
                 "POST" => self.parse_keyword_http(ts),
                 "PUT" => self.parse_keyword_http(ts),
@@ -428,6 +434,32 @@ impl Compiler {
         Ok((f(expr.into()), ts))
     }
 
+    /// Creates an `alias` expression
+    /// #### Examples
+    /// ```
+    /// alias ll = io::files(".")
+    /// ```
+    /// ```
+    /// alias ll(path) = ls(path)
+    /// ```
+    fn parse_keyword_alias(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        fn translate(a: Box<Expression>, b: Box<Expression>) -> std::io::Result<AliasCalls> {
+            match a.deref().clone() {
+                Identifier(name) => Ok(AliasCalls::IdentifierCall(name, b)),
+                FunctionCall { fx, args } => {
+                    let name = pull_identifier_name(fx.deref())?;
+                    let params = convert_to_parameters(args)?;
+                    Ok(AliasCalls::FunctionCall(name, params, b))
+                }
+                other => throw(SyntaxError(IllegalExpression(other.to_code())))
+            }
+        }
+        match self.compile_next(ts)? {
+            (SetVariables(a, b) | SetVariablesExpr(a, b), ts) => Ok((Alias(translate(a, b)?), ts)),
+            (other, _ts) => throw(SyntaxError(IllegalExpression(other.to_code())))
+        }
+    }
+
     /// Creates an `assert` expression
     /// #### Examples
     /// ```
@@ -461,7 +493,7 @@ impl Compiler {
     /// Excludes fields from a selection
     /// #### Examples
     /// ```
-    /// deselect stocks where last_sale > 1.00
+    /// deselect exchange from stocks where last_sale > 1.00
     /// ```
     fn parse_keyword_deselect(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (fields, ts) = self.next_expression_list(ts)?;
@@ -490,6 +522,17 @@ impl Compiler {
         Ok((DoWhile { condition: condition.into(), code: code.into() }, ts))
     }
 
+    /// Defines a test feature
+    /// #### Examples
+    /// ```
+    /// feature "Matches function" {
+    ///     scenario "Compare Array contents" {
+    ///         assert(matches(
+    ///             [ 1 "a" "b" "c" ],
+    ///             [ 1 "a" "b" "c" ]
+    ///         ))
+    /// }
+    /// ```
     fn parse_keyword_feature(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (title, ts) = self.compile_next(ts.clone())?;
         let ts = ts.expect("{")?;
@@ -522,56 +565,24 @@ impl Compiler {
         }
     }
 
-    /// Defines a test scenario
+    /// Compiles the selection of an individual value or a tuple of values from a query
     /// #### Examples
+    /// ##### Retrieve an individual value
     /// ```
-    /// scenario "Compare Array: Equal" {
-    ///     let count = 1
-    ///     assert [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
-    ///     count += 1
-    /// }
+    /// let exchange = fetch exchange from stocks
+    /// where symbol is "ABC"
     /// ```
+    /// ##### Retrieve a tuple of values
     /// ```
-    /// scenario "Compare Array: Completed?" 
-    ///     inherits "Compare Array: Equal" {
-    ///         assert count == 2
-    /// }
+    /// let (symbol, exchange) = fetch symbol, exchange from stocks
+    /// where symbol is "ABC"
     /// ```
-    fn parse_keyword_scenario(
-        &self,
-        ts: TokenSlice,
-    ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
-        // get the scenario title (ex: scenario "Compare Array: Equal")
-        let (title, ts) = self.compile_next(ts.clone())?;
-        // does it inherit state from a parent?
-        let (maybe_inherits, ts) = match ts.next() {
-            (Some(Atom { text, .. }), nts) if text == "inherits" => {
-                match self.compile_next(nts)? {
-                    (Literal(StringValue(parent)), ts) => (Some(parent), ts),
-                    _ => (None, ts)
-                }
-            }
-            _ => (None, ts)
-        };
-        // next should be a code block
-        let ts = ts.expect("{")?;
-        match self.next_operator_brackets_curly(ts)? {
-            (None, ts) => throw(ExactNear("Scope block expected".into(), ts.current())),
-            (Some(code), ts) => match code {
-                CodeBlock(verifications) => Ok((
-                    Some(Scenario {
-                        title: title.into(),
-                        inherits: maybe_inherits,
-                        verifications,
-                    }), ts)),
-                other => Ok((
-                    Some(Scenario {
-                        title: title.into(),
-                        inherits: maybe_inherits,
-                        verifications: vec![other],
-                    }), ts)),
-            },
-        }
+    fn parse_keyword_fetch(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        let (fields, ts) = self.next_expression_list(ts)?;
+        let fields = fields.expect("At least one field is required");
+        let ts = ts.expect("from")?;
+        let (from, ts) = self.compile_next(ts)?;
+        Ok((Fetch { fields, from: from.into() }, ts))
     }
 
     /// Builds a language model from a function variant
@@ -615,20 +626,25 @@ impl Compiler {
 
     /// Parses a for statement
     /// #### Examples
+    /// ##### Basic Numeric Loop (C-style)
     /// ```
-    /// for(i = 0, i < 5, i = i + 1) ...
+    /// for(i = 0, i < 5, i = i + 1) yield i
     /// ```
+    /// ##### Destructuring List of Arrays
     /// ```
-    /// for [x, y, z] in [[1, 5, 3], [6, 11, 17], ...] ...
+    /// for [x, y, z] in [[1, 5, 3], [6, 11, 17]] yield (x, y, z)
     /// ```
+    /// ##### Destructuring List of Tuples
     /// ```
-    /// for (c, n) in [('a', 5), ('c', 11), ...] ...
+    /// for (c, n) in [('a', 5), ('c', 11)] yield c + n
     /// ```
+    /// ##### Iterating a List of values
     /// ```
-    /// for item in ['apple', 'berry', ...] ...
+    /// for item in ['apple', 'berry', "carrot"] yield item::reverse()
     /// ```
+    /// ##### Iterate a List of rows (objects)
     /// ```
-    /// for row in tools::to_table([{symbol:'ABC', price: 10.0}, ...]) ...
+    /// for row in [{symbol:"ABC", price: 10.11}, {symbol:"XYZ", price: 18.09}]::to(Table) yield "%s: %.1f"::sprintf(row.symbol, row.price)
     /// ```
     fn parse_keyword_for(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         // for [item in items] [block]
@@ -638,14 +654,14 @@ impl Compiler {
                 let (block, ts) = self.compile_next(ts.clone())?;
                 Ok((For {
                     construct: Condition(Conditions::In(item, items)).into(),
-                    op: block.into(),
+                    code: block.into(),
                 }, ts))
             }
             TupleExpression(components) if components.len() == 3 => {
                 let (block, ts) = self.compile_next(ts.clone())?;
                 Ok((For {
                     construct: TupleExpression(components).into(),
-                    op: block.into(),
+                    code: block.into(),
                 }, ts))
             }
             _ => throw(ExactNear(
@@ -890,6 +906,107 @@ impl Compiler {
         }
     }
 
+    /// Builds a language model from a ONCE statement:
+    /// #### Examples
+    /// ```
+    /// let y = 0
+    /// for x in 0..10 {
+    ///     once { y += 1 }
+    ///     yield x * y
+    /// }
+    /// ```
+    fn parse_keyword_once(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
+        let (expr, ts) = self.compile_next(ts)?;
+        Ok((OneTime(expr.into(), generate_uuid()), ts))
+    }
+
+    /// Defines a test scenario
+    /// #### Examples
+    /// ##### Basic Syntax
+    /// ```
+    /// scenario "Compare Arrays" {
+    ///     assert [ 1 "a" "b" "c" ] matches [ 1 "a" "b" "c" ]
+    /// }
+    /// ```
+    /// ##### Dependencies - causes dependencies to be executed first
+    /// ```
+    /// scenario "init" {
+    ///   Table(
+    ///     symbol: String(8),
+    ///     exchange: Enum(AMEX, NASDAQ, NYSE, OTCBB, OTHER_OTC),
+    ///     last_sale: f64
+    ///   )::new::save_as("stock_demo.dev.stocks")
+    /// }
+    ///
+    /// scenario "setup" {
+    ///   let stocks = tables::load("stock_demo.dev.stocks")
+    ///   {'exchange':'AMEX','last_sale':11.11,'symbol':'ABC'} ~> stocks
+    /// }
+    ///
+    /// scenario "pop_quote" dependencies ["init", "setup"] {
+    ///    let stocks = tables::load("stock_demo.dev.stocks")
+    ///    stocks::show(5)
+    ///    quote <~ stocks
+    ///    assert quote is [{'exchange':'AMEX','last_sale':11.11,'symbol':'ABC'}]
+    /// }
+    /// ```
+    /// ##### State Inheritance - inherits the state of a previously executed scenario
+    /// ```
+    /// scenario "init" {
+    ///   let stocks = Table(
+    ///     symbol: String(8),
+    ///     exchange: Enum(AMEX, NASDAQ, NYSE, OTCBB, OTHER_OTC),
+    ///     last_sale: f64
+    ///   )::new::save_as("stock_demo.dev.stocks")
+    /// }
+    ///
+    /// scenario "setup" inherits "init" {
+    ///   {'exchange':'AMEX','last_sale':11.11,'symbol':'ABC'} ~> stocks
+    /// }
+    ///
+    /// scenario "pop_quote" inherits "setup" {
+    ///    stocks::show(5)
+    ///    quote <~ stocks
+    ///    assert quote is [{'exchange':'AMEX','last_sale':11.11,'symbol':'ABC'}]
+    /// }
+    /// ```
+    fn parse_keyword_scenario(
+        &self,
+        ts: TokenSlice,
+    ) -> std::io::Result<(Option<Expression>, TokenSlice)> {
+        // get the scenario title (ex: scenario "Compare Array: Equal")
+        let (title, ts) = self.compile_next(ts.clone())?;
+        // does it inherit state from a parent?
+        let (maybe_inherits, ts) = match ts.next() {
+            (Some(Atom { text, .. }), nts) if text == "inherits" => {
+                match self.compile_next(nts)? {
+                    (Literal(StringValue(parent)), ts) => (Some(parent), ts),
+                    _ => (None, ts)
+                }
+            }
+            _ => (None, ts)
+        };
+        // next should be a code block
+        let ts = ts.expect("{")?;
+        match self.next_operator_brackets_curly(ts)? {
+            (None, ts) => throw(ExactNear("Scope block expected".into(), ts.current())),
+            (Some(code), ts) => match code {
+                CodeBlock(verifications) => Ok((
+                    Some(Scenario {
+                        title: title.into(),
+                        inherits: maybe_inherits,
+                        verifications,
+                    }), ts)),
+                other => Ok((
+                    Some(Scenario {
+                        title: title.into(),
+                        inherits: maybe_inherits,
+                        verifications: vec![other],
+                    }), ts)),
+            },
+        }
+    }
+
     /// Builds a language model from a SELECT statement:
     /// #### Examples
     /// ```
@@ -904,7 +1021,7 @@ impl Compiler {
         Ok((Select { fields, from: from.into() }, ts))
     }
 
-    /// Builds a `test` declaration
+    /// Compiles a `test` execution statement
     /// #### Examples
     /// ##### Test all features
     /// ```
@@ -914,9 +1031,13 @@ impl Compiler {
     /// ```
     /// test "Matches function"
     /// ```
-    /// ##### Test a specific scenario within a features
+    /// ##### Test a specific scenario within a feature
     /// ```
-    /// test "Compare Array contents: Equal" in "Matches function"
+    /// test "Compare Arrays" in "Matches function"
+    /// ```
+    /// ##### Test multiple scenarios within a feature
+    /// ```
+    /// test ["Compare Arrays", "Compare Objects"] in "Matches function"
     /// ```
     /// ##### Test all matching features and scenarios
     /// ```
@@ -932,9 +1053,10 @@ impl Compiler {
             // ex: test "Matches function"
             Ok((Literal(StringValue(test_name)), ts)) =>
                 Ok((Test(Literal(StringValue(test_name)).into()), ts)),
-            // ex: test "Compare Array contents: Equal" in "Matches function"
-            Ok((Condition(In(feature, scenario)), ts)) =>
-                Ok((Test(Condition(In(feature, scenario)).into()).into(), ts)),
+            // ex A: test "test_get_quote" in "unit_tests"
+            // ex B: test ["init", "test_get_quote"] in "unit_tests"
+            Ok((Condition(In(scenario, feature)), ts)) =>
+                Ok((Test(Condition(In(scenario, feature)).into()).into(), ts)),
             // ex: test ...
             _ => {
                 match ts.next() {
@@ -971,8 +1093,11 @@ impl Compiler {
         Ok((Throw(expr.into()), ts))
     }
 
-    /// Builds a language model from an UNDELETE statement:
-    /// ex: undelete stocks where symbol == "BANG"
+    /// Builds a language model from an UNDELETE statement
+    /// #### Examples
+    /// ```
+    /// undelete stocks where symbol is "BANG"
+    /// ```
     fn parse_keyword_undelete(&self, ts: TokenSlice) -> std::io::Result<(Expression, TokenSlice)> {
         let (from, ts) = self.compile_next(ts)?;
         Ok((Undelete { from: from.into() }, ts))
@@ -1047,7 +1172,7 @@ impl Compiler {
                 args,
             };
             // is it a type declaration? e.g., String(32)
-            match DataType::decipher_type(&fx) {
+            match TypeEngine::decipher_model(&fx) {
                 Ok(data_type) => Ok((Literal(Kind(data_type)), ts)),
                 Err(_) => Ok((fx, ts))
             }
@@ -1055,7 +1180,7 @@ impl Compiler {
         // must be a identifier. e.g., abc
         else {
             let identifier = Identifier(name.to_string());
-            match DataType::decipher_type(&identifier) {
+            match TypeEngine::decipher_model(&identifier) {
                 Ok(data_type) => Ok((Literal(Kind(data_type)), ts)),
                 Err(_) => Ok((identifier, ts))
             }
@@ -1172,7 +1297,7 @@ fn apply_colon(
     left: Expression, 
     right: Expression
 ) -> std::io::Result<Expression> {
-    let b_as_type = DataType::decipher_type(&right);
+    let b_as_type = TypeEngine::decipher_model(&right);
     let b_is_type = b_as_type.is_ok();
     match (left, right) {
         (Literal(Kind(FunctionType(params, _))), _b) if b_is_type => 
@@ -1260,6 +1385,7 @@ fn apply_operator_binary(
         "limit" => Ok(Limit { from: aa, limit: bb }),
         "order_by" => Ok(OrderBy { from: aa, columns: vec![b] }),
         "where" => Ok(Where { from: aa, condition: must_be_condition(bb.deref())? }),
+        "with" => Ok(With { resource: aa, code: bb }),
         sym => throw(CompilerError(CompileErrors::IllegalOperator(sym.into()), op.clone())),
     }
 }
@@ -1345,7 +1471,8 @@ fn get_precedence(op: &Token, is_even: bool) -> i8 {
         "->" | "=>" | "~>" | "<~" | "~>>" | "<<~" | "|>" | "|>>" => 1,
         "=" | ":=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^=" => 0,
         "?" | "!?" | "as" => 0,
-        _ => -1, // Unknown or lowest
+        "with" => -1,
+        _ => -2, // Unknown or lowest
     }
 }
 
@@ -1364,7 +1491,7 @@ fn is_mnemonic_operator(token: &Token, _is_even: bool) -> bool {
     matches!(token.get().as_str(), 
        "and" | "as" | "in" | "is" | "isnt" | "like" |
        "group_by" | "having" | "limit" | "matches" |
-        "or" | "order_by" | "when" | "where"
+        "or" | "order_by" | "when" | "where" | "with"
     )
 }
 
@@ -1416,7 +1543,6 @@ pub fn resolve_name_and_parameters_and_return_type(
 mod tests {
     use crate::compiler::Compiler;
     use crate::expression::Expression;
-    use crate::typed_values::TypedValue::Number;
 
     #[cfg(test)]
     mod unit_tests {
@@ -1472,7 +1598,7 @@ mod tests {
         use crate::expression::Expression::*;
         use crate::expression::Ranges::{Exclusive, Inclusive};
         use crate::expression::{HttpMethodCalls, UseOps, FALSE, TRUE};
-        use crate::machine::Machine;
+        use crate::machine::{Machine, ROW_ID};
         use crate::number_kind::NumberKind::{F64Kind, I64Kind};
         use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::parameter::Parameter;
@@ -1624,18 +1750,18 @@ mod tests {
 
         #[test]
         fn test_colon_colon_sequence() {
-            let code = Compiler::build("oxide::tools::compact").unwrap();
+            let code = Compiler::build("oxide::collections::compact").unwrap();
             assert_eq!(
                 code,
                 ColonColon(
                     ColonColon(
                         Identifier("oxide".into()).into(),
-                        Identifier("tools".into()).into(),
+                        Identifier("collections".into()).into(),
                     ).into(),
                     Identifier("compact".into()).into()
                 )
             );
-            assert_eq!(code.to_code(), "oxide::tools::compact");
+            assert_eq!(code.to_code(), "oxide::collections::compact");
         }
 
         #[test]
@@ -1968,7 +2094,7 @@ mod tests {
                                 Identifier("last_sale".into()).into(),
                                 Literal(Number(F64Value(2.0))).into()
                             )),
-                            ("uid".to_string(), Identifier("__row_id__".into()))
+                            ("uid".to_string(), Identifier(ROW_ID.into()))
                         ]).into()
                     ).into())
             )
@@ -1989,7 +2115,7 @@ mod tests {
                             Literal(Number(I64Value(17))),
                         ]).into()
                     )).into(),
-                    op: Yield(Identifier("item".into()).into()).into(),
+                    code: Yield(Identifier("item".into()).into()).into(),
                 },
             );
         }
@@ -2021,7 +2147,7 @@ mod tests {
                             ).into()
                         ).into(),
                     ]).into(),
-                    op: FunctionCall {
+                    code: FunctionCall {
                         fx: Identifier("println".into()).into(),
                         args: vec![Identifier("i".into())],
                     }.into(),
@@ -2068,20 +2194,15 @@ mod tests {
 
         #[test]
         fn test_http_delete() {
-            let model = Compiler::build(
-                r#"
+            let model = Compiler::build(r#"
                 DELETE "http://localhost:9000/comments?id=675af"
-            "#,
-            )
-            .unwrap();
-            assert_eq!(
-                model,
-                HTTP(HttpMethodCalls::DELETE(
+            "#).unwrap();
+            assert_eq!(model, HTTP(HttpMethodCalls::DELETE(
                     Literal(StringValue(
                         "http://localhost:9000/comments?id=675af".into()
                     )).into()
-                ))
-            );
+                )));
+            assert_eq!(model.to_code(), r#"DELETE "http://localhost:9000/comments?id=675af""#)
         }
 
         #[test]
@@ -2089,52 +2210,37 @@ mod tests {
             let model = Compiler::build(
                 r#"
                 GET "http://localhost:9000/comments?id=675af"
-            "#,
-            )
-            .unwrap();
-            assert_eq!(
-                model,
-                HTTP(HttpMethodCalls::GET(
-                    Literal(StringValue(
-                        "http://localhost:9000/comments?id=675af".into()
-                    )).into()
-                ))
-            );
+            "#).unwrap();
+            assert_eq!(model, HTTP(HttpMethodCalls::GET(
+                Literal(StringValue(
+                    "http://localhost:9000/comments?id=675af".into()
+                )).into()
+            )));
+            assert_eq!(model.to_code(), r#"GET "http://localhost:9000/comments?id=675af""#)
         }
 
         #[test]
         fn test_http_head() {
-            let model = Compiler::build(
-                r#"
+            let model = Compiler::build(r#"
                 HEAD "http://localhost:9000/quotes/AMD/NYSE"
-            "#,
-            )
-            .unwrap();
-            assert_eq!(
-                model,
-                HTTP(HttpMethodCalls::HEAD(
-                    Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".into())).into()
-                ))
-            );
+            "#).unwrap();
+            assert_eq!(model, HTTP(HttpMethodCalls::HEAD(
+                Literal(StringValue("http://localhost:9000/quotes/AMD/NYSE".into())).into()
+            )));
+            assert_eq!(model.to_code(), r#"HEAD "http://localhost:9000/quotes/AMD/NYSE""#)
         }
 
         #[test]
         fn test_http_patch() {
-            let model = Compiler::build(
-                r#"
+            let model = Compiler::build(r#"
                 PATCH "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE"
-            "#,
-            )
-            .unwrap();
-            assert_eq!(
-                model,
-                HTTP(HttpMethodCalls::PATCH(
-                    Literal(StringValue(
-                        "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".into()
-                    ))
-                    .into()
-                ))
-            );
+            "#).unwrap();
+            assert_eq!(model, HTTP(HttpMethodCalls::PATCH(
+                Literal(StringValue(
+                    "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE".into()
+                )).into()
+            )));
+            assert_eq!(model.to_code(), r#"PATCH "http://localhost:9000/quotes/AMD/NASDAQ?exchange=NYSE""#)
         }
 
         #[test]
@@ -2142,43 +2248,36 @@ mod tests {
             let model = Compiler::build(r#"
                 POST "http://localhost:9000/quotes/AMD/NASDAQ"
             "#).unwrap();
-            assert_eq!(
-                model,
-                HTTP(HttpMethodCalls::POST(
-                    Literal(StringValue(
-                        "http://localhost:9000/quotes/AMD/NASDAQ".into()
-                    ))
-                    .into()
-                ))
-            );
+            assert_eq!(model, HTTP(HttpMethodCalls::POST(
+                Literal(StringValue(
+                    "http://localhost:9000/quotes/AMD/NASDAQ".into()
+                )).into()
+            )));
+            assert_eq!(model.to_code(), r#"POST "http://localhost:9000/quotes/AMD/NASDAQ""#)
         }
 
         #[test]
         fn test_http_post_with_body() {
-            let model = Compiler::build(
-                r#"
+            let model = Compiler::build(r#"
                 POST {
                     url: "http://localhost:8080/machine/www/stocks",
                     body: "Hello World"
                 }
             "#).unwrap();
-            assert_eq!(
-                model,
-                HTTP(HttpMethodCalls::POST(
-                    StructureExpression(vec![
-                        (
-                            "url".to_string(),
-                            Literal(StringValue(
-                                "http://localhost:8080/machine/www/stocks".to_string()
-                            ))
-                        ), (
-                            "body".to_string(),
-                            Literal(StringValue("Hello World".to_string()))
-                        ),
-                    ])
-                    .into()
-                ))
-            );
+            assert_eq!(model, HTTP(HttpMethodCalls::POST(
+                StructureExpression(vec![
+                    (
+                        "url".to_string(),
+                        Literal(StringValue(
+                            "http://localhost:8080/machine/www/stocks".to_string()
+                        ))
+                    ), (
+                        "body".to_string(),
+                        Literal(StringValue("Hello World".to_string()))
+                    ),
+                ]).into()
+            )));
+            assert_eq!(model.to_code(), "POST {url: \"http://localhost:8080/machine/www/stocks\", body: \"Hello World\"}")
         }
 
         #[test]
@@ -2189,23 +2288,21 @@ mod tests {
                     body: "./demoes/language/include_file.ox"
                 }
             "#).unwrap();
-            assert_eq!(
-                model,
-                HTTP(HttpMethodCalls::POST(
-                    StructureExpression(vec![
-                        (
-                            "url".to_string(),
-                            Literal(StringValue(
-                                "http://localhost:8080/machine/www/stocks".to_string()
-                            ))
-                        ), (
-                            "body".to_string(),
-                            Literal(StringValue("./demoes/language/include_file.ox".to_string()))
-                        ),
-                    ])
+            assert_eq!(model, HTTP(HttpMethodCalls::POST(
+                StructureExpression(vec![
+                    (
+                        "url".to_string(),
+                        Literal(StringValue(
+                            "http://localhost:8080/machine/www/stocks".to_string()
+                        ))
+                    ), (
+                        "body".to_string(),
+                        Literal(StringValue("./demoes/language/include_file.ox".to_string()))
+                    ),
+                ])
                     .into()
-                ))
-            );
+            )));
+            assert_eq!(model.to_code(), "POST {url: \"http://localhost:8080/machine/www/stocks\", body: \"./demoes/language/include_file.ox\"}")
         }
 
         #[test]
@@ -2213,14 +2310,12 @@ mod tests {
             let model = Compiler::build(r#"
                 PUT "http://localhost:9000/quotes/AMD/NASDAQ"
             "#).unwrap();
-            assert_eq!(
-                model,
-                HTTP(HttpMethodCalls::PUT(
-                    Literal(StringValue(
-                        "http://localhost:9000/quotes/AMD/NASDAQ".to_string()
-                    )).into()
-                ))
-            );
+            assert_eq!(model, HTTP(HttpMethodCalls::PUT(
+                Literal(StringValue(
+                    "http://localhost:9000/quotes/AMD/NASDAQ".to_string()
+                )).into()
+            )));
+            assert_eq!(model.to_code(), r#"PUT "http://localhost:9000/quotes/AMD/NASDAQ""#)
         }
 
         #[test]
@@ -2742,7 +2837,7 @@ mod tests {
         fn test_use_multiple() {
             // multiple uses
             let code = Compiler::build(r#"
-                use os, utils, "tools"
+                use os, utils, "collections"
             "#,
             )
                 .unwrap();
@@ -2751,10 +2846,10 @@ mod tests {
                 Use(vec![
                     UseOps::Everything("os".into()),
                     UseOps::Everything("utils".into()),
-                    UseOps::Everything("tools".into()),
+                    UseOps::Everything("collections".into()),
                 ])
             );
-            assert_eq!(code.to_code(), "use os, utils, tools");
+            assert_eq!(code.to_code(), "use os, utils, collections");
         }
 
         #[test]
@@ -2981,21 +3076,46 @@ mod tests {
                 where last_sale >= 1.0
                 limit 100
             "#).unwrap();
-            assert_eq!(
-                model,
-                Delete {
-                    from: Limit {
-                        limit: Box::new(Literal(Number(I64Value(100)))),
-                        from: Where {
-                            condition: GreaterOrEqual(
-                                Box::new(Identifier("last_sale".into())),
-                                Box::new(Literal(Number(F64Value(1.0)))),
-                            ),
-                            from: Identifier("stocks".into()).into(),
-                        }.into()
+            assert_eq!(model, Delete {
+                from: Limit {
+                    limit: Box::new(Literal(Number(I64Value(100)))),
+                    from: Where {
+                        condition: GreaterOrEqual(
+                            Box::new(Identifier("last_sale".into())),
+                            Box::new(Literal(Number(F64Value(1.0)))),
+                        ),
+                        from: Identifier("stocks".into()).into(),
                     }.into()
-                }
-            )
+                }.into()
+            })
+        }
+
+        #[test]
+        fn test_deselect_from() {
+            let model = Compiler::build(r#"
+                deselect last_sale from stocks
+            "#).unwrap();
+            assert_eq!(model, Deselect {
+                fields: vec![
+                    Identifier("last_sale".into())
+                ],
+                from: Identifier("stocks".into()).into(),
+            })
+        }
+
+        #[test]
+        fn test_fetch_from() {
+            let model = Compiler::build(r#"
+                fetch symbol, exchange, last_sale from stocks
+            "#).unwrap();
+            assert_eq!(model, Fetch {
+                fields: vec![
+                    Identifier("symbol".into()),
+                    Identifier("exchange".into()),
+                    Identifier("last_sale".into())
+                ],
+                from: Identifier("stocks".into()).into(),
+            })
         }
 
         #[test]
@@ -3003,19 +3123,16 @@ mod tests {
             let model = Compiler::build(r#"
                 stocks where last_sale >= 1.0 limit 20
             "#).unwrap();
-            assert_eq!(
-                model,
-                Limit {
-                    from: Where {
-                        from: Identifier("stocks".into()).into(),
-                        condition: GreaterOrEqual(
-                            Identifier("last_sale".into()).into(),
-                            Literal(Number(F64Value(1.0))).into(),
-                        ),
-                    }.into(),
-                    limit: Literal(Number(I64Value(20))).into(),
-                }
-            );
+            assert_eq!(model, Limit {
+                from: Where {
+                    from: Identifier("stocks".into()).into(),
+                    condition: GreaterOrEqual(
+                        Identifier("last_sale".into()).into(),
+                        Literal(Number(F64Value(1.0))).into(),
+                    ),
+                }.into(),
+                limit: Literal(Number(I64Value(20))).into(),
+            });
         }
 
         #[test]
@@ -3024,21 +3141,19 @@ mod tests {
                 {symbol: "BKP", exchange: "OTCBB", last_sale: 0.1421} 
                      ~> (stocks where symbol is "BKPQ")
             "#).unwrap();
-            assert_eq!(
-                model,
-                ArrowCurvyRight(
-                    StructureExpression(vec![
-                        ("symbol".into(), Literal(StringValue("BKP".into()))),
-                        ("exchange".into(), Literal(StringValue("OTCBB".into()))),
-                        ("last_sale".into(), Literal(Number(F64Value(0.1421))))
-                    ]).into(),
-                    Where {
-                        from: Identifier("stocks".into()).into(),
-                        condition: Equal(
-                            Identifier("symbol".into()).into(),
-                            Literal(StringValue("BKPQ".into())).into()
-                        )
-                    }.into())
+            assert_eq!(model, ArrowCurvyRight(
+                StructureExpression(vec![
+                    ("symbol".into(), Literal(StringValue("BKP".into()))),
+                    ("exchange".into(), Literal(StringValue("OTCBB".into()))),
+                    ("last_sale".into(), Literal(Number(F64Value(0.1421))))
+                ]).into(),
+                Where {
+                    from: Identifier("stocks".into()).into(),
+                    condition: Equal(
+                        Identifier("symbol".into()).into(),
+                        Literal(StringValue("BKPQ".into())).into()
+                    )
+                }.into())
             );
         }
 
@@ -3047,17 +3162,14 @@ mod tests {
             let model = Compiler::build(r#"
                 select symbol, exchange, last_sale from stocks
             "#).unwrap();
-            assert_eq!(
-                model,
-                Select {
-                    fields: vec![
-                        Identifier("symbol".into()),
-                        Identifier("exchange".into()),
-                        Identifier("last_sale".into())
-                    ],
-                    from: Identifier("stocks".into()).into(),
-                }
-            )
+            assert_eq!(model, Select {
+                fields: vec![
+                    Identifier("symbol".into()),
+                    Identifier("exchange".into()),
+                    Identifier("last_sale".into())
+                ],
+                from: Identifier("stocks".into()).into(),
+            })
         }
 
         #[test]
@@ -3067,26 +3179,23 @@ mod tests {
                 from stocks
                 where last_sale >= 1.0 limit 10
             "#).unwrap();
-            assert_eq!(
-                model,
-                Select {
-                    fields: vec![
-                        Identifier("symbol".into()),
-                        Identifier("exchange".into()),
-                        Identifier("last_sale".into())
-                    ],
-                    from: Limit {
-                        limit: Literal(Number(I64Value(10))).into(),
-                        from: Where {
-                            condition: GreaterOrEqual(
-                                Identifier("last_sale".into()).into(),
-                                Literal(Number(F64Value(1.0))).into(),
-                            ),
-                            from: Identifier("stocks".into()).into(),
-                        }.into(),
-                    }.into()
-                }
-            )
+            assert_eq!(model, Select {
+                fields: vec![
+                    Identifier("symbol".into()),
+                    Identifier("exchange".into()),
+                    Identifier("last_sale".into())
+                ],
+                from: Limit {
+                    limit: Literal(Number(I64Value(10))).into(),
+                    from: Where {
+                        condition: GreaterOrEqual(
+                            Identifier("last_sale".into()).into(),
+                            Literal(Number(F64Value(1.0))).into(),
+                        ),
+                        from: Identifier("stocks".into()).into(),
+                    }.into(),
+                }.into()
+            })
         }
 
         #[test]
@@ -3094,12 +3203,9 @@ mod tests {
             let model = Compiler::build(r#"
                 undelete stocks
             "#).unwrap();
-            assert_eq!(
-                model,
-                Undelete {
-                    from: Box::new(Identifier("stocks".into())),
-                }
-            )
+            assert_eq!(model, Undelete {
+                from: Box::new(Identifier("stocks".into())),
+            })
         }
 
         #[test]
@@ -3109,21 +3215,18 @@ mod tests {
                 where last_sale >= 1.0
                 limit 100
             "#).unwrap();
-            assert_eq!(
-                model,
-                Undelete {
-                    from: Limit {
-                        limit: Box::new(Literal(Number(I64Value(100)))),
-                        from: Where {
-                            condition: GreaterOrEqual(
-                                Box::new(Identifier("last_sale".into())),
-                                Box::new(Literal(Number(F64Value(1.0)))),
-                            ),
-                            from: Identifier("stocks".into()).into(),
-                        }.into()
+            assert_eq!(model, Undelete {
+                from: Limit {
+                    limit: Box::new(Literal(Number(I64Value(100)))),
+                    from: Where {
+                        condition: GreaterOrEqual(
+                            Box::new(Identifier("last_sale".into())),
+                            Box::new(Literal(Number(F64Value(1.0)))),
+                        ),
+                        from: Identifier("stocks".into()).into(),
                     }.into()
-                }
-            )
+                }.into()
+            })
         }
 
         #[test]
@@ -3134,29 +3237,26 @@ mod tests {
                  { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
                         ~> stocks
             "#).unwrap();
-            assert_eq!(
-                model,
-                ArrowCurvyRight(
-                    Box::new(ArrayExpression(vec![
-                        StructureExpression(vec![
-                            ("symbol".into(), Literal(StringValue("ABC".into()))),
-                            ("exchange".into(), Literal(StringValue("AMEX".into()))),
-                            ("last_sale".into(), Literal(Number(F64Value(12.49)))),
-                        ]),
-                        StructureExpression(vec![
-                            ("symbol".into(), Literal(StringValue("BOOM".into()))),
-                            ("exchange".into(), Literal(StringValue("NYSE".into()))),
-                            ("last_sale".into(), Literal(Number(F64Value(56.88)))),
-                        ]),
-                        StructureExpression(vec![
-                            ("symbol".into(), Literal(StringValue("JET".into()))),
-                            ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
-                            ("last_sale".into(), Literal(Number(F64Value(32.12)))),
-                        ]),
-                    ])),
-                    Identifier("stocks".into()).into(),
-                )
-            );
+            assert_eq!(model, ArrowCurvyRight(
+                Box::new(ArrayExpression(vec![
+                    StructureExpression(vec![
+                        ("symbol".into(), Literal(StringValue("ABC".into()))),
+                        ("exchange".into(), Literal(StringValue("AMEX".into()))),
+                        ("last_sale".into(), Literal(Number(F64Value(12.49)))),
+                    ]),
+                    StructureExpression(vec![
+                        ("symbol".into(), Literal(StringValue("BOOM".into()))),
+                        ("exchange".into(), Literal(StringValue("NYSE".into()))),
+                        ("last_sale".into(), Literal(Number(F64Value(56.88)))),
+                    ]),
+                    StructureExpression(vec![
+                        ("symbol".into(), Literal(StringValue("JET".into()))),
+                        ("exchange".into(), Literal(StringValue("NASDAQ".into()))),
+                        ("last_sale".into(), Literal(Number(F64Value(32.12)))),
+                    ]),
+                ])),
+                Identifier("stocks".into()).into(),
+            ));
         }
     }
 

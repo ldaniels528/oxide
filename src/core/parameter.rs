@@ -7,6 +7,7 @@ use crate::columns::Column;
 use crate::data_types::DataType;
 use crate::data_types::DataType::RuntimeResolvedType;
 
+use crate::type_engine::TypeEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::Null;
 use serde::{Deserialize, Serialize};
@@ -47,10 +48,6 @@ impl Parameter {
         columns.iter().map(Self::from_column).collect()
     }
 
-    pub fn from_tuple(name: impl Into<String>, value: TypedValue) -> Self {
-        Self::new_with_default(name.into(), value.get_type(), value)
-    }
-
     pub fn merge_parameters(
         mut current_params: Vec<Parameter>,
         incoming_params: Vec<Parameter>,
@@ -65,7 +62,7 @@ impl Parameter {
                     let existing_param = &current_params[index];
                     let new_param = Parameter::new(
                         name,
-                        DataType::best_fit(vec![
+                        TypeEngine::best_fit(vec![
                             existing_param.get_data_type(),
                             incoming_param.get_data_type(),
                         ]),

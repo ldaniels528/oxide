@@ -289,7 +289,7 @@ result</pre>
 <hr>
 <h4>▶️ HTTP</h4>
 <h5>example¹</h5>
-<pre>let port = 9999
+<pre>let port = http::get_random_port()
 http::start(port)</pre>
 <h5>results</h5>
 <pre>
@@ -297,57 +297,69 @@ true
 
 </pre>
 <h5>example²</h5>
-<pre>stocks = nsd::save(
-   "readme.www.stocks",
-   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
-)</pre>
+<pre>Stocks = Table(symbol: String(8), exchange: String(8), last_sale: f64)
+stocks = nsd::save('readme.www.stocks', Stocks::new())</pre>
 <h5>results</h5>
 <pre>
 true
 
 </pre>
 <h5>example³</h5>
+<pre>for n in 0..5000 {}
+stocks::describe()</pre>
+<h5>results</h5>
+<pre>
+|----------------------------------------------------------|
+| id | name      | type      | default_value | is_nullable |
+|----------------------------------------------------------|
+| 0  | symbol    | String(8) | null          | true        |
+| 1  | exchange  | String(8) | null          | true        |
+| 2  | last_sale | f64       | null          | true        |
+|----------------------------------------------------------|
+
+</pre>
+<h5>example⁴</h5>
 <pre>POST {
-    url: "http://localhost:%d/readme/www/stocks/0"::sprintf(port)
-    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }
+    url: 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)
+    body: { symbol: 'ABC', exchange: 'AMEX', last_sale: 11.77 }
 }</pre>
 <h5>results</h5>
 <pre>
 0
 
 </pre>
-<h5>example⁴</h5>
+<h5>example⁵</h5>
 <pre>GET 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)</pre>
 <h5>results</h5>
 <pre>
 {exchange: "AMEX", last_sale: 11.77, symbol: "ABC"}
 
 </pre>
-<h5>example⁵</h5>
+<h5>example⁶</h5>
 <pre>HEAD 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)</pre>
 <h5>results</h5>
 <pre>
-{content-length: "80", content-type: "application/json", date: "Sat, 26 Jul 2025 18:00:00 GMT"}
+{content-length: "80", content-type: "application/json", date: "Fri, 22 Aug 2025 04:30:22 GMT"}
 
 </pre>
-<h5>example⁶</h5>
+<h5>example⁷</h5>
 <pre>PUT {
     url: 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)
-    body: { symbol: "ABC", exchange: "AMEX", last_sale: 11.79 }
+    body: { symbol: 'ABC', exchange: 'AMEX', last_sale: 11.79 }
 }</pre>
 <h5>results</h5>
 <pre>
 1
 
 </pre>
-<h5>example⁷</h5>
+<h5>example⁸</h5>
 <pre>GET 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)</pre>
 <h5>results</h5>
 <pre>
 {exchange: "AMEX", last_sale: 11.79, symbol: "ABC"}
 
 </pre>
-<h5>example⁸</h5>
+<h5>example⁹</h5>
 <pre>PATCH {
     url: 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)
     body: { last_sale: 11.81 }
@@ -357,32 +369,32 @@ true
 1
 
 </pre>
-<h5>example⁹</h5>
+<h5>example¹⁰</h5>
 <pre>GET 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)</pre>
 <h5>results</h5>
 <pre>
 {exchange: "AMEX", last_sale: 11.81, symbol: "ABC"}
 
 </pre>
-<h5>example¹⁰</h5>
+<h5>example¹¹</h5>
 <pre>DELETE 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)</pre>
 <h5>results</h5>
 <pre>
 1
 
 </pre>
-<h5>example¹¹</h5>
+<h5>example¹²</h5>
 <pre>GET 'http://localhost:%d/readme/www/stocks/0'::sprintf(port)</pre>
 <h5>results</h5>
 <pre>
 {}
 
 </pre>
-<h5>example¹²</h5>
+<h5>example¹³</h5>
 <pre>http::stop(port)</pre>
 <h5>results</h5>
 <pre>
-true
+false
 
 </pre>
 <hr>

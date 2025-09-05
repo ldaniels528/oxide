@@ -26,9 +26,9 @@ use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::{Array, Sequence};
 use crate::structures::{Row, Structure, Structures};
+use crate::type_engine::{TypeEngine, TypeHints};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use actix::ActorTryFutureExt;
 use chrono::Local;
 use num_traits::ToPrimitive;
 use serde::de::Error;
@@ -116,7 +116,7 @@ impl EventSourceRowCollection {
 
 impl Debug for EventSourceRowCollection {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "EventSourceRowCollection({})", self.get_record_size())
+        write!(f, "EventSourceRowCollection({})", Parameter::render(&self.get_parameters()))
     }
 }
 
@@ -224,7 +224,7 @@ impl RowCollection for EventSourceRowCollection {
     }
 
     fn overwrite_field(&mut self, id: usize, column_id: usize, new_value: TypedValue) -> std::io::Result<i64> {
-        self.events.append_row(Self::make_field_action(id, column_id, "CF", &new_value));
+        self.events.append_row(Self::make_field_action(id, column_id, "CF", &new_value))?;
         self.state.overwrite_field(id, column_id, new_value)
     }
 
@@ -302,7 +302,6 @@ pub struct TableFunction {
     fx: TypedValue,
     journal: Dataframe,
     state: Dataframe,
-    ms0: Machine,
 }
 
 impl TableFunction {
@@ -317,7 +316,6 @@ impl TableFunction {
         ns: &Namespace,
         params: Vec<Parameter>,
         code: Expression,
-        ms0: Machine,
     ) -> std::io::Result<Self> {
         // build a new configuration
         let cfg = ObjectConfig::build_table_fn(
@@ -329,30 +327,29 @@ impl TableFunction {
         cfg.save(ns)?;
 
         // instantiate the table function
-        Self::initialize(ns, cfg, ms0, true)
+        Self::initialize(ns, cfg, true)
     }
 
     pub fn from_namespace(
         ns: &Namespace,
-        ms0: Machine,
     ) -> std::io::Result<Self> {
-        Self::initialize(ns, ObjectConfig::load(&ns)?, ms0, false)
+        Self::initialize(ns, ObjectConfig::load(&ns)?, false)
     }
 
     pub fn initialize(
         ns: &Namespace,
         cfg: ObjectConfig,
-        ms0: Machine,
         is_create: bool,
     ) -> std::io::Result<Self> {
         match cfg {
             ObjectConfig::TableFnConfig { columns, code, .. } => {
                 // build the journal and state columns
                 let journal_columns = Column::from_parameters(&columns);
-                let state_columns = match Expression::infer_with_hints(&code, &columns) {
-                    StructureType(params) => Column::from_parameters(&params),
-                    TableType(params, ..) => Column::from_parameters(&params),
-                    z => return throw(TypeMismatch(TypeMismatchErrors::UnsupportedType(StructureType(vec![]), z)))
+                let hints = TypeHints::new().with_params(&columns);
+                let state_columns = match TypeEngine::infer(hints, &code) {
+                    (_, StructureType(params)) => Column::from_parameters(&params),
+                    (_, TableType(params, ..)) => Column::from_parameters(&params),
+                    (_, z) => return throw(TypeMismatch(TypeMismatchErrors::UnsupportedType(StructureType(vec![]), z)))
                 };
 
                 // build the journal device
@@ -376,7 +373,6 @@ impl TableFunction {
                     code,
                     Dataframe::DiskTable(journal),
                     Dataframe::DiskTable(state),
-                    ms0,
                 ))
             }
             _ => throw(Exact("Table configuration is invalid for this device".into())),
@@ -389,7 +385,6 @@ impl TableFunction {
         code: Expression,
         journal: Dataframe,
         state: Dataframe,
-        ms0: Machine,
     ) -> Self {
         // println!();
         // println!("TableFunction::params:  ({})", Parameter::render(&params));
@@ -406,7 +401,6 @@ impl TableFunction {
             },
             journal,
             state,
-            ms0,
         }
     }
 
@@ -431,7 +425,7 @@ impl TableFunction {
 
 impl Debug for TableFunction {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TableFunction({})", self.get_record_size())
+        write!(f, "TableFunction({})", Parameter::render(&self.get_parameters()))
     }
 }
 
@@ -479,11 +473,11 @@ impl RowCollection for TableFunction {
 
     fn overwrite_row(&mut self, id: usize, row: Row) -> std::io::Result<i64> {
         self.journal.overwrite_row(id, row.clone())?;
-        let ms = self.ms0
-            .with_variable(machine::FX_SELF, self.fx.clone())
+        let ms = Machine::new()
+            .with_variable(machine::ROW_SELF, self.fx.clone())
             .with_row(self.get_columns(), &row);
         let fx_call = FunctionCall {
-            fx: Box::new(Identifier(machine::FX_SELF.into())),
+            fx: Box::new(Identifier(machine::ROW_SELF.into())),
             args: row.get_values().iter().map(|v| Literal(v.clone())).collect(),
         };
         match ms.evaluate(&fx_call).map(|(_, v)| v)? {
@@ -541,15 +535,21 @@ mod tests {
         use crate::typed_values::TypedValue::Number;
 
         #[test]
+        fn test_basics() {
+            let ns = Namespace::new("journaling", "basics", "stocks");
+            let mut jrc = EventSourceRowCollection::new(&ns, &make_quote_parameters()).unwrap();
+            assert_eq!(jrc.get_namespace(), &ns);
+            assert_eq!(format!("{:?}", jrc), "EventSourceRowCollection(symbol: String(8), exchange: String(8), last_sale: f64)");
+        }
+
+        #[test]
         fn test_events_crud() {
             // 1. create an event-sourced table:
             //  table stocks (symbol: String(8), exchange: String(8), last_sale: DateTime):::{
             //      journaling: true
             //  }
-            let mut jrc = EventSourceRowCollection::new(
-                &Namespace::new("event_src", "basics", "stocks"),
-                &make_quote_parameters(),
-            ).unwrap();
+            let ns = Namespace::new("journaling", "events_crud", "stocks");
+            let mut jrc = EventSourceRowCollection::new(&ns, &make_quote_parameters()).unwrap();
 
             // ensure the row collection is completely empty
             jrc.events.resize(0).unwrap();
@@ -657,7 +657,6 @@ mod tests {
         use crate::data_types::DataType::NumberType;
         use crate::dataframe::Dataframe::ModelTable;
         use crate::journaling::{Journaling, TableFunction};
-        use crate::machine::Machine;
         use crate::model_row_collection::ModelRowCollection;
         use crate::number_kind::NumberKind::I64Kind;
         use crate::numbers::Numbers;
@@ -668,6 +667,12 @@ mod tests {
         use crate::table_renderer::TableRenderer;
         use crate::test_util::{make_quote, make_quote_parameters};
         use crate::typed_values::TypedValue::{Number, StringValue};
+
+        #[test]
+        fn test_basics() {
+            let mut tf = make_table_function();
+            assert_eq!(format!("{:?}", tf), "TableFunction(symbol: String(8), exchange: String(8), last_sale: f64, rank: i64)");
+        }
 
         #[test]
         fn test_table_function() {
@@ -775,8 +780,7 @@ mod tests {
                     let mut new_params = params.clone();
                     new_params.push(Parameter::new("rank", NumberType(I64Kind)));
                     new_params
-                })),
-                Machine::new_platform(),
+                }))
             )
         }
     }

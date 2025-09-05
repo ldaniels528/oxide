@@ -14,10 +14,7 @@ use crate::expression::{Expression, HttpMethodCalls};
 use crate::interpreter::Interpreter;
 use crate::machine::Machine;
 use crate::numbers::Numbers::*;
-use crate::packages::Package;
-use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
-use crate::sequences::Sequence;
 use crate::server_engine::UserAPIMethod;
 use crate::structures::Structures::Soft;
 use crate::structures::*;
@@ -29,17 +26,13 @@ use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use itertools::Itertools;
 use log::{error, warn};
-use once_cell::sync::Lazy;
 use shared_lib::cnv_error;
-use std::collections::HashMap;
 use std::convert::Into;
 use std::ops::Deref;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
-use uuid::Uuid;
 
 /// Manages and executes HTTP/Websocket connections
 pub struct WebEngine;
@@ -72,8 +65,6 @@ impl WebEngine {
         ms: &Machine,
         call: &HttpMethodCalls
     ) -> std::io::Result<(Machine, TypedValue)> {
-        use isahc::{ReadResponseExt, RequestExt};
-
         // evaluate the URL or configuration object
         match ms.evaluate(&call.get_url_or_config())? {
             // GET http://localhost:9000/quotes/AAPL/NYSE
@@ -146,7 +137,7 @@ impl WebEngine {
         body: Option<String>,
         headers: Vec<(String, String)>,
     ) -> std::io::Result<(Machine, TypedValue)> {
-        use isahc::{ReadResponseExt, Request, RequestExt};
+        use isahc::{Request, RequestExt};
         let mut builder = match method_call {
             HttpMethodCalls::DELETE(..) => Request::delete(url),
             HttpMethodCalls::GET(..) => Request::get(url),
@@ -244,7 +235,7 @@ impl WebEngine {
         mut response: isahc::Response<isahc::Body>,
         is_header_only: bool,
     ) -> std::io::Result<TypedValue> {
-        use isahc::{ReadResponseExt, RequestExt};
+        use isahc::ReadResponseExt;
         if response.status().is_success() {
             if is_header_only {
                 let mut key_values = vec![];
@@ -280,7 +271,7 @@ impl WebEngine {
     /// Converts a [Response] to a [TypedValue]
     async fn exec_http_response_async(
         ms: &Machine,
-        mut response: reqwest::Response,
+        response: reqwest::Response,
         is_header_only: bool,
     ) -> std::io::Result<TypedValue> {
         if response.status().is_success() {
@@ -502,7 +493,7 @@ impl WebSocketUserServer {
 impl Actor for WebSocketUserServer {
     type Context = ws::WebsocketContext<Self>;
 
-    fn started(&mut self, ctx: &mut Self::Context) {
+    fn started(&mut self, _ctx: &mut Self::Context) {
         self.on_open(StringValue("Connected".into())).ok();
     }
 }
@@ -540,7 +531,7 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for WebSocketUserServ
 fn transmit<A>(ctx: &mut ws::WebsocketContext<A>, value: &TypedValue) 
     where A: Actor<Context = ws::WebsocketContext<A>> + StreamHandler<Result<ws::Message, ws::ProtocolError>>,
 {
-    let bytes = ByteCodeCompiler::encode_value(&value)
+    let bytes = ByteCodeCompiler::encode_typed_value(&value)
         .unwrap_or_else(|err| {
             error!("ERROR: {}", err);
             vec![]
@@ -568,21 +559,19 @@ mod tests {
     /// HTTP tests
     #[cfg(test)]
     mod http_tests {
-        use crate::data_types::DataType::{NumberType, RuntimeResolvedType, StringType};
+        use crate::connections::webservers;
+        use crate::connections::webservers::get_random_port;
         use crate::expression::Expression::{Identifier, Literal, StructureExpression};
         use crate::expression::HttpMethodCalls;
         use crate::interpreter::Interpreter;
         use crate::number_kind::NumberKind::F64Kind;
         use crate::numbers::Numbers::{F64Value, I64Value};
-        use crate::packages::{webservers, WwwPkg};
         use crate::parameter::Parameter;
-        use crate::server_engine::{APIMethods, UserAPI, UserAPIMethod};
         use crate::structures::SoftStructure;
         use crate::structures::Structures::Soft;
-        use crate::test_util::{make_lines_from_table, start_test_server_async, verify_exact_code_with, verify_exact_code_with_async, verify_exact_json_with, verify_exact_json_with_async, verify_exact_table_with, verify_exact_table_with_async};
-        use crate::typed_values::TypedValue::{Boolean, Function, Number, StringValue, Structured};
+        use crate::test_util::*;
+        use crate::typed_values::TypedValue::{Boolean, Number, StringValue, Structured};
         use crate::web_engine::WebEngine;
-        use crate::{server_engine, test_util};
         use serde_json::json;
 
         #[actix::test]
@@ -590,7 +579,7 @@ mod tests {
             let port = start_test_server_async().await.unwrap();
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with_async(interpreter, r#"
-                let stocks = nsd::save(
+                let stocks = tables::save(
                     "web_engine.http_serve.stocks",
                     |--------------------------------|
                     | symbol | exchange  | last_sale |
@@ -629,7 +618,7 @@ mod tests {
             let port = start_test_server_async().await.unwrap();
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with_async(interpreter, r#"
-                let stocks = nsd::save(
+                let stocks = tables::save(
                     "web_engine.http_serve_async.stocks",
                     |--------------------------------|
                     | symbol | exchange  | last_sale |
@@ -668,7 +657,7 @@ mod tests {
             let port = start_test_server_async().await.unwrap();
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with_async(interpreter, r#"
-                stocks = nsd::save(
+                stocks = tables::save(
                     "web_engine.http_serve_and_query.stocks",
                     |--------------------------------|
                     | symbol | exchange  | last_sale |
@@ -732,7 +721,7 @@ mod tests {
             // create the "stocks" table
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate(r#"
-                stocks = nsd::save(
+                stocks = tables::save(
                     "web_engine.http_post_sync.stocks",
                     Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
                 )
@@ -780,7 +769,7 @@ mod tests {
             // create the "stocks" table
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate_async(r#"
-                stocks = nsd::save(
+                stocks = tables::save(
                     "web_engine.http_post_async.stocks",
                     Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
                 )
@@ -826,7 +815,7 @@ mod tests {
             let port = start_test_server_async().await.unwrap();
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate_async(r#"
-                stocks = nsd::save(
+                stocks = tables::save(
                     "web_engine.http_serve_workflow.stocks",
                     Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
                 )
@@ -915,13 +904,14 @@ mod tests {
             let mut interpreter = Interpreter::new();
             let result = interpreter.evaluate_async(format!(r#"
                 // create the table
-                nsd::save(
+                tables::save(
                     "web_engine.http_workflow.stocks",
                     Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
                 )
                 row_id = POST {{
                     url: http://localhost:{port}/web_engine/http_workflow/stocks/0
                     body: {{ symbol: "ABC", exchange: "AMEX", last_sale: 11.77 }}
+                    headers: {{ "Content-Type": "application/json" }}
                 }}
                 assert(row_id matches 0)
                 GET http://localhost:{port}/web_engine/http_workflow/stocks/0
@@ -937,13 +927,13 @@ mod tests {
 
         #[actix::test]
         async fn test_http_serve_user_api_get() {
-            let port = webservers::get_random_port();
+            let port = webservers::get_random_port().unwrap();
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with_async(interpreter, format!(r#"
                 http::start({port}, {{
                     "/api/stocks" : {{
                         "GET" : (ticker -> {{
-                            let stocks = nsd::load("web_engine.http_serve_api_get.stocks")
+                            let stocks = tables::load("web_engine.http_serve_api_get.stocks")
                             stocks where symbol is ticker
                         }})
                     }}
@@ -951,7 +941,7 @@ mod tests {
             "#).as_str(), "true").await;
 
             interpreter = verify_exact_code_with_async(interpreter, r#"
-                let stocks = nsd::save("web_engine.http_serve_api_get.stocks",
+                let stocks = tables::save("web_engine.http_serve_api_get.stocks",
                     |--------------------------------|
                     | symbol | exchange  | last_sale |
                     |--------------------------------|
@@ -972,17 +962,17 @@ mod tests {
 
         #[actix::test]
         async fn test_http_serve_user_api_post() {
-            let port = webservers::get_random_port();
+            let port = webservers::get_random_port().unwrap();
             let mut interpreter = Interpreter::new();
             interpreter = verify_exact_code_with_async(interpreter, format!(r#"
                 http::start({port}, {{
                     "/api/stocks" : {{
                         "GET" : (ticker -> {{
-                            let stocks = nsd::load("web_engine.http_serve_api_post.stocks")
+                            let stocks = tables::load("web_engine.http_serve_api_post.stocks")
                             stocks where symbol is ticker
                         }})
                         "POST" : (quote -> {{
-                            let stocks = nsd::load("web_engine.http_serve_api_post.stocks")
+                            let stocks = tables::load("web_engine.http_serve_api_post.stocks")
                             quote ~> stocks
                         }})
                     }}
@@ -990,7 +980,7 @@ mod tests {
             "#).as_str(), "true").await;
 
             interpreter = verify_exact_code_with_async(interpreter, r#"
-                let stocks = nsd::save("web_engine.http_serve_api_post.stocks",
+                let stocks = tables::save("web_engine.http_serve_api_post.stocks",
                     |--------------------------------|
                     | symbol | exchange  | last_sale |
                     |--------------------------------|
@@ -1015,19 +1005,45 @@ mod tests {
     /// Unit tests
     #[cfg(test)]
     mod ws_tests {
+        use crate::compiler::Compiler;
+        use crate::connections::webservers;
         use crate::numbers::Numbers::I64Value;
-        use crate::packages::{webservers, Package};
-        use crate::test_util::{make_lines_from_table, start_test_server_async};
+        use crate::test_util::{interpret, make_lines_from_table, start_test_server_async};
         use crate::typed_values::TypedValue::Number;
         use crate::web_engine::WebSocketClient;
 
         #[actix::test]
-        async fn test_websocket_basic_conversation() {
+        async fn test_websocket_text_conversation() {
+            // start the server
             let port = start_test_server_async().await.unwrap();
             let mut wsc = WebSocketClient::connect("0.0.0.0", port, "/ws").await.unwrap();
-            wsc.evaluate("let a = [0, 1, 3, 5]").await.unwrap();
+
+            // invocation #1
+            wsc.with_variable("a", interpret("[0, 1, 3, 5]")).await.unwrap();
+
+            // invocation #2
             let value = wsc.evaluate("a[2]").await.unwrap();
             assert_eq!(value, Number(I64Value(3)));
+
+            // shutdown the server
+            webservers::stop_server(port).await.unwrap();
+        }
+
+        #[actix::test]
+        async fn test_websocket_binary_conversation() {
+            // start the server
+            let port = start_test_server_async().await.unwrap();
+            let mut wsc = WebSocketClient::connect("0.0.0.0", port, "/ws").await.unwrap();
+
+            // invocation #1
+            wsc.with_variable("a", interpret("[8, 3, 7]")).await.unwrap();
+
+            // invocation #2
+            let expr = Compiler::build("a[1]").unwrap();
+            let value =wsc.invoke(&expr).await.unwrap();
+            assert_eq!(value, Number(I64Value(3)));
+            
+            // shutdown the server
             webservers::stop_server(port).await.unwrap();
         }
 
@@ -1036,7 +1052,7 @@ mod tests {
             let port = start_test_server_async().await.unwrap();
             let mut wsc = WebSocketClient::connect("0.0.0.0", port, "/ws").await.unwrap();
             let value = wsc.evaluate(r#"
-                let stocks = nsd::save(
+                let stocks = tables::save(
                     "web_engine.ws_script.stocks",
                     Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
                 )

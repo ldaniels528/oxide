@@ -356,7 +356,7 @@ mod tests {
     use crate::data_types::DataType::*;
     use crate::number_kind::NumberKind::F64Kind;
     use crate::numbers::Numbers::*;
-    use crate::test_util::{make_quote_columns, make_quote_parameters};
+    use crate::test_util::make_quote_parameters;
     use crate::typed_values::TypedValue::*;
 
     use super::*;
@@ -377,7 +377,6 @@ mod tests {
     async fn test_append_then_read() {
         let actor = DataframeActor::new().start();
         let ns = Namespace::parse("actors.append_then_read.stocks").unwrap();
-        let table_columns = make_quote_columns();
 
         // create the new empty table
         assert_eq!(1, create_table!(actor, ns, make_quote_parameters()).unwrap());
@@ -408,7 +407,7 @@ mod tests {
         ])).unwrap());
 
         // read the previously created row
-        let (columns, row_maybe) = read_row!(actor, ns, 0).unwrap();
+        let (_columns, row_maybe) = read_row!(actor, ns, 0).unwrap();
         assert_eq!(row_maybe.unwrap(), Row::new(0, vec![
             StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(22.88)),
         ]));
@@ -419,7 +418,7 @@ mod tests {
         ])).unwrap());
 
         // read rows
-        let (columns, rows) = read_range!(actor, ns, 0, 2).unwrap();
+        let (_columns, rows) = read_range!(actor, ns, 0, 2).unwrap();
         assert_eq!(rows, vec![
             Row::new(0, vec![
                 StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(22.88)),
@@ -435,7 +434,7 @@ mod tests {
         ])).unwrap());
 
         // re-read rows
-        let (columns, rows) = read_fully!(actor, ns).unwrap();
+        let (_columns, rows) = read_fully!(actor, ns).unwrap();
         assert_eq!(rows, vec![
             Row::new(0, vec![
                 StringValue("JUNO".into()), StringValue("AMEX".into()), Number(F64Value(22.88)),

@@ -13,11 +13,10 @@ use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::throw;
 use crate::errors::Errors::Exact;
 use crate::expression::Conditions;
-use crate::machine::Machine;
+use crate::machine::{Machine, FX_SELF};
 use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::I64Value;
 use crate::parameter::Parameter;
-use crate::row_collection::RowCollection;
 use crate::sequences::{Array, Tuple};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
@@ -79,7 +78,7 @@ pub trait Structure {
                 ms.with_variable(name, value.to_owned())
             });
         // add self-reference
-        ms1.with_variable("self", Structured(Structures::Soft(SoftStructure::from_tuples(tuples))))
+        ms1.with_variable(FX_SELF, Structured(Structures::Soft(SoftStructure::from_tuples(tuples))))
     }
 
     fn to_array(&self) -> Array {
@@ -161,7 +160,7 @@ impl Structures {
 
     pub fn transform_row(
         src: &Vec<Parameter>,
-        src_values: &Vec<TypedValue>,
+        src_values: &[TypedValue],
         dest: &Vec<Parameter>,
     ) -> Row {
         let mut dest_values = vec![Null; dest.len()];
@@ -400,7 +399,7 @@ impl Structure for HardStructure {
         tuples.extend(self.fields.iter().zip(self.values.iter())
             .map(|(c, v)| (c.get_name().to_string(), v.to_owned()))
             .collect::<Vec<_>>());
-        tuples.sort_by(|(s0, t0), (s1, t1)| s1.cmp(&s0));
+        tuples.sort_by(|(s0, _t0), (s1, _t1)| s1.cmp(&s0));
         tuples
     }
 
@@ -500,7 +499,7 @@ impl SoftStructure {
 
     pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
         let tup_maybe = self.tuples.iter()
-            .find(|(k, v)| *k == *name);
+            .find(|(k, _v)| *k == *name);
         let new_tuples = match tup_maybe {
             None => {
                 let mut new_tuples = self.tuples.clone();
@@ -817,7 +816,7 @@ impl Row {
         &self,
         columns: &Vec<Column>,
         field_names: &Vec<String>,
-        field_values: &Vec<TypedValue>,
+        field_values: &[TypedValue],
     ) -> std::io::Result<Row> {
         // field and value vectors must have the same length
         let src_values = self.get_values();
@@ -951,18 +950,12 @@ mod tests {
     /// common unit tests
     #[cfg(test)]
     mod common_tests {
-        use crate::columns::Column;
-        use crate::compiler::Compiler;
-        use crate::dataframe::Dataframe::ModelTable;
-        use crate::errors::Errors::Exact;
         use crate::interpreter::Interpreter;
-        use crate::model_row_collection::ModelRowCollection;
-        use crate::numbers::Numbers::{F64Value, I64Value, NaNValue, U128Value};
+        use crate::numbers::Numbers::{F64Value, I64Value};
         use crate::sequences::Array;
-        use crate::structures::Structures::{Firm, Hard, Soft};
+        use crate::structures::Structures::{Firm, Soft};
         use crate::structures::*;
         use crate::test_util::*;
-        use crate::typed_values::TypedValue::*;
         use serde_json::json;
 
         #[test]
@@ -1023,7 +1016,7 @@ mod tests {
         #[test]
         fn test_firm_structure_from_table() {
             verify_exact_value(r#"
-                stocks = nsd::save(
+                stocks = tables::save(
                     "interpreter.struct.stocks",
                     Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
                 )
@@ -1107,7 +1100,7 @@ mod tests {
         #[test]
         fn test_hard_structure_import() {
             let mut interpreter = Interpreter::new();
-            let result = interpreter.evaluate(r#"
+            let _result = interpreter.evaluate(r#"
             stock = Struct(symbol: String(8), exchange: String(8), last_sale: f64)
                 ::new("ABC", "NYSE", 23.67)
             use stock
@@ -1219,7 +1212,7 @@ mod tests {
         #[test]
         fn test_soft_structure_import() {
             let mut interpreter = Interpreter::new();
-            let result = interpreter.evaluate(r#"
+            let _result = interpreter.evaluate(r#"
             quote = { symbol: "ABC", exchange: "AMEX" }
             use quote
         "#).unwrap();
@@ -1322,7 +1315,7 @@ mod tests {
     mod firm_structure_tests {
         use crate::byte_code_compiler::ByteCodeCompiler;
         use crate::numbers::Numbers::*;
-        use crate::structures::Row;
+        use crate::structures::{Row, Structure};
         use crate::test_util::{make_quote, make_quote_columns, make_quote_parameters};
         use crate::typed_values::TypedValue::*;
 
@@ -1337,6 +1330,7 @@ mod tests {
                     Number(F64Value(100.00)),
                 ],
             });
+            assert_eq!(row.to_code(), r#"{a: "KING", b: "YHWH", c: 100}"#)
         }
 
         #[test]
@@ -1465,7 +1459,8 @@ mod tests {
             assert_eq!(model.to_json().to_string(), r#"{"exchange":"NYSE","last_sale":11.11,"symbol":"EDF"}"#.to_string());
 
             let bytes = model.encode().unwrap();
-            assert_eq!(model, HardStructure::decode(bytes).unwrap())
+            assert_eq!(model, HardStructure::decode(bytes).unwrap());
+            assert_eq!(model.to_code(), r#"Struct(symbol: String(8) = "EDF", exchange: String(8) = "NYSE", last_sale: f64 = 11.11)"#);
         }
 
         #[test]
@@ -1663,7 +1658,8 @@ mod tests {
                 r#"{"age":41,"first_name":"Thomas","last_name":"Brady"}"#.to_string());
 
             let bytes = model.encode().unwrap();
-            assert_eq!(model, SoftStructure::decode(bytes).unwrap())
+            assert_eq!(model, SoftStructure::decode(bytes).unwrap());
+            assert_eq!(model.to_code(), r#"{age: 41, first_name: "Thomas", last_name: "Brady"}"#);
         }
     }
 }

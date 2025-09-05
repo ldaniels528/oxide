@@ -7,7 +7,6 @@ use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
 use crate::data_types::DataType::*;
-use crate::dataframe::Dataframe;
 use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::Errors::{Exact, InvalidNamespace, TypeMismatch};
 use crate::errors::TypeMismatchErrors::TableExpected;
@@ -19,16 +18,15 @@ use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::I64Kind;
 use crate::numbers::Numbers::I64Value;
-use crate::packages::ToolsPkg;
+use crate::packages::CollectionsPkg;
 use crate::parameter::Parameter;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::Array;
+use crate::structures::Row;
 use crate::structures::Structures::{Firm, Hard};
-use crate::structures::{Row, Structure};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::fs::File;
 use std::ops::Range;
@@ -70,6 +68,20 @@ pub trait RowCollection: Debug {
         Ok(affected)
     }
 
+    fn column(&self, column_id: usize) -> std::io::Result<Vec<TypedValue>> {
+        let (mut row_id, eof) = (0, self.len()?);
+        let mut values = Vec::with_capacity(eof);
+        while row_id < eof {
+            // read the row metadata
+            let metadata = self.read_row_metadata(row_id)?;
+            // if the row is allocated, read the column
+            let value = if metadata.is_allocated { self.read_field(row_id, column_id)? } else { Null };
+            values.push(value);
+            row_id += 1;
+        }
+        Ok(values)
+    }
+
     /// Eliminates all deleted rows; re-ordering the table in the process.
     fn compact(&mut self) -> std::io::Result<i64> {
         let (mut affected, mut row_id, mut eof) = (0, 0, self.len()?);
@@ -78,7 +90,7 @@ pub trait RowCollection: Debug {
             let metadata = self.read_row_metadata(row_id)?;
             // if row is unallocated, replace it
             if !metadata.is_allocated {
-                if let Some(row) = self.find_previous(eof, |row| true)? {
+                if let Some(row) = self.find_previous(eof, |_row| true)? {
                     eof = row.get_id();
                     let a = self.overwrite_row(row_id, row.with_row_id(row_id))?;
                     let b = self.delete_row(row.get_id())?;
@@ -104,14 +116,6 @@ pub trait RowCollection: Debug {
         self.iter().fold(0, |n, row| if f(row) { n + 1 } else { n })
     }
 
-    fn create_related_structure(
-        &self,
-        columns: Vec<Column>,
-        _extension: &str,
-    ) -> std::io::Result<Box<dyn RowCollection>> {
-        Ok(Box::new(ModelRowCollection::with_rows(columns, Vec::new())))
-    }
-
     /// deletes an existing row by ID from the table
     fn delete_row(&mut self, id: usize) -> std::io::Result<i64> {
         self.overwrite_row_metadata(id, RowMetadata::new(false))
@@ -133,8 +137,8 @@ pub trait RowCollection: Debug {
     }
 
     /// Returns a table that describes the structure of the host table
-    fn describe(&self) -> TypedValue {
-        let params = ToolsPkg::get_tools_describe_parameters();
+    fn describe(&self) -> std::io::Result<TypedValue> {
+        let params = CollectionsPkg::get_tools_describe_parameters();
         let mut mrc = ModelRowCollection::from_parameters(&params);
         for column in self.get_columns() {
             mrc.append_row(Row::new(0, vec![
@@ -142,9 +146,9 @@ pub trait RowCollection: Debug {
                 StringValue(column.get_data_type().to_code()),
                 StringValue(column.get_default_value().unwrap_value()),
                 Boolean(true),
-            ]));
+            ]))?;
         }
-        TableValue(ModelTable(mrc))
+        Ok(TableValue(ModelTable(mrc)))
     }
 
     fn examine_range(&self, range: std::ops::Range<usize>) -> TypedValue {
@@ -397,7 +401,7 @@ pub trait RowCollection: Debug {
         for row in self.iter() {
             let ms = machine.with_row(columns, &row);
             match ms.evaluate_condition(condition) {
-                Ok((_ms, Boolean(true) | Boolean(true))) => {
+                Ok((_ms, Boolean(true))) => {
                     match callback(&result, row) {
                         ErrorValue(msg) => return ErrorValue(msg),
                         value => result = value
@@ -771,7 +775,7 @@ mod tests {
 
     #[test]
     fn test_condition_exists_in_table() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+        fn test_variant(_label: &str, mut rc: Box<dyn RowCollection>, _columns: Vec<Column>) -> u64 {
             // append some rows to the host table (rc)
             assert_eq!(4, rc.append_rows(vec![
                 make_quote(0, "HOCK", "AMEX", 0.0076),
@@ -801,7 +805,7 @@ mod tests {
 
     #[test]
     fn test_table_encode_decode() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+        fn test_variant(_label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
             // append some rows to the host table (rc)
             assert_eq!(4, rc.append_rows(vec![
                 make_quote(0, "IBM", "NYSE", 21.22),
@@ -836,7 +840,7 @@ mod tests {
 
     #[test]
     fn test_write_then_read_row() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+        fn test_variant(_label: &str, mut rc: Box<dyn RowCollection>, _columns: Vec<Column>) -> u64 {
             // write a new row
             let row = make_quote(2, "AMD", "NYSE", 88.78);
             assert_eq!(rc.overwrite_row(row.get_id(), row.to_owned()).unwrap(), 1);
@@ -855,7 +859,7 @@ mod tests {
 
     #[test]
     fn test_write_then_read_row_metadata() {
-        fn test_variant(label: &str, mut rc: Box<dyn RowCollection>, columns: Vec<Column>) -> u64 {
+        fn test_variant(_label: &str, mut rc: Box<dyn RowCollection>, _columns: Vec<Column>) -> u64 {
             // write a new row
             let row = make_quote(2, "BOX", "AMEX", 777.9311);
             assert_eq!(rc.overwrite_row(row.get_id(), row.to_owned()).unwrap(), 1);
@@ -1035,7 +1039,7 @@ mod tests {
             assert_eq!(0, rc.append_row(make_quote(0, "GE", "NYSE", 21.22)).unwrap());
 
             // describe the table
-            let mrc = rc.describe().to_table().unwrap();
+            let mrc = rc.describe().unwrap().to_table().unwrap();
             let mrc_columns = mrc.get_columns().to_owned();
             let mrc_rows = mrc.read_active_rows().unwrap();
             let count = rc.count(|_| true);
@@ -1685,7 +1689,7 @@ mod tests {
     fn test_shuffle() {
         let mut intepreter = Interpreter::new();
         intepreter = verify_exact_code_with(intepreter, r#"
-            let stocks = nsd::save(
+            let stocks = tables::save(
                 "row_collection.shuffle.stocks",
                 |--------------------------------|
                 | symbol | exchange  | last_sale |

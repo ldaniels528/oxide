@@ -40,16 +40,6 @@ impl ByteRowCollection {
         Self::from_bytes(columns, row_bytes, watermark)
     }
 
-    /// Decodes a byte vector into a [ByteRowCollection]
-    pub fn decode_with_parameters(
-        params: &Vec<Parameter>, 
-        bytes: Vec<u8>,
-        watermark: usize,
-    ) -> Self {
-        let columns = Column::from_parameters(params);
-        Self::decode(columns, bytes, watermark)
-    }
-
     /// Creates a new [ModelRowCollection] prefilled with the given rows.
     pub fn from_parameters_and_rows(parameters: &Vec<Parameter>, rows: &Vec<Row>) -> Self {
         Self::from_columns_and_rows(Column::from_parameters(parameters), rows.to_vec())

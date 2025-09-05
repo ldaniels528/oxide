@@ -76,7 +76,6 @@ impl Display for SyntaxErrors {
 pub enum TypeMismatchErrors {
     ArgumentsMismatched(usize, usize),
     ArrayExpected(String),
-    BitsetExpected(String),
     BooleanExpected(String),
     CannotBeNegated(String),
     CharExpected(String),
@@ -114,8 +113,6 @@ impl Display for TypeMismatchErrors {
                 format!("Mismatched number of arguments: {a} vs. {b}"),
             TypeMismatchErrors::ArrayExpected(a) =>
                 format!("Array value expected near {a}"),
-            TypeMismatchErrors::BitsetExpected(a) =>
-                format!("BitSet value expected near {a}"),
             TypeMismatchErrors::BooleanExpected(a) =>
                 format!("Boolean value expected near {a}"),
             TypeMismatchErrors::CannotBeNegated(a) =>
@@ -283,20 +280,42 @@ pub fn column_not_found<A>(name: &str, columns: &Vec<Column>) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::data_types::DataType::{NumberType, StructureType};
+    use crate::data_types::DataType::{NumberType, StringType, StructureType};
+    use crate::errors::CompileErrors::*;
     use crate::errors::TypeMismatchErrors::*;
     use crate::number_kind::NumberKind::I128Kind;
-    use crate::packages::UtilsPkg;
+    use crate::packages::{StringsPkg, UtilsPkg};
+    use crate::test_util::make_quote_columns;
     use Errors::*;
+
+    #[test]
+    fn test_column_not_found() {
+        assert!(column_not_found::<()>("rank", &make_quote_columns()).is_err());
+    }
+
+    #[test]
+    fn test_compile_errors() {
+        verify_compiler_error(
+            ExpectedHttpMethod,
+            "Syntax error: HTTP method expected: DELETE, GET, HEAD, PATCH, POST or PUT");
+
+        verify_compiler_error(
+            IllegalHttpMethod("TRX".into()), "Syntax error: Illegal HTTP method 'TRX'");
+
+        verify_compiler_error(
+            IllegalOperator("@".into()), "Syntax error: Illegal operator '@'");
+
+        verify_compiler_error(
+            UnexpectedEOF, "Syntax error: Unexpected end of input");
+    }
 
     #[test]
     fn test_general_errors() {
         verify(AssertionError("true".into(), "false".into()),
                "Assertion Error: true was not false");
+        verify(CannotBeExecuted("with".into()), "with cannot be executed");
         verify(CannotSubtract("a".into(), "b".into()),
                "Cannot subtract b from a");
-        verify(PlatformOpError(PackageOps::Utils(UtilsPkg::Hex)),
-               "Conversion error: \"util::hex(a)\"");
         verify(Empty, "General fault occurred".into());
         verify(Exact("Something bad happened".into()),
                "Something bad happened");
@@ -306,16 +325,23 @@ mod tests {
                "Something bad happened on line 13 column 5");
         verify(HashTableOverflow(100, "AAA".into()),
                "Hash table overflow detected (rid: 100, key: AAA)");
+        verify(IndexOutOfRange("bytes".into(), 5, 4),
+               "bytes index is out of range (5 >= 4)");
+        verify(InstantiationError(StringType), "instantiation error for type String");
         verify(InvalidNamespace("a.b.c".into()), "Invalid namespace reference a.b.c");
         verify(NotImplemented("magic()".into()), "Not yet implemented - magic()");
         verify(PackageNotFound("wth".into()), "Package 'wth' not found");
-        verify(IndexOutOfRange("bytes".into(), 5, 4),
-               "bytes index is out of range (5 >= 4)");
-        verify(UnsupportedFeature("journaling".into()), "Unsupported feature 'journaling'")
+        verify(PlatformOpError(PackageOps::Utils(UtilsPkg::Hex)),
+               "Conversion error: \"util::hex(a): String\"");
+        verify(UnsupportedFeature("journaling".into()), "Unsupported feature 'journaling'");
+        verify(UnsupportedPlatformOps(PackageOps::Strings(StringsPkg::EndsWith)),
+               "Unsupported operation str::ends_with(a: String, b: String): Boolean")
     }
 
     #[test]
     fn test_syntax_errors() {
+        verify(SyntaxError(SyntaxErrors::IllegalDate("2025-08-02X01:44:28.920A".into())),
+               "Syntax error: Illegal date '2025-08-02X01:44:28.920A'");
         verify(SyntaxError(SyntaxErrors::IllegalExpression("2 ~ 3".into())),
                "Syntax error: Illegal expression: 2 ~ 3");
         verify(SyntaxError(SyntaxErrors::IllegalOperator(Token::Atom {
@@ -325,8 +351,12 @@ mod tests {
             line_number: 1,
             column_number: 18,
         })), "Syntax error: Illegal use of operator '+'");
+        verify(SyntaxError(SyntaxErrors::KeywordExpected("then".to_string())),
+               "Syntax error: expected keyword 'then'");
         verify(SyntaxError(SyntaxErrors::LiteralExpected("What".to_string())),
                "Syntax error: expected literal value, but found 'What'");
+        verify(SyntaxError(SyntaxErrors::ParameterExpected("xyz".to_string())),
+               "Syntax error: expected parameter, but found 'xyz'");
         verify(SyntaxError(SyntaxErrors::TypeIdentifierExpected("hot_dog".to_string())),
                "Syntax error: expected type identifier, but found 'hot_dog'");
     }
@@ -335,6 +365,8 @@ mod tests {
     fn test_type_mismatch_errors() {
         verify(TypeMismatch(ArgumentsMismatched(2, 1)),
                "Type Mismatch: Mismatched number of arguments: 2 vs. 1");
+        verify(TypeMismatch(ArrayExpected("name".into())),
+        "Type Mismatch: Array value expected near name");
         verify(TypeMismatch(BooleanExpected("457".into())),
                "Type Mismatch: Boolean value expected near 457");
         verify(TypeMismatch(CodeBlockExpected("[]".into())),
@@ -359,12 +391,13 @@ mod tests {
                "Type Mismatch: A Struct was expected near count");
         verify(TypeMismatch(StructIsnt("count".into(), "i64".into())),
                "Type Mismatch: count is not a Struct (i64)");
+        verify(TypeMismatch(StructsOneOrMoreExpected),
+        "Type Mismatch: At least one Struct is required.");
         verify(TypeMismatch(TableExpected("stocks".into())),
                "Type Mismatch: stocks is not a Table");
         verify(TypeMismatch(UnsupportedType(StructureType(vec![]), NumberType(I128Kind))),
                "Type Mismatch: Struct is not convertible to i128");
-        verify(
-            Multiple(vec![ViewsCannotBeResized, WriteProtected]),
+        verify(Multiple(vec![ViewsCannotBeResized, WriteProtected]),
             "Multiple errors detected:\nViews cannot be resized\nWrite operations are not allowed");
         verify(ViewsCannotBeResized, "Views cannot be resized");
         verify(WriteProtected, "Write operations are not allowed");
@@ -372,5 +405,9 @@ mod tests {
 
     fn verify(error: Errors, message: &str) {
         assert_eq!(error.to_string().as_str(), message)
+    }
+
+    fn verify_compiler_error(err: CompileErrors, message: &str) {
+        assert_eq!(err.to_string(), message);
     }
 }

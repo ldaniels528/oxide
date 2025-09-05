@@ -3,24 +3,14 @@
 // Expression class
 ////////////////////////////////////////////////////////////////////
 
-use crate::builtins::Builtins;
 use crate::byte_code_compiler::ByteCodeCompiler;
 use crate::data_types::DataType;
-use crate::data_types::DataType::*;
 use crate::expression::Expression::*;
 use crate::expression::Ranges::{Exclusive, Inclusive};
-use crate::machine;
-use crate::number_kind::NumberKind;
-use crate::number_kind::NumberKind::I64Kind;
-use crate::packages::Package;
-use crate::packages::{IoPkg, PackageOps};
 use crate::parameter::Parameter;
-use crate::row_collection::RowCollection;
-use crate::sequences::Sequence;
-use crate::structures::Structure;
+use crate::type_engine::{TypeEngine, TypeHints};
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{Boolean, Function, Number, PlatformOp, StringValue};
-use crate::utils::maybe_a_or_b;
+use crate::typed_values::TypedValue::Boolean;
 use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
@@ -30,6 +20,29 @@ pub const FALSE: Expression = Condition(Conditions::False);
 pub const TRUE: Expression = Condition(Conditions::True);
 pub const NULL: Expression = Literal(TypedValue::Null);
 pub const UNDEFINED: Expression = Literal(TypedValue::Undefined);
+
+/// Alias Call Types
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum AliasCalls {
+    IdentifierCall(String, Box<Expression>),
+    FunctionCall(String, Vec<Parameter>, Box<Expression>),
+}
+
+impl AliasCalls {
+    pub fn get_body(&self) -> &Expression {
+        match self {
+            AliasCalls::IdentifierCall(_, b) => b,
+            AliasCalls::FunctionCall(_, _, b) => b,
+        }
+    }
+
+    pub fn get_parameters(&self) -> Vec<Parameter> {
+        match self {
+            AliasCalls::IdentifierCall(..) => vec![],
+            AliasCalls::FunctionCall(_, params, _) => params.to_vec(),
+        }
+    }
+}
 
 /// Represents Logical Conditions
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
@@ -147,6 +160,28 @@ impl HttpMethodCalls {
     }
 }
 
+/// Observables
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Observations {
+    VariableObservation { condition: Conditions, code: Expression },
+}
+
+/// Represents an enumeration of range variations
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+pub enum Ranges {
+    Inclusive(Box<Expression>, Box<Expression>),
+    Exclusive(Box<Expression>, Box<Expression>),
+}
+
+impl Ranges {
+    pub fn is_pure(&self) -> bool {
+        match self {
+            Inclusive(a, b) => is_pure_a_and_b(a, b),
+            Exclusive(a, b) => is_pure_a_and_b(a, b),
+        }
+    }
+}
+
 /// Represents an enumeration of use definition variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum UseOps {
@@ -170,25 +205,11 @@ impl Display for UseOps {
     }
 }
 
-/// Represents an enumeration of range variations
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub enum Ranges {
-    Inclusive(Box<Expression>, Box<Expression>),
-    Exclusive(Box<Expression>, Box<Expression>),
-}
-
-impl Ranges {
-    pub fn is_pure(&self) -> bool {
-        match self {
-            Inclusive(a, b) => is_pure_a_and_b(a, b),
-            Exclusive(a, b) => is_pure_a_and_b(a, b),
-        }
-    }
-}
-
 /// Represents an enumeration of Expression variations
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 pub enum Expression {
+    Alias(AliasCalls),
+    Aliases,
     ArrayExpression(Vec<Expression>),
     ArrowCurvyLeft(Box<Expression>, Box<Expression>),
     ArrowCurvyLeft2x(Box<Expression>, Box<Expression>),
@@ -221,7 +242,7 @@ pub enum Expression {
     },
     ElementAt(Box<Expression>, Box<Expression>),
     Feature { title: Box<Expression>, scenarios: Vec<Expression> },
-    For { construct: Box<Expression>, op: Box<Expression> },
+    For { construct: Box<Expression>, code: Box<Expression> },
     FunctionCall { fx: Box<Expression>, args: Vec<Expression> },
     HTTP(HttpMethodCalls),
     Identifier(String),
@@ -242,6 +263,7 @@ pub enum Expression {
     Multiply(Box<Expression>, Box<Expression>),
     NamedValue(String, Box<Expression>),
     Neg(Box<Expression>),
+    OneTime(Box<Expression>, u128),
     Parameters(Vec<Parameter>),
     Plus(Box<Expression>, Box<Expression>),
     PlusPlus(Box<Expression>, Box<Expression>),
@@ -269,6 +291,10 @@ pub enum Expression {
         condition: Box<Expression>,
         code: Box<Expression>,
     },
+    With {
+        resource: Box<Expression>,
+        code: Box<Expression>,
+    },
     Yield(Box<Expression>),
     Zip(Box<Expression>, Box<Expression>),
     ////////////////////////////////////////////////////////////////////
@@ -276,6 +302,7 @@ pub enum Expression {
     ////////////////////////////////////////////////////////////////////
     Delete { from: Box<Expression> },
     Deselect { from: Box<Expression>, fields: Vec<Expression> },
+    Fetch { from: Box<Expression>, fields: Vec<Expression> },
     GroupBy { from: Box<Expression>, columns: Vec<Expression> },
     Having { from: Box<Expression>, condition: Conditions },
     Limit { from: Box<Expression>, limit: Box<Expression> },
@@ -290,9 +317,14 @@ impl Expression {
     ////////////////////////////////////////////////////////////////
     // instance methods
     ////////////////////////////////////////////////////////////////
-
+    
     pub fn decompile(expr: &Expression) -> String {
         match expr {
+            Alias(AliasCalls::FunctionCall(name, params, b)) =>
+                format!("alias {}({}) = {}", name, Parameter::render(params), Self::decompile(b)),
+            Alias(AliasCalls::IdentifierCall(name, b)) =>
+                format!("alias {} = {}", name, Self::decompile(b)),
+            Aliases => "aliases".to_string(),
             ArrayExpression(items) =>
                 format!("[{}]", items.iter().map(|i| Self::decompile(i)).collect::<Vec<String>>().join(", ")),
             ArrowCurvyLeft(a, b) =>
@@ -335,13 +367,6 @@ impl Expression {
             CoalesceErr(a, b) =>
                 format!("{} !? {}", Self::decompile(a), Self::decompile(b)),
             CodeBlock(items) => Self::decompile_code_blocks(items),
-            Condition(cond) => Self::decompile_cond(cond),
-            Divide(a, b) =>
-                format!("{} / {}", Self::decompile(a), Self::decompile(b)),
-            DoWhile { condition, code } => 
-                format!("do {} while {}", Self::decompile(condition), Self::decompile(code)),
-            ElementAt(a, b) =>
-                format!("{}[{}]", Self::decompile(a), Self::decompile(b)),
             ColonColon(a, b) =>
                 format!("{}::{}", Self::decompile(a), Self::decompile(b)),
             ColonColonCapture(a, b) =>
@@ -350,17 +375,25 @@ impl Expression {
                 format!("{}:::{}", Self::decompile(a), Self::decompile(b)),
             ColonColonColonCapture(a, b) =>
                 format!("{}<:::{}", Self::decompile(a), Self::decompile(b)),
+            Condition(cond) => Self::decompile_cond(cond),
+            Divide(a, b) =>
+                format!("{} / {}", Self::decompile(a), Self::decompile(b)),
+            DoWhile { condition, code } => 
+                format!("do {} while {}", Self::decompile(condition), Self::decompile(code)),
+            ElementAt(a, b) =>
+                format!("{}[{}]", Self::decompile(a), Self::decompile(b)),
             Feature { title, scenarios } =>
                 format!("feature {} {{\n{}\n}}", title.to_code(), scenarios.iter()
                     .map(|s| s.to_code())
                     .collect::<Vec<_>>()
                     .join("\n")),
-            For { construct, op } =>
-                format!("for {} {}", Self::decompile(construct), Self::decompile(op)),
+            For { construct, code } =>
+                format!("for {} {}", Self::decompile(construct), Self::decompile(code)),
             FunctionCall { fx, args } =>
                 format!("{}({})", Self::decompile(fx), Self::decompile_list(args)),
             HTTP(method) =>
                 format!("{} {}", method.get_method(), Self::decompile(&method.get_url_or_config())),
+            Identifier(name) => name.to_string(),
             If { condition, a, b } =>
                 format!("if {} {}{}", Self::decompile(condition), Self::decompile(a), b.to_owned()
                     .map(|x| format!(" else {}", Self::decompile(&x)))
@@ -387,11 +420,8 @@ impl Expression {
             NamedValue(name, expr) =>
                 format!("{}: {}", name, Self::decompile(expr)),
             Neg(a) => format!("-({})", Self::decompile(a)),
+            OneTime(expr, ..) => format!("once {}", Self::decompile(expr)),
             Parameters(parameters) => Self::decompile_parameters(parameters),
-            Use(args) =>
-                format!("use {}", args.iter().map(|a| a.to_code())
-                    .collect::<Vec<_>>()
-                    .join(", ")),
             Plus(a, b) =>
                 format!("{} + {}", Self::decompile(a), Self::decompile(b)),
             PlusPlus(a, b) =>
@@ -433,11 +463,16 @@ impl Expression {
             }),
             Throw(message) => format!("throw({})", Self::decompile(message)),
             TupleExpression(args) => format!("({})", Self::decompile_list(args)),
-            Identifier(name) => name.to_string(),
+            Use(args) =>
+                format!("use {}", args.iter().map(|a| a.to_code())
+                    .collect::<Vec<_>>()
+                    .join(", ")),
             WhenEver { condition, code } => 
                 format!("when {} {}", Self::decompile(condition), Self::decompile(code)),
             While { condition, code } =>
                 format!("while {} {}", Self::decompile(condition), Self::decompile(code)),
+            With { resource, code } =>
+                format!("{} with {}", Self::decompile(resource), Self::decompile(code)),
             Yield(expr) =>
                 format!("yield {}", Self::decompile(expr)),
             Zip(a, b) =>
@@ -449,6 +484,8 @@ impl Expression {
                 format!("delete {}", Self::decompile(from)),
             Deselect { fields, from } =>
                 format!("deselect {} from {}", Self::decompile_list(fields), Self::decompile(from)),
+            Fetch { fields, from } =>
+                format!("fetch {} from {}", Self::decompile_list(fields), Self::decompile(from)),
             GroupBy { from, columns } =>
                 format!("{} group_by {}", Self::decompile(from), Self::decompile_list(columns)),
             Having { from, condition } =>
@@ -466,7 +503,7 @@ impl Expression {
         }
     }
 
-    pub fn decompile_code_blocks(ops: &Vec<Expression>) -> String {
+    pub fn decompile_code_blocks(ops: &[Expression]) -> String {
         format!("{{\n{}\n}}", ops.iter().map(|i| Self::decompile(i))
             .collect::<Vec<String>>()
             .join("\n"))
@@ -512,16 +549,8 @@ impl Expression {
             .join(", ")
     }
 
-    pub fn decompile_list(fields: &Vec<Expression>) -> String {
+    pub fn decompile_list(fields: &[Expression]) -> String {
         fields.iter().map(|x| Self::decompile(x)).collect::<Vec<String>>().join(", ".into())
-    }
-
-    pub fn decompile_cond_opt(opt: &Option<Conditions>) -> String {
-        opt.to_owned().map(|i| Self::decompile_cond(&i)).unwrap_or("".into())
-    }
-
-    pub fn decompile_opt(opt: &Option<Box<Expression>>) -> String {
-        opt.to_owned().map(|i| Self::decompile(&i)).unwrap_or("".into())
     }
     
     pub fn encode(&self) -> Vec<u8> {
@@ -529,197 +558,7 @@ impl Expression {
     }
 
     pub fn infer_type(&self) -> DataType {
-        Self::infer(self)
-    }
-
-    /// provides type inference for the given [Expression]
-    pub fn infer(expr: &Expression) -> DataType {
-        Self::infer_with_hints(expr, &vec![])
-    }
-
-    /// provides type inference for the given [Expression] with hints
-    /// to improve the matching performance.
-    pub fn infer_with_hints(
-        expr: &Expression,
-        hints: &Vec<Parameter>,
-    ) -> DataType {
-        let data_type = Self::do_infer_with_hints(expr, hints);
-        //println!("infer_with_hints: [{}] {:?} => '{}'", if hints.is_empty() { "N" } else { "Y" }, expr, data_type);
-        data_type
-    }
-
-    /// provides type inference for the given [Expression] with hints
-    /// to improve the matching performance.
-    fn do_infer_with_hints(
-        expr: &Expression,
-        hints: &Vec<Parameter>,
-    ) -> DataType {
-        match expr {
-            ArrayExpression(items) => {
-                let data_types = items.iter().map(|item| item.infer_type()).collect();
-                let best_fit = DataType::best_fit(data_types);
-                FixedSizeType(ArrayType(best_fit.into()).into(), items.len())
-            }
-            ArrowCurvyLeft(..) => StructureType(vec![]),
-            ArrowCurvyLeft2x(..) => TableType(vec![]),
-            ArrowCurvyRight(..) => BooleanType,
-            ArrowCurvyRight2x(..) => NumberType(I64Kind),
-            ArrowFat(_, b) => Self::infer_with_hints(b, hints),
-            ArrowSkinnyLeft(..) => RuntimeResolvedType,
-            ArrowSkinnyRight(_, b) =>  Self::infer_with_hints(b, hints),
-            ArrowVerticalBar(_, b) => Self::infer_with_hints(b, hints),
-            ArrowVerticalBar2x(_, b) => Self::infer_with_hints(b, hints),
-            As(_, datatype) => Self::infer_with_hints(datatype, hints),
-            Assert { .. } => BooleanType,
-            BitwiseAnd(a, b) => Self::infer_a_or_b(a, b, hints),
-            BitwiseOr(a, b) => Self::infer_a_or_b(a, b, hints),
-            BitwiseShiftLeft(a, b) => Self::infer_a_or_b(a, b, hints),
-            BitwiseShiftRight(a, b) => Self::infer_a_or_b(a, b, hints),
-            BitwiseXor(a, b) => Self::infer_a_or_b(a, b, hints),
-            Coalesce(a, b) => Self::infer_a_or_b(a, b, hints),
-            CoalesceErr(a, b) => Self::infer_a_or_b(a, b, hints),
-            CodeBlock(ops) => ops.last().map(|op| Self::infer_with_hints(op, hints))
-                .unwrap_or(RuntimeResolvedType),
-            // platform functions: cal::plus(..)
-            ColonColon(a, b) => Self::infer_package_op(a, b),
-            ColonColonColon(..) => RuntimeResolvedType,
-            ColonColonCapture(a, b) => Self::infer_package_op(a, b),
-            ColonColonColonCapture(..) => RuntimeResolvedType,
-            Zip(a, b) => Self::infer_a_or_b(a, b, hints),
-            Condition(..) => BooleanType,
-            Divide(a, b) => Self::infer_a_or_b(a, b, hints),
-            DoWhile { code, .. } => Self::infer_with_hints(code, hints),
-            ElementAt(..) => RuntimeResolvedType,
-            Feature { .. } => BooleanType,
-            For { op, .. } => Self::infer_with_hints(op, hints),
-            FunctionCall { fx, .. } => Self::infer_with_hints(fx, hints),
-            HTTP { .. } => RuntimeResolvedType,
-            If { a: true_v, b: Some(false_v), .. } => Self::infer_a_or_b(true_v, false_v, hints),
-            If { a: true_v, .. } => Self::infer_with_hints(true_v, hints),
-            Include(..) => BooleanType,
-            Infix(container, field) => match container.deref() {
-                StructureExpression(key_values) => {
-                    let (_, new_hints) = Self::convert_to_combined_hints(key_values, hints);
-                    Self::infer_with_hints(field, &new_hints)
-                }
-                Identifier(name) => {
-                    match hints.iter().find(|hint| hint.get_name() == name) {
-                        Some(param) => param.get_data_type(),
-                        None => RuntimeResolvedType
-                    }
-                }
-                _ => RuntimeResolvedType
-            }
-            IsDefined(..) => BooleanType,
-            Literal(Function { body, .. }) => Self::infer_with_hints(body, hints),
-            Literal(PlatformOp(pf)) => pf.get_return_type(),
-            Literal(v) => v.get_type(),
-            Ls(..) => TableType(IoPkg::get_io_files_parameters()),
-            MatchExpression(_, cases) => DataType::best_fit(
-                cases.iter()
-                    .map(|op| Self::infer_with_hints(op, hints))
-                    .collect::<Vec<_>>()
-            ),
-            Minus(a, b) => Self::infer_a_or_b(a, b, hints),
-            Module(..) => BooleanType,
-            Modulo(a, b) => Self::infer_a_or_b(a, b, hints),
-            Multiply(a, b) => Self::infer_a_or_b(a, b, hints),
-            NamedValue(_, e) => Self::infer_with_hints(e, hints),
-            Neg(a) => Self::infer_with_hints(a, hints),
-            Parameters(params) => {
-                let data_types = params.iter().map(|p| p.get_data_type()).collect();
-                FixedSizeType(TupleType(data_types).into(), params.len())
-            },
-            Plus(a, b) => Self::infer_a_or_b(a, b, hints),
-            PlusPlus(a, b) => Self::infer_a_or_b(a, b, hints),
-            Pow(a, b) => Self::infer_a_or_b(a, b, hints),
-            Range(Exclusive(a, b)) => Self::infer_a_or_b(a, b, hints),
-            Range(Inclusive(a, b)) => Self::infer_a_or_b(a, b, hints),
-            Referenced(a) => Self::infer_with_hints(a, hints),
-            Return(a) => Self::infer_with_hints(a, hints),
-            Scenario { .. } => BooleanType,
-            SetVariables(..) => BooleanType,
-            SetVariablesExpr(_, b) => b.infer_type(),
-            // structures: { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 }
-            StructureExpression(key_values) => {
-                let (params, _) = Self::convert_to_combined_hints(key_values, &hints);
-                StructureType(params)
-            }
-            Test(..) => TableType(vec![]),
-            Throw(..) => ErrorType,
-            // tuples: (100, 23, 36)
-            TupleExpression(values) => TupleType(values.iter()
-                .map(|p| Self::infer_with_hints(p, hints))
-                .collect::<Vec<_>>()),
-            Use(..) => BooleanType,
-            Identifier(name) =>
-                match name {
-                    s if s == machine::ROW_ID => NumberType(I64Kind),
-                    _ =>
-                        match hints.iter().find(|hint| hint.get_name() == name) {
-                            Some(param) => param.get_data_type(),
-                            None => RuntimeResolvedType
-                        }
-                }
-            WhenEver { code, .. } => Self::infer_with_hints(code, hints),
-            While { code, .. } => Self::infer_with_hints(code, hints),
-            Yield(..) => ArrayType(RuntimeResolvedType.into()),
-            ////////////////////////////////////////////////////////////////////
-            // SQL models
-            ////////////////////////////////////////////////////////////////////
-            Delete { .. }
-            | Undelete { .. } => NumberType(NumberKind::I64Kind),
-            Deselect { .. }
-            | GroupBy { .. }
-            | Having { .. }
-            | Limit { .. }
-            | OrderBy { .. }
-            | Select { .. }
-            | Where { .. } => TableType(vec![]),
-        }
-    }
-
-    fn infer_package_op(a: &Expression, b: &Expression) -> DataType {
-        match (a, b) {
-            (Identifier(package), FunctionCall { fx, .. }) =>
-                match fx.deref() {
-                    Identifier(name) =>
-                        maybe_a_or_b(
-                            PackageOps::find_function(package, name),
-                            Builtins::lookup_by_name(package, name),
-                        )
-                            .map(|pf| pf.get_return_type())
-                            .unwrap_or(RuntimeResolvedType),
-                    _ => RuntimeResolvedType
-                }
-            _ => RuntimeResolvedType
-        }
-    }
-    
-    fn convert_to_combined_hints(
-        key_values: &Vec<(String, Expression)>,
-        hints: &Vec<Parameter>,
-    ) -> (Vec<Parameter>, Vec<Parameter>) {
-        let mut params = vec![];
-        let mut combined_hints = hints.clone();
-        for (name, value) in key_values {
-            let param = Parameter::new(name.clone(), Self::infer_with_hints(value, &combined_hints));
-            params.push(param.clone());
-            combined_hints.push(param);
-        }
-        (params, combined_hints)
-    }
-
-    /// provides type inference for the given [Expression]s
-    fn infer_a_or_b(
-        a: &Expression,
-        b: &Expression,
-        hints: &Vec<Parameter>,
-    ) -> DataType {
-        DataType::best_fit(vec![
-            Self::infer_with_hints(a, hints),
-            Self::infer_with_hints(b, hints)
-        ])
+        TypeEngine::infer(TypeHints::new(), self).1
     }
 
     /// Indicates whether the expression is a conditional expression
@@ -734,6 +573,9 @@ impl Expression {
 
     pub fn is_pure(&self) -> bool {
         match self {
+            Alias(AliasCalls::FunctionCall(_, _, b)) => b.is_pure(),
+            Alias(AliasCalls::IdentifierCall(_, b)) => b.is_pure(),
+            Aliases => true,
             ArrayExpression(items) => is_pure_all(items),
             ArrowCurvyLeft(_, _) => false,
             ArrowCurvyLeft2x(_, _) => false,
@@ -745,8 +587,7 @@ impl Expression {
             ArrowVerticalBar(_, _) => false,
             ArrowVerticalBar2x(_, _) => false,
             As(a, _) => a.is_pure(),
-            Assert { condition, message } =>
-                condition.is_pure() && is_pure_opt(message),
+            Assert { condition, message } => condition.is_pure() && is_pure_opt(message),
             BitwiseAnd(a, b) => is_pure_a_and_b(a, b),
             BitwiseOr(a, b) => is_pure_a_and_b(a, b),
             BitwiseShiftLeft(a, b) => is_pure_a_and_b(a, b),
@@ -764,7 +605,7 @@ impl Expression {
             DoWhile { condition, code } => is_pure_a_and_b(condition, code),
             ElementAt(a, b) => is_pure_a_and_b(a, b),
             Feature { .. } => false,
-            For { construct, op } => is_pure_a_and_b(construct, op),
+            For { construct, code } => is_pure_a_and_b(construct, code),
             FunctionCall { fx, args } => fx.is_pure() && is_pure_all(args),
             HTTP(_) => false,
             Identifier(_) => false,
@@ -782,6 +623,7 @@ impl Expression {
             Multiply(a, b) => is_pure_a_and_b(a, b),
             NamedValue(_, b) => b.is_pure(),
             Neg(a) => a.is_pure(),
+            OneTime(a, ..) => a.is_pure(),
             Parameters(p) => p.iter().all(|p| p.get_default_value().is_pure()),
             Plus(a, b) => is_pure_a_and_b(a, b),
             PlusPlus(a, b) => is_pure_a_and_b(a, b),
@@ -799,11 +641,13 @@ impl Expression {
             Use(_) => false,
             WhenEver { .. } => false,
             While { condition, code } => is_pure_a_and_b(condition, code),
+            With { resource, code } => resource.is_pure() && code.is_pure(),
             Yield(a) => a.is_pure(),
             Zip(a, b) => is_pure_a_and_b(a, b),
             // SQL models
             Delete { from } => from.is_pure(),
             Deselect { from, fields } => from.is_pure() && is_pure_all(fields),
+            Fetch { from, fields } => from.is_pure() && is_pure_all(fields),
             GroupBy { from, .. } => from.is_pure(),
             Having { from, condition, .. } => from.is_pure() && condition.is_pure(),
             Limit { from, limit } => is_pure_a_and_b(from, limit),
@@ -836,7 +680,6 @@ impl Display for Expression {
 #[cfg(test)]
 mod expression_tests {
     use crate::expression::Conditions::*;
-    use crate::expression::Expression::*;
     use crate::machine::Machine;
     use crate::numbers::Numbers::I64Value;
     use crate::numbers::Numbers::*;
@@ -1261,167 +1104,10 @@ fn is_pure_a_and_b(a: &Expression, b: &Expression) -> bool {
     a.is_pure() && b.is_pure()
 }
 
-fn is_pure_all(items: &Vec<Expression>) -> bool {
+fn is_pure_all(items: &[Expression]) -> bool {
     items.iter().all(|item| item.is_pure())
 }
 
 fn is_pure_opt(maybe_expr: &Option<Box<Expression>>) -> bool {
     maybe_expr.is_none() || maybe_expr.iter().all(|e| e.is_pure())
-}
-
-/// inference unit tests
-#[cfg(test)]
-mod inference_tests {
-    use super::*;
-    use crate::number_kind::NumberKind::{F64Kind, I64Kind};
-    use crate::numbers::Numbers::{F64Value, I64Value};
-    use crate::test_util::{verify_bit_operator, verify_data_type, verify_math_operator};
-    use crate::typed_values::TypedValue::{Number, StringValue};
-
-    #[test]
-    fn test_infer() {
-        let kind = Expression::infer(
-            &Literal(StringValue("hello world".into()))
-        );
-        assert_eq!(kind, FixedSizeType(StringType.into(), 11))
-    }
-
-    #[test]
-    fn test_infer_a_or_b_strings() {
-        let kind = Expression::infer_a_or_b(
-            &Literal(StringValue("yes".into())),
-            &Literal(StringValue("hello".into())),
-            &vec![],
-        );
-        assert_eq!(kind, FixedSizeType(StringType.into(), 5))
-    }
-
-    #[test]
-    fn test_infer_a_or_b_numbers() {
-        let kind = Expression::infer_a_or_b(
-            &Literal(Number(I64Value(76))),
-            &Literal(Number(F64Value(76.0))),
-            &vec![],
-        );
-        assert_eq!(kind, NumberType(F64Kind))
-    }
-
-    #[test]
-    fn test_infer_conditionals_and() {
-        verify_data_type("true && false", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_in_range_exclusive() {
-        verify_data_type("20 in 1..20", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_in_range_inclusive() {
-        verify_data_type("20 in 1..=20", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_eq() {
-        verify_data_type("x == y", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_gt() {
-        verify_data_type("x > y", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_gte() {
-        verify_data_type("x >= y", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_is() {
-        verify_data_type("a is b", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_isnt() {
-        verify_data_type("a isnt b", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_lt() {
-        verify_data_type("x < y", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_lte() {
-        verify_data_type("x <= y", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_neq() {
-        verify_data_type("x != y", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_conditionals_or() {
-        verify_data_type("true || false", BooleanType);
-    }
-
-    #[test]
-    fn test_infer_mathematics_divide() {
-        verify_math_operator("/");
-    }
-
-    #[test]
-    fn test_infer_infix() {
-        // TODO find a way to resolve the type: stock.last_sale
-        verify_data_type(r#"
-            let stock = { symbol: "TED", exchange: "AMEX", last_sale: 13.37 }
-            stock.last_sale
-        "#, RuntimeResolvedType);
-    }
-
-    #[test]
-    fn test_infer_mathematics_minus() {
-        verify_math_operator("-");
-    }
-
-    #[test]
-    fn test_infer_mathematics_plus() {
-        verify_math_operator("+");
-    }
-
-    #[test]
-    fn test_infer_mathematics_plus_plus() {
-        verify_math_operator("++");
-    }
-
-    #[test]
-    fn test_infer_mathematics_power() {
-        verify_math_operator("**");
-    }
-
-    #[test]
-    fn test_infer_mathematics_shl() {
-        verify_bit_operator("<<");
-    }
-
-    #[test]
-    fn test_infer_mathematics_shr() {
-        verify_bit_operator(">>");
-    }
-
-    #[test]
-    fn test_infer_mathematics_times() {
-        verify_math_operator("*");
-    }
-
-    #[test]
-    fn test_infer_return() {
-        verify_data_type("return 5", NumberType(I64Kind));
-    }
-
-    #[test]
-    fn test_infer_row_id() {
-        verify_data_type("__row_id__", NumberType(I64Kind));
-    }
 }

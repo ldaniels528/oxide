@@ -12,6 +12,7 @@ use crate::errors::TypeMismatchErrors::StringExpected;
 use crate::expression::Conditions::In;
 use crate::expression::Expression::{Condition, Feature, Identifier, Literal, Scenario};
 use crate::expression::{Conditions, Expression};
+use crate::extractions::{pull_name, pull_string, pull_string_lit, pull_strings};
 use crate::machine::Machine;
 use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::I64Kind;
@@ -21,10 +22,7 @@ use crate::row_collection::RowCollection;
 use crate::structures::Row;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{Boolean, Function, Number, StringValue, TableValue, Undefined};
-use crate::utils::{pull_name, pull_string, pull_string_lit};
-use itertools::Itertools;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::ops::Deref;
 
 /// Test Error enumerations
@@ -64,10 +62,6 @@ impl TestState {
     pub fn get_errors(&self) -> &Vec<TestErrors> {
         &self.errors
     }
-    
-    pub fn is_empty(&self) -> bool {
-        self.errors.is_empty()
-    }
 
     pub fn feature_error(
         &mut self,
@@ -106,7 +100,6 @@ impl TestEngine {
     /// - scenarios: the collection of test scenarios
     /// #### Examples
     /// ```
-    /// use testing
     /// feature "Matches function" {
     ///     scenario "Compare Array contents" {
     ///         assert(matches(
@@ -117,7 +110,7 @@ impl TestEngine {
     /// ```
     pub fn add_feature(ms: &Machine,
                        title: &Box<Expression>,
-                       scenarios: &Vec<Expression>,
+                       scenarios: &[Expression],
     ) -> std::io::Result<(Machine, TypedValue)> {
         let (ms, feature_name) = ms.evaluate(title)?;
         match feature_name {
@@ -126,7 +119,7 @@ impl TestEngine {
                     params: vec![],
                     body: Feature {
                         title: title.clone(),
-                        scenarios: scenarios.clone()
+                        scenarios: scenarios.to_vec()
                     }.into(),
                     returns: TableType(vec![])
                 }), Boolean(true))),
@@ -154,10 +147,25 @@ impl TestEngine {
             // ex: test "Matches function"
             Literal(StringValue(test_name)) =>
                 Self::run_features(ms,&Self::find_features(ms, |name| name == test_name)),
-            // ex: test "Compare Array contents: Equal" in "Matches function"
+            // ex: test ??? in "Matches function"
             Condition(In(a, b)) => {
-                let (scenario_name, feature_name) = (pull_name(a)?, pull_name(b)?);
-                Self::run_features(ms, &Self::find_features_in(ms, feature_name.as_str(), scenario_name.as_str()))
+                match a.deref() {
+                    // ex: test ["init", "test_get_quote"] in "unit_tests"
+                    Expression::ArrayExpression(array) => {
+                        let (ms, values) = ms.evaluate_as_vec(array.as_slice())?;
+                        let (scenario_names, feature_name) = (pull_strings(values.as_slice())?, pull_name(b)?);
+                        let mut results = vec![];
+                        for scenario_name in scenario_names {
+                            results.extend(Self::find_features_in(&ms, &feature_name, &scenario_name));
+                        }
+                        Self::run_features(&ms, &results)
+                    }
+                    // ex: test "test_get_quote" in "unit_tests"
+                    _ => {
+                        let (scenario_name, feature_name) = (pull_name(a)?, pull_name(b)?);
+                        Self::run_features(ms, &Self::find_features_in(ms, &feature_name, &scenario_name))
+                    }
+                }
             }
             // test where name matches "M*."
             Condition(cond) =>
@@ -177,7 +185,7 @@ impl TestEngine {
             out
         }
 
-        let horiz_line = |level: i64, count: usize, edge: char| -> String {
+        let horiz_line = |_level: i64, count: usize, edge: char| -> String {
             let mut line = String::new();
             for _ in 0..count { line.push(horiz); }
             format!("{}{}", edge, line)
@@ -293,15 +301,14 @@ impl TestEngine {
     /// ```
     fn do_feature_test(
         ms0: &Machine,
+        mut scenario_states: im::HashMap<String, Machine>,
         test_state: &mut TestState,
         report: &mut ModelRowCollection,
         seq: &mut i64,
         feat_title: String,
         scenarios: Vec<Expression>,
-    ) -> std::io::Result<(Machine, ())> {
-        let mut scenario_states: HashMap<String, Machine> = HashMap::new();
-
-        /// Captures test outcomes and stores them in the verification report table
+    ) -> std::io::Result<(Machine, im::HashMap<String, Machine>)> {
+        // Captures test outcomes and stores them in the verification report table
         let mut capture = |seq: i64, level: i64, text: String, passed: i64, failed: i64| {
             let row_id = seq as usize;
             report.overwrite_row(row_id, Row::new(row_id, vec![
@@ -310,7 +317,7 @@ impl TestEngine {
             ])).ok();
         };
 
-        /// Returns the next sequence ID
+        // Returns the next sequence ID
         let mut next_seq = || {
             let my_seq_id = *seq;
             *seq += 1;
@@ -327,13 +334,21 @@ impl TestEngine {
                 Scenario { title, inherits, verifications } => {
                     // get the initial state object
                     let mut mss = match inherits {
-                        None => ms0,
+                        None => ms0.clone(),
                         Some(parent_name) =>
                             match scenario_states.get(parent_name) {
-                                None => return throw(Exact(format!("Scenario `{}` was not found", parent_name))),
-                                Some(ms1) => ms1
+                                None => {
+                                    let results = Self::find_features_in(ms0, &feat_title, parent_name);
+                                    println!("inherits: {:?}", results);
+                                    let (ms, ss0, v0) = Self::run_features_with_state(ms0, scenario_states, &results)?;
+                                    println!("scenario: {} -> {:?}", parent_name, v0);
+                                    scenario_states = ss0;
+                                    println!("scenario_states: {:?}", scenario_states.get(parent_name));
+                                    ms
+                                },
+                                Some(ms1) => ms1.clone()
                             }
-                    }.clone();
+                    };
 
                     // capture the scenario summary ID
                     let (ms1, scenario_title) = mss.evaluate_as_string(title)?;
@@ -359,7 +374,7 @@ impl TestEngine {
                     }
 
                     // capture the final state of the scenario
-                    scenario_states.insert(scenario_title.clone(), mss);
+                    scenario_states = scenario_states.update(scenario_title.clone(), mss);
 
                     // capture the scenario metrics
                     capture(scenario_id, 1, scenario_title, passed, failed);
@@ -385,7 +400,7 @@ impl TestEngine {
         capture(feat_id, 0, feat_title, test_state.scenarios_passed, test_state.scenarios_failed);
 
         // return the report
-        Ok((ms0.clone(), ()))
+        Ok((ms0.clone(), scenario_states))
     }
 
     fn find_features<F>(
@@ -427,7 +442,7 @@ impl TestEngine {
                         _ => false
                     }).collect::<Vec<_>>();
                 (title.to_owned(), my_scenarios.iter()
-                    .map(|e| e.deref().clone()).collect::<Vec<_>>())
+                    .map(|e| *e).cloned().collect::<Vec<_>>())
             })
             .collect::<Vec<_>>()
     }
@@ -462,8 +477,18 @@ impl TestEngine {
 
     fn run_features(
         ms: &Machine,
-        features: &Vec<(Expression, Vec<Expression>)>
+        features: &Vec<(Expression, Vec<Expression>)>,
     ) -> std::io::Result<(Machine, TypedValue)> {
+        let scenario_states: im::HashMap<String, Machine> = im::HashMap::new();
+        let (ms, _, result) = Self::run_features_with_state(ms, scenario_states, features)?;
+        Ok((ms, result))
+    }
+
+    fn run_features_with_state(
+        ms: &Machine,
+        mut scenario_states: im::HashMap<String, Machine>,
+        features: &Vec<(Expression, Vec<Expression>)>
+    ) -> std::io::Result<(Machine, im::HashMap<String, Machine>, TypedValue)> {
         let mut report = ModelRowCollection::from_parameters(&Self::get_testing_feature_parameters());
         let mut state = TestState::new("Test Suite".into());
         let mut seq = 0;
@@ -481,13 +506,16 @@ impl TestEngine {
 
         // test each feature
         for (feat_title, scenarios) in titled_features {
-            Self::do_feature_test(ms, &mut state, &mut report, &mut seq, feat_title, scenarios)?;
+            let (_, ss0) = Self::do_feature_test(
+                ms, scenario_states, &mut state, &mut report, &mut seq, feat_title, scenarios
+            )?;
+            scenario_states = ss0;
         }
         
-        Ok((ms.to_owned(), TableValue(TestReport(report, state))))
+        Ok((ms.to_owned(), scenario_states, TableValue(TestReport(report, state))))
     }
 
-    fn get_testing_feature_parameters() -> Vec<Parameter> {
+    pub fn get_testing_feature_parameters() -> Vec<Parameter> {
         vec![
             Parameter::new("seq", NumberType(I64Kind)),
             Parameter::new("level", NumberType(I64Kind)),
@@ -502,7 +530,8 @@ impl TestEngine {
 /// Unit tests
 #[cfg(test)]
 mod tests {
-    use crate::test_util::{verify_exact_report, verify_exact_table};
+    use crate::interpreter::Interpreter;
+    use crate::test_util::{verify_exact_code_with, verify_exact_report, verify_exact_report_with, verify_exact_table};
 
     #[test]
     fn test_fail() {
@@ -950,5 +979,54 @@ mod tests {
             "│		✅ assert [1, 'a', 'b', 'c'] matches [1, 'a', 'b', 'c']", 
             "└─────────────────────────────────────────────────────"]
         );
+    }
+
+    #[test]
+    fn test_scenario_chained_inheritance() {
+        let mut interpreter = Interpreter::new();
+        interpreter = verify_exact_code_with(interpreter, r#"
+            feature 'unit_tests' {
+                scenario 'shared_state' {
+                    let stocks =
+                        |------------------------------------|
+                        | id | symbol | exchange | last_sale |
+                        |------------------------------------|
+                        | 0  | ABC    | AMEX     | 11.11     |
+                        | 1  | UNO    | OTCBB    | 0.2456    |
+                        | 2  | BIZ    | NYSE     | 23.66     |
+                        | 3  | XYZ    | AMEX     | 0.1428    |
+                        | 4  | BOOM   | NASDAQ   | 0.0872    |
+                        |------------------------------------|
+                }
+
+                scenario 'setup' inherits 'shared_state' {
+                    let quote = stocks[0]
+                }
+
+                scenario 'test_get_quote' inherits 'setup' {
+                    println("quote = %s"::sprintf(quote))
+                    assert quote is [{'exchange':'AMEX','last_sale':11.11,'symbol':'ABC'}]
+                }
+            }
+        "#, "true");
+
+        verify_exact_report_with(interpreter, r#"
+            test ['test_get_quote'] in 'unit_tests'
+         "#, vec![
+            "📊 Test Suite summary:",
+            "────────────────────────────────────────────────────────────────────────────────────────",
+            "❌ [unit_tests::test_get_quote] - Identifier 'quote' not found",
+            "❌ [unit_tests::test_get_quote] - Identifier 'quote' not found",
+            "✅ 0 passed | ❌ 2 failed",
+            "────────────────────────────────────────────────────────────────────────────────────────",
+            "👎 2 tests failed. Please review the errors above.",
+            "",
+            "┌──────────────────────────────────────────────────────────────────────",
+            "│🟥 unit_tests",
+            "├──────────────────────────────────────────────────────────────────────",
+            "│	🔴 test_get_quote",
+            "│		❌ println('quote = %s'::sprintf(quote))",
+            "│		❌ assert quote == [{exchange: 'AMEX', last_sale: 11.11, symbol: 'ABC'}]",
+            "└──────────────────────────────────────────────────────────────────────"]);
     }
 }

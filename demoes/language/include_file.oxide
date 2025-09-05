@@ -1,4 +1,4 @@
-stocks := nsd::save(
+stocks := tables::save(
     "interpreter.include.stocks",
     Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
 )

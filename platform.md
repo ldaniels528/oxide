@@ -47,8 +47,8 @@ group_by exchange</pre>
 |---------------------|
 | id | exchange | qty |
 |---------------------|
-| 0  | NYSE     | 2   |
-| 1  | NASDAQ   | 3   |
+| 0  | NASDAQ   | 3   |
+| 1  | NYSE     | 2   |
 |---------------------|
 
 </pre>
@@ -73,8 +73,8 @@ group_by exchange</pre>
 |--------------------------|
 | id | exchange | max_sale |
 |--------------------------|
-| 0  | NYSE     | 23.66    |
-| 1  | NASDAQ   | 214.88   |
+| 0  | NASDAQ   | 214.88   |
+| 1  | NYSE     | 23.66    |
 |--------------------------|
 
 </pre>
@@ -99,8 +99,8 @@ group_by exchange</pre>
 |--------------------------|
 | id | exchange | min_sale |
 |--------------------------|
-| 0  | NYSE     | 11.77    |
-| 1  | NASDAQ   | 32.97    |
+| 0  | NASDAQ   | 32.97    |
+| 1  | NYSE     | 11.77    |
 |--------------------------|
 
 </pre>
@@ -131,157 +131,28 @@ group_by exchange</pre>
 
 </pre>
 <hr>
-<h4>📦 arrays::contains &#8212; Returns true if the array contains the specific item</h4>
-<h5>example1</h5>
-<pre>1..7::contains(5)</pre>
-<h5>results</h5>
-<pre>
-true
-
-</pre>
-<hr>
-<h4>📦 arrays::filter &#8212; Filters an array based on a function</h4>
-<h5>example1</h5>
-<pre>1..7::filter(n -> (n % 2) == 0)</pre>
-<h5>results</h5>
-<pre>
-[2, 4, 6]
-
-</pre>
-<hr>
-<h4>📦 arrays::head &#8212; Returns true if the array head contains the specific item</h4>
-<h5>example1</h5>
-<pre>['abc', 'def', 'ghi']::head()</pre>
-<h5>results</h5>
-<pre>
-abc
-
-</pre>
-<hr>
-<h4>📦 arrays::is_empty &#8212; Returns true if the array is empty</h4>
-<h5>example1</h5>
-<pre>[1, 3, 5]::is_empty</pre>
-<h5>results</h5>
-<pre>
-false
-
-</pre>
-<hr>
-<h4>📦 arrays::is_empty &#8212; Returns true if the array is empty</h4>
-<h5>example2</h5>
-<pre>[]::is_empty</pre>
-<h5>results</h5>
-<pre>
-true
-
-</pre>
-<hr>
-<h4>📦 arrays::len &#8212; Returns the length of an array</h4>
-<h5>example1</h5>
-<pre>[1, 5, 2, 4, 6, 0]::len()</pre>
-<h5>results</h5>
-<pre>
-6
-
-</pre>
-<hr>
-<h4>📦 arrays::map &#8212; Transform an array based on a function</h4>
-<h5>example1</h5>
-<pre>[1, 2, 3]::map(n -> n * 2)</pre>
-<h5>results</h5>
-<pre>
-[2, 4, 6]
-
-</pre>
-<hr>
-<h4>📦 arrays::pop &#8212; Removes and returns a value or object from an array</h4>
-<h5>example1</h5>
-<pre>stocks = []
-stocks = stocks::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
-stocks = stocks::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
-stocks</pre>
-<h5>results</h5>
-<pre>
-[{"exchange":"AMEX","last_sale":12.49,"symbol":"ABC"}, {"exchange":"NYSE","last_sale":56.88,"symbol":"BOOM"}]
-
-</pre>
-<hr>
-<h4>📦 arrays::push &#8212; Appends a value or object to an array</h4>
-<h5>example1</h5>
-<pre>stocks = [
-    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
-    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
-    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
-]
-stocks::push({ symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
-stocks::to(Table)</pre>
-<h5>results</h5>
-<pre>
-|------------------------------------|
-| id | symbol | exchange | last_sale |
-|------------------------------------|
-| 0  | ABC    | AMEX     | 12.49     |
-| 1  | BOOM   | NYSE     | 56.88     |
-| 2  | JET    | NASDAQ   | 32.12     |
-|------------------------------------|
-
-</pre>
-<hr>
-<h4>📦 arrays::reduce &#8212; Reduces an array to a single value</h4>
-<h5>example1</h5>
-<pre>1..=5::reduce(0, (a, b) -> a + b)</pre>
-<h5>results</h5>
-<pre>
-15
-
-</pre>
-<hr>
-<h4>📦 arrays::reduce &#8212; Reduces an array to a single value</h4>
-<h5>example2</h5>
-<pre>numbers = [1, 2, 3, 4, 5]
-numbers::reduce(0, (a, b) -> a + b)</pre>
-<h5>results</h5>
-<pre>
-15
-
-</pre>
-<hr>
-<h4>📦 arrays::reverse &#8212; Returns a reverse copy of an array</h4>
-<h5>example1</h5>
-<pre>['cat', 'dog', 'ferret', 'mouse']::reverse()</pre>
-<h5>results</h5>
-<pre>
-["mouse", "ferret", "dog", "cat"]
-
-</pre>
-<hr>
-<h4>📦 arrays::tail &#8212; Every element in an array after the first element</h4>
-<h5>example1</h5>
-<pre>|--------------------------------------|
-| symbol | exchange | last_sale | rank |
-|--------------------------------------|
-| BOOM   | NYSE     | 113.76    | 1    |
-| ABC    | AMEX     | 24.98     | 2    |
-| JET    | NASDAQ   | 64.24     | 3    |
-|--------------------------------------|
-::tail()</pre>
-<h5>results</h5>
-<pre>
-|-------------------------------------------|
-| id | symbol | exchange | last_sale | rank |
-|-------------------------------------------|
-| 0  | ABC    | AMEX     | 24.98     | 2    |
-| 1  | JET    | NASDAQ   | 64.24     | 3    |
-|-------------------------------------------|
-
-</pre>
-<hr>
 <h4>📦 blobs::append &#8212; Appends a BLOB</h4>
 <h5>example1</h5>
 <pre>let bs = blobs::create("builtins.blob.append")
 bs::truncate()
 let id = bs::append("Hello World")
-bs::read(id)</pre>
+let result = bs::read(id)
+blobs::close(id)
+result</pre>
+<h5>results</h5>
+<pre>
+Hello World
+
+</pre>
+<hr>
+<h4>📦 blobs::close &#8212; Closes a BLOB</h4>
+<h5>example1</h5>
+<pre>let bs = blobs::create("builtins.blob.append")
+bs::truncate()
+let id = bs::append("Hello World")
+let result = bs::read(id)
+blobs::close(id)
+result</pre>
 <h5>results</h5>
 <pre>
 Hello World
@@ -293,7 +164,9 @@ Hello World
 <pre>let bs = blobs::create("builtins.blob.append")
 bs::truncate()
 let id = bs::append("Hello World")
-bs::read(id)</pre>
+let result = bs::read(id)
+blobs::close(id)
+result</pre>
 <h5>results</h5>
 <pre>
 Hello World
@@ -313,9 +186,9 @@ bs::entries()</pre>
 |-----------------------------------------------------------------------|
 | id | blob_id                              | offset | allocated | used |
 |-----------------------------------------------------------------------|
-| 0  | a5f3e5f9-e505-484c-b129-d2597c81f274 | 0      | 70        | 63   |
-| 1  | f8513951-0d1f-48d4-ae52-0e0ac2321d32 | 70     | 82        | 72   |
-| 2  | e1920943-9383-4b4c-94af-abd09255ebd3 | 152    | 73        | 65   |
+| 0  | c7876e54-e9d4-4a6a-b2d7-763643e72b42 | 0      | 70        | 63   |
+| 1  | e30c25b8-efb2-48a3-bfa3-934041612874 | 70     | 82        | 72   |
+| 2  | c9401edc-22f1-4fc9-8ae2-143d165a0660 | 152    | 73        | 65   |
 |-----------------------------------------------------------------------|
 
 </pre>
@@ -339,7 +212,9 @@ bs::len()</pre>
 <pre>let bs = blobs::create("builtins.blob.append")
 bs::truncate()
 let id = bs::append("Hello World")
-bs::read(id)</pre>
+let result = bs::read(id)
+blobs::close(id)
+result</pre>
 <h5>results</h5>
 <pre>
 Hello World
@@ -351,7 +226,9 @@ Hello World
 <pre>let bs = blobs::create("builtins.blob.append")
 bs::truncate()
 let id = bs::append("Hello World")
-bs::read(id)</pre>
+let result = bs::read(id)
+blobs::close(id)
+result</pre>
 <h5>results</h5>
 <pre>
 Hello World
@@ -368,6 +245,193 @@ bs::read(id1)</pre>
 <h5>results</h5>
 <pre>
 The brown fox
+
+</pre>
+<hr>
+<h4>📦 collections::contains &#8212; Returns true if the array contains the specific item</h4>
+<h5>example1</h5>
+<pre>1..7::contains(5)</pre>
+<h5>results</h5>
+<pre>
+true
+
+</pre>
+<hr>
+<h4>📦 collections::filter &#8212; Filters an array based on a function</h4>
+<h5>example1</h5>
+<pre>1..7::filter(n -> (n % 2) == 0)</pre>
+<h5>results</h5>
+<pre>
+[2, 4, 6]
+
+</pre>
+<hr>
+<h4>📦 collections::head &#8212; Returns true if the array head contains the specific item</h4>
+<h5>example1</h5>
+<pre>['abc', 'def', 'ghi']::head()</pre>
+<h5>results</h5>
+<pre>
+abc
+
+</pre>
+<hr>
+<h4>📦 collections::is_empty &#8212; Returns true if the array is empty</h4>
+<h5>example1</h5>
+<pre>[1, 3, 5]::is_empty</pre>
+<h5>results</h5>
+<pre>
+false
+
+</pre>
+<hr>
+<h4>📦 collections::is_empty &#8212; Returns true if the array is empty</h4>
+<h5>example2</h5>
+<pre>[]::is_empty</pre>
+<h5>results</h5>
+<pre>
+true
+
+</pre>
+<hr>
+<h4>📦 collections::len &#8212; Returns the length of an array</h4>
+<h5>example1</h5>
+<pre>[1, 5, 2, 4, 6, 0]::len()</pre>
+<h5>results</h5>
+<pre>
+6
+
+</pre>
+<hr>
+<h4>📦 collections::len &#8212; Returns the length of an array</h4>
+<h5>example2</h5>
+<pre>stocks = nsd::save(
+   "examples.table_len.stocks",
+   [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+    { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+    { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }]
+)
+stocks::len()</pre>
+<h5>results</h5>
+<pre>
+3
+
+</pre>
+<hr>
+<h4>📦 collections::map &#8212; Transform an array based on a function</h4>
+<h5>example1</h5>
+<pre>[1, 2, 3]::map(n -> n * 2)</pre>
+<h5>results</h5>
+<pre>
+[2, 4, 6]
+
+</pre>
+<hr>
+<h4>📦 collections::map &#8212; Transform an array based on a function</h4>
+<h5>example2</h5>
+<pre>stocks = nsd::save(
+   "examples.map_over_table.stocks",
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
+)
+[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
+ { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
+ { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
+stocks::map(row -> {
+    symbol: symbol,
+    exchange: exchange,
+    last_sale: last_sale,
+    processed_time: DateTime::new()
+})</pre>
+<h5>results</h5>
+<pre>
+|---------------------------------------------------------------|
+| id | symbol | exchange | last_sale | processed_time           |
+|---------------------------------------------------------------|
+| 0  | WKRP   | NYSE     | 11.11     | 2025-08-22T04:30:30.873Z |
+| 1  | ACDC   | AMEX     | 35.11     | 2025-08-22T04:30:30.873Z |
+| 2  | UELO   | NYSE     | 90.12     | 2025-08-22T04:30:30.873Z |
+|---------------------------------------------------------------|
+
+</pre>
+<hr>
+<h4>📦 collections::pop &#8212; Removes and returns a value or object from an array</h4>
+<h5>example1</h5>
+<pre>stocks = []
+stocks = stocks::push({ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 })
+stocks = stocks::push({ symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 })
+stocks</pre>
+<h5>results</h5>
+<pre>
+[{"exchange":"AMEX","last_sale":12.49,"symbol":"ABC"}, {"exchange":"NYSE","last_sale":56.88,"symbol":"BOOM"}]
+
+</pre>
+<hr>
+<h4>📦 collections::push &#8212; Appends a value or object to an array</h4>
+<h5>example1</h5>
+<pre>stocks = [
+    { symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+    { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }
+]
+stocks::push({ symbol: "DEX", exchange: "OTC_BB", last_sale: 0.0086 })
+stocks::to(Table)</pre>
+<h5>results</h5>
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 0  | ABC    | AMEX     | 12.49     |
+| 1  | BOOM   | NYSE     | 56.88     |
+| 2  | JET    | NASDAQ   | 32.12     |
+|------------------------------------|
+
+</pre>
+<hr>
+<h4>📦 collections::reduce &#8212; Reduces an array to a single value</h4>
+<h5>example1</h5>
+<pre>1..=5::reduce(0, (a, b) -> a + b)</pre>
+<h5>results</h5>
+<pre>
+15
+
+</pre>
+<hr>
+<h4>📦 collections::reduce &#8212; Reduces an array to a single value</h4>
+<h5>example2</h5>
+<pre>numbers = [1, 2, 3, 4, 5]
+numbers::reduce(0, (a, b) -> a + b)</pre>
+<h5>results</h5>
+<pre>
+15
+
+</pre>
+<hr>
+<h4>📦 collections::reverse &#8212; Returns a reverse copy of an array</h4>
+<h5>example1</h5>
+<pre>['cat', 'dog', 'ferret', 'mouse']::reverse()</pre>
+<h5>results</h5>
+<pre>
+["mouse", "ferret", "dog", "cat"]
+
+</pre>
+<hr>
+<h4>📦 collections::tail &#8212; Every element in an array after the first element</h4>
+<h5>example1</h5>
+<pre>|--------------------------------------|
+| symbol | exchange | last_sale | rank |
+|--------------------------------------|
+| BOOM   | NYSE     | 113.76    | 1    |
+| ABC    | AMEX     | 24.98     | 2    |
+| JET    | NASDAQ   | 64.24     | 3    |
+|--------------------------------------|
+::tail()</pre>
+<h5>results</h5>
+<pre>
+|-------------------------------------------|
+| id | symbol | exchange | last_sale | rank |
+|-------------------------------------------|
+| 0  | ABC    | AMEX     | 24.98     | 2    |
+| 1  | JET    | NASDAQ   | 64.24     | 3    |
+|-------------------------------------------|
 
 </pre>
 <hr>
@@ -953,36 +1017,35 @@ include path_str</pre>
 | 18 | CARGO_PKG_VERSION_PATCH     | 0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 19 | CARGO_PKG_VERSION_PRE       |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | 20 | COMMAND_MODE                | unix2003                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 21 | DYLD_FALLBACK_LIBRARY_PATH  | /Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/curl-sys-4df64ca9a12dc1ef/out/build:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/libnghttp2-sys-a03ea848d17920a3/out/i/lib:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/psm-b14dc0a618ce3260/out:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/zstd-sys-0997cf218e518f20/out:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/deps:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib |
+| 21 | DYLD_FALLBACK_LIBRARY_PATH  | /Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/curl-sys-f8beabd8c96ae5b2/out/build:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/libnghttp2-sys-f8cd8899effd21b3/out/i/lib:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/psm-cacfdd295c7ee0e4/out:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/build/zstd-sys-50900c6ddb7d6258/out:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug/deps:/Users/ldaniels/GitHub/oxide/target/llvm-cov-target/debug:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib/rustlib/aarch64-apple-darwin/lib:/Users/ldaniels/.rustup/toolchains/stable-aarch64-apple-darwin/lib:/Users/ldaniels/lib:/usr/local/lib:/usr/lib |
 | 22 | HOME                        | /Users/ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 23 | IJ_RESTARTER_LOG            | /Users/ldaniels/Library/Logs/JetBrains/IntelliJIdea2025.1/restarter.log                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 24 | JAVA_HOME                   | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 25 | LC_CTYPE                    | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 26 | LLVM_PROFILE_FILE           | /Users/ldaniels/GitHub/oxide/target/llvm-cov-target/oxide-%p-%m.profraw                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 27 | LOGNAME                     | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 28 | OLDPWD                      | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 29 | PATH                        | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:.                                                                                                                                                                                                                                                                                                           |
-| 30 | PWD                         | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| 31 | RUSTC                       | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| 32 | RUSTFLAGS                   | -C instrument-coverage --cfg=trybuild_no_target                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| 33 | RUSTUP_HOME                 | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 34 | RUSTUP_TOOLCHAIN            | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 35 | RUST_BACKTRACE              | short                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| 36 | RUST_RECURSION_COUNT        | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 37 | SDKMAN_CANDIDATES_API       | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 38 | SDKMAN_CANDIDATES_DIR       | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| 39 | SDKMAN_DIR                  | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| 40 | SDKMAN_PLATFORM             | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| 41 | SHELL                       | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 42 | SSH_AUTH_SOCK               | /private/tmp/com.apple.launchd.9xJlkubfiQ/Listeners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| 43 | TERM                        | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
-| 44 | TMPDIR                      | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| 45 | USER                        | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 46 | XPC_FLAGS                   | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| 47 | XPC_SERVICE_NAME            | application.com.jetbrains.intellij.505803.123145134.575263A5-06DE-4476-8C71-D548DCA38225                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| 48 | __CFBundleIdentifier        | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| 49 | __CF_USER_TEXT_ENCODING     | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| 50 | __LLVM_PROFILE_RT_INIT_ONCE | __LLVM_PROFILE_RT_INIT_ONCE                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 23 | JAVA_HOME                   | /Users/ldaniels/.sdkman/candidates/java/current                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 24 | LC_CTYPE                    | en_US.UTF-8                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 25 | LLVM_PROFILE_FILE           | /Users/ldaniels/GitHub/oxide/target/llvm-cov-target/oxide-%p-%m.profraw                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 26 | LOGNAME                     | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 27 | OLDPWD                      | /                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 28 | PATH                        | /Users/ldaniels/.bun/bin:/Users/ldaniels/.sdkman/candidates/java/current/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Users/ldaniels/.cargo/bin:/opt/homebrew/bin:.                                                                                                                                                                                                                                                                                                           |
+| 29 | PWD                         | /Users/ldaniels/GitHub/oxide                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| 30 | RUSTC                       | /Users/ldaniels/.cargo/bin/rustc                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| 31 | RUSTFLAGS                   | -C instrument-coverage --cfg=trybuild_no_target                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| 32 | RUSTUP_HOME                 | /Users/ldaniels/.rustup                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 33 | RUSTUP_TOOLCHAIN            | stable-aarch64-apple-darwin                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 34 | RUST_BACKTRACE              | short                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| 35 | RUST_RECURSION_COUNT        | 1                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 36 | SDKMAN_CANDIDATES_API       | https://api.sdkman.io/2                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 37 | SDKMAN_CANDIDATES_DIR       | /Users/ldaniels/.sdkman/candidates                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| 38 | SDKMAN_DIR                  | /Users/ldaniels/.sdkman                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| 39 | SDKMAN_PLATFORM             | darwinarm64                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| 40 | SHELL                       | /bin/zsh                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 41 | SSH_AUTH_SOCK               | /private/tmp/com.apple.launchd.9xJlkubfiQ/Listeners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 42 | TERM                        | ansi                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| 43 | TMPDIR                      | /var/folders/ld/hwrvzn011w79gftyb6vj8mg40000gn/T/                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| 44 | USER                        | ldaniels                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| 45 | XPC_FLAGS                   | 0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 46 | XPC_SERVICE_NAME            | application.com.jetbrains.intellij.505803.125067926                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| 47 | __CFBundleIdentifier        | com.jetbrains.intellij                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| 48 | __CF_USER_TEXT_ENCODING     | 0x1F5:0x0:0x0                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| 49 | __LLVM_PROFILE_RT_INIT_ONCE | __LLVM_PROFILE_RT_INIT_ONCE                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 |-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 
 </pre>
@@ -1022,13 +1085,10 @@ Hello World
 <pre>oxide::help() limit 3</pre>
 <h5>results</h5>
 <pre>
-|-----------------------------------------------------------------------------------------------------------------------------------------|
-| id | name       | module | signature                                 | description                                            | returns |
-|-----------------------------------------------------------------------------------------------------------------------------------------|
-| 0  | send_text  | ws     | ws::send_text(a: UUID, b: String)         | Transfers a text message via a web socket connection   | String  |
-| 1  | send_bytes | ws     | ws::send_bytes(a: UUID, b: Bytes)         | Transfers a binary message via a web socket connection | String  |
-| 2  | connect    | ws     | ws::connect(a: String, b: i64, c: String) | Establishes a web socket connection                    | UUID    |
-|-----------------------------------------------------------------------------------------------------------------------------------------|
+|--------------------------------------------------------|
+| id | name | module | signature | description | returns |
+|--------------------------------------------------------|
+|--------------------------------------------------------|
 
 </pre>
 <hr>
@@ -1095,21 +1155,12 @@ true
 
 </pre>
 <hr>
-<h4>📦 oxide::sprintf &#8212; C-style "sprintf" function</h4>
-<h5>example1</h5>
-<pre>oxide::sprintf("Hello %s", "World")</pre>
-<h5>results</h5>
-<pre>
-Hello World
-
-</pre>
-<hr>
 <h4>📦 oxide::uuid &#8212; Returns a random 128-bit UUID</h4>
 <h5>example1</h5>
 <pre>oxide::uuid()</pre>
 <h5>results</h5>
 <pre>
-08024513-6b71-4120-967e-0e01e2b33c74
+cb8a67bb-2986-47d0-9e2d-11913167dac3
 
 </pre>
 <hr>
@@ -1118,7 +1169,7 @@ Hello World
 <pre>oxide::version()</pre>
 <h5>results</h5>
 <pre>
-0.48
+0.49
 
 </pre>
 <hr>
@@ -1191,6 +1242,15 @@ World
 <h5>results</h5>
 <pre>
 ["Hello", "there", "World"]
+
+</pre>
+<hr>
+<h4>📦 str::sprintf &#8212; C-style "sprintf" function</h4>
+<h5>example1</h5>
+<pre>"Hello %s"::sprintf("World")</pre>
+<h5>results</h5>
+<pre>
+Hello World
 
 </pre>
 <hr>
@@ -1274,7 +1334,7 @@ hello
 
 </pre>
 <hr>
-<h4>📦 tools::compact &#8212; Shrinks a table by removing deleted rows</h4>
+<h4>📦 tables::compact &#8212; Shrinks a table by removing deleted rows</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.compact.stocks",
@@ -1301,7 +1361,7 @@ stocks</pre>
 
 </pre>
 <hr>
-<h4>📦 tools::describe &#8212; Describes a table or structure</h4>
+<h4>📦 tables::describe &#8212; Describes a table or structure</h4>
 <h5>example1</h5>
 <pre>{
    symbol: "BIZ",
@@ -1320,7 +1380,7 @@ stocks</pre>
 
 </pre>
 <hr>
-<h4>📦 tools::describe &#8212; Describes a table or structure</h4>
+<h4>📦 tables::describe &#8212; Describes a table or structure</h4>
 <h5>example2</h5>
 <pre>stocks =
     |--------------------------------------|
@@ -1344,36 +1404,7 @@ stocks::describe()</pre>
 
 </pre>
 <hr>
-<h4>📦 tools::fetch &#8212; Retrieves a raw structure from a table</h4>
-<h5>example1</h5>
-<pre>stocks = nsd::save(
-   "examples.fetch.stocks",
-   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
-)
-[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
- { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
- { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
-stocks::fetch(2)</pre>
-<h5>results</h5>
-<pre>
-|------------------------------------|
-| id | symbol | exchange | last_sale |
-|------------------------------------|
-| 2  | JET    | NASDAQ   | 32.12     |
-|------------------------------------|
-
-</pre>
-<hr>
-<h4>📦 tools::filter &#8212; Filters a collection based on a function</h4>
-<h5>example1</h5>
-<pre>(1..11)::filter(n -> (n % 2) == 0)</pre>
-<h5>results</h5>
-<pre>
-[2, 4, 6, 8, 10]
-
-</pre>
-<hr>
-<h4>📦 tools::latest &#8212; Returns the row_id of last inserted record</h4>
+<h4>📦 tables::latest &#8212; Returns the row_id of last inserted record</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "packages.tools_latest.stocks",
@@ -1402,49 +1433,7 @@ stocks[row_id]</pre>
 ```
             
 <hr>
-<h4>📦 tools::len &#8212; Returns the length of a table</h4>
-<h5>example1</h5>
-<pre>stocks = nsd::save(
-   "examples.table_len.stocks",
-   [{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
-    { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
-    { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }]
-)
-stocks::len()</pre>
-<h5>results</h5>
-<pre>
-3
-
-</pre>
-<hr>
-<h4>📦 tools::map &#8212; Transform a collection based on a function</h4>
-<h5>example1</h5>
-<pre>stocks = nsd::save(
-   "examples.map_over_table.stocks",
-   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
-)
-[{ symbol: "WKRP", exchange: "NYSE", last_sale: 11.11 },
- { symbol: "ACDC", exchange: "AMEX", last_sale: 35.11 },
- { symbol: "UELO", exchange: "NYSE", last_sale: 90.12 }] ~> stocks
-stocks::map(row -> {
-    symbol: symbol,
-    exchange: exchange,
-    last_sale: last_sale,
-    processed_time: DateTime::new()
-})</pre>
-<h5>results</h5>
-<pre>
-|---------------------------------------------------------------|
-| id | symbol | exchange | last_sale | processed_time           |
-|---------------------------------------------------------------|
-| 0  | WKRP   | NYSE     | 11.11     | 2025-07-26T18:00:09.287Z |
-| 1  | ACDC   | AMEX     | 35.11     | 2025-07-26T18:00:09.287Z |
-| 2  | UELO   | NYSE     | 90.12     | 2025-07-26T18:00:09.288Z |
-|---------------------------------------------------------------|
-
-</pre>
-<hr>
-<h4>📦 tools::pop &#8212; Removes and returns a value or object from a Sequence</h4>
+<h4>📦 tables::pop &#8212; Removes and returns a value or object from a Sequence</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.tools_pop.stocks",
@@ -1464,7 +1453,63 @@ stocks::pop()</pre>
 
 </pre>
 <hr>
-<h4>📦 tools::push &#8212; Appends a value or object to a Sequence</h4>
+<h4>📦 tables::cell &#8212; Returns a cell from a table</h4>
+<h5>example1</h5>
+<pre>stocks =
+   [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+    { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
+       ::to(Table)
+stocks::cell(3, "last_sale")</pre>
+<h5>results</h5>
+<pre>
+0.1428
+
+</pre>
+<hr>
+<h4>📦 tables::column &#8212; Returns a column slice of a table</h4>
+<h5>example1</h5>
+<pre>stocks =
+   [{ symbol: "DMX", exchange: "NYSE", last_sale: 99.99 },
+    { symbol: "UNO", exchange: "OTC", last_sale: 0.2456 },
+    { symbol: "BIZ", exchange: "NYSE", last_sale: 23.66 },
+    { symbol: "GOTO", exchange: "OTC", last_sale: 0.1428 },
+    { symbol: "ABC", exchange: "AMEX", last_sale: 11.11 },
+    { symbol: "BOOM", exchange: "NASDAQ", last_sale: 0.0872 },
+    { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }]
+       ::to(Table)
+stocks::column("last_sale")</pre>
+<h5>results</h5>
+<pre>
+[99.99, 0.2456, 23.66, 0.1428, 11.11, 0.0872, 32.12]
+
+</pre>
+<hr>
+<h4>📦 tables::row &#8212; Retrieves a raw structure from a table</h4>
+<h5>example1</h5>
+<pre>stocks = nsd::save(
+   "examples.pull_row.stocks",
+   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
+)
+[{ symbol: "ABC", exchange: "AMEX", last_sale: 12.49 },
+ { symbol: "BOOM", exchange: "NYSE", last_sale: 56.88 },
+ { symbol: "JET", exchange: "NASDAQ", last_sale: 32.12 }] ~> stocks
+stocks::row(2)</pre>
+<h5>results</h5>
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 2  | JET    | NASDAQ   | 32.12     |
+|------------------------------------|
+
+</pre>
+<hr>
+<h4>📦 tables::push &#8212; Appends a value or object to a Sequence</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.tools_push.stocks",
@@ -1488,23 +1533,71 @@ stocks</pre>
 
 </pre>
 <hr>
-<h4>📦 tools::reverse &#8212; Returns a reverse copy of a table, string or array</h4>
+<h4>📦 tables::record_size &#8212; returns the table's record size</h4>
 <h5>example1</h5>
-<pre>['cat', 'dog', 'ferret', 'mouse']::reverse::to(Table)</pre>
+<pre>stocks = Table(
+   symbol: String(8),
+   exchange: Enum(AMEX, NYSE, NASDAQ, OTCBB),
+   last_sale: f64
+)::new
+stocks::record_size()</pre>
 <h5>results</h5>
 <pre>
-|-------------|
-| id | value  |
-|-------------|
-| 0  | mouse  |
-| 1  | ferret |
-| 2  | dog    |
-| 3  | cat    |
-|-------------|
+38
 
 </pre>
 <hr>
-<h4>📦 tools::scan &#8212; Returns existence metadata for a table</h4>
+<h4>📦 tables::reduce &#8212; Reduces a table to a single row</h4>
+<h5>example1</h5>
+<pre>stocks =
+    |--------------------------------|
+    | symbol | exchange  | last_sale |
+    |--------------------------------|
+    | ROFL   | OTCBB     | 6.37      |
+    | IKR    | NYSE      | 11.75     |
+    | LOL    | NASDAQ    | 32.96     |
+    | SMH    | OTCBB     | 5.02      |
+    |--------------------------------|
+stocks::tail::reduce(stocks::head, (a, b) -> {
+   if((a.last_sale) > (b.last_sale), a, b)
+})</pre>
+<h5>results</h5>
+
+```json
+{
+  "exchange": "NASDAQ",
+  "last_sale": 32.96,
+  "symbol": "LOL"
+}
+```
+            
+<hr>
+<h4>📦 tables::save_as &#8212; Saves a table to a namespace; overwriting any existing rows</h4>
+<h5>example1</h5>
+<pre>stocks =
+    |--------------------------------|
+    | symbol | exchange  | last_sale |
+    |--------------------------------|
+    | IKR    | NYSE      | 11.75     |
+    | LOL    | NASDAQ    | 32.96     |
+    | SMH    | OTCBB     | 5.02      |
+    | ROFL   | OTCBB     | 1.37      |
+    |--------------------------------|
+stocks::save_as("examples.save_as.stocks")</pre>
+<h5>results</h5>
+<pre>
+|------------------------------------|
+| id | symbol | exchange | last_sale |
+|------------------------------------|
+| 0  | IKR    | NYSE     | 11.75     |
+| 1  | LOL    | NASDAQ   | 32.96     |
+| 2  | SMH    | OTCBB    | 5.02      |
+| 3  | ROFL   | OTCBB    | 1.37      |
+|------------------------------------|
+
+</pre>
+<hr>
+<h4>📦 tables::scan &#8212; Returns existence metadata for a table</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.scan.stocks",
@@ -1531,7 +1624,7 @@ stocks::scan()</pre>
 
 </pre>
 <hr>
-<h4>📦 tools::shuffle &#8212; Shuffles a collection in random order</h4>
+<h4>📦 tables::shuffle &#8212; Shuffles a collection in random order</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.shuffle.stocks",
@@ -1549,16 +1642,16 @@ stocks</pre>
 |------------------------------------|
 | id | symbol | exchange | last_sale |
 |------------------------------------|
-| 0  | ABC    | AMEX     | 11.11     |
 | 2  | BIZ    | NYSE     | 23.66     |
-| 3  | GOTO   | OTC      | 0.1428    |
 | 4  | BOOM   | NASDAQ   | 0.0872    |
 | 1  | UNO    | OTC      | 0.2456    |
+| 3  | GOTO   | OTC      | 0.1428    |
+| 0  | ABC    | AMEX     | 11.11     |
 |------------------------------------|
 
 </pre>
 <hr>
-<h4>📦 tools::to_csv &#8212; Converts a collection to CSV format</h4>
+<h4>📦 tables::to_csv &#8212; Converts a collection to CSV format</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.csv.stocks",
@@ -1576,7 +1669,7 @@ stocks::to_csv()</pre>
 
 </pre>
 <hr>
-<h4>📦 tools::to_json &#8212; Converts a collection to JSON format</h4>
+<h4>📦 tables::to_json &#8212; Converts a collection to JSON format</h4>
 <h5>example1</h5>
 <pre>stocks = nsd::save(
    "examples.json.stocks",
@@ -1648,6 +1741,15 @@ SGVsbG8gV29ybGQ=
 
 </pre>
 <hr>
+<h4>📦 util::binary &#8212; Converts a numeric value to a binary string</h4>
+<h5>example1</h5>
+<pre>util::binary(13)</pre>
+<h5>results</h5>
+<pre>
+1101
+
+</pre>
+<hr>
 <h4>📦 util::get_type &#8212; Returns the object's type</h4>
 <h5>example1</h5>
 <pre>'Z'::get_type()</pre>
@@ -1711,12 +1813,21 @@ b10a8db1-64e0-7541-05b7-a99be72e3fe5
 
 </pre>
 <hr>
+<h4>📦 util::octal &#8212; Converts a numeric value to an octal string</h4>
+<h5>example1</h5>
+<pre>util::octal(345)</pre>
+<h5>results</h5>
+<pre>
+531
+
+</pre>
+<hr>
 <h4>📦 util::random &#8212; Returns a random numeric value</h4>
 <h5>example1</h5>
 <pre>util::random()</pre>
 <h5>results</h5>
 <pre>
-1789564348963069182
+9083266595307926209
 
 </pre>
 <hr>
@@ -1726,6 +1837,15 @@ b10a8db1-64e0-7541-05b7-a99be72e3fe5
 <h5>results</h5>
 <pre>
 1.43
+
+</pre>
+<hr>
+<h4>📦 http::get_random_port &#8212; Returns an used random port number</h4>
+<h5>example1</h5>
+<pre>http::get_random_port()</pre>
+<h5>results</h5>
+<pre>
+20976
 
 </pre>
 <hr>

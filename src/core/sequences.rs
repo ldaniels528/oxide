@@ -7,21 +7,18 @@ use crate::data_types::DataType;
 use crate::data_types::DataType::{ArrayType, NumberType, RuntimeResolvedType, TableType};
 use crate::data_types::DataType::{FixedSizeType, TupleType};
 use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::ModelTable;
-use crate::errors::throw;
-use crate::errors::Errors::{Exact, TypeMismatch, UnsupportedFeature};
+use crate::errors::Errors::{Exact, TypeMismatch};
 use crate::errors::TypeMismatchErrors::StructExpected;
-use crate::model_row_collection::ModelRowCollection;
 use crate::number_kind::NumberKind::I64Kind;
-use crate::numbers::Numbers::{I64Value, U64Value};
+use crate::numbers::Numbers::I64Value;
 use crate::row_collection::RowCollection;
-use crate::structures::Structures::{Firm, Hard};
+use crate::structures::Structures::Firm;
 use crate::structures::{Structure, Structures};
+use crate::type_engine::TypeEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::{ArrayValue, Boolean, ErrorValue, Number, Structured, TableValue, TupleValue, Undefined};
 use log::error;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::cmp::Ordering;
 use std::ops::Index;
 use std::ops::{Add, BitAnd, BitOr, BitXor, Div, Mul, Neg, Not, Rem, Shl, Shr, Sub};
@@ -115,17 +112,7 @@ impl Sequence for Sequences {
     }
 
     fn get_or_else(&self, index: usize, default: TypedValue) -> TypedValue {
-        match self {
-            Sequences::TheArray(array) => array.get_or_else(index, default),
-            Sequences::TheDataframe(df) =>
-                match df.read_one(index) {
-                    Ok(None) => TypedValue::Null,
-                    Ok(Some(row)) => Structured(Firm(row, df.get_parameters())),
-                    Err(err) => ErrorValue(Exact(err.to_string()))
-                }
-            Sequences::TheRange(..) => self.to_array().get_or_else(index, default),
-            Sequences::TheTuple(tuple) => tuple.get(index).map(|v| v.clone()).unwrap_or(default),
-        }
+        self.get(index).unwrap_or(default)
     }
 
     fn get_type(&self) -> DataType {
@@ -297,7 +284,7 @@ impl Array {
         match kinds.as_slice() {
             [] => RuntimeResolvedType,
             [kind] => kind.clone(),
-            kinds => DataType::best_fit(kinds.to_vec())
+            kinds => TypeEngine::best_fit(kinds.to_vec())
         }
     }
 
@@ -450,14 +437,6 @@ impl Tuple {
     }
 }
 
-impl Index<usize> for Tuple {
-    type Output = TypedValue;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        if index < self.the_tuple.len() { &self.the_tuple[index] } else { &Undefined }
-    }
-}
-
 impl PartialOrd for Tuple {
     fn partial_cmp(&self, rhs: &Self) -> Option<Ordering> {
         self.get_values().partial_cmp(&rhs.get_values())
@@ -551,11 +530,11 @@ pub fn div_vec(aa: Vec<TypedValue>, bb: Vec<TypedValue>) -> Vec<TypedValue> {
         .collect()
 }
 
-pub fn idx_vec(aa: &Vec<TypedValue>, index: usize) -> TypedValue {
+pub fn idx_vec(aa: &[TypedValue], index: usize) -> TypedValue {
     if index < aa.len() { aa[index].clone() } else { Undefined }
 }
 
-pub fn idx_vec_opt(aa: &Vec<TypedValue>, index: usize) -> Option<TypedValue> {
+pub fn idx_vec_opt(aa: &[TypedValue], index: usize) -> Option<TypedValue> {
     if index < aa.len() { Some(aa[index].clone()) } else { None }
 }
 
@@ -627,7 +606,79 @@ pub fn range_to_vec(a: &TypedValue, b: &TypedValue, inclusive: bool) -> Vec<Type
 mod tests {
     /// Unit core tests
     #[cfg(test)]
-    mod core_tests {}
+    mod core_tests {
+        use crate::sequences::Sequence;
+        use crate::test_util::interpret;
+        use crate::typed_values::TypedValue::{CharValue, StringValue, TupleValue};
+
+        #[test]
+        fn test_get_values_array() {
+            let array = interpret(r#"["ABC", "NYSE"]"#).to_sequence().unwrap();
+            assert_eq!(array.get_values(), vec![
+                StringValue("ABC".into()),
+                StringValue("NYSE".into())
+            ]);
+        }
+
+        #[test]
+        fn test_get_values_range() {
+            let range = interpret("'A'..='C'").to_sequence().unwrap();
+            assert_eq!(range.get_values(), vec![
+                CharValue('A'),
+                CharValue('B'),
+                CharValue('C'),
+            ]);
+        }
+
+        #[test]
+        fn test_get_values_structure() {
+            let structure = interpret(r#"{ symbol: "ABC", exchange: "NYSE" }"#).to_sequence().unwrap();
+            assert_eq!(structure.get_values(), vec![
+                TupleValue(vec![
+                    StringValue("symbol".into()),
+                    StringValue("ABC".into())
+                ]),
+                TupleValue(vec![
+                    StringValue("exchange".into()),
+                    StringValue("NYSE".into())
+                ])
+            ]);
+        }
+
+        #[test]
+        fn test_get_values_tuple() {
+            let tuple = interpret(r#"("ABC", "NYSE")"#).to_sequence().unwrap();
+            assert_eq!(tuple.get_values(), vec![
+                StringValue("ABC".into()),
+                StringValue("NYSE".into())
+            ]);
+        }
+
+        #[test]
+        fn test_sublist_array() {
+            let array = interpret(r#"["ABC", "NASDAQ", "NYSE"]"#).to_sequence().unwrap();
+            assert_eq!(
+                array.sublist(1, 3),
+                interpret(r#"["NASDAQ", "NYSE"]"#).to_sequence().unwrap());
+        }
+
+        #[test]
+        fn test_sublist_range() {
+            let range = interpret("'A'..='C'").to_sequence().unwrap();
+            assert_eq!(
+                range.sublist(0, 2),
+                interpret(r#"['A', 'B']"#).to_sequence().unwrap());
+        }
+
+        #[test]
+        fn test_sublist_tuple() {
+            let tuple = interpret(r#"("ABC", "NYSE")"#).to_sequence().unwrap();
+            assert_eq!(
+                tuple.sublist(0, 1),
+                interpret(r#"("ABC", "NYSE")"#).to_sequence().unwrap());
+        }
+
+    }
 
     /// Unit array tests
     #[cfg(test)]
@@ -651,19 +702,19 @@ mod tests {
 
         #[test]
         fn test_get() {
-            let mut array = create_array();
+            let array = create_array();
             assert_eq!(array.get(1), Some(StringValue("NASDAQ".into())));
         }
 
         #[test]
         fn test_get_or_else_positive() {
-            let mut array = create_array();
+            let array = create_array();
             assert_eq!(array.get_or_else(1, StringValue("N/A".into())), StringValue("NASDAQ".into()));
         }
 
         #[test]
         fn test_get_or_else_negative() {
-            let mut array = create_array();
+            let array = create_array();
             assert_eq!(array.get_or_else(7, StringValue("N/A".into())), StringValue("N/A".into()));
         }
 
@@ -685,13 +736,13 @@ mod tests {
 
         #[test]
         fn test_len() {
-            let mut array = create_array();
+            let array = create_array();
             assert_eq!(array.len(), 4)
         }
 
         #[test]
         fn test_pop() {
-            let mut array = create_array();
+            let array = create_array();
             let (new_array, value) = array.pop();
             assert_eq!(value, Some(StringValue("OTC-BB".into())));
             assert_eq!(new_array, Array::from(vec![

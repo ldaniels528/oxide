@@ -7,52 +7,34 @@ use crate::columns::Column;
 use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
-use crate::data_types::*;
-use crate::dataframe::Dataframe;
-use crate::dataframe::Dataframe::{DiskTable, ModelTable, TestReport};
+use crate::dataframe::Dataframe::{ModelTable, TestReport};
 
+use crate::connections::webservers;
 use crate::errors::Errors;
-use crate::expression::Expression;
 use crate::file_row_collection::FileRowCollection;
 use crate::interpreter::Interpreter;
 use crate::namespaces::Namespace;
 use crate::number_kind::NumberKind::{F64Kind, I64Kind};
 use crate::numbers::Numbers::{F64Value, I64Value};
-use crate::object_config::ObjectConfig;
-use crate::packages::webservers;
 use crate::parameter::Parameter;
 use crate::structures::Row;
 use crate::table_renderer::TableRenderer;
 use crate::test_engine::TestEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use chrono::Utc;
-use futures_util::AsyncReadExt;
-use itertools::Itertools;
-use rand::distributions::Uniform;
-use rand::prelude::ThreadRng;
-use rand::{thread_rng, Rng, RngCore};
-use serde::{Deserialize, Serialize};
+use log::warn;
 use serde_json::Value;
 use std::fs::File;
 
-pub fn make_dataframe(database: &str, schema: &str, name: &str, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
-    make_dataframe_ns(Namespace::new(database, schema, name), columns)
-}
-
-pub fn make_dataframe_ns(ns: Namespace, columns: Vec<Parameter>) -> std::io::Result<Dataframe> {
-    Ok(DiskTable(FileRowCollection::create_table(&ns, &columns)?))
-}
-
-pub fn make_dataframe_config(columns: Vec<Parameter>) -> ObjectConfig {
-    ObjectConfig::build_table(columns)
+pub fn interpret(source: &str) -> TypedValue {
+    let mut interpreter = Interpreter::new();
+    interpreter.evaluate(source).unwrap()
 }
 
 pub fn make_lines_from_table(table_value: TypedValue) -> Vec<String> {
-    match table_value {
-        TableValue(df) => TableRenderer::from_dataframe(&df),
-        _ => vec![]
-    }
+    let mut lines = Vec::new();
+    if let TableValue(df) = table_value { lines.extend(TableRenderer::from_dataframe(&df)) }
+    lines
 }
 
 pub fn make_quote(id: usize,
@@ -119,14 +101,47 @@ pub fn verify_bit_operator(op: &str) {
 
 pub fn verify_data_type(code: &str, expected: DataType) {
     let model = Compiler::build(code).unwrap();
-    assert_eq!(Expression::infer(&model), expected);
+    assert_eq!(model.infer_type(), expected);
 }
 
 pub fn verify_exact_code(code: &str, expected: &str) {
     verify_exact_code_with(Interpreter::new(), code, expected);
 }
 
+pub fn verify_exact_code_and_inferred_type(code: &str, expected: &str, expected_type: &str) {
+    let expr = Compiler::build(code).unwrap();
+    let actual = Interpreter::new().invoke(&expr).unwrap();
+    assert_eq!(actual.to_code(), expected);
+    assert_eq!(expr.infer_type().to_code(), expected_type);
+}
+
+pub fn verify_exact_code_and_inferred_type_with(
+    mut interpreter: Interpreter,
+    code: &str, 
+    expected: &str, 
+    expected_type: &str
+) -> Interpreter {
+    let expr = Compiler::build(code).unwrap();
+    let actual = interpreter.invoke(&expr).unwrap();
+    assert_eq!(actual.to_code(), expected);
+    assert_eq!(expr.infer_type().to_code(), expected_type);
+    verify_code(code);
+    interpreter
+}
+
+fn verify_code(code: &str) {
+    let expr = Compiler::build(code).unwrap();
+    if expr.to_code() != code {
+        warn!("Expected:\n{}\nActual:\n{}", code, expr.to_code())
+    }
+}
+
 pub async fn verify_exact_code_async(code: &str, expected: &str) {
+    verify_exact_code_with_async(Interpreter::new(), code, expected).await;
+}
+
+pub async fn verify_exact_code_async_and_sync(code: &str, expected: &str) {
+    verify_exact_code_with(Interpreter::new(), code, expected);
     verify_exact_code_with_async(Interpreter::new(), code, expected).await;
 }
 
@@ -137,6 +152,7 @@ pub fn verify_exact_code_with(
 ) -> Interpreter {
     let actual = interpreter.evaluate(code).unwrap();
     assert_eq!(actual.to_code(), expected);
+    verify_code(code);
     interpreter
 }
 
@@ -147,15 +163,12 @@ pub async fn verify_exact_code_with_async(
 ) -> Interpreter {
     let actual = interpreter.evaluate_async(code).await.unwrap();
     assert_eq!(actual.to_code(), expected);
+    verify_code(code);
     interpreter
 }
 
 pub fn verify_exact_json(code: &str, expected: Value) {
     verify_exact_json_with(Interpreter::new(), code, expected);
-}
-
-pub async fn verify_exact_json_async(code: &str, expected: Value) {
-    verify_exact_json_with_async(Interpreter::new(), code, expected).await;
 }
 
 pub fn verify_exact_json_with(
@@ -165,6 +178,7 @@ pub fn verify_exact_json_with(
 ) -> Interpreter {
     let actual = interpreter.evaluate(code).unwrap();
     assert_eq!(actual.to_json(), expected);
+    verify_code(code);
     interpreter
 }
 
@@ -175,6 +189,7 @@ pub async fn verify_exact_json_with_async(
 ) -> Interpreter {
     let actual = interpreter.evaluate_async(code).await.unwrap();
     assert_eq!(actual.to_json(), expected);
+    verify_code(code);
     interpreter
 }
 
@@ -187,7 +202,6 @@ pub fn verify_exact_report_with(
     code: &str,
     expected: Vec<&str>,
 ) -> Interpreter {
-    use itertools::Itertools;
     let report = interpreter.evaluate(code)
         .unwrap();
     let actual = match report {
@@ -216,6 +230,11 @@ pub async fn verify_exact_table_async(code: &str, expected: Vec<&str>) {
     verify_exact_table_with_async(Interpreter::new(), code, expected).await;
 }
 
+pub async fn verify_exact_table_async_and_sync(code: &str, expected: Vec<&str>) {
+    verify_exact_table_with(Interpreter::new(), code, expected.clone());
+    verify_exact_table_with_async(Interpreter::new(), code, expected).await;
+}
+
 pub fn verify_exact_table_with(
     mut interpreter: Interpreter,
     code: &str,
@@ -226,6 +245,7 @@ pub fn verify_exact_table_with(
     let actual = TableRenderer::from_table_with_ids(&result).unwrap();
     for s in &actual { println!("{}", s) }
     assert_eq!(actual, expected);
+    verify_code(code);
     interpreter
 }
 
@@ -239,6 +259,7 @@ pub async fn verify_exact_table_with_async(
     let actual = TableRenderer::from_table_with_ids(&result).unwrap();
     for s in &actual { println!("{}", s) }
     assert_eq!(actual, expected);
+    verify_code(code);
     interpreter
 }
 
@@ -253,6 +274,7 @@ pub fn verify_exact_unwrapped_with(
 ) -> Interpreter {
     let actual = interpreter.evaluate(code).unwrap();
     assert_eq!(actual.unwrap_value(), expected);
+    verify_code(code);
     interpreter
 }
 
@@ -263,6 +285,7 @@ pub async  fn verify_exact_unwrapped_with_async(
 ) -> Interpreter {
     let actual = interpreter.evaluate_async(code).await.unwrap();
     assert_eq!(actual.unwrap_value(), expected);
+    verify_code(code);
     interpreter
 }
 
@@ -282,6 +305,7 @@ pub fn verify_exact_value_whence(
     let mut my_interpreter = interpreter;
     let actual = my_interpreter.evaluate(code).unwrap();
     assert!(f(actual));
+    verify_code(code);
     my_interpreter
 }
 
@@ -290,6 +314,15 @@ pub fn verify_exact_value_where(code: &str, f: fn(TypedValue) -> bool) {
     let actual = TypedValue::from_result(interpreter.evaluate(code));
     println!("verify: {} -> {}", code, actual);
     assert!(f(actual));
+    verify_code(code);
+}
+
+pub async fn verify_exact_value_where_async(code: &str, f: fn(TypedValue) -> bool) {
+    let mut interpreter = Interpreter::new();
+    let actual = TypedValue::from_result(interpreter.evaluate_async(code).await);
+    println!("verify: {} -> {}", code, actual);
+    assert!(f(actual));
+    verify_code(code);
 }
 
 pub fn verify_exact_value_with(
@@ -301,18 +334,18 @@ pub fn verify_exact_value_with(
         Ok(actual) => assert_eq!(actual, expected),
         Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected),
     }
+    verify_code(code);
     interpreter
 }
 
-pub async  fn verify_exact_value_with_async(
+pub async fn verify_exact_value_with_async(
     mut interpreter: Interpreter,
     code: &str,
     expected: TypedValue,
 ) -> Interpreter {
-    match interpreter.evaluate(code) {
-        Ok(actual) => assert_eq!(actual, expected),
-        Err(err) => assert_eq!(ErrorValue(Errors::Exact(err.to_string())), expected),
-    }
+    let actual = interpreter.evaluate(code).unwrap();
+    assert_eq!(actual, expected);
+    verify_code(code);
     interpreter
 }
 
@@ -331,67 +364,7 @@ fn are_equal_unordered(expected: Vec<&str>, actual: Vec<String>)  {
     let mut b_norm: Vec<_> = actual.iter().map(|s| s.trim().to_string()).collect();
     a_norm.sort();
     b_norm.sort();
-    if a_norm != b_norm {
-        assert_eq!(actual, expected)
-    }
-}
-
-/////////////////////////////////////////////////////////////
-//      STOCK QUOTE GENERATION
-/////////////////////////////////////////////////////////////
-
-#[derive(Clone, Debug, PartialEq, PartialOrd, Serialize, Deserialize)]
-pub struct StockQuote {
-    pub symbol: String,
-    pub exchange: String,
-    pub last_sale: f64,
-    pub transaction_time: i64,
-}
-
-impl StockQuote {
-    pub fn generate_quote() -> StockQuote {
-        Self::generate_quote_from_symbol_and_exchange(
-            Self::generate_random_symbol(),
-            Self::generate_random_exchange())
-    }
-
-    fn generate_quote_from_symbol_and_exchange(symbol: String, exchange: String) -> StockQuote {
-        StockQuote {
-            symbol,
-            exchange,
-            last_sale: Self::generate_random_last_sale(),
-            transaction_time: Self::generate_random_transaction_time(),
-        }
-    }
-
-    fn get_exchange_from_index(exchange_index: usize) -> String {
-        let exchanges = ["AMEX", "NASDAQ", "NYSE", "OTCBB", "OTHEROTC"];
-        exchanges[exchange_index % exchanges.len()].parse().unwrap()
-    }
-
-    fn generate_random_exchange() -> String {
-        let mut rng: ThreadRng = thread_rng();
-        let exchange_index = rng.next_u32();
-        Self::get_exchange_from_index(exchange_index as usize)
-    }
-
-    fn generate_random_last_sale() -> f64 {
-        let mut rng: ThreadRng = thread_rng();
-        400.0 * rng.sample(Uniform::new(0.0, 1.0))
-    }
-
-    fn generate_random_symbol() -> String {
-        let mut rng: ThreadRng = thread_rng();
-        let size: usize = rng.sample(Uniform::new(3, 5));
-        (0..size)
-            .map(|_| rng.gen_range(b'A'..=b'Z') as char)
-            .collect()
-    }
-
-    fn generate_random_transaction_time() -> i64 {
-        let mut rng: ThreadRng = thread_rng();
-        Utc::now().timestamp_millis() - (rng.sample(Uniform::new(0, 10000)) as i64)
-    }
+    if a_norm != b_norm { assert_eq!(actual, expected) }
 }
 
 #[cfg(test)]

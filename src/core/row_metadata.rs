@@ -15,14 +15,6 @@ pub struct RowMetadata {
 }
 
 impl RowMetadata {
-    pub fn as_undelete(&self) -> RowMetadata {
-        RowMetadata {
-            is_allocated: true,
-            is_blob: self.is_blob,
-            is_encrypted: self.is_encrypted,
-            is_replicated: self.is_replicated,
-        }
-    }
 
     pub fn from_bytes(buf: &Vec<u8>, offset: usize) -> Self {
         if offset >= buf.len() {

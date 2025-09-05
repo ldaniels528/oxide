@@ -30,7 +30,7 @@ impl ModelRowCollection {
     pub fn combine(columns: Vec<Column>, tables: Vec<&dyn RowCollection>) -> std::io::Result<ModelRowCollection> {
         let mut mrc = ModelRowCollection::new(columns);
         for table in tables {
-            mrc.append_rows(table.get_rows());
+            mrc.append_rows(table.get_rows())?;
         }
         Ok(mrc)
     }
@@ -45,7 +45,7 @@ impl ModelRowCollection {
     }
 
     /// Creates a new [ModelRowCollection] from abstract columns
-    pub fn from_bytes(params: &Vec<Parameter>, bytes: Vec<u8>) -> Self {
+    pub fn from_bytes(params: &Vec<Parameter>, _bytes: Vec<u8>) -> Self {
         let columns = Column::from_parameters(params);
         // let record_size = Row::compute_record_size(&columns);
         // let row_bytes = bytes.chunks(record_size)
@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn test_contains() {
-        let (mrc, phys_columns) = create_data_set();
+        let (mrc, _phys_columns) = create_data_set();
         let row = make_quote(3, "GOTO", "OTC", 0.1442);
         assert_eq!(mrc.contains(&row), true);
     }
@@ -275,7 +275,7 @@ mod tests {
 
     #[test]
     fn test_get_rows() {
-        let (mrc, phys_columns) = create_data_set();
+        let (mrc, _phys_columns) = create_data_set();
         assert_eq!(mrc.get_rows(), vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),
@@ -287,14 +287,14 @@ mod tests {
 
     #[test]
     fn test_index_of() {
-        let (mrc, phys_columns) = create_data_set();
+        let (mrc, _phys_columns) = create_data_set();
         let row = make_quote(3, "GOTO", "OTC", 0.1442);
         assert_eq!(mrc.index_of(&row), Number(I64Value(3)));
     }
 
     #[test]
     fn test_to_binary() {
-        let (mrc, phys_columns) = create_data_set();
+        let (mrc, _phys_columns) = create_data_set();
         assert_eq!(mrc.get_rows(), vec![
             make_quote(0, "ABC", "AMEX", 12.33),
             make_quote(1, "UNO", "OTC", 0.2456),

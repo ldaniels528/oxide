@@ -6,8 +6,8 @@
 use crate::blob_file_row_collection::BLOBFileRowCollection;
 use crate::byte_row_collection::ByteRowCollection;
 use crate::columns::Column;
+use crate::conversions::Conversions;
 use crate::data_types::DataType;
-use crate::dataframe::Dataframe::ModelTable;
 use crate::expression::{Conditions, Expression};
 use crate::field::FieldMetadata;
 use crate::file_row_collection::FileRowCollection;
@@ -21,11 +21,12 @@ use crate::parameter::Parameter;
 use crate::row_collection::RowCollection;
 use crate::row_metadata::RowMetadata;
 use crate::sequences::Sequence;
-use crate::structures::{Row, Structure};
+use crate::structures::Row;
 use crate::test_engine::TestState;
+use crate::type_engine::TypeEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::StringValue;
-use itertools::Itertools;
+use log::error;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -91,7 +92,7 @@ impl Dataframe {
             let row = Row::new(id, items.to_owned());
             rows.push(row)
         }
-        Dataframe::ModelTable(ModelRowCollection::from_parameters_and_rows(&params, &rows))
+        Self::ModelTable(ModelRowCollection::from_parameters_and_rows(&params, &rows))
     }
 
     fn get_parameters_and_values(cells: &Vec<Vec<String>>) -> (Vec<Parameter>, Vec<Vec<TypedValue>>) {
@@ -99,14 +100,14 @@ impl Dataframe {
         fn detect_type(rows: &Vec<Vec<TypedValue>>, column_index: usize) -> DataType {
             let mut types = vec![];
             for row in rows { types.push(row[column_index].get_type()); }
-            DataType::best_fit(types)
+            TypeEngine::best_fit(types)
         }
 
         // interpret the cells as a table
         let header = cells[0].clone();
         let body = cells[1..].iter()
             .map(|row| row.iter()
-                .map(|text| match TypedValue::wrap_value(text) {
+                .map(|text| match Conversions::wrap_value(text) {
                     Ok(value) => value,
                     Err(_) => StringValue(text.into())
                 }).collect::<Vec<_>>())
@@ -122,8 +123,8 @@ impl Dataframe {
     pub fn overwrite_where(
         df: Dataframe,
         machine: &Machine,
-        fields: &Vec<Expression>,
-        values: &Vec<Expression>,
+        fields: &[Expression],
+        values: &[Expression],
         condition: &Option<Conditions>,
         limit: TypedValue,
     ) -> std::io::Result<(Dataframe, i64)> {
@@ -200,7 +201,7 @@ impl Dataframe {
                     None => combined_params.push(param),
                     Some(index) => {
                         // if so, build a type that fits both
-                        let data_type = DataType::best_fit(vec![
+                        let data_type = TypeEngine::best_fit(vec![
                             combined_params[index].get_data_type(),
                             param.get_data_type()
                         ]);
@@ -217,9 +218,9 @@ impl Dataframe {
         combined_params
     }
 
-    pub fn combine_tables(dataframes: Vec<Dataframe>) -> Dataframe {
+    pub fn combine_tables(dataframes: Vec<Dataframe>) -> std::io::Result<Dataframe> {
         /// Appends a source dataframe to a destination dataframe
-        fn merge(dest: &mut Dataframe, src: &Dataframe) {
+        fn merge(dest: &mut Dataframe, src: &Dataframe) -> std::io::Result<()> {
             let src_params = src.get_parameters();
             let dst_params = dest.get_parameters();
             for row in src.get_rows() {
@@ -228,8 +229,9 @@ impl Dataframe {
                     hash.get(param.get_name()).map(|v| v.clone())
                         .unwrap_or(TypedValue::Null)
                 }).collect::<Vec<_>>();
-                dest.append_row(Row::new(0, values));
+                dest.append_row(Row::new(0, values))?;
             }
+            Ok(())
         }
 
         // determine the combine columns
@@ -238,8 +240,8 @@ impl Dataframe {
 
         // create a new table with the combine columns
         let mut mrc = Self::ModelTable(ModelRowCollection::new(columns));
-        for df in dataframes { merge(&mut mrc, &df); }
-        mrc
+        for df in dataframes { merge(&mut mrc, &df)?; }
+        Ok(mrc)
     }
 
     pub fn intersect(&self, that: &Dataframe) -> std::io::Result<Dataframe> {
@@ -274,8 +276,8 @@ impl Dataframe {
 
     pub fn is_pure(&self) -> bool {
         match self {
-            Dataframe::BinaryTable(brc) => brc.iter().all(|row| row.is_pure()),
-            Dataframe::ModelTable(mrc) => mrc.iter().all(|row| row.is_pure()),
+            Self::BinaryTable(brc) => brc.iter().all(|row| row.is_pure()),
+            Self::ModelTable(mrc) => mrc.iter().all(|row| row.is_pure()),
             _ => false
         }
     }
@@ -291,7 +293,7 @@ impl Dataframe {
                 let mut values = vec![];
                 values.extend(row_a.get_values());
                 values.extend(row_b.get_values());
-                mrc.append_row(Row::new(0, values));
+                mrc.append_row(Row::new(0, values)).ok();
             }
         }
         Self::ModelTable(mrc)
@@ -322,7 +324,7 @@ impl Dataframe {
 
         // Step 3: Construct new sorted table
         let mut sorted = ModelRowCollection::with_rows(self.get_columns().clone(), vec![]);
-        for (i, mut row) in rows.into_iter().enumerate() {
+        for (i, row) in rows.into_iter().enumerate() {
             row.with_row_id(i);
             sorted.append_row(row)?;
         }
@@ -332,23 +334,26 @@ impl Dataframe {
 
     pub fn sublist(&self, start: usize, end: usize) -> Self {
         let mut mrc = ModelRowCollection::new(self.get_columns().clone());
-        let mut row_id = start;
-        while row_id < end {
-            match self.read_one(row_id) {
+        let mut src_row_id = start;
+        let mut dst_row_id = 0;
+        while src_row_id < end {
+            match self.read_one(src_row_id) {
                 Ok(Some(row)) => {
-                    mrc.append_row(row.clone());
+                    if let Ok(_) = mrc.overwrite_row(dst_row_id, row.with_row_id(src_row_id)) {
+                        dst_row_id += 1;
+                    }
                 },
                 Ok(None) => {  },
-                Err(e) => { eprintln!("Error reading row[{row_id}]: {e}") }
+                Err(e) => { error!("Error reading row[{src_row_id}]: {e}") }
             }
-            row_id += 1;
+            src_row_id += 1;
         }
-        Dataframe::ModelTable(mrc)
+        Self::ModelTable(mrc)
     }
 
     pub fn tail(&self) -> std::io::Result<Dataframe> {
         Ok(match self.find_nth_active_row_id(2)? {
-            None => ModelTable(ModelRowCollection::from_parameters(&self.get_parameters())),
+            None => Self::ModelTable(ModelRowCollection::from_parameters(&self.get_parameters())),
             Some(row_id) => self.sublist(row_id, self.len()?),
         })
     }
@@ -369,8 +374,8 @@ impl Dataframe {
     pub fn update_where(
         mut df: Dataframe,
         ms: &Machine,
-        fields: &Vec<Expression>,
-        values: &Vec<Expression>,
+        fields: &[Expression],
+        values: &[Expression],
         condition: &Option<Conditions>,
         limit: TypedValue,
     ) -> std::io::Result<i64> {
@@ -398,8 +403,8 @@ impl Dataframe {
     pub async fn update_where_async(
         mut df: Dataframe,
         ms: &Machine,
-        fields: &Vec<Expression>,
-        values: &Vec<Expression>,
+        fields: &[Expression],
+        values: &[Expression],
         condition: &Option<Conditions>,
         limit: TypedValue,
     ) -> std::io::Result<i64> {
@@ -742,7 +747,7 @@ mod tests {
         for (n, c) in params.iter().enumerate() {
             println!("{}. {}: {}", n + 1, c.get_name(), c.get_data_type().to_code())
         }
-        let df = Dataframe::combine_tables(dfs);
+        let df = Dataframe::combine_tables(dfs).unwrap();
         assert_eq!(df.get_parameters(), params);
 
         // |-------------------------------------------------|

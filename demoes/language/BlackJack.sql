@@ -21,13 +21,13 @@ use agg, oxide, util
 Cards = Table(face: String(2), suit: String(2))
 
 // create the card faces & suits
-faces = select face: value from ((2..=10)::map(n -> n::to_string()) ++ ["J", "Q", "K", "A"])::to_table()
-suits = select suit: value from ["♥️", "♦️", "♣️", "♠️"]::to_table()
+faces = select face: value from ((2..=10)::map(n -> n::to(String)) ++ ["J", "Q", "K", "A"])::to(Table)
+suits = select suit: value from ["♥️", "♦️", "♣️", "♠️"]::to(Table)
 
 // create the deck, player-hand and dealer-hand
-deck = nsd::save("games.blackjack.deck", Cards::new())
-player = nsd::save("games.blackjack.player", Cards::new())
-dealer = nsd::save("games.blackjack.dealer", Cards::new())
+deck = Cards::new::save_as("games.blackjack.deck")
+player = Cards::new::save_as("games.blackjack.player")
+dealer = Cards::new::save_as("games.blackjack.dealer")
 
 //////////////////////////////////////////////////////////////////////////////////////
 //      UTILITY METHODS

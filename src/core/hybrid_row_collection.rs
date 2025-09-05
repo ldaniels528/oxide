@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn test_get_rows() {
-        let mut hrc = create_hybrid_row_collection("hrc.get_rows.stocks");
+        let hrc = create_hybrid_row_collection("hrc.get_rows.stocks");
         assert_eq!(hrc.get_rows(), vec![
             make_quote(0, "AAB", "NYSE", 22.44),
             make_quote(1, "XYZ", "NASDAQ", 66.67),
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn test_get_internals() {
-        let mut hrc = create_hybrid_row_collection("hrc.get_internals.stocks");
+        let hrc = create_hybrid_row_collection("hrc.get_internals.stocks");
         let (brc, frc) = hrc.get_internals();
         assert_eq!(brc.get_rows(), vec![
             make_quote(0, "AAB", "NYSE", 22.44),
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_read_one_from_memory() {
-        let mut hrc = create_hybrid_row_collection("hrc.read_mem.stocks");
+        let hrc = create_hybrid_row_collection("hrc.read_mem.stocks");
         assert_eq!(
             hrc.read_one(1).unwrap(),
             Some(Row::new(1, vec![
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn test_read_one_from_disk() {
-        let mut hrc = create_hybrid_row_collection("hrc.read_disk.stocks");
+        let hrc = create_hybrid_row_collection("hrc.read_disk.stocks");
         assert_eq!(
             hrc.read_one(7).unwrap(),
             Some(Row::new(7, vec![

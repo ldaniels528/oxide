@@ -16,7 +16,7 @@ use crate::typed_values::TypedValue::{Structured, TableValue};
 use crate::utils::{strip_margin, superscript};
 use log::__private_api::Value;
 use shared_lib::cnv_error;
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::Write;
 
 fn generate_readme(file: File) -> std::io::Result<File> {
@@ -317,7 +317,7 @@ fn generate_language_examples(mut file: File) -> std::io::Result<File> {
 }
 
 async fn generate_platform_examples(mut file: File) -> std::io::Result<File> {
-    for op in PackageOps::get_all_packages() {
+    for op in PackageOps::get_contents() {
         println!("[+] {}::{} ({} items)", op.get_package_name(), op.get_name(), op.get_examples().len());
         let mut n = 0;
         let mut interpreter = Interpreter::new();
@@ -433,6 +433,10 @@ server response:
 
 fn get_language_examples(model: &Expression) -> Vec<String> {
     match model {
+        Expression::Alias(..) => vec![
+            "alias ll = ls('.')".to_string(),
+        ],
+        Expression::Aliases => vec!["aliases".to_string()],
         Expression::ArrayExpression(..) => vec![
             strip_margin(r#"
                 |// Arrays can be defined via ranges
@@ -458,7 +462,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         ],
         Expression::ArrowCurvyLeft(..) => vec![
             strip_margin(r#"
-                |stocks = nsd::save(
+                |stocks = tables::save(
                 |   "expressions.read_next_row.stocks",
                 |   Table(symbol: String(8), exchange: String(8), history: Table(last_sale: f64, processed_time: DateTime))::new
                 |)
@@ -472,7 +476,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         Expression::ArrowCurvyLeft2x(..) => vec![],
         Expression::ArrowCurvyRight(..) => vec![
             strip_margin(r#"
-                |stocks = nsd::save(
+                |stocks = tables::save(
                 |   "expressions.into.stocks",
                 |   Table(symbol: String(8), exchange: String(8), last_sale: f64)::new
                 |)
@@ -653,7 +657,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
             "#, '|'),
             strip_margin(r#"
                 |Stocks = Table(symbol: String(8), exchange: String(8), last_sale: f64)
-                |stocks = nsd::save('readme.www.stocks', Stocks::new())
+                |stocks = tables::save('readme.www.stocks', Stocks::new())
             "#, '|'),
             strip_margin(r#"
                 |for n in 0..5000 {}
@@ -783,6 +787,15 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                 |let i = 75
                 |let j = -i
                 |j
+            "#, '|')
+        ],
+        Expression::OneTime(..) => vec![
+            strip_margin(r#"
+                | let y = 0
+                | for x in 0..10 {
+                |     once { y += 1 }
+                |     yield x * y
+                | }
             "#, '|')
         ],
         Expression::Parameters(..) => vec![],
@@ -938,6 +951,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
                 |}
             "#, '|')
         ],
+        Expression::With { .. } => vec![],
         Expression::Yield(..) => vec![
             strip_margin(r#"
                 |for(i = 0, i < 5, i = i + 1) yield i * 2
@@ -955,6 +969,7 @@ fn get_language_examples(model: &Expression) -> Vec<String> {
         Deselect { .. } => vec![
             "deselect age from { name: 'Tom', age: 37, sex: 'M' }".into()
         ],
+        Fetch { .. } => vec![],
         Undelete { .. } => vec![],
         GroupBy { .. } => vec![],
         Having { ..} => vec![],
@@ -994,7 +1009,7 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Arrays: Indexing", ElementAt(null.clone(), null.clone())),
         ("Testing", Feature { title: null.clone(), scenarios: vec![] }),
         ("Function-Call", FunctionCall { fx: null.clone(), args: vec![] }),
-        ("Iteration", For { construct: null.clone(), op: null.clone() }),
+        ("Iteration", For { construct: null.clone(), code: null.clone() }),
         ("HTTP", HTTP(HttpMethodCalls::GET(null.clone()))),
         ("IF expression", If { condition: null.clone(), a: null.clone(), b: None }),
         ("Includes", Include(null.clone())),

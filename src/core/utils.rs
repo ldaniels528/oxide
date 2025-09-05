@@ -3,28 +3,26 @@
 //      Utility Functions
 ////////////////////////////////////////////////////////////////////
 
-use crate::bit_array::BitSet;
-use crate::data_types::DataType;
-use crate::data_types::DataType::{NumberType, UUIDType};
-use crate::errors::Errors::{IndexOutOfRange, SyntaxError, TypeMismatch};
-use crate::errors::TypeMismatchErrors::*;
-use crate::errors::{throw, SyntaxErrors};
+use crate::errors::throw;
+use crate::errors::Errors::IndexOutOfRange;
 use crate::expression::Conditions::{AssumedBoolean, False, True};
-use crate::expression::Expression::{Condition, Identifier, Literal};
+use crate::expression::Expression::{Condition, Literal};
 use crate::expression::{Conditions, Expression};
-use crate::machine::Machine;
-use crate::number_kind::NumberKind::{F64Kind, U128Kind, U64Kind};
-use crate::numbers::Numbers;
-use crate::numbers::Numbers::{U64Value, U8Value};
-use crate::sequences::Sequences::{TheArray, TheRange, TheTuple};
-use crate::sequences::{range_to_vec, Array, Sequence};
+use crate::numbers::Numbers::U8Value;
 use crate::typed_values::TypedValue;
-use crate::typed_values::TypedValue::{ArrayValue, BLOBStoreHandle, BitSetValue, Boolean, ByteStringValue, CharValue, Kind, Number, StringValue, TupleValue, UUIDValue, Undefined, WebSocketHandle};
+use crate::typed_values::TypedValue::{Boolean, CharValue, Number, UUIDValue, Undefined};
 use chrono::{DateTime, NaiveDate, NaiveDateTime, TimeDelta};
 use num_traits::ToPrimitive;
+use regex::Regex;
 use shared_lib::cnv_error;
-use std::future::Future;
 use uuid::Uuid;
+
+const DECIMAL_FORMAT: &str = r"^-?(?:\d+(?:_\d)*|\d+)(?:\.\d+)?$";
+const INTEGER_FORMAT: &str = r"^-?(?:\d+(?:_\d)*)?$";
+const ISO_DATE_FORMAT: &str =
+    r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?(([+-]\d\d:\d\d)|Z)?$";
+const UUID_FORMAT: &str =
+    "^[0-9a-fA-F]{8}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{4}\\b-[0-9a-fA-F]{12}$";
 
 pub fn char_div(c: char, divisor: u32) -> TypedValue {
     match divisor {
@@ -43,12 +41,6 @@ pub fn compute_time_millis(dt: TimeDelta) -> f64 {
         Some(nano) => nano.to_f64().map(|t| t / 1e+6).unwrap_or(0.),
         None => dt.num_milliseconds().to_f64().unwrap_or(0.)
     }
-}
-
-pub fn convert_to(items: &Vec<TypedValue>, datatype: &DataType) -> std::io::Result<Vec<TypedValue>> {
-    let mut values = Vec::with_capacity(items.len());
-    for item in items { values.push(item.convert_to(datatype)?); }
-    Ok(values)
 }
 
 pub fn elem_at<T>(
@@ -86,268 +78,78 @@ pub fn encode_base36(mut num: u128) -> std::io::Result<String> {
 }
 
 pub fn expand_escapes(input: &str) -> String {
-    let mut output = String::new();
+    // Fast path: no escapes present
+    if !input.as_bytes().contains(&b'\\') {
+        return input.to_owned();
+    }
+
+    let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
 
     while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') => output.push('\n'),
-                Some('r') => output.push('\r'),
-                Some('t') => output.push('\t'),
-                Some('0') => output.push('\0'),
-                Some('\\') => output.push('\\'),
-                Some('\'') => output.push('\''),
-                Some('\"') => output.push('\"'),
-                Some('x') => {
-                    let hi = chars.next();
-                    let lo = chars.next();
-                    if let (Some(h), Some(l)) = (hi, lo) {
-                        if let Ok(byte) = u8::from_str_radix(&format!("{h}{l}"), 16) {
-                            output.push(byte as char);
-                        }
-                    }
-                }
-                Some(other) => {
-                    output.push('\\');
-                    output.push(other);
-                }
-                None => output.push('\\'),
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+
+        match chars.next() {
+            Some('n')  => out.push('\n'),
+            Some('r')  => out.push('\r'),
+            Some('t')  => out.push('\t'),
+            Some('0')  => out.push('\0'),
+            Some('\\') => out.push('\\'),
+            Some('\'') => out.push('\''),
+            Some('"')  => out.push('"'),
+
+            // Unknown escape: keep it literal (\X)
+            Some(other) => {
+                out.push('\\');
+                out.push(other);
             }
-        } else {
-            output.push(c);
+            None => out.push('\\'),
         }
     }
 
-    output
-}
-
-pub fn extract_value_fn0<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine) -> std::io::Result<(Machine, TypedValue)>,
-{
-    match args.len() {
-        0 => f(ms),
-        n => throw(TypeMismatch(ArgumentsMismatched(0, n)))
-    }
-}
-
-pub fn extract_value_fn1<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, &TypedValue) -> std::io::Result<(Machine, TypedValue)>,
-{
-    match args.as_slice() {
-        [value] => f(ms, value),
-        args => throw(TypeMismatch(ArgumentsMismatched(1, args.len())))
-    }
-}
-
-pub async fn extract_value_fn1_async<F, Fut>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, TypedValue) -> Fut,
-    Fut: Future<Output = std::io::Result<(Machine, TypedValue)>>,
-{
-    match args.as_slice() {
-        [a] => f(ms, a.clone()).await,
-        args => throw(TypeMismatch(ArgumentsMismatched(1, args.len())))
-    }
-}
-
-pub fn extract_value_fn1_or_2<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, &TypedValue, Option<&TypedValue>) -> std::io::Result<(Machine, TypedValue)>,
-{
-    match args.as_slice() {
-        [value0] => f(ms, value0, None),
-        [value0, value1] => f(ms, value0, Some(value1)),
-        args => throw(TypeMismatch(ArgumentsMismatched(2, args.len())))
-    }
-}
-
-pub async fn extract_value_fn1_or_2_async<F, Fut>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, TypedValue, Option<TypedValue>) -> Fut,
-    Fut: Future<Output = std::io::Result<(Machine, TypedValue)>>,
-{
-    match args.as_slice() {
-        [value0] => f(ms, value0.clone(), None).await,
-        [value0, value1] => f(ms, value0.clone(), Some(value1.clone())).await,
-        args => throw(TypeMismatch(ArgumentsMismatched(2, args.len())))
-    }
-}
-
-pub fn extract_value_fn2<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, &TypedValue, &TypedValue) -> std::io::Result<(Machine, TypedValue)>,
-{
-    match args.as_slice() {
-        [a, b] => f(ms, a, b),
-        args => throw(TypeMismatch(ArgumentsMismatched(2, args.len())))
-    }
-}
-
-pub async fn extract_value_fn2_async<F, Fut>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, TypedValue, TypedValue) -> Fut,
-    Fut: Future<Output = std::io::Result<(Machine, TypedValue)>>,
-{
-    match args.as_slice() {
-        [a, b] => f(ms, a.clone(), b.clone()).await,
-        args => throw(TypeMismatch(ArgumentsMismatched(2, args.len())))
-    }
-}
-
-pub fn extract_value_fn3<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, &TypedValue, &TypedValue, &TypedValue) -> std::io::Result<(Machine, TypedValue)>,
-{
-    match args.as_slice() {
-        [a, b, c] => f(ms, a, b, c),
-        args => throw(TypeMismatch(ArgumentsMismatched(3, args.len())))
-    }
-}
-
-pub async fn extract_value_fn3_async<F, Fut>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, TypedValue, TypedValue, TypedValue) -> Fut,
-    Fut: Future<Output = std::io::Result<(Machine, TypedValue)>>,
-{
-    match args.as_slice() {
-        [a, b, c] => f(ms, a.clone(), b.clone(), c.clone()).await,
-        args => throw(TypeMismatch(ArgumentsMismatched(3, args.len())))
-    }
-}
-
-pub fn extract_array_fn1<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Array) -> TypedValue,
-{
-    extract_value_fn1(ms, args, |ms, value|
-        Ok((ms, f(value.to_sequence()?.to_array()))))
-}
-
-pub fn extract_bitset_fn1<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, BitSet) -> std::io::Result<(Machine, TypedValue)>,
-{
-    extract_value_fn1(ms, args, |ms, value0| {
-        let bits = pull_bitset(value0.clone())?;
-        f(ms, bits)
-    })
-}
-
-pub fn extract_bitset_fn2<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, BitSet, TypedValue) -> std::io::Result<(Machine, TypedValue)>,
-{
-    extract_value_fn2(ms, args, |ms, value0, value1| {
-        let bits = pull_bitset(value0.clone())?;
-        f(ms, bits, value1.clone())
-    })
-}
-
-pub fn extract_char_fn1<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(Machine, char) -> std::io::Result<(Machine, TypedValue)>,
-{
-    extract_value_fn1(ms, args, |ms, value0| {
-        let c = pull_char(value0.clone())?;
-        f(ms, c)
-    })
-}
-
-pub fn extract_number_fn1<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(&Numbers) -> Numbers,
-{
-    extract_value_fn1(ms, args, |ms, value| {
-        let n = pull_number(value)?;
-        Ok((ms, Number(f(&n))))
-    })
-}
-
-pub fn extract_number_fn2<F>(
-    ms: Machine,
-    args: Vec<TypedValue>,
-    f: F,
-) -> std::io::Result<(Machine, TypedValue)>
-where
-    F: Fn(&Numbers, &Numbers) -> Numbers,
-{
-    extract_value_fn2(ms, args, |ms, value0, value1| {
-        let n = pull_number(value0)?;
-        let m = pull_number(value1)?;
-        Ok((ms, Number(f(&n, &m))))
-    })
+    out
 }
 
 pub fn generate_uuid() -> u128 {
     Uuid::new_v4().as_u128()
 }
 
+pub fn is_decimal(value: &str) -> std::io::Result<bool> {
+    let decimal_regex = Regex::new(DECIMAL_FORMAT).map_err(|e| cnv_error!(e))?;
+    Ok(decimal_regex.is_match(value))
+}
+
+pub fn is_integer(value: &str) -> std::io::Result<bool> {
+    let int_regex = Regex::new(INTEGER_FORMAT).map_err(|e| cnv_error!(e))?;
+    Ok(int_regex.is_match(value))
+}
+
+pub fn is_iso8601(value: &str) -> std::io::Result<bool> {
+    let iso_date_regex = Regex::new(ISO_DATE_FORMAT).map_err(|e| cnv_error!(e))?;
+    Ok(iso_date_regex.is_match(value))
+}
+
 pub fn is_leap_year(year: i64) -> bool {
     (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+pub fn is_numeric_value(value: &str) -> std::io::Result<bool> {
+    let decimal_regex = Regex::new(DECIMAL_FORMAT)
+        .map_err(|e| cnv_error!(e))?;
+    Ok(decimal_regex.is_match(value))
 }
 
 pub fn is_quoted(s: &str) -> bool {
     (s.starts_with("\"") && s.ends_with("\"")) ||
         (s.starts_with("'") && s.ends_with("'"))
+}
+
+pub fn is_uuid(value: &str) -> std::io::Result<bool> {
+    let uuid_regex = Regex::new(UUID_FORMAT).map_err(|e| cnv_error!(e))?;
+    Ok(uuid_regex.is_match(value))
 }
 
 /// Tests whether as string could be converted into an u16
@@ -361,10 +163,6 @@ pub fn lift_condition(condition_expr: &Expression) -> std::io::Result<Conditions
     })
 }
 
-pub fn maybe_a_or_b<T>(a: Option<T>, b: Option<T>) -> Option<T> {
-    if a.is_some() { a } else { b }
-}
-
 pub fn millis_to_iso_date(millis: i64) -> Option<String> {
     let seconds = millis / 1000;
     let nanoseconds = (millis % 1000) * 1_000_000;
@@ -376,165 +174,16 @@ pub fn millis_to_iso_date(millis: i64) -> Option<String> {
 pub fn millis_to_naive_date(millis: i64) -> Option<NaiveDate> {
     // Convert milliseconds to seconds and nanoseconds
     let secs = millis / 1000;
-    let nsecs = (millis % 1000) * 1_000_000;
+    let nanos = (millis % 1000) * 1_000_000;
 
     // Build a NaiveDateTime
-    NaiveDateTime::from_timestamp_opt(secs, nsecs as u32)
+    NaiveDateTime::from_timestamp_opt(secs, nanos as u32)
         .map(|dt| dt.date())
 }
 
 /// Converts the contents of a string to u16
 pub fn parse_u16(s: &str) -> std::io::Result<u16> {
     s.parse::<u16>().map_err(|e| cnv_error!(e))
-}
-
-pub fn pull_array(value: &TypedValue) -> std::io::Result<Array> {
-    match value.to_sequence()? {
-        TheArray(array) => Ok(array),
-        TheRange(a, b, incl) => Ok(Array::from(range_to_vec(&a, &b, incl))),
-        z => throw(TypeMismatch(ArrayExpected(z.unwrap_value())))
-    }
-}
-
-pub fn pull_bitset(value: TypedValue) -> std::io::Result<BitSet> {
-    match value {
-        BitSetValue(bits) => Ok(bits),
-        z => throw(TypeMismatch(BitsetExpected(z.to_code())))
-    }
-}
-
-pub fn pull_char(value: TypedValue) -> std::io::Result<char> {
-    match value {
-        CharValue(c) => Ok(c),
-        z => throw(TypeMismatch(CharExpected(z.to_code())))
-    }
-}
-
-pub fn pull_blobstore_uuid(value: &TypedValue) -> std::io::Result<u128> {
-    match value {
-        BLOBStoreHandle(uuid) => Ok(*uuid),
-        other => throw(TypeMismatch(UnsupportedType(NumberType(U128Kind), other.get_type())))
-    }
-}
-
-pub fn pull_bool(value: &TypedValue) -> std::io::Result<bool> {
-    match value {
-        Boolean(state) => Ok(*state),
-        z => throw(TypeMismatch(BooleanExpected(z.to_code())))
-    }
-}
-
-pub fn pull_identifier_name(expr: &Expression) -> std::io::Result<String> {
-    match expr {
-        Identifier(name) => Ok(name.clone()),
-        z => throw(SyntaxError(SyntaxErrors::TypeIdentifierExpected(z.to_code())))
-    }
-}
-
-pub fn pull_kind(value: &TypedValue) -> std::io::Result<DataType> {
-    match value {
-        Kind(kind) => Ok(kind.clone()),
-        other => throw(TypeMismatch(UnsupportedType(NumberType(F64Kind), other.get_type())))
-    }
-}
-
-pub fn pull_name(expr: &Expression) -> std::io::Result<String> {
-    match expr {
-        Literal(StringValue(name)) => Ok(name.clone()),
-        Identifier(name) => Ok(name.clone()),
-        x => throw(TypeMismatch(StringExpected(x.to_code())))
-    }
-}
-
-pub fn pull_number(value: &TypedValue) -> std::io::Result<Numbers> {
-    match value {
-        Number(n) => Ok(n.clone()),
-        UUIDValue(uuid) => Ok(Numbers::U128Value(*uuid)),
-        other => throw(TypeMismatch(UnsupportedType(NumberType(F64Kind), other.get_type())))
-    }
-}
-
-pub fn pull_number_lit(expr: &Expression) -> std::io::Result<Numbers> {
-    match expr {
-        Literal(Number(n)) => Ok(n.clone()),
-        x => throw(TypeMismatch(NumericValueExpected(x.to_code())))
-    }
-}
-
-pub fn pull_number_u64(value: &TypedValue) -> std::io::Result<u64> {
-    match value {
-        CharValue(c) => Ok(unicode_char_to_u64(*c)),
-        Number(n) => Ok(n.to_u64()),
-        other => throw(TypeMismatch(UnsupportedType(NumberType(U64Kind), other.get_type())))
-    }
-}
-
-pub fn pull_number_u64_vec(value: &TypedValue) -> std::io::Result<Vec<u64>> {
-    match value {
-        ArrayValue(array) => Ok({
-            let mut result = Vec::new();
-            for item in array.get_values() {
-                result.push(pull_number_u64(&item)?);
-            }
-            result
-        }),
-        BitSetValue(bits) => Ok(bits.to_vec()),
-        ByteStringValue(bytes) =>
-            Ok(bytes.to_vec().iter()
-                .map(|n| n.to_u64().unwrap_or(0))
-                .collect::<Vec<_>>()),
-        StringValue(s) => Ok(s.chars().map(|c| unicode_char_to_u64(c)).collect::<Vec<_>>()),
-        other => pull_number_u64(other).map(|n| vec![n])
-    }
-}
-
-pub fn pull_sequence(value: &TypedValue) -> std::io::Result<Array> {
-    match value.to_sequence()? {
-        TheArray(array) => Ok(array),
-        TheRange(a, b, incl) => Ok(Array::from(range_to_vec(&a, &b, incl))),
-        TheTuple(values) => Ok(Array::from(values)),
-        z => throw(TypeMismatch(ArrayExpected(z.unwrap_value())))
-    }
-}
-
-pub fn pull_string_lit(expr: &Expression) -> std::io::Result<String> {
-    match expr {
-        Literal(CharValue(c)) => Ok(c.to_string()),
-        Literal(StringValue(s)) => Ok(s.clone()),
-        x => throw(TypeMismatch(StringExpected(x.to_code())))
-    }
-}
-
-pub fn pull_string(value: &TypedValue) -> std::io::Result<String> {
-    match value {
-        CharValue(c) => Ok(c.to_string()),
-        StringValue(s) => Ok(s.clone()),
-        x => throw(TypeMismatch(StringExpected(x.to_code())))
-    }
-}
-
-pub fn pull_uuid(value: &TypedValue) -> std::io::Result<u128> {
-    match value {
-        BLOBStoreHandle(uuid) => Ok(*uuid),
-        UUIDValue(uuid) => Ok(*uuid),
-        WebSocketHandle(uuid) => Ok(*uuid),
-        other => throw(TypeMismatch(UnsupportedType(UUIDType, other.get_type())))
-    }
-}
-
-pub fn pull_vec(value: &TypedValue) -> std::io::Result<Vec<TypedValue>> {
-    match value {
-        ArrayValue(array) => Ok(array.get_values()),
-        TupleValue(items) => Ok(items.clone()),
-        z => throw(TypeMismatch(ArrayExpected(z.to_code())))
-    }
-}
-
-pub fn pull_ws_handle(value: &TypedValue) -> std::io::Result<u128> {
-    match value {
-        WebSocketHandle(uuid) => Ok(*uuid),
-        z => throw(TypeMismatch(ArrayExpected(z.to_code())))
-    }
 }
 
 pub fn remove_last_char(s: &str) -> &str {
@@ -622,14 +271,6 @@ pub fn u64_to_unicode_char(value: u64) -> Option<char> {
         .and_then(|s| s.chars().next())
 }
 
-pub fn u64_vec_to_values(values: &Vec<u64>) -> Vec<TypedValue> {
-    values.into_iter().map(|n| Number(U64Value(*n))).collect::<Vec<_>>()
-}
-
-pub fn u64_vec_to_u8_vec(values: &Vec<u64>) -> Vec<u8> {
-    values.into_iter().map(|v| v.to_u8().unwrap_or(0)).collect::<Vec<_>>()
-}
-
 pub fn u8_vec_to_values(bytes: &Vec<u8>) -> Vec<TypedValue> {
     bytes.into_iter().map(|b| Number(U8Value(*b))).collect()
 }
@@ -666,26 +307,7 @@ pub fn unicode_char_to_u64(c: char) -> u64 {
     u64::from_le_bytes(padded) // Convert 8-byte array to u64 (little-endian)
 }
 
-pub fn values_to_bitset(items: Vec<TypedValue>) -> std::io::Result<TypedValue> {
-    // collect the u64 values
-    let mut values: Vec<u64> = Vec::with_capacity(items.len());
-    for item in items {
-       let array = match item {
-           CharValue(c) => vec![unicode_char_to_u64(c)],
-           StringValue(s) => s.chars().map(|c| unicode_char_to_u64(c)).collect(),
-            _ => pull_number_u64_vec(&item)?
-        };
-        values.extend(array)
-    }
-    values.sort();
-
-    // create the bitset
-    let mut bits = BitSet::new(values.len(), values[0]);
-    bits.add(values.as_slice());
-    Ok(BitSetValue(bits))
-}
-
-pub fn values_to_u8_vec(values: &Vec<TypedValue>) -> Vec<u8> {
+pub fn values_to_u8_vec(values: &[TypedValue]) -> Vec<u8> {
     values.into_iter().map(|v| v.to_u8()).collect()
 }
 
@@ -693,6 +315,7 @@ pub fn values_to_u8_vec(values: &Vec<TypedValue>) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_util::interpret;
 
     #[test]
     fn test_decode_base36() {
@@ -702,6 +325,17 @@ mod tests {
     #[test]
     fn test_encode_base36() {
         assert_eq!(encode_base36(564684).unwrap(), "C3PO");
+    }
+
+    #[test]
+    fn test_expand_escape_sequences() {
+        let sequences = vec![
+            ("\\n", "\n"), ("\\r", "\r"), ("\\t", "\t"),
+            ("\\", "\\"), ("\\\"", "\""), ("\\'", "'"),
+        ];
+        for (input, expected) in sequences {
+            assert_eq!(expand_escapes(input), expected);
+        }
     }
 
     #[test]
@@ -725,5 +359,15 @@ mod tests {
         assert_eq!(superscript(23), "²³");
         assert_eq!(superscript(960), "⁹⁶⁰");
         assert_eq!(superscript(1874), "¹⁸⁷⁴");
+    }
+
+    #[test]
+    fn test_values_to_u8_vec() {
+        assert_eq!(values_to_u8_vec(vec![
+            interpret("100"),
+            interpret("1000"),
+            interpret("33"),
+            interpret("-1")
+        ].as_slice()), vec![100u8, 232u8, 33u8, 255u8]);
     }
 }

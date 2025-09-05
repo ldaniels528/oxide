@@ -448,11 +448,11 @@ mod tests {
         use crate::blobs::BLOBMetadata;
         use crate::byte_code_compiler::ByteCodeCompiler;
         use crate::byte_row_collection::ByteRowCollection;
+        use crate::connections::blob_stores::metadata_to_table;
         use crate::data_types::DataType::{FixedSizeType, NumberType, StringType, TableType};
         use crate::dataframe::Dataframe::BinaryTable;
         use crate::model_row_collection::ModelRowCollection;
         use crate::number_kind::NumberKind::F64Kind;
-        use crate::packages::blob_stores::metadata_to_table;
         use crate::row_collection::RowCollection;
         use crate::table_renderer::TableRenderer;
         use crate::test_util::make_lines_from_table;
