@@ -9,6 +9,7 @@ use crate::compiler::Compiler;
 use crate::data_types::DataType;
 use crate::data_types::DataType::*;
 use crate::dataframe::Dataframe;
+use crate::dataframe::Dataframe::ModelTable;
 use crate::errors::Errors::*;
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{throw, SyntaxErrors};
@@ -18,6 +19,7 @@ use crate::expression::Ranges::{Exclusive, Inclusive};
 use crate::expression::{AliasCalls, Conditions, Expression, Observations, UseOps, UNDEFINED};
 use crate::extractions::*;
 use crate::machine::Observations::VariableObservation;
+use crate::model_row_collection::ModelRowCollection;
 use crate::numbers::Numbers::*;
 use crate::packages::IoPkg;
 use crate::packages::{Package, PackageOps};
@@ -44,8 +46,6 @@ use std::future::Future;
 use std::io::Read;
 use std::ops::{Deref, Neg};
 use std::pin::Pin;
-use crate::dataframe::Dataframe::ModelTable;
-use crate::model_row_collection::ModelRowCollection;
 
 pub const FX_SELF: &str = "self";
 pub const ROW_ID: &str = "__row_id__";
@@ -88,13 +88,6 @@ impl Machine {
     /// and default imports and/or constants
     pub fn new_platform() -> Self {
         Self::new()
-            .with_variable("__platform__", StringValue(whoami::platform().to_string()))
-            .with_variable("__realname__", StringValue(whoami::realname()))
-            .with_variable("__username__", StringValue(whoami::username()))
-            .with_variable("𝑒", Number(F64Value(std::f64::consts::E)))
-            .with_variable("π", Number(F64Value(std::f64::consts::PI)))
-            .with_variable("γ", Number(F64Value(0.577215664901532860606512090082402431_f64)))
-            .with_variable("φ", Number(F64Value((1f64 + 5.0f64.sqrt()) / 2f64)))
     }
 
     ////////////////////////////////////////////////////////////////
@@ -191,7 +184,7 @@ impl Machine {
             WhenEver { condition, code } => self.exec_when_statement(condition, code),
             While { condition, code } => self.exec_while(condition, code),
             With { resource, code } => self.exec_with(resource, code),
-            Yield(a) => self.exec_yield(a),
+            Yield(a, uuid) => self.exec_yield(a, *uuid),
             Zip(a, b) => self.exec_zip(a, b),
             ////////////////////////////////////////////////////////////////////
             // SQL models
@@ -281,7 +274,7 @@ impl Machine {
                 WhenEver { condition, code } => self.exec_when_statement(condition, code),
                 While { condition, code } => self.exec_while_async(condition, code).await,
                 With { resource, code } => self.exec_with_async(resource, code).await,
-                Yield(a) => self.exec_yield_async(a).await,
+                Yield(a, uuid) => self.exec_yield_async(a, *uuid).await,
                 Zip(a, b) => self.exec_zip_async(a, b).await,
                 ////////////////////////////////////////////////////////////////////
                 // SQL models
@@ -630,7 +623,8 @@ impl Machine {
         match alias_maybe {
             Some((params, body)) => {
                 let (ms, vargs) = self.evaluate_as_vec(args)?;
-                ms.build_function_arguments(params, vargs).evaluate(body)
+                let new_body = Compiler::build(body.to_code().as_str())?;
+                ms.build_function_arguments(params, vargs).evaluate(&new_body)
             },
             _ => throw(IdentifierNotFound(name.into()))
         }
@@ -650,7 +644,8 @@ impl Machine {
         match alias_maybe {
             Some((params, body)) => {
                 let (ms, vargs) = self.evaluate_as_vec_async(args).await?;
-                ms.build_function_arguments(params, vargs).evaluate_async(body).await
+                let new_body = Compiler::build(body.to_code().as_str())?;
+                ms.build_function_arguments(params, vargs).evaluate_async(&new_body).await
             },
             _ => throw(IdentifierNotFound(name.into()))
         }
@@ -666,7 +661,10 @@ impl Machine {
             _ => false
         }).map(|alias| alias.get_body());
         match alias_maybe {
-            Some(body) => self.evaluate(body),
+            Some(body) => {
+                let new_body = Compiler::build(body.to_code().as_str())?;
+                self.evaluate(&new_body)
+            },
             _ => throw(IdentifierNotFound(name.into()))
         }
     }
@@ -681,7 +679,10 @@ impl Machine {
             _ => false
         }).map(|alias| alias.get_body());
         match alias_maybe {
-            Some(body) => self.evaluate_async(body).await,
+            Some(body) => {
+                let new_body = Compiler::build(body.to_code().as_str())?;
+                self.evaluate_async(&new_body).await
+            },
             _ => throw(IdentifierNotFound(name.into()))
         }
     }
@@ -2599,9 +2600,10 @@ impl Machine {
     fn exec_yield(
         &self,
         expr: &Expression,
+        uuid: u128,
     ) -> std::io::Result<(Self, TypedValue)> {
         const LABEL: &str = "__yield__";
-        let full_prop_name = format!("{}{}", LABEL, hex::encode(expr.encode()));
+        let full_prop_name = format!("{}{}", LABEL, u128_to_uuid(uuid));
         let prop_name = full_prop_name.as_str();
         let (mut ms, value) = self.evaluate(expr)?;
         let array = match ms.get(prop_name) {
@@ -2623,9 +2625,10 @@ impl Machine {
     async fn exec_yield_async(
         &self,
         expr: &Expression,
+        uuid: u128,
     ) -> std::io::Result<(Self, TypedValue)> {
         const LABEL: &str = "__yield__";
-        let full_prop_name = format!("{}{}", LABEL, hex::encode(expr.encode()));
+        let full_prop_name = format!("{}{}", LABEL, u128_to_uuid(uuid));
         let prop_name = full_prop_name.as_str();
         let (mut ms, value) = self.evaluate_async(expr).await?;
         let array = match ms.get(prop_name) {
@@ -2884,6 +2887,14 @@ impl Machine {
         self.variables.get(name).cloned()
     }
 
+    pub fn get_aliases(&self) -> &Vec<AliasCalls> {
+        &self.aliases
+    }
+
+    pub fn get_observations(&self) -> &Vec<Observations> {
+        &self.observations
+    }
+
     /// returns a variable by name or the default value
     pub fn get_or_else(&self, name: &str, default: fn() -> TypedValue) -> TypedValue {
         self.get(name).unwrap_or(default())
@@ -2954,6 +2965,21 @@ impl Machine {
     pub fn with_variable(&self, name: &str, value: TypedValue) -> Self {
         let mut ms = self.clone();
         ms.variables = ms.variables.update(name.to_owned(), value);
+        ms
+    }
+
+    pub fn without_temp_variables(&self) -> Self {
+        let mut ms = self.clone();
+        ms.variables = ms.variables
+            .into_iter()
+            .filter(|(k, _)| !k.starts_with("__"))
+            .collect::<im::HashMap<String, TypedValue>>();
+        ms
+    }
+
+    pub fn without_variable(&self, name: &str) -> Self {
+        let mut ms = self.clone();
+        ms.variables.remove(name);
         ms
     }
 }

@@ -316,7 +316,7 @@ impl TypeEngine {
             Use(..) => (hints, BooleanType),
             WhenEver { code, .. } => Self::infer(hints, code),
             With { resource, code } => Self::infer_with(hints, resource, code),
-            Yield(a) => Self::infer_yield(hints, a),
+            Yield(a, ..) => Self::infer_yield(hints, a),
             ////////////////////////////////////////////////////////////////////
             // Logic models
             ////////////////////////////////////////////////////////////////////

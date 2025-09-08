@@ -20,7 +20,7 @@ use crate::table_renderer::TableRenderer;
 use crate::test_engine::TestEngine;
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
-use crate::utils::compute_time_millis;
+use crate::utils::{compute_time_millis, generate_uuid};
 use crate::web_engine::WebSocketClient;
 use chrono::Local;
 use crossterm::style::Stylize;
@@ -125,8 +125,7 @@ impl TerminalConsoles {
 pub struct TerminalState {
     database: String,
     schema: String,
-    session_id: i64,
-    user_id: i64,
+    session_id: u128,
     user_name: String,
     counter: usize,
     is_alive: bool,
@@ -140,8 +139,7 @@ impl TerminalState {
             database: "oxide".into(),
             schema: "public".into(),
             interpreter: TerminalConsoles::Remote(WebSocketClient::connect(host, port, path).await?),
-            session_id: Local::now().timestamp_millis(),
-            user_id: users::get_current_uid().to_i64().unwrap_or(-1),
+            session_id: generate_uuid(),
             user_name: users::get_current_username().iter()
                 .flat_map(|oss| oss.as_os_str().to_str())
                 .collect(),
@@ -156,8 +154,7 @@ impl TerminalState {
             database: "oxide".into(),
             schema: "public".into(),
             interpreter: TerminalConsoles::Local(Interpreter::new()),
-            session_id: Local::now().timestamp_millis(),
-            user_id: users::get_current_uid().to_i64().unwrap_or(-1),
+            session_id: generate_uuid(),
             user_name: users::get_current_username().iter()
                 .flat_map(|oss| oss.as_os_str().to_str())
                 .collect(),
@@ -173,7 +170,7 @@ impl TerminalState {
 
     /// return the REPL prompt string (e.g. "oxide.public[4]>")
     pub fn get_prompt(&self) -> String {
-        format!("{}@{}[{}]> ", self.user_name, self.database, self.counter)
+        format!("{}@{}[{}]> ", self.user_name.as_str().cyan(), self.database, self.counter.to_string().yellow())
     }
 
     /// returns true if the application is running
@@ -379,9 +376,12 @@ async fn handle_input(mut state: TerminalState, input: &str) -> std::io::Result<
             // compute the execution-time
             let execution_time = compute_time_millis(Local::now() - t0);
             // process the result
-            let limit = state.interpreter.get("__COLUMNS__").await.map(|v| v.unwrap_or(Undefined).to_usize());
+            let (limit_maybe, _height_maybe) = match terminal::size() {
+                Ok((width, height)) => (Some(width as usize), Some(height as usize)),
+                Err(_) => (None, None)
+            };
             let raw_lines = build_output(state.counter, result, execution_time)?;
-            let lines = limit
+            let lines = limit_maybe
                 .map(|n| limit_width(raw_lines.clone(), n))
                 .unwrap_or(raw_lines);
             for line in lines {
@@ -486,21 +486,8 @@ async fn setup_system_variables(mut state: TerminalState, args: Vec<String>) -> 
 
     // capture the session ID
     state.interpreter
-        .with_variable("__SESSION_ID__", Number(I64Value(state.session_id)))
+        .with_variable("__SESSION_ID__", UUIDValue(state.session_id))
         .await.unwrap();
-
-    // capture the user ID
-    state.interpreter
-        .with_variable("__USER_ID__", Number(I64Value(state.user_id)))
-        .await.unwrap();
-
-    // capture the terminal width and height
-    if let Ok((width, height)) = terminal::size() {
-        state.interpreter
-            .with_variable("__COLUMNS__", Number(I64Value(width as i64))).await.unwrap();
-        state.interpreter
-            .with_variable("__HEIGHT__", Number(I64Value(height as i64))).await.unwrap();
-    }
     state
 }
 
@@ -555,16 +542,16 @@ mod tests {
 
             let lines = build_output(12, result, 13.2).unwrap();
             assert_eq!(lines, vec![
-                "12: 5 row(s) in 13.2 ms ~ \u{1b}[38;5;13m\u{1b}[1mTable(String(128), String(128), String(128), Boolean)\u{1b}[0m",
-                "|-------------------------------------------------------------|",
-                "| id | name        | type       | default_value | is_nullable |",
-                "|-------------------------------------------------------------|",
-                "| 0  | name        | String(20) | null          | true        |",
-                "| 1  | module      | String(20) | null          | true        |",
-                "| 2  | signature   | String(32) | null          | true        |",
-                "| 3  | description | String(60) | null          | true        |",
-                "| 4  | returns     | String(32) | null          | true        |",
-                "|-------------------------------------------------------------|"]);
+                "12: 5 row(s) in 13.2 ms ~ \u{1b}[38;5;13m\u{1b}[1mTable(String, String, String, Boolean)\u{1b}[0m",
+                "|---------------------------------------------------------|",
+                "| id | name        | type   | default_value | is_nullable |",
+                "|---------------------------------------------------------|",
+                "| 0  | name        | String | null          | true        |",
+                "| 1  | module      | String | null          | true        |",
+                "| 2  | signature   | String | null          | true        |",
+                "| 3  | description | String | null          | true        |",
+                "| 4  | returns     | String | null          | true        |",
+                "|---------------------------------------------------------|"]);
             webservers::stop_server(port).await.unwrap();
         }
 
@@ -652,9 +639,8 @@ mod tests {
         #[test]
         fn test_get_prompt() {
             let mut state: TerminalState = TerminalState::offline().unwrap();
-            let prompt = state.get_prompt();
-            // prompt: "teddy.bear@oxide[0]> "
-            assert!(prompt.contains("@oxide") && prompt.contains("[0]> "));
+            state.user_name = "ldaniels".into();
+            assert_eq!(state.get_prompt(), "\u{1b}[38;5;14mldaniels\u{1b}[39m@oxide[\u{1b}[38;5;11m0\u{1b}[39m]> ");
         }
 
         #[test]
@@ -680,7 +666,7 @@ mod tests {
             let lines = build_output_header(12, &result, 13.2).unwrap();
             assert_eq!(
                 lines,
-                "12: 5 row(s) in 13.2 ms ~ \u{1b}[38;5;13m\u{1b}[1mTable(String(128), String(128), String(128), Boolean)\u{1b}[0m")
+                "12: 5 row(s) in 13.2 ms ~ \u{1b}[38;5;13m\u{1b}[1mTable(String, String, String, Boolean)\u{1b}[0m")
         }
 
         #[test]
@@ -801,8 +787,6 @@ mod tests {
             let state = TerminalState::offline().unwrap();
             let mut state = setup_system_variables(state, vec![]).await;
             assert!(matches!(state.interpreter.get("__ARGS__").await.unwrap(), Some(ArrayValue(..))));
-            assert!(matches!(state.interpreter.get("__COLUMNS__").await.unwrap(), Some(Number(..))));
-            assert!(matches!(state.interpreter.get("__HEIGHT__").await.unwrap(), Some(Number(..))));
         }
 
         #[test]

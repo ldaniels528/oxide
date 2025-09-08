@@ -1031,7 +1031,7 @@ fn create_language_examples() -> Vec<(String, Vec<String>)> {
         ("Import/Use", Use(vec![])),
         ("When statement", WhenEver { condition: null.clone(), code: null.clone() }),
         ("While expression", While { condition: null.clone(), code: null.clone() }),
-        ("Yield", Yield(null.clone())),
+        ("Yield", Yield(null.clone(), 0)),
         ("Zip", Zip(null.clone(), null.clone())),
     ];
 

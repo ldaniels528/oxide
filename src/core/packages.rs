@@ -15,8 +15,8 @@ use crate::errors::Errors::*;
 use crate::errors::SyntaxErrors::IllegalDate;
 use crate::errors::TypeMismatchErrors::*;
 use crate::errors::{column_not_found, throw};
-use crate::expression::Expression;
 use crate::expression::Expression::{CodeBlock, FunctionCall, Literal, Multiply, StructureExpression};
+use crate::expression::{Expression, Observations};
 use crate::extractions::*;
 use crate::file_row_collection::FileRowCollection;
 use crate::journaling::{EventSourceRowCollection, Journaling, TableFunction};
@@ -32,7 +32,7 @@ use crate::sequences::Sequences::{TheArray, TheDataframe, TheRange, TheTuple};
 use crate::sequences::{range_diff, Array, Sequence};
 use crate::sprintf::StringPrinter;
 use crate::structures::Structures::{Hard, Soft};
-use crate::structures::{Row, SoftStructure, Structure, Structures};
+use crate::structures::{HardStructure, Row, SoftStructure, Structure, Structures};
 use crate::type_engine::{TypeEngine, TypeHints};
 use crate::typed_values::TypedValue;
 use crate::typed_values::TypedValue::*;
@@ -40,7 +40,10 @@ use crate::utils::*;
 use crate::{server_engine, type_engine};
 use async_trait::async_trait;
 use chrono::{Datelike, Local, MappedLocalTime, NaiveDate, NaiveDateTime, TimeZone, Timelike, Weekday};
+use crossterm::terminal;
 use itertools::Itertools;
+use mysql_async::prelude::Query;
+use num_traits::ToPrimitive;
 use once_cell::sync::Lazy;
 use rand::prelude::ThreadRng;
 use rand::{thread_rng, RngCore};
@@ -57,8 +60,8 @@ use uuid::Uuid;
 
 // platform version constants
 pub const MAJOR_VERSION: u8 = 1;
-pub const MINOR_VERSION: u8 = 49;
-pub const VERSION: &str = "0.49";
+pub const MINOR_VERSION: u8 = 50;
+pub const VERSION: &str = "0.50";
 
 // duration unit constants
 pub const MILLIS: i64 = 1;
@@ -1125,9 +1128,9 @@ impl CollectionsPkg {
 
     pub fn get_tools_describe_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("name", FixedSizeType(StringType.into(), 128)),
-            Parameter::new("type", FixedSizeType(StringType.into(), 128)),
-            Parameter::new("default_value", FixedSizeType(StringType.into(), 128)),
+            Parameter::new("name", StringType),
+            Parameter::new("type", StringType),
+            Parameter::new("default_value", StringType),
             Parameter::new("is_nullable", BooleanType),
         ]
     }
@@ -2300,6 +2303,7 @@ pub enum OxidePkg {
     Printf,
     Println,
     Reset,
+    Scope,
     UUID,
     Version,
 }
@@ -2371,11 +2375,7 @@ impl OxidePkg {
         let mut mrc = ModelRowCollection::from_parameters(&OxidePkg::get_oxide_inspect_parameters());
         for (row_id, expr) in ops.iter().enumerate() {
             mrc.overwrite_row(row_id, Row::new(
-                row_id,
-                vec![
-                    StringValue(expr.to_code()),
-                    StringValue(format!("{:?}", expr)),
-                ],
+                row_id, vec![StringValue(format!("{:?}", expr))],
             ))?;
         }
         Ok((ms, TableValue(ModelTable(mrc))))
@@ -2385,6 +2385,65 @@ impl OxidePkg {
         let (ms, result) = StringsPkg::do_str_sprintf(ms, args)?;
         print!("{}", result.unwrap_value());
         Ok((ms, Boolean(true)))
+    }
+
+    fn do_oxide_scope(
+        ms: Machine,
+        args: Vec<TypedValue>,
+    ) -> std::io::Result<(Machine, TypedValue)> {
+        match args.as_slice() {
+            [] => {
+                let mut mrc = ModelRowCollection::from_parameters(&OxidePkg::get_oxide_scope_parameters());
+                let mut id = 0;
+                // add aliases
+                let mut aliases = ms.get_aliases().iter()
+                    .map(|a| (a.get_name(), a.get_body().to_code()))
+                    .collect::<Vec<_>>();
+                aliases.sort_by_key(|k| k.0);
+                for (name, code) in aliases.iter() {
+                    mrc.append_row(Row::new(id, vec![
+                        StringValue(name.to_string()),
+                        StringValue("Alias".to_string()),
+                        StringValue(code.to_string()),
+                    ]))?;
+                    id += 1;
+                }
+                // add observables
+                let clean = |s: String| {
+                    [("\n", ";"), (";;", ";"), ("{;", "{"), (";}", "}"), ("};", "}")]
+                        .into_iter()
+                        .fold(s.to_owned(), |acc, (pat, rep)| acc.replace(pat, rep))
+                };
+                let mut observables = ms.get_observations().iter()
+                    .map(|ob| match ob {
+                        Observations::VariableObservation { condition, code } =>
+                            (clean(condition.to_code()), clean(code.to_code())),
+                    })
+                    .collect::<Vec<_>>();
+                observables.sort_by_key(|k| k.0.clone());
+                for (cond, code) in observables.iter() {
+                    mrc.append_row(Row::new(id, vec![
+                        StringValue(cond.to_string()),
+                        StringValue("Observable".to_string()),
+                        StringValue(code.to_string()),
+                    ]))?;
+                    id += 1;
+                }
+                // add variables
+                let mut variables: Vec<(&String, &TypedValue)> = ms.get_variables().iter().collect::<Vec<_>>();
+                variables.sort_by_key(|k| k.0);
+                for (name, value) in variables.iter() {
+                    mrc.append_row(Row::new(id, vec![
+                        StringValue(name.to_string()),
+                        StringValue(value.get_type().get_name()),
+                        StringValue(value.to_code()),
+                    ]))?;
+                    id += 1;
+                }
+                Ok((ms, TableValue(ModelTable(mrc))))
+            }
+            args => throw(TypeMismatch(ArgumentsMismatched(0, args.len()))),
+        }
     }
 
     fn do_oxide_uuid(
@@ -2418,6 +2477,7 @@ impl OxidePkg {
             PackageOps::Oxide(OxidePkg::Printf),
             PackageOps::Oxide(OxidePkg::Println),
             PackageOps::Oxide(OxidePkg::Reset),
+            PackageOps::Oxide(OxidePkg::Scope),
             PackageOps::Oxide(OxidePkg::UUID),
             PackageOps::Oxide(OxidePkg::Version),
         ]
@@ -2434,8 +2494,15 @@ impl OxidePkg {
 
     pub fn get_oxide_inspect_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("code", FixedSizeType(StringType.into(), 8192)),
-            Parameter::new("model", FixedSizeType(StringType.into(), 8192)),
+            Parameter::new("model", StringType),
+        ]
+    }
+    
+    pub fn get_oxide_scope_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("identifier", StringType),
+            Parameter::new("type", StringType),
+            Parameter::new("value", StringType),
         ]
     }
 }
@@ -2457,6 +2524,7 @@ impl Package for OxidePkg {
             OxidePkg::Printf => Self::do_oxide_printf(ms, args),
             OxidePkg::Println => extract_value_fn1(ms, args, IoPkg::do_io_stdout),
             OxidePkg::Reset => extract_value_fn0(ms, args, |_ms| Ok((Machine::new_platform(), Boolean(true)))),
+            OxidePkg::Scope => Self::do_oxide_scope(ms, args),
             OxidePkg::UUID => Self::do_oxide_uuid(ms, args),
             OxidePkg::Version => extract_value_fn0(ms, args, Self::do_oxide_version),
         }
@@ -2473,6 +2541,7 @@ impl Package for OxidePkg {
             OxidePkg::Printf => "printf".into(),
             OxidePkg::Println => "println".into(),
             OxidePkg::Reset => "reset".into(),
+            OxidePkg::Scope => "scope".into(),
             OxidePkg::UUID => "uuid".into(),
             OxidePkg::Version => "version".into(),
         }
@@ -2495,6 +2564,7 @@ impl Package for OxidePkg {
             OxidePkg::Printf => "C-style \"printf\" function".into(),
             OxidePkg::Println => "Print line function".into(),
             OxidePkg::Reset => "Clears the scope of all user-defined objects".into(),
+            OxidePkg::Scope => "Returns the scope of all user-defined objects".into(),
             OxidePkg::UUID => "Returns a random 128-bit UUID".into(),
             OxidePkg::Version => "Returns the Oxide version".into(),
         }
@@ -2532,22 +2602,27 @@ impl Package for OxidePkg {
             OxidePkg::Println => vec![r#"oxide::println("Hello World")"#.into()],
             OxidePkg::Reset => vec!["oxide::reset()".into()],
             OxidePkg::UUID => vec!["oxide::uuid()".into()],
+            OxidePkg::Scope => vec!["oxide::scope()".into()],
             OxidePkg::Version => vec!["oxide::version()".into()],
         }
     }
 
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
+            // ()
+            OxidePkg::Home
+            | OxidePkg::Reset
+            | OxidePkg::Help
+            | OxidePkg::Scope
+            | OxidePkg::Version
+            | OxidePkg::UUID => vec![],
+            // (String)
             OxidePkg::Compile
             | OxidePkg::Debug
             | OxidePkg::Eval
             | OxidePkg::Inspect
             | OxidePkg::Println => vec![StringType],
-            OxidePkg::Home
-            | OxidePkg::Reset
-            | OxidePkg::Help
-            | OxidePkg::Version
-            | OxidePkg::UUID => vec![],
+            // (String, ..)
             OxidePkg::Printf => vec![
                 StringType, ArrayType(RuntimeResolvedType.into())
             ],
@@ -2556,17 +2631,22 @@ impl Package for OxidePkg {
 
     fn get_return_type(&self) -> DataType {
         match self {
-            // function
-            OxidePkg::Compile | OxidePkg::Debug => FunctionType(vec![], RuntimeResolvedType.into()),
-            OxidePkg::Eval | OxidePkg::Home => StringType,
-            OxidePkg::Help => TableType(OxidePkg::get_oxide_help_parameters()),
-            OxidePkg::Inspect => TableType(OxidePkg::get_oxide_inspect_parameters()),
+            // Boolean
             OxidePkg::Printf
             | OxidePkg::Println
             | OxidePkg::Reset => BooleanType,
-            // f64
+            // Function
+            OxidePkg::Compile 
+            | OxidePkg::Debug => FunctionType(vec![], RuntimeResolvedType.into()),
+            // Number::f64
             OxidePkg::Version => NumberType(F64Kind),
-            OxidePkg::UUID => NumberType(U128Kind),
+            OxidePkg::UUID => UUIDType,
+            // String
+            OxidePkg::Eval | OxidePkg::Home => StringType,
+            // Table
+            OxidePkg::Help => TableType(OxidePkg::get_oxide_help_parameters()),
+            OxidePkg::Inspect => TableType(OxidePkg::get_oxide_inspect_parameters()),
+            OxidePkg::Scope => TableType(OxidePkg::get_oxide_scope_parameters()),
         }
     }
 }
@@ -2576,8 +2656,13 @@ impl Package for OxidePkg {
 pub enum OsPkg {
     Call,
     Clear,
+    ConsoleInfo,
     CurrentDir,
     Env,
+    Platform,
+    UserId,
+    UserName,
+    UserRealName,
 }
 
 impl OsPkg {
@@ -2618,6 +2703,25 @@ impl OsPkg {
         Ok((ms, Boolean(true)))
     }
 
+    fn do_os_console_info(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
+        let (columns, rows) = terminal::size()
+            .ok().map(|(cols, rows)| (Number(U16Value(cols)), Number(U16Value(rows))))
+            .unwrap_or((Undefined, Undefined));
+        let (width, height) = terminal::window_size()
+            .ok().map(|ws| (Number(U16Value(ws.width)), Number(U16Value(ws.height))))
+            .unwrap_or((Undefined, Undefined));
+        let is_raw_mode_enabled =
+            terminal::is_raw_mode_enabled().ok().map(Boolean).unwrap_or(Undefined);
+        let supports_keyboard_enhancement =
+            terminal::supports_keyboard_enhancement().ok().map(Boolean).unwrap_or(Undefined);
+        Ok((ms, Structured(Hard(HardStructure::new(
+            Self::get_os_console_info_parameters(), vec![
+                columns, rows, width, height,
+                is_raw_mode_enabled, supports_keyboard_enhancement
+            ],
+        )))))
+    }
+
     fn do_os_current_dir(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         let dir = env::current_dir()?;
         Ok((ms, StringValue(dir.display().to_string())))
@@ -2627,7 +2731,7 @@ impl OsPkg {
         use std::env;
         let mut mrc = ModelRowCollection::from_parameters(&vec![
             Parameter::new("key", FixedSizeType(StringType.into(), 256)),
-            Parameter::new("value", FixedSizeType(StringType.into(), 8192)),
+            Parameter::new("value", StringType),
         ]);
         for (key, value) in env::vars() {
                 mrc.append_row(Row::new(0, vec![StringValue(key), StringValue(value)]))?;
@@ -2639,17 +2743,50 @@ impl OsPkg {
         vec![
             PackageOps::Os(OsPkg::Call),
             PackageOps::Os(OsPkg::Clear),
+            PackageOps::Os(OsPkg::ConsoleInfo),
             PackageOps::Os(OsPkg::CurrentDir),
             PackageOps::Os(OsPkg::Env),
+            PackageOps::Os(OsPkg::Platform),
+            PackageOps::Os(OsPkg::UserId),
+            PackageOps::Os(OsPkg::UserName),
+            PackageOps::Os(OsPkg::UserRealName),
+        ]
+    }
+
+    pub fn get_os_console_info_parameters() -> Vec<Parameter> {
+        vec![
+            Parameter::new("columns", NumberType(U16Kind)),
+            Parameter::new("rows", NumberType(U16Kind)),
+            Parameter::new("width", NumberType(U16Kind)),
+            Parameter::new("height", NumberType(U16Kind)),
+            Parameter::new("is_raw_mode_enabled", BooleanType),
+            Parameter::new("supports_keyboard_enhancement", BooleanType),
         ]
     }
 
     pub fn get_os_env_parameters() -> Vec<Parameter> {
         vec![
             Parameter::new("key", FixedSizeType(StringType.into(), 256)),
-            Parameter::new("value", FixedSizeType(StringType.into(), 8192)),
+            Parameter::new("value", StringType),
         ]
     }
+
+    pub fn do_os_platform(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(whoami::platform().to_string())))
+    }
+
+    pub fn do_os_real_name(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(whoami::realname())))
+    }
+
+    pub fn do_os_user_id(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, Number(I64Value(users::get_current_uid().to_i64().unwrap_or(-1)))))
+    }
+
+    pub fn do_os_user_name(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
+        Ok((ms, StringValue(whoami::username())))
+    }
+
 }
 
 #[async_trait]
@@ -2661,9 +2798,14 @@ impl Package for OsPkg {
     ) -> std::io::Result<(Machine, TypedValue)> {
         match self {
             OsPkg::Call => Self::do_os_call(ms, args),
-            OsPkg::CurrentDir => extract_value_fn0(ms, args, Self::do_os_current_dir),
             OsPkg::Clear => extract_value_fn0(ms, args, Self::do_os_clear_screen),
+            OsPkg::ConsoleInfo => extract_value_fn0(ms, args, Self::do_os_console_info),
+            OsPkg::CurrentDir => extract_value_fn0(ms, args, Self::do_os_current_dir),
             OsPkg::Env => extract_value_fn0(ms, args, Self::do_os_env),
+            OsPkg::Platform => extract_value_fn0(ms, args, Self::do_os_platform),
+            OsPkg::UserRealName => extract_value_fn0(ms, args, Self::do_os_real_name),
+            OsPkg::UserId => extract_value_fn0(ms, args, Self::do_os_user_id),
+            OsPkg::UserName => extract_value_fn0(ms, args, Self::do_os_user_name),
         }
     }
 
@@ -2671,8 +2813,13 @@ impl Package for OsPkg {
         match self {
             OsPkg::Call => "call".into(),
             OsPkg::Clear => "clear".into(),
+            OsPkg::ConsoleInfo => "console_info".into(),
             OsPkg::CurrentDir => "current_dir".into(),
             OsPkg::Env => "env".into(),
+            OsPkg::Platform => "platform".into(),
+            OsPkg::UserId => "user_id".into(),
+            OsPkg::UserName => "user_name".into(),
+            OsPkg::UserRealName => "user_real_name".into(),
         }
     }
 
@@ -2684,8 +2831,13 @@ impl Package for OsPkg {
         match self {
             OsPkg::Call => "Invokes an operating system application".into(),
             OsPkg::Clear => "Clears the terminal/screen".into(),
+            OsPkg::ConsoleInfo => "Returns OS-specific console information".into(),
             OsPkg::CurrentDir => "Returns the current directory".into(),
             OsPkg::Env => "Returns a table of the OS environment variables".into(),
+            OsPkg::Platform => "Returns the OS/Platform identifier".into(),
+            OsPkg::UserRealName => "Returns the real name of current user".into(),
+            OsPkg::UserId => "Returns the user ID of current user".into(),
+            OsPkg::UserName => "Returns the username of current user".into(),
         }
     }
 
@@ -2702,30 +2854,54 @@ impl Package for OsPkg {
                 '|',
             )],
             OsPkg::Clear => vec!["os::clear()".into()],
-            OsPkg::CurrentDir => vec![strip_margin(r#"
+            OsPkg::ConsoleInfo => vec!["os::console_info()".into()],
+            OsPkg::CurrentDir => vec![
+                strip_margin(r#"
                     |cur_dir = os::current_dir()
                     |prefix = if(cur_dir::ends_with("core"), "../..", ".")
                     |path_str = prefix + "/demoes/language/include_file.oxide"
                     |include path_str
-                "#,
-                '|',
-            )],
+                "#, '|')
+            ],
             OsPkg::Env => vec!["os::env()".into()],
+            OsPkg::Platform => vec!["os::platform()".into()],
+            OsPkg::UserId => vec!["os::user_id()".into()],
+            OsPkg::UserName => vec!["os::user_name()".into()],
+            OsPkg::UserRealName => vec!["os::user_real_name()".into()],
         }
     }
 
     fn get_parameter_types(&self) -> Vec<DataType> {
         match self {
-            // zero-parameter
+            // ()
+            OsPkg::Clear
+            | OsPkg::ConsoleInfo
+            | OsPkg::CurrentDir
+            | OsPkg::Env
+            | OsPkg::Platform
+            | OsPkg::UserRealName
+            | OsPkg::UserId
+            | OsPkg::UserName => vec![],
+            // (String)
             OsPkg::Call => vec![StringType],
-            OsPkg::Clear | OsPkg::CurrentDir | OsPkg::Env => vec![],
         }
     }
 
     fn get_return_type(&self) -> DataType {
         match self {
-            OsPkg::Call | OsPkg::CurrentDir => StringType,
+            // Boolean
             OsPkg::Clear => BooleanType,
+            // i64
+            OsPkg::UserId => NumberType(I64Kind),
+            // String
+            OsPkg::Call
+            | OsPkg::CurrentDir
+            | OsPkg::Platform
+            | OsPkg::UserRealName
+            | OsPkg::UserName => StringType,
+            // Structure
+            OsPkg::ConsoleInfo => StructureType(OsPkg::get_os_console_info_parameters()),
+            // Table
             OsPkg::Env => TableType(OsPkg::get_os_env_parameters()),
         }
     }
@@ -4962,6 +5138,7 @@ mod tests {
         assert_eq!(Collections(CollectionsPkg::Filter).to_code(), "collections::filter(a: Array(), b: fn(item): Boolean): Array()");
         assert_eq!(Collections(CollectionsPkg::Head).to_code(), "collections::head(a)");
         assert_eq!(Collections(CollectionsPkg::IsEmpty).to_code(), "collections::is_empty(a): Boolean");
+        assert_eq!(Collections(CollectionsPkg::Keys).to_code(), "collections::keys(a: Struct): Array(String)");
         assert_eq!(Collections(CollectionsPkg::Len).to_code(), "collections::len(a): i64");
         assert_eq!(Collections(CollectionsPkg::Map).to_code(), "collections::map(a: Array(), b: fn(item)): Array()");
         assert_eq!(Collections(CollectionsPkg::Pop).to_code(), "collections::pop(a: Array()): Array()");
@@ -5005,34 +5182,23 @@ mod tests {
         assert_eq!(Math(MathPkg::Pow).to_code(), "math::pow(a: f64, b: f64): f64");
         assert_eq!(Math(MathPkg::Round).to_code(), "math::round(n: f64): f64");
         assert_eq!(Math(MathPkg::Sqrt).to_code(), "math::sqrt(n: f64): f64");
-        // tables
-        assert_eq!(Tables(TablesPkg::CreateEventSrc).to_code(), "tables::create_event_src(a: String, b: Table): Table");
-        assert_eq!(Tables(TablesPkg::CreateFn).to_code(), "tables::create_fn(a: String, b: fn(): Struct): Table");
-        assert_eq!(Tables(TablesPkg::CreateIndex).to_code(), "tables::create_index(a: String, b: Array()): Boolean");
-        assert_eq!(Tables(TablesPkg::Drop).to_code(), "tables::drop(s: String): Boolean");
-        assert_eq!(Tables(TablesPkg::Exists).to_code(), "tables::exists(s: String): Boolean");
-        assert_eq!(Tables(TablesPkg::Journal).to_code(), "tables::journal(t: Table): Table");
-        assert_eq!(Tables(TablesPkg::Load).to_code(), "tables::load(s: String): Table");
-        assert_eq!(Tables(TablesPkg::Replay).to_code(), "tables::replay(t: Table): Boolean");
-        assert_eq!(Tables(TablesPkg::Resize).to_code(), "tables::resize(s: String, n: i64): Boolean");
-        assert_eq!(Tables(TablesPkg::Save).to_code(), "tables::save(a: String, b: Table): Table");
-        assert_eq!(Tables(TablesPkg::Truncate).to_code(), "tables::truncate(s: String): Boolean");
         // os
         assert_eq!(Os(OsPkg::Call).to_code(), "os::call(s: String): String");
         assert_eq!(Os(OsPkg::Clear).to_code(), "os::clear(): Boolean");
         assert_eq!(Os(OsPkg::CurrentDir).to_code(), "os::current_dir(): String");
-        assert_eq!(Os(OsPkg::Env).to_code(), "os::env(): Table(key: String(256), value: String(8192))");
+        assert_eq!(Os(OsPkg::Env).to_code(), "os::env(): Table(key: String(256), value: String)");
         // oxide
         assert_eq!(Oxide(OxidePkg::Compile).to_code(), "oxide::compile(s: String): fn()");
         assert_eq!(Oxide(OxidePkg::Debug).to_code(), "oxide::debug(s: String): fn()");
         assert_eq!(Oxide(OxidePkg::Eval).to_code(), "oxide::eval(s: String): String");
-        assert_eq!(Oxide(OxidePkg::Help).to_code(), "oxide::help(): Table(name: String(20), module: String(20), signature: String(32), description: String(60), returns: String(32))");
+        assert_eq!(Oxide(OxidePkg::Help).to_code(), "oxide::help(): Table(name: String, module: String, signature: String, description: String, returns: String)");
         assert_eq!(Oxide(OxidePkg::Home).to_code(), "oxide::home(): String");
-        assert_eq!(Oxide(OxidePkg::Inspect).to_code(), "oxide::inspect(s: String): Table(code: String(8192), model: String(8192))");
+        assert_eq!(Oxide(OxidePkg::Inspect).to_code(), "oxide::inspect(s: String): Table(code: String, model: String)");
         assert_eq!(Oxide(OxidePkg::Printf).to_code(), "oxide::printf(a: String, b: Array()): Boolean");
         assert_eq!(Oxide(OxidePkg::Println).to_code(), "oxide::println(s: String): Boolean");
         assert_eq!(Oxide(OxidePkg::Reset).to_code(), "oxide::reset(): Boolean");
-        assert_eq!(Oxide(OxidePkg::UUID).to_code(), "oxide::uuid(): u128");
+        assert_eq!(Oxide(OxidePkg::Scope).to_code(), "oxide::scope(): Table(identifier: String, type: String, value: String)");
+        assert_eq!(Oxide(OxidePkg::UUID).to_code(), "oxide::uuid(): UUID");
         assert_eq!(Oxide(OxidePkg::Version).to_code(), "oxide::version(): f64");
         // str
         assert_eq!(Strings(StringsPkg::EndsWith).to_code(), "str::ends_with(a: String, b: String): Boolean");
@@ -5053,8 +5219,15 @@ mod tests {
         assert_eq!(Strings(StringsPkg::Trim).to_code(), "str::trim(s: String): String");
         // tables
         assert_eq!(Tables(TablesPkg::Compact).to_code(), "tables::compact(t: Table): Table");
-        assert_eq!(Tables(TablesPkg::Describe).to_code(), "tables::describe(t: Table): Table(name: String(128), type: String(128), default_value: String(128), is_nullable: Boolean)");
+        assert_eq!(Tables(TablesPkg::CreateEventSrc).to_code(), "tables::create_event_src(a: String, b: Table): Table");
+        assert_eq!(Tables(TablesPkg::CreateFn).to_code(), "tables::create_fn(a: String, b: fn(): Struct): Table");
+        assert_eq!(Tables(TablesPkg::CreateIndex).to_code(), "tables::create_index(a: String, b: Array()): Boolean");
+        assert_eq!(Tables(TablesPkg::Describe).to_code(), "tables::describe(t: Table): Table(name: String, type: String, default_value: String, is_nullable: Boolean)");
+        assert_eq!(Tables(TablesPkg::Drop).to_code(), "tables::drop(s: String): Boolean");
+        assert_eq!(Tables(TablesPkg::Exists).to_code(), "tables::exists(s: String): Boolean");
+        assert_eq!(Tables(TablesPkg::Journal).to_code(), "tables::journal(t: Table): Table");
         assert_eq!(Tables(TablesPkg::Latest).to_code(), "tables::latest(t: Table): u64");
+        assert_eq!(Tables(TablesPkg::Load).to_code(), "tables::load(s: String): Table");
         assert_eq!(Tables(TablesPkg::Pop).to_code(), "tables::pop(t: Table): Struct");
         assert_eq!(Tables(TablesPkg::PullCell).to_code(), "tables::cell(a: Table, b: i64, c: String)");
         assert_eq!(Tables(TablesPkg::PullColumn).to_code(), "tables::column(a: Table, b: String): Array()");
@@ -5062,11 +5235,15 @@ mod tests {
         assert_eq!(Tables(TablesPkg::Push).to_code(), "tables::push(a: Table, b: Table): Boolean");
         assert_eq!(Tables(TablesPkg::RecordSize).to_code(), "tables::record_size(t: Table): u64");
         assert_eq!(Tables(TablesPkg::Reduce).to_code(), "tables::reduce(a: Table, b: Struct, c: fn(a, b)): Table");
+        assert_eq!(Tables(TablesPkg::Replay).to_code(), "tables::replay(t: Table): Boolean");
+        assert_eq!(Tables(TablesPkg::Resize).to_code(), "tables::resize(s: String, n: i64): Boolean");
+        assert_eq!(Tables(TablesPkg::Save).to_code(), "tables::save(a: String, b: Table): Table");
         assert_eq!(Tables(TablesPkg::SaveAs).to_code(), "tables::save_as(a: Table, b: String): Table");
         assert_eq!(Tables(TablesPkg::Scan).to_code(), "tables::scan(t: Table): Table");
         assert_eq!(Tables(TablesPkg::Shuffle).to_code(), "tables::shuffle(a: Table, b: Boolean): Boolean");
         assert_eq!(Tables(TablesPkg::ToCSV).to_code(), "tables::to_csv(t: Table): Table");
         assert_eq!(Tables(TablesPkg::ToJSON).to_code(), "tables::to_json(t: Table): Table");
+        assert_eq!(Tables(TablesPkg::Truncate).to_code(), "tables::truncate(s: String): Boolean");
         // util
         assert_eq!(Utils(UtilsPkg::Base36Decode).to_code(), "util::base36_decode(a): Bytes");
         assert_eq!(Utils(UtilsPkg::Base36Encode).to_code(), "util::base36_encode(a): String");
@@ -5644,8 +5821,7 @@ mod tests {
                 prefix = if(cur_dir::ends_with("core"), "../..", ".")
                 path_str = prefix + "/demoes/language/include_file.oxide"
                 include path_str
-            "#,
-                vec![
+            "#, vec![
                     "|------------------------------------|",
                     "| id | symbol | exchange | last_sale |",
                     "|------------------------------------|",

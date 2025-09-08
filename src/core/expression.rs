@@ -29,6 +29,13 @@ pub enum AliasCalls {
 }
 
 impl AliasCalls {
+    pub fn get_name(&self) -> &String {
+        match self {
+            AliasCalls::IdentifierCall(n, _) => n,
+            AliasCalls::FunctionCall(n, _, _) => n,
+        }
+    }
+    
     pub fn get_body(&self) -> &Expression {
         match self {
             AliasCalls::IdentifierCall(_, b) => b,
@@ -295,7 +302,7 @@ pub enum Expression {
         resource: Box<Expression>,
         code: Box<Expression>,
     },
-    Yield(Box<Expression>),
+    Yield(Box<Expression>, u128),
     Zip(Box<Expression>, Box<Expression>),
     ////////////////////////////////////////////////////////////////////
     // SQL models
@@ -473,7 +480,7 @@ impl Expression {
                 format!("while {} {}", Self::decompile(condition), Self::decompile(code)),
             With { resource, code } =>
                 format!("{} with {}", Self::decompile(resource), Self::decompile(code)),
-            Yield(expr) =>
+            Yield(expr, ..) =>
                 format!("yield {}", Self::decompile(expr)),
             Zip(a, b) =>
                 format!("{} <|> {}", Self::decompile(a), Self::decompile(b)),
@@ -642,7 +649,7 @@ impl Expression {
             WhenEver { .. } => false,
             While { condition, code } => is_pure_a_and_b(condition, code),
             With { resource, code } => resource.is_pure() && code.is_pure(),
-            Yield(a) => a.is_pure(),
+            Yield(a, ..) => a.is_pure(),
             Zip(a, b) => is_pure_a_and_b(a, b),
             // SQL models
             Delete { from } => from.is_pure(),

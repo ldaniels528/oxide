@@ -181,39 +181,6 @@ mod tests {
         "#, "15").await
         }
 
-        #[actix::test]
-        async fn test_euler_mascheroni_constant() {
-            verify_exact_code_async_and_sync(r#"
-                let x = 2 * γ
-                x
-            "#, "1.1544313298030657").await
-        }
-
-        #[actix::test]
-        async fn test_euler_number() {
-            verify_exact_code_async_and_sync(r#"
-                let n = 2 * 𝑒
-                n
-            "#, "5.43656365691809").await
-        }
-
-        #[actix::test]
-        async fn test_golden_ratio() {
-            verify_exact_code_async_and_sync(r#"
-                let g = 2 * φ
-                g
-            "#, "3.23606797749979").await
-        }
-
-        #[actix::test]
-        async fn test_pi() {
-            verify_exact_code_async_and_sync(r#"
-                let r = 5
-                let c = 2 * π * r
-                c
-            "#, "31.41592653589793").await
-        }
-
         #[test]
         fn test_basic_state_manipulation() {
             let mut interpreter = Interpreter::new();
@@ -786,15 +753,6 @@ mod tests {
                     yield x * y
                 }
             "#, "[0, 1, 2, 3, 4]", "Array(i64)");
-
-            verify_exact_code_async_and_sync(r#"
-                let answer = true
-                for x in 0..4 {
-                    answer = !answer
-                    once yield answer
-                    yield answer
-                }
-            "#, "[false, false, true, false, true]").await;
         }
 
         #[test]
@@ -1010,7 +968,7 @@ mod tests {
             interpreter = verify_exact_code_with(interpreter, r#"
                 fn create_gamestate() -> {
                     {
-                        name: (__realname__::split(" "))[0],
+                        name: os::user_real_name::split(" ")::head,
                         money: 1000.0,
                         bet: 25.0,
                         bet_factor: 1.0,

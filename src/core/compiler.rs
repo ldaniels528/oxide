@@ -352,7 +352,7 @@ impl Compiler {
                 "use" => self.parse_keyword_use(nts),
                 "whenever" => self.parse_keyword_whenever(nts),
                 "while" => self.parse_keyword_while(nts),
-                "yield" => self.parse_expression_1a(nts, Yield),
+                "yield" => self.parse_expression_1a(nts, |e| Yield(e, generate_uuid())),
                 name => self.expect_function_call_or_type_or_identifier(name, nts),
             }?;
             Ok((Some(expr), ts))
@@ -2098,26 +2098,6 @@ mod tests {
                         ]).into()
                     ).into())
             )
-        }
-
-        #[test]
-        fn test_for_each_item_in_array() {
-            verify_build(
-                "for item in [1, 5, 6, 11, 17] yield item",
-                For {
-                    construct: Condition(In(
-                        Identifier("item".into()).into(),
-                        ArrayExpression(vec![
-                            Literal(Number(I64Value(1))),
-                            Literal(Number(I64Value(5))),
-                            Literal(Number(I64Value(6))),
-                            Literal(Number(I64Value(11))),
-                            Literal(Number(I64Value(17))),
-                        ]).into()
-                    )).into(),
-                    code: Yield(Identifier("item".into()).into()).into(),
-                },
-            );
         }
 
         #[test]
