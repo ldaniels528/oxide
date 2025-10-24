@@ -2337,34 +2337,23 @@ impl OxidePkg {
     /// returns a table describing all modules
     fn do_oxide_help(ms: Machine) -> std::io::Result<(Machine, TypedValue)> {
         let mut mrc = ModelRowCollection::from_parameters(&OxidePkg::get_oxide_help_parameters());
-        for (module_name, module) in ms.get_variables().iter() {
-            match module {
-                Structured(Hard(mod_struct)) => {
-                    for (name, func) in mod_struct.to_name_values() {
-                        mrc.append_row(Row::new(
-                            0,
-                            vec![
-                                // name
-                                StringValue(name),
-                                // module
-                                StringValue(module_name.to_string()),
-                                // signature
-                                StringValue(func.to_code()),
-                                // description
-                                match func {
-                                    PackageFunction(pf) => StringValue(pf.get_description()),
-                                    _ => Null,
-                                },
-                                // returns
-                                match func {
-                                    PackageFunction(pf) => StringValue(pf.get_return_type().to_code()),
-                                    _ => Null,
-                                },
-                            ],
-                        ))?;
-                    }
-                }
-                _ => {}
+        let mut packages = PACKAGE_OPS.iter().collect::<Vec<_>>();
+        packages.sort_by(|a, b| a.0.cmp(&b.0));
+        for (_, modules) in packages {
+            for pkg_op in modules {
+                mrc.append_row(Row::new(
+                    0,
+                    vec![
+                        // package name
+                        StringValue(pkg_op.get_package_name()),
+                        // name
+                        StringValue(pkg_op.get_name()),
+                        // description
+                        StringValue(pkg_op.get_description()),
+                        // signature
+                        StringValue(pkg_op.to_code()),
+                    ],
+                ))?;
             }
         }
         Ok((ms, TableValue(ModelTable(mrc))))
@@ -2436,11 +2425,10 @@ impl OxidePkg {
 
     pub fn get_oxide_help_parameters() -> Vec<Parameter> {
         vec![
-            Parameter::new("name", FixedSizeType(StringType.into(), 20)),
-            Parameter::new("module", FixedSizeType(StringType.into(), 20)),
-            Parameter::new("signature", FixedSizeType(StringType.into(), 32)),
-            Parameter::new("description", FixedSizeType(StringType.into(), 60)),
-            Parameter::new("returns", FixedSizeType(StringType.into(), 32)),
+            Parameter::new("module", StringType),
+            Parameter::new("name", StringType),
+            Parameter::new("description", StringType),
+            Parameter::new("signature", StringType),
         ]
     }
 
